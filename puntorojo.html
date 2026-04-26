@@ -835,6 +835,18 @@ body.auth-locked .app{filter:blur(4px);pointer-events:none}
 .pr-offline-banner.show{transform:translateY(0)}
 body.pr-offline{padding-top:36px}
 
+/* ═════════════════════════ LOCK BIOMÉTRICO ═════════════════════════ */
+.pr-bio-lock{position:fixed;inset:0;background:var(--ink);display:none;align-items:center;justify-content:center;z-index:9997;padding:24px}
+.pr-bio-lock.show{display:flex}
+.pr-bio-lock-box{background:var(--paper);max-width:380px;width:100%;padding:32px 28px;border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,.4);text-align:center}
+.pr-bio-logo{width:90px;height:auto;margin:0 auto 18px;display:block}
+.pr-bio-title{font-size:11px;letter-spacing:2px;color:var(--mute);text-transform:uppercase;font-weight:700;margin-bottom:8px}
+.pr-bio-user{font-size:14px;color:var(--ink);font-weight:700;margin-bottom:24px;letter-spacing:.3px;text-transform:uppercase;word-break:break-all}
+.pr-bio-hint{font-size:10px;color:var(--mute);letter-spacing:1px;text-transform:uppercase;font-weight:600;margin-top:14px;line-height:1.5}
+.pr-bio-foot{margin-top:20px;padding-top:16px;border-top:1px solid var(--line-soft)}
+body.pr-bio-locked{overflow:hidden}
+body.pr-bio-locked .app{filter:blur(6px);pointer-events:none}
+
 /* ═════════════════════════ MODO OSCURO ═════════════════════════ */
 body.pr-dark{
   --paper:#1A1816!important;
@@ -1134,6 +1146,20 @@ html,body,.main{background:#FFFFFF!important;}
 <!-- ═════════════════ BANNER SIN CONEXIÓN ═════════════════ -->
 <div id="prOfflineBanner" class="pr-offline-banner" role="status">
   ⚠ SIN CONEXIÓN A INTERNET — TUS CAMBIOS SE GUARDARÁN EN ESTE DISPOSITIVO Y SE SINCRONIZARÁN AL VOLVER
+</div>
+
+<!-- ═════════════════ LOCK BIOMÉTRICO ═════════════════ -->
+<div id="prBioLock" class="pr-bio-lock" aria-hidden="true">
+  <div class="pr-bio-lock-box">
+    <img src="logo.png" alt="Punto Rojo" class="pr-bio-logo">
+    <div class="pr-bio-title">ACCESO BIOMÉTRICO</div>
+    <div class="pr-bio-user" id="prBioUserLabel">—</div>
+    <button class="btn" id="prBioAuthBtn" onclick="doBioUnlock()" style="width:100%;padding:14px;font-size:13px;letter-spacing:1px">AUTENTICATE</button>
+    <div class="pr-bio-hint" id="prBioHint">TOCÁ EL BOTÓN PARA USAR HUELLA / FACE ID / WINDOWS HELLO</div>
+    <div class="pr-bio-foot">
+      <button class="btn ghost sm" onclick="bioLockEscapeToLogin()" style="width:100%">USAR EMAIL Y CLAVE EN SU LUGAR</button>
+    </div>
+  </div>
 </div>
 
 <div class="app">
@@ -1967,6 +1993,16 @@ html,body,.main{background:#FFFFFF!important;}
         <option value="baja">BAJA — 500px, ~30 KB por foto (ahorra datos)</option>
       </select>
       <div class="hint">Las fotos se comprimen antes de subir a la nube. Si tu conexión es lenta, elegí "BAJA".</div>
+    </div>
+
+    <div class="field">
+      <label>ACCESO BIOMÉTRICO</label>
+      <div id="bioStatusBox" style="padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--cream);font-size:11px;letter-spacing:.3px;line-height:1.5;margin-bottom:8px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button id="bioEnableBtn" class="btn cafe sm" style="flex:1;padding:10px" onclick="handleBioEnableClick()">ACTIVAR</button>
+        <button id="bioDisableBtn" class="btn ghost sm" style="flex:1;padding:10px;display:none" onclick="handleBioDisableClick()">DESACTIVAR</button>
+      </div>
+      <div class="hint">Una vez activado, este dispositivo va a pedirte tu huella, Face ID o Windows Hello cada vez que abras la app. Es independiente por dispositivo.</div>
     </div>
 
     <div class="modal-actions">
@@ -3866,6 +3902,8 @@ function openSettingsModal(){
   if (db) db.classList.toggle('primary', t === 'dark');
   const sel = document.getElementById('prefPhotoQuality');
   if (sel) sel.value = q;
+  // Refrescar el cuadro de estado biométrico
+  try { refreshBioStatusBox(); } catch(e){}
   document.getElementById('modalSettings').classList.add('show');
 }
 
@@ -8606,6 +8644,267 @@ function deleteCurrentProveedor(){
 })();
 
 /* ═══════════════════════════════════════════════════════════════
+   ACCESO BIOMÉTRICO (WebAuthn) · HUELLA / FACE ID / WINDOWS HELLO
+   ═══════════════════════════════════════════════════════════════
+   - El usuario activa biometría desde AJUSTES después de loguearse normal.
+   - El dispositivo registra una "passkey" (no se puede copiar a otro celular).
+   - Las próximas veces que abra la app, se le pide biometría antes de entrar.
+   - Es por dispositivo: cada celular/compu se activa por separado.
+   ═══════════════════════════════════════════════════════════════ */
+
+const BIO_KEY_PREFIX = 'puntorojo_bio_';
+
+function isBiometricSupported(){
+  return !!(window.PublicKeyCredential
+    && navigator.credentials
+    && navigator.credentials.create
+    && navigator.credentials.get);
+}
+
+async function isPlatformAuthenticatorAvailable(){
+  if (!isBiometricSupported()) return false;
+  try {
+    return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+  } catch(e) { return false; }
+}
+
+function bioStorageKey(uid){ return BIO_KEY_PREFIX + uid; }
+
+function getStoredBiometric(uid){
+  try {
+    const raw = localStorage.getItem(bioStorageKey(uid));
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) { return null; }
+}
+
+function saveStoredBiometric(uid, data){
+  try { localStorage.setItem(bioStorageKey(uid), JSON.stringify(data)); } catch(e) {}
+}
+
+function clearStoredBiometric(uid){
+  try { localStorage.removeItem(bioStorageKey(uid)); } catch(e) {}
+}
+
+/* Convierte ArrayBuffer ↔ base64 para guardar credentialId */
+function abToB64(buf){
+  const bytes = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s);
+}
+function b64ToAb(str){
+  const s = atob(str);
+  const arr = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) arr[i] = s.charCodeAt(i);
+  return arr.buffer;
+}
+
+/* Registra una passkey biométrica para el currentUser en este dispositivo. */
+async function setupBiometricForCurrentUser(){
+  if (!currentUser) { showToast('LOGUEATE PRIMERO', 'red'); return false; }
+  if (!isBiometricSupported()) { showToast('TU NAVEGADOR NO SOPORTA BIOMETRÍA', 'red'); return false; }
+  if (!(await isPlatformAuthenticatorAvailable())) {
+    showToast('ESTE DISPOSITIVO NO TIENE LECTOR BIOMÉTRICO DISPONIBLE', 'red');
+    return false;
+  }
+
+  try {
+    const challenge = new Uint8Array(32);
+    (window.crypto || window.msCrypto).getRandomValues(challenge);
+    const userIdBytes = new TextEncoder().encode(currentUser.uid);
+
+    const cred = await navigator.credentials.create({
+      publicKey: {
+        challenge,
+        rp: { name: 'Punto Rojo', id: window.location.hostname },
+        user: {
+          id: userIdBytes,
+          name: currentUser.email || currentUser.username || currentUser.uid,
+          displayName: currentUser.displayName || currentUser.email || 'Usuario'
+        },
+        pubKeyCredParams: [
+          { type: 'public-key', alg: -7 },   // ES256
+          { type: 'public-key', alg: -257 }  // RS256
+        ],
+        authenticatorSelection: {
+          authenticatorAttachment: 'platform',
+          userVerification: 'required',
+          residentKey: 'preferred'
+        },
+        timeout: 60000,
+        attestation: 'none'
+      }
+    });
+
+    if (!cred) throw new Error('Sin credencial');
+
+    const data = {
+      credentialId: abToB64(cred.rawId),
+      registeredAt: Date.now(),
+      deviceLabel: detectDeviceLabel()
+    };
+    saveStoredBiometric(currentUser.uid, data);
+    showToast('ACCESO BIOMÉTRICO ACTIVADO EN ESTE DISPOSITIVO', 'green');
+    logActivity('auth', 'Biometría activada', detectDeviceLabel());
+    return true;
+  } catch(e) {
+    console.error('Bio setup error:', e);
+    if (e.name === 'NotAllowedError') {
+      showToast('CANCELADO POR EL USUARIO', '');
+    } else {
+      showToast('NO SE PUDO ACTIVAR BIOMETRÍA: ' + (e.message || e.name || ''), 'red');
+    }
+    return false;
+  }
+}
+
+function detectDeviceLabel(){
+  const ua = navigator.userAgent || '';
+  if (/iPhone|iPad/.test(ua)) return 'iPhone/iPad (Safari)';
+  if (/Mac/.test(ua)) return 'Mac (Safari/Chrome)';
+  if (/Android/.test(ua)) return 'Android';
+  if (/Windows/.test(ua)) return 'Windows (Hello)';
+  return 'Dispositivo desconocido';
+}
+
+/* Pide al usuario autenticarse con biometría. Devuelve true/false. */
+async function authenticateBiometric(){
+  if (!currentUser) return false;
+  const stored = getStoredBiometric(currentUser.uid);
+  if (!stored || !stored.credentialId) return false;
+  if (!isBiometricSupported()) return false;
+
+  try {
+    const challenge = new Uint8Array(32);
+    (window.crypto || window.msCrypto).getRandomValues(challenge);
+    const credIdBuf = b64ToAb(stored.credentialId);
+
+    const assertion = await navigator.credentials.get({
+      publicKey: {
+        challenge,
+        allowCredentials: [{
+          type: 'public-key',
+          id: credIdBuf,
+          transports: ['internal']
+        }],
+        userVerification: 'required',
+        timeout: 60000
+      }
+    });
+
+    if (!assertion) return false;
+    return true;
+  } catch(e) {
+    console.warn('Bio auth error:', e.name, e.message);
+    return false;
+  }
+}
+
+/* Quita la biometría de este dispositivo (no afecta a otros dispositivos del mismo usuario). */
+function disableBiometricForCurrentUser(){
+  if (!currentUser) return;
+  clearStoredBiometric(currentUser.uid);
+  showToast('ACCESO BIOMÉTRICO DESACTIVADO EN ESTE DISPOSITIVO', '');
+  logActivity('delete', 'Biometría desactivada', detectDeviceLabel());
+}
+
+function hasBiometricEnabled(){
+  if (!currentUser) return false;
+  return !!getStoredBiometric(currentUser.uid);
+}
+
+/* ═════════ HANDLERS DEL TOGGLE EN AJUSTES ═════════ */
+async function handleBioEnableClick(){
+  const ok = await setupBiometricForCurrentUser();
+  if (ok) refreshBioStatusBox();
+}
+function handleBioDisableClick(){
+  if (!confirm('¿DESACTIVAR EL ACCESO BIOMÉTRICO EN ESTE DISPOSITIVO?\n\nSe te va a pedir email + clave la próxima vez. Podés volver a activar la biometría cuando quieras.')) return;
+  disableBiometricForCurrentUser();
+  refreshBioStatusBox();
+}
+
+/* Refresca el cuadro de estado en AJUSTES con texto y botones según el estado actual. */
+async function refreshBioStatusBox(){
+  const box = document.getElementById('bioStatusBox');
+  const enableBtn = document.getElementById('bioEnableBtn');
+  const disableBtn = document.getElementById('bioDisableBtn');
+  if (!box) return;
+
+  if (!isBiometricSupported()) {
+    box.innerHTML = '<strong style="color:var(--amber)">NO DISPONIBLE</strong> · Tu navegador no soporta WebAuthn.';
+    enableBtn.disabled = true; enableBtn.style.opacity = '.5';
+    disableBtn.style.display = 'none';
+    return;
+  }
+
+  const platformOk = await isPlatformAuthenticatorAvailable();
+  if (!platformOk && !hasBiometricEnabled()) {
+    box.innerHTML = '<strong style="color:var(--amber)">DISPOSITIVO SIN BIOMETRÍA</strong> · No detectamos huella, Face ID ni Windows Hello en este dispositivo. Si tenés esos métodos configurados a nivel sistema, igual probá.';
+    enableBtn.disabled = false; enableBtn.style.opacity = '1';
+    disableBtn.style.display = 'none';
+    return;
+  }
+
+  if (hasBiometricEnabled()) {
+    const stored = getStoredBiometric(currentUser.uid) || {};
+    const fecha = stored.registeredAt ? new Date(stored.registeredAt).toLocaleDateString('es-GT') : '';
+    box.innerHTML = `<strong style="color:var(--green-dark)">ACTIVADO</strong> · ${stored.deviceLabel || ''}<br><span style="font-size:9.5px;color:var(--mute)">REGISTRADO: ${fecha}</span>`;
+    enableBtn.style.display = 'none';
+    disableBtn.style.display = '';
+  } else {
+    box.innerHTML = '<strong style="color:var(--mute)">DESACTIVADO</strong> · Tu próxima entrada va a requerir email y clave.';
+    enableBtn.style.display = '';
+    enableBtn.disabled = false; enableBtn.style.opacity = '1';
+    disableBtn.style.display = 'none';
+  }
+}
+
+/* ═════════ LOCK SCREEN ═════════ */
+let _bioLockActive = false;
+let _bioLockSkipped = false; // si el usuario eligió "usar email/clave en su lugar" en esta sesión
+
+function showBioLock(){
+  _bioLockActive = true;
+  const lock = document.getElementById('prBioLock');
+  const lbl = document.getElementById('prBioUserLabel');
+  if (lbl && currentUser) lbl.textContent = currentUser.displayName || currentUser.email || '';
+  document.body.classList.add('pr-bio-locked');
+  if (lock) lock.classList.add('show');
+  // Auto-trigger biometría apenas se muestra (mejor UX)
+  setTimeout(() => doBioUnlock(), 350);
+}
+
+function hideBioLock(){
+  _bioLockActive = false;
+  document.body.classList.remove('pr-bio-locked');
+  const lock = document.getElementById('prBioLock');
+  if (lock) lock.classList.remove('show');
+}
+
+async function doBioUnlock(){
+  const hint = document.getElementById('prBioHint');
+  if (hint) hint.textContent = 'AUTENTICANDO...';
+  const ok = await authenticateBiometric();
+  if (ok) {
+    if (hint) hint.textContent = 'ACCESO CONCEDIDO';
+    setTimeout(hideBioLock, 250);
+  } else {
+    if (hint) hint.textContent = 'NO RECONOCIDO. TOCÁ "AUTENTICATE" PARA REINTENTAR.';
+  }
+}
+
+/* "Escape": el usuario se da por vencido con la biometría y vuelve a login normal.
+   Esto cierra sesión de Firebase y muestra la pantalla de email/clave. */
+async function bioLockEscapeToLogin(){
+  if (!confirm('CERRAR SESIÓN Y VOLVER AL LOGIN CON EMAIL Y CLAVE?')) return;
+  _bioLockSkipped = true;
+  try { await firebase.auth().signOut(); } catch(e){}
+  hideBioLock();
+  location.reload();
+}
+
+/* ═══════════════════════════════════════════════════════════════
    RECEPTORES + ACUSES DIGITALES VÍA QR
    ═══════════════════════════════════════════════════════════════
    - Cada receptor tiene un token único (su QR contiene este token).
@@ -8993,6 +9292,10 @@ function applyAuthSession(fbUser, profileData){
   updateActivityBadge();
   updateNotifBadge();
   updateStorageIndicator();
+  // Si tiene biometría activada en este dispositivo, mostrar lock antes de dejar entrar
+  try {
+    if (!_bioLockSkipped && hasBiometricEnabled()) showBioLock();
+  } catch(e) { console.warn('Bio lock check failed:', e); }
   // Arranca la sincronización con la nube. Si ya hay datos, los aplica.
   // Si no hay nada en la nube, sube el state local como punto de partida.
   try {
