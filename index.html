@@ -843,7 +843,9 @@ body.pr-offline{padding-top:36px}
 .pr-bio-title{font-size:11px;letter-spacing:2px;color:var(--mute);text-transform:uppercase;font-weight:700;margin-bottom:8px}
 .pr-bio-user{font-size:14px;color:var(--ink);font-weight:700;margin-bottom:24px;letter-spacing:.3px;text-transform:uppercase;word-break:break-all}
 .pr-bio-hint{font-size:10px;color:var(--mute);letter-spacing:1px;text-transform:uppercase;font-weight:600;margin-top:14px;line-height:1.5}
-.pr-bio-foot{margin-top:20px;padding-top:16px;border-top:1px solid var(--line-soft)}
+.pr-bio-foot{margin-top:20px;padding-top:16px;border-top:1px solid var(--line-soft);text-align:center}
+.pr-bio-emergency-link{background:transparent;border:none;color:var(--mute);font-size:10px;letter-spacing:.5px;text-transform:uppercase;font-weight:500;cursor:pointer;font-family:inherit;padding:6px 10px;text-decoration:underline}
+.pr-bio-emergency-link:hover{color:var(--red)}
 body.pr-bio-locked{overflow:hidden}
 body.pr-bio-locked .app{filter:blur(6px);pointer-events:none}
 
@@ -1157,7 +1159,21 @@ html,body,.main{background:#FFFFFF!important;}
     <button class="btn" id="prBioAuthBtn" onclick="doBioUnlock()" style="width:100%;padding:14px;font-size:13px;letter-spacing:1px">AUTENTICATE</button>
     <div class="pr-bio-hint" id="prBioHint">TOCÁ EL BOTÓN PARA USAR HUELLA / FACE ID / WINDOWS HELLO</div>
     <div class="pr-bio-foot">
-      <button class="btn ghost sm" onclick="bioLockEscapeToLogin()" style="width:100%">USAR EMAIL Y CLAVE EN SU LUGAR</button>
+      <button class="pr-bio-emergency-link" onclick="showBioEmergencyReset()">¿No podés autenticarte?</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal de RESET DE EMERGENCIA — solo aparece cuando el usuario lo solicita explícitamente -->
+<div class="modal-bg" id="modalBioReset" onclick="closeModalBg(event,'bioReset')">
+  <div class="modal" style="max-width:440px">
+    <h3>RESET DE EMERGENCIA</h3>
+    <p class="desc" style="color:var(--red);font-weight:600">⚠ ESTO BORRA LA BIOMETRÍA DE ESTE DISPOSITIVO. Para confirmar, escribí el email exacto de tu cuenta.</p>
+    <div class="field"><label>EMAIL DE TU CUENTA</label><input id="bioResetEmail" type="email" autocapitalize="off" spellcheck="false" placeholder="tu@puntorojosa.com"></div>
+    <div id="bioResetError" class="auth-error"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeModal('bioReset')">CANCELAR</button>
+      <button class="btn" onclick="confirmBioEmergencyReset()" style="background:var(--red)">BORRAR BIOMETRÍA</button>
     </div>
   </div>
 </div>
@@ -8894,13 +8910,29 @@ async function doBioUnlock(){
   }
 }
 
-/* "Escape": el usuario se da por vencido con la biometría y vuelve a login normal.
-   Esto cierra sesión de Firebase y muestra la pantalla de email/clave. */
-async function bioLockEscapeToLogin(){
-  if (!confirm('CERRAR SESIÓN Y VOLVER AL LOGIN CON EMAIL Y CLAVE?')) return;
-  _bioLockSkipped = true;
+/* RESET DE EMERGENCIA — solo si el sensor del dispositivo falla.
+   Requiere escribir el email exacto del usuario para evitar que cualquiera lo dispare. */
+function showBioEmergencyReset(){
+  const m = document.getElementById('modalBioReset');
+  const inp = document.getElementById('bioResetEmail');
+  const err = document.getElementById('bioResetError');
+  if (inp) inp.value = '';
+  if (err) err.textContent = '';
+  if (m) m.classList.add('show');
+}
+
+async function confirmBioEmergencyReset(){
+  const inp = document.getElementById('bioResetEmail');
+  const err = document.getElementById('bioResetError');
+  err.textContent = '';
+  const typed = (inp.value || '').trim().toLowerCase();
+  const real = (currentUser && currentUser.email || '').toLowerCase();
+  if (!typed) { err.textContent = 'ESCRIBÍ TU EMAIL'; return; }
+  if (typed !== real) { err.textContent = 'EL EMAIL NO COINCIDE CON LA SESIÓN ACTIVA'; return; }
+  if (!confirm('¿BORRAR BIOMETRÍA DE ESTE DISPOSITIVO?\n\nVas a tener que volver a entrar con email y clave, y reactivar la biometría desde cero si querés volver a usarla.')) return;
+  disableBiometricForCurrentUser();
+  closeModal('bioReset');
   try { await firebase.auth().signOut(); } catch(e){}
-  hideBioLock();
   location.reload();
 }
 
