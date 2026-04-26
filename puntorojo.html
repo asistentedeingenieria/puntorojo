@@ -3019,8 +3019,17 @@ function ensureDataV9(data){
       // Migración: el viejo acuseRecepcion único pasa a ser el acuse "final" (entrega).
       // Los acuses por etapa (0..5) y final se guardan en acuseRecepciones.
       if (!a.acuseRecepciones || typeof a.acuseRecepciones !== 'object') a.acuseRecepciones = {};
-      if (a.acuseRecepcion && (a.acuseRecepcion.url || a.acuseRecepcion.data) && !a.acuseRecepciones.final) {
-        a.acuseRecepciones.final = a.acuseRecepcion;
+      // Migración 1: el viejo acuseRecepcion único pasa a etapa 6 (que incluye entrega final).
+      if (a.acuseRecepcion && (a.acuseRecepcion.url || a.acuseRecepcion.data) && !a.acuseRecepciones['5'] && !a.acuseRecepciones.final) {
+        a.acuseRecepciones['5'] = a.acuseRecepcion;
+      }
+      // Migración 2: el slot 'final' que existía en una versión previa ahora se fusiona
+      // con etapa 6 (E6 = MASILLA + ENTREGA FINAL). Si E6 está vacía, se mueve ahí.
+      if (a.acuseRecepciones.final) {
+        if (!a.acuseRecepciones['5']) {
+          a.acuseRecepciones['5'] = a.acuseRecepciones.final;
+        }
+        delete a.acuseRecepciones.final;
       }
     })));
     p.materiales.pedidos.forEach(pd => {
@@ -5138,15 +5147,15 @@ document.addEventListener('keydown', (e) => {
   }, { passive: true });
 })();
 
-/* Slots de acuses por apto: 6 etapas + 1 entrega final = 7 acuses por apto */
+/* Slots de acuses por apto: 6 etapas (E6 incluye la entrega final).
+   Las etiquetas reflejan las etapas oficiales de obra de Punto Rojo. */
 const ACUSE_SLOTS = [
-  { key: '0',     label: 'ETAPA 1 · ESTRUCTURA' },
-  { key: '1',     label: 'ETAPA 2 · PRIMERA CARA' },
-  { key: '2',     label: 'ETAPA 3 · REFUERZOS' },
-  { key: '3',     label: 'ETAPA 4 · 2DA CARA' },
-  { key: '4',     label: 'ETAPA 5 · CIELOS' },
-  { key: '5',     label: 'ETAPA 6 · MASILLA' },
-  { key: 'final', label: 'ENTREGA FINAL' }
+  { key: '0', label: 'ETAPA 1 · TRAZO' },
+  { key: '1', label: 'ETAPA 2 · TABIQUE 1 CARA CON FORRO' },
+  { key: '2', label: 'ETAPA 3 · REFUERZOS DE MADERA' },
+  { key: '3', label: 'ETAPA 4 · FORRO 2DA CARA + ENCHAPE' },
+  { key: '4', label: 'ETAPA 5 · CIELOS' },
+  { key: '5', label: 'ETAPA 6 · MASILLA + ENTREGA FINAL' }
 ];
 
 /* Helpers para leer / escribir un slot específico */
@@ -5174,15 +5183,16 @@ function renderAcusesRecepcion(){
     const levelsHtml = (t.levels || []).map(l => {
       const cards = (l.aptos || []).map(a => {
         // 7 filas de slot (6 etapas + entrega final)
-        const slotRows = ACUSE_SLOTS.map(s => {
+        const slotRows = ACUSE_SLOTS.map((s, sIdx) => {
           const slot = getAcuseSlot(a, s.key);
           const src = getAcuseSlotSrc(slot);
           const has = !!src;
           const fecha = has && slot.ts ? new Date(slot.ts).toLocaleDateString('es-GT', {day:'2-digit',month:'2-digit',year:'numeric'}) : '';
           const user = has && slot.user ? slot.user : '';
           const imgEsc = has ? String(src).replace(/'/g,"\\'") : '';
-          const isFinal = s.key === 'final';
-          return `<div class="acuse-slot-row${has ? ' has' : ''}${isFinal ? ' final' : ''}">
+          // Última etapa (E6) destacada porque incluye entrega final
+          const isLast = sIdx === ACUSE_SLOTS.length - 1;
+          return `<div class="acuse-slot-row${has ? ' has' : ''}${isLast ? ' final' : ''}">
             <div class="acuse-slot-label">${s.label}</div>
             <div class="acuse-slot-status">${has
               ? `FIRMADO · ${fecha}${user ? ' · ' + user.split('@')[0] : ''}`
