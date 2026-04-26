@@ -21,6 +21,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 
+<!-- ════════ QR CODES (generar + escanear) ════════ -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.10/html5-qrcode.min.js"></script>
+
 <!-- ════════ FIREBASE SDK · LOGIN, BASE DE DATOS Y FOTOS EN LA NUBE ════════ -->
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
@@ -349,8 +353,10 @@ input.inline:disabled,select.inline:disabled{opacity:.55;cursor:not-allowed;back
 .acuse-slot-row{display:grid;grid-template-columns:1.4fr 1fr auto;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px dotted var(--line-soft);font-size:10.5px}
 .acuse-slot-row:last-child{border-bottom:none}
 .acuse-slot-row.has{background:#F8FBF9}
-.acuse-slot-row.final{background:#FFF6E6;border-top:2px solid var(--cafe);border-bottom:none;font-weight:700}
-.acuse-slot-row.final.has{background:#E8F4EE;border-top-color:var(--green-dark)}
+.acuse-slot-row.final{background:#F1F5F9;border-top:2px solid var(--cafe);border-bottom:none;font-weight:700}
+.acuse-slot-row.final.has{background:#F0FDF4;border-top-color:var(--green-dark)}
+.acuse-slot-row.digital{background:#F0FDF4;border-left:3px solid var(--green-dark);padding-left:11px}
+.acuse-slot-row.digital.final{background:#ECFDF5}
 .acuse-slot-label{font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--ink);font-size:10.5px}
 .acuse-slot-status{font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--mute);font-weight:600}
 .acuse-slot-row.has .acuse-slot-status{color:var(--green-dark)}
@@ -1144,6 +1150,7 @@ html,body,.main{background:#FFFFFF!important;}
       <span>—</span>
     </div>
     <div class="top-actions">
+      <button class="btn-top" data-perm="receptores.manage" onclick="openReceptoresModal()" title="Gestionar receptores y QR para firmar acuses">RECEPTORES</button>
       <button class="btn-top" id="settingsBtn" onclick="openSettingsModal()" title="Mis preferencias (modo oscuro, calidad de fotos)">AJUSTES</button>
       <button class="btn-top notif-btn" id="notifBtn" onclick="openNotifications()" title="Notificaciones" style="position:relative">
         <span>NOTIF.</span>
@@ -1968,6 +1975,67 @@ html,body,.main{background:#FFFFFF!important;}
   </div>
 </div>
 
+<!-- ═════════════ RECEPTORES (firmar acuses digitalmente vía QR) ═════════════ -->
+<div class="modal-bg" id="modalReceptores" onclick="closeModalBg(event,'receptores')">
+  <div class="modal" style="max-width:760px">
+    <h3>RECEPTORES DE OBRA</h3>
+    <p class="desc">Personas externas (clientes, supervisores del cliente, residentes, etc.) que firman los acuses al recibir el trabajo. Cada uno tiene un QR único — al escanearlo, se firma digitalmente el acuse en lugar de subir foto.</p>
+
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+      <button class="btn cafe sm" onclick="openNewReceptor()">+ AGREGAR RECEPTOR</button>
+    </div>
+
+    <div id="receptoresList" style="max-height:55vh;overflow-y:auto"></div>
+
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('receptores')">CERRAR</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal para crear/editar un receptor -->
+<div class="modal-bg" id="modalEditReceptor" onclick="closeModalBg(event,'editReceptor')">
+  <div class="modal" style="max-width:480px">
+    <h3 id="erTitle">NUEVO RECEPTOR</h3>
+    <p class="desc">Datos del receptor. Después le generamos su QR único para que firme acuses.</p>
+    <div class="field"><label>NOMBRE COMPLETO</label><input id="erNombre" placeholder="EJ: JUAN PÉREZ"></div>
+    <div class="field"><label>CARGO / EMPRESA</label><input id="erCargo" placeholder="EJ: SUPERVISOR — CONSTRUCTORA ABC"></div>
+    <div class="field"><label>TELÉFONO O EMAIL (OPCIONAL)</label><input id="erContacto" placeholder="EJ: 5555-1234 O CONTACTO@EMPRESA.COM"></div>
+    <div id="erError" class="auth-error"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeModal('editReceptor')">CANCELAR</button>
+      <button class="btn" onclick="saveReceptor()">GUARDAR</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal para mostrar el QR de un receptor (puede imprimirlo o el receptor lo guarda en su celular) -->
+<div class="modal-bg" id="modalReceptorQR" onclick="closeModalBg(event,'receptorQR')">
+  <div class="modal" style="max-width:440px">
+    <h3 id="qrViewTitle">CÓDIGO QR</h3>
+    <p class="desc" id="qrViewDesc">El receptor puede tomarle foto, imprimirlo o guardarlo en su celular. Cada vez que escanees este QR en un acuse, se firma con su nombre.</p>
+    <div id="qrViewCanvas" style="display:flex;justify-content:center;padding:20px;background:#fff;border:1px solid var(--line);border-radius:8px;margin-bottom:14px"></div>
+    <div id="qrViewMeta" style="text-align:center;font-size:11px;color:var(--mute);letter-spacing:.5px;line-height:1.5;margin-bottom:14px"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="printReceptorQR()">IMPRIMIR / DESCARGAR</button>
+      <button class="btn" onclick="closeModal('receptorQR')">CERRAR</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal del scanner — abre la cámara para escanear el QR del receptor -->
+<div class="modal-bg" id="modalQRScanner" onclick="closeModalBg(event,'QRScanner')">
+  <div class="modal" style="max-width:520px">
+    <h3 id="qrScanTitle">ESCANEAR QR DEL RECEPTOR</h3>
+    <p class="desc" id="qrScanDesc">Apuntá la cámara al QR del receptor para firmar este acuse digitalmente.</p>
+    <div id="qrScanReader" style="width:100%;border-radius:8px;overflow:hidden;background:#000;min-height:300px"></div>
+    <div id="qrScanStatus" style="text-align:center;font-size:11px;color:var(--mute);letter-spacing:.5px;margin-top:12px;min-height:14px"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="cancelQRScan()">CANCELAR</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal de gestión de usuarios -->
 <div class="modal-bg" id="modalUsers" onclick="closeModalBg(event,'users')">
   <div class="modal" style="max-width:720px">
@@ -2215,6 +2283,7 @@ const PERMS_DISPONIBLES = [
   { key: 'projects.create',  label: 'Crear proyectos nuevos',  group: 'ADMINISTRACIÓN' },
   { key: 'data.import',      label: 'Importar/resetear datos', group: 'ADMINISTRACIÓN' },
   { key: 'users.manage',     label: 'Gestionar usuarios',      group: 'ADMINISTRACIÓN' },
+  { key: 'receptores.manage',label: 'Gestionar receptores y QR de acuses',group: 'ADMINISTRACIÓN' },
   { key: 'activity.clear',   label: 'Limpiar historial',       group: 'ADMINISTRACIÓN' }
 ];
 
@@ -2877,6 +2946,7 @@ const INITIAL_DATA = {
   version: DATA_VERSION,
   activeProjectId: 'essenza-f2',
   activity: [],
+  receptores: [],
   projects: [
     {
       id: 'essenza-f2',
@@ -3036,6 +3106,7 @@ function loadState(){
 
 function ensureDataV9(data){
   if (!data.activity) data.activity = [];
+  if (!Array.isArray(data.receptores)) data.receptores = [];
   (data.projects || []).forEach(p => {
     if (p.descuentoAutorizado === undefined) p.descuentoAutorizado = 0;
     if (p.ivaPct === undefined) p.ivaPct = 0.12;
@@ -5217,31 +5288,52 @@ function renderAcusesRecepcion(){
   cont.innerHTML = (p.towers || []).map(t => {
     const levelsHtml = (t.levels || []).map(l => {
       const cards = (l.aptos || []).map(a => {
-        // 7 filas de slot (6 etapas + entrega final)
+        // 6 filas de slot (E1-E5 + E6 con entrega final)
         const slotRows = ACUSE_SLOTS.map((s, sIdx) => {
           const slot = getAcuseSlot(a, s.key);
+          const isDigital = !!(slot && slot.type === 'digital' && slot.receptorId);
           const src = getAcuseSlotSrc(slot);
-          const has = !!src;
+          const has = !!(src || isDigital);
           const fecha = has && slot.ts ? new Date(slot.ts).toLocaleDateString('es-GT', {day:'2-digit',month:'2-digit',year:'numeric'}) : '';
-          const user = has && slot.user ? slot.user : '';
-          const imgEsc = has ? String(src).replace(/'/g,"\\'") : '';
+          const imgEsc = src ? String(src).replace(/'/g,"\\'") : '';
           // Última etapa (E6) destacada porque incluye entrega final
           const isLast = sIdx === ACUSE_SLOTS.length - 1;
-          return `<div class="acuse-slot-row${has ? ' has' : ''}${isLast ? ' final' : ''}">
+          // Status text: distinto si es digital o foto
+          let statusText = 'PENDIENTE';
+          if (has) {
+            if (isDigital) {
+              statusText = `<strong style="color:var(--green-dark)">FIRMA DIGITAL</strong> · ${slot.receptorNombre || ''} · ${fecha}`;
+            } else {
+              statusText = `FOTO · ${fecha}${slot.user ? ' · ' + slot.user.split('@')[0] : ''}`;
+            }
+          }
+          // Acción VER: foto vs comprobante digital
+          const verBtn = has
+            ? (isDigital
+                ? `<button class="btn ghost sm" onclick='viewDigitalAcuse(${JSON.stringify(slot).replace(/'/g, "&apos;")})'>VER</button>`
+                : `<button class="btn ghost sm" onclick="viewPhoto('${imgEsc}')">VER</button>`)
+            : '';
+          // Botones de carga: foto + firma digital
+          const cargarBtns = canEdit
+            ? `<label class="btn sm ${has ? 'ghost' : 'cafe'}" style="cursor:pointer;margin:0" title="${has ? 'Reemplazar con foto' : 'Subir foto firmada'}">${has ? 'CAMBIAR' : 'FOTO'}<input type="file" accept="image/*" capture="environment" style="display:none" onchange="uploadAcuseRecepcion(event,'${t.id}','${l.id}','${a.id}','${s.key}')"></label>
+               <button class="btn sm ${has ? 'ghost' : 'cafe'}" onclick="openQRScanForAcuse('${t.id}','${l.id}','${a.id}','${s.key}')" title="Firmar digitalmente con QR del receptor">QR</button>`
+            : '';
+          // Eliminar
+          const delBtn = has && canEdit
+            ? `<button class="btn-icon danger" onclick="deleteAcuseRecepcion('${t.id}','${l.id}','${a.id}','${s.key}')" title="Eliminar este acuse">✕</button>`
+            : '';
+          return `<div class="acuse-slot-row${has ? ' has' : ''}${isLast ? ' final' : ''}${isDigital ? ' digital' : ''}">
             <div class="acuse-slot-label">${s.label}</div>
-            <div class="acuse-slot-status">${has
-              ? `FIRMADO · ${fecha}${user ? ' · ' + user.split('@')[0] : ''}`
-              : 'PENDIENTE'}</div>
-            <div class="acuse-slot-actions">
-              ${has ? `<button class="btn ghost sm" onclick="viewPhoto('${imgEsc}')">VER</button>` : ''}
-              ${canEdit ? `<label class="btn sm ${has ? 'ghost' : 'cafe'}" style="cursor:pointer;margin:0">${has ? 'CAMBIAR' : 'SUBIR'}<input type="file" accept="image/*" capture="environment" style="display:none" onchange="uploadAcuseRecepcion(event,'${t.id}','${l.id}','${a.id}','${s.key}')"></label>` : ''}
-              ${has && canEdit ? `<button class="btn-icon danger" onclick="deleteAcuseRecepcion('${t.id}','${l.id}','${a.id}','${s.key}')" title="Eliminar este acuse">✕</button>` : ''}
-            </div>
+            <div class="acuse-slot-status">${statusText}</div>
+            <div class="acuse-slot-actions">${verBtn}${cargarBtns}${delBtn}</div>
           </div>`;
         }).join('');
 
-        // Contador de cuántos acuses tiene
-        const completed = ACUSE_SLOTS.filter(s => !!getAcuseSlotSrc(getAcuseSlot(a, s.key))).length;
+        // Contador de cuántos acuses tiene (foto o digital)
+        const completed = ACUSE_SLOTS.filter(s => {
+          const slot = getAcuseSlot(a, s.key);
+          return slot && (slot.type === 'digital' || getAcuseSlotSrc(slot));
+        }).length;
         const allDone = completed === ACUSE_SLOTS.length;
 
         return `<div class="acuse-card-multi${allDone ? ' all-done' : ''}">
@@ -8512,6 +8604,312 @@ function deleteCurrentProveedor(){
     updateFooterLastUpdate();
   });
 })();
+
+/* ═══════════════════════════════════════════════════════════════
+   RECEPTORES + ACUSES DIGITALES VÍA QR
+   ═══════════════════════════════════════════════════════════════
+   - Cada receptor tiene un token único (su QR contiene este token).
+   - Al escanear: validamos token → registramos firma digital en el slot.
+   - Los acuses pueden ser type:'photo' (foto papel firmado) o type:'digital' (QR).
+   ═══════════════════════════════════════════════════════════════ */
+
+const QR_TOKEN_PREFIX = 'PR-RECEP-';
+
+function makeReceptorToken(){
+  // Random ~16 chars (suficiente entropía)
+  const arr = new Uint8Array(12);
+  (window.crypto || window.msCrypto).getRandomValues(arr);
+  return QR_TOKEN_PREFIX + Array.from(arr).map(b => b.toString(36)).join('').toUpperCase().slice(0,16);
+}
+
+function findReceptorByToken(token){
+  if (!token || !state.receptores) return null;
+  return state.receptores.find(r => r.token === token && !r.deleted) || null;
+}
+
+/* ─────── ABM de receptores ─────── */
+let editingReceptorId = null;
+
+function openReceptoresModal(){
+  if (!can('receptores.manage') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
+  renderReceptoresList();
+  document.getElementById('modalReceptores').classList.add('show');
+}
+
+function renderReceptoresList(){
+  const cont = document.getElementById('receptoresList');
+  const list = (state.receptores || []).filter(r => !r.deleted);
+  if (list.length === 0) {
+    cont.innerHTML = `<div class="empty" style="padding:40px 20px"><p style="font-size:12px;letter-spacing:.5px">SIN RECEPTORES TODAVÍA — TOCÁ "+ AGREGAR RECEPTOR" PARA EMPEZAR</p></div>`;
+    return;
+  }
+  cont.innerHTML = list.map(r => `
+    <div style="border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;background:var(--white)">
+      <div>
+        <div style="font-weight:700;color:var(--ink);font-size:13px;text-transform:uppercase;letter-spacing:.3px">${r.nombre || ''}</div>
+        <div style="font-size:10px;color:var(--mute);letter-spacing:.5px;text-transform:uppercase;margin-top:3px;font-weight:500">${r.cargo || 'SIN CARGO'}</div>
+        ${r.contacto ? `<div style="font-size:10px;color:var(--mute);margin-top:2px">${r.contacto}</div>` : ''}
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+        <button class="btn ghost sm" onclick="showReceptorQR('${r.id}')">VER QR</button>
+        <button class="btn ghost sm" onclick="openEditReceptor('${r.id}')">EDITAR</button>
+        <button class="btn-icon danger" onclick="deleteReceptor('${r.id}')" title="Eliminar receptor">✕</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function openNewReceptor(){
+  editingReceptorId = null;
+  document.getElementById('erTitle').textContent = 'NUEVO RECEPTOR';
+  ['erNombre','erCargo','erContacto'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('erError').textContent = '';
+  document.getElementById('modalEditReceptor').classList.add('show');
+}
+
+function openEditReceptor(id){
+  const r = (state.receptores || []).find(x => x.id === id);
+  if (!r) return;
+  editingReceptorId = id;
+  document.getElementById('erTitle').textContent = 'EDITAR RECEPTOR';
+  document.getElementById('erNombre').value = r.nombre || '';
+  document.getElementById('erCargo').value = r.cargo || '';
+  document.getElementById('erContacto').value = r.contacto || '';
+  document.getElementById('erError').textContent = '';
+  document.getElementById('modalEditReceptor').classList.add('show');
+}
+
+function saveReceptor(){
+  if (!can('receptores.manage') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
+  const nombre = document.getElementById('erNombre').value.trim().toUpperCase();
+  const cargo = document.getElementById('erCargo').value.trim().toUpperCase();
+  const contacto = document.getElementById('erContacto').value.trim();
+  const err = document.getElementById('erError');
+  err.textContent = '';
+
+  if (!nombre) { err.textContent = 'NOMBRE REQUERIDO'; return; }
+
+  if (!Array.isArray(state.receptores)) state.receptores = [];
+
+  if (editingReceptorId) {
+    const r = state.receptores.find(x => x.id === editingReceptorId);
+    if (!r) return;
+    r.nombre = nombre;
+    r.cargo = cargo;
+    r.contacto = contacto;
+    r.updatedAt = Date.now();
+    showToast('RECEPTOR ACTUALIZADO', 'green');
+  } else {
+    const r = {
+      id: 'recep-' + uid(),
+      nombre, cargo, contacto,
+      token: makeReceptorToken(),
+      active: true,
+      deleted: false,
+      createdAt: Date.now(),
+      createdBy: currentUser ? currentUser.email : null
+    };
+    state.receptores.push(r);
+    logActivity('create', 'Receptor agregado: ' + nombre, cargo);
+    showToast('RECEPTOR CREADO — VE SU QR PARA QUE LO TENGA', 'green');
+  }
+  saveState();
+  closeModal('editReceptor');
+  renderReceptoresList();
+}
+
+function deleteReceptor(id){
+  if (!can('receptores.manage') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
+  const r = (state.receptores || []).find(x => x.id === id);
+  if (!r) return;
+  if (!confirm(`¿ELIMINAR RECEPTOR "${r.nombre}"?\n\nLas firmas digitales que ya hizo NO se borran (quedan registradas con su nombre). Solo no podrá usar su QR para nuevas firmas.`)) return;
+  // Soft delete para preservar firmas históricas
+  r.deleted = true;
+  r.deletedAt = Date.now();
+  saveState();
+  logActivity('delete', 'Receptor eliminado: ' + r.nombre, '');
+  renderReceptoresList();
+  showToast('RECEPTOR ELIMINADO');
+}
+
+/* ─────── Mostrar QR de un receptor ─────── */
+let _currentQRReceptorId = null;
+
+function showReceptorQR(id){
+  const r = (state.receptores || []).find(x => x.id === id);
+  if (!r) return;
+  _currentQRReceptorId = id;
+  document.getElementById('qrViewTitle').textContent = 'QR DE ' + r.nombre;
+  document.getElementById('qrViewMeta').innerHTML = `<strong style="color:var(--ink);font-size:13px;display:block;margin-bottom:4px">${r.nombre}</strong>${r.cargo || ''}${r.contacto ? '<br>' + r.contacto : ''}`;
+  // Generar QR
+  const canvas = document.getElementById('qrViewCanvas');
+  canvas.innerHTML = '';
+  if (typeof QRCode === 'undefined') {
+    canvas.innerHTML = '<p style="color:var(--red);font-size:11px;letter-spacing:.5px">ERROR: NO SE PUDO CARGAR LA LIBRERÍA QR. RECARGÁ LA PÁGINA.</p>';
+  } else {
+    try {
+      new QRCode(canvas, {
+        text: r.token,
+        width: 280,
+        height: 280,
+        colorDark: '#0F172A',
+        colorLight: '#FFFFFF',
+        correctLevel: QRCode.CorrectLevel.H
+      });
+    } catch(e) {
+      console.error(e);
+      canvas.innerHTML = '<p style="color:var(--red);font-size:11px">ERROR GENERANDO QR</p>';
+    }
+  }
+  document.getElementById('modalReceptorQR').classList.add('show');
+}
+
+function printReceptorQR(){
+  const r = (state.receptores || []).find(x => x.id === _currentQRReceptorId);
+  if (!r) return;
+  const canvas = document.querySelector('#qrViewCanvas canvas, #qrViewCanvas img');
+  const dataUrl = canvas ? (canvas.toDataURL ? canvas.toDataURL('image/png') : canvas.src) : '';
+  const w = window.open('', '_blank');
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>QR · ${r.nombre}</title>
+<style>
+@page{size:A5;margin:14mm}
+body{font-family:system-ui,-apple-system,Inter,Arial,sans-serif;text-align:center;padding:20px;color:#0F172A}
+h1{font-size:18px;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px}
+.cargo{font-size:12px;color:#64748B;letter-spacing:.5px;margin-bottom:24px;text-transform:uppercase}
+.qr{padding:20px;background:#fff;border:1px solid #ccc;display:inline-block;border-radius:8px}
+.qr img{display:block;width:280px;height:280px}
+.foot{margin-top:24px;font-size:10px;color:#64748B;letter-spacing:1px;text-transform:uppercase}
+@media print{.no-print{display:none}}
+</style></head><body>
+<h1>${r.nombre}</h1>
+<div class="cargo">${r.cargo || ''}${r.contacto ? ' · ' + r.contacto : ''}</div>
+<div class="qr"><img src="${dataUrl}" alt="QR"></div>
+<div class="foot">PUNTO ROJO — QR PARA FIRMAR ACUSES DE OBRA</div>
+<button class="no-print" onclick="window.print()" style="margin-top:24px;padding:10px 20px;background:#C8141C;color:#fff;border:0;border-radius:6px;font-weight:600;cursor:pointer">IMPRIMIR</button>
+</body></html>`);
+  w.document.close();
+}
+
+/* ─────── Scanner QR para firmar acuses ─────── */
+let _qrScanCtx = null;        // { towerId, levelId, aptoId, slotKey }
+let _html5Qr = null;          // Instancia de Html5Qrcode
+
+function openQRScanForAcuse(towerId, levelId, aptoId, slotKey){
+  if (!can('avance.edit')) return showToast('SIN PERMISO', 'red');
+  if (!Array.isArray(state.receptores) || state.receptores.filter(r => !r.deleted).length === 0) {
+    showToast('PRIMERO AGREGÁ RECEPTORES (BOTÓN "RECEPTORES" EN TOPBAR)', 'red');
+    return;
+  }
+  if (typeof Html5Qrcode === 'undefined') {
+    showToast('LIBRERÍA QR NO CARGADA — RECARGÁ', 'red');
+    return;
+  }
+  _qrScanCtx = { towerId, levelId, aptoId, slotKey };
+  const slotInfo = ACUSE_SLOTS.find(s => s.key === String(slotKey));
+  document.getElementById('qrScanTitle').textContent = 'ESCANEAR QR · ' + (slotInfo ? slotInfo.label : 'ACUSE');
+  document.getElementById('qrScanStatus').textContent = 'APUNTÁ LA CÁMARA AL QR DEL RECEPTOR...';
+  document.getElementById('modalQRScanner').classList.add('show');
+  setTimeout(startQRScan, 300);
+}
+
+function startQRScan(){
+  const reader = document.getElementById('qrScanReader');
+  reader.innerHTML = '';
+  try {
+    _html5Qr = new Html5Qrcode('qrScanReader');
+    _html5Qr.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 240, height: 240 } },
+      (decoded) => {
+        if (!_html5Qr) return;
+        // Pausar para evitar disparos múltiples
+        _html5Qr.stop().catch(()=>{}).finally(() => {
+          _html5Qr = null;
+          processQRScan(decoded);
+        });
+      },
+      () => {} // ignorar errores de frame
+    ).catch(err => {
+      console.error('Cam start error:', err);
+      document.getElementById('qrScanStatus').textContent = 'ERROR ACCEDIENDO A LA CÁMARA: ' + (err.message || err);
+    });
+  } catch(e) {
+    console.error(e);
+    document.getElementById('qrScanStatus').textContent = 'ERROR: ' + e.message;
+  }
+}
+
+function cancelQRScan(){
+  if (_html5Qr) {
+    _html5Qr.stop().catch(()=>{}).finally(() => { _html5Qr = null; });
+  }
+  closeModal('QRScanner');
+}
+
+async function processQRScan(decoded){
+  const ctx = _qrScanCtx;
+  if (!ctx) { closeModal('QRScanner'); return; }
+
+  const r = findReceptorByToken(String(decoded || '').trim());
+  if (!r) {
+    document.getElementById('qrScanStatus').textContent = 'QR INVÁLIDO O RECEPTOR ELIMINADO. INTENTÁ DE NUEVO.';
+    setTimeout(startQRScan, 1200);
+    return;
+  }
+
+  // Pedir confirmación al supervisor antes de firmar
+  const slotInfo = ACUSE_SLOTS.find(s => s.key === String(ctx.slotKey));
+  const ok = confirm(`CONFIRMÁ LA FIRMA DIGITAL\n\nReceptor: ${r.nombre}\n${r.cargo || ''}\n\nAcuse: ${slotInfo ? slotInfo.label : ctx.slotKey}\n\n¿FIRMAR ESTE ACUSE?`);
+  if (!ok) {
+    document.getElementById('qrScanStatus').textContent = 'CANCELADO — ESCANEÁ DE NUEVO O CERRÁ';
+    setTimeout(startQRScan, 600);
+    return;
+  }
+
+  // Guardar la firma
+  try {
+    const p = activeProj();
+    const t = (p.towers || []).find(x => x.id === ctx.towerId);
+    const l = t ? (t.levels || []).find(x => x.id === ctx.levelId) : null;
+    const a = l ? (l.aptos || []).find(x => x.id === ctx.aptoId) : null;
+    if (!a) { showToast('APTO NO ENCONTRADO', 'red'); closeModal('QRScanner'); return; }
+    if (!a.acuseRecepciones) a.acuseRecepciones = {};
+    a.acuseRecepciones[ctx.slotKey] = {
+      type: 'digital',
+      receptorId: r.id,
+      receptorNombre: r.nombre,
+      receptorCargo: r.cargo || '',
+      ts: Date.now(),
+      user: currentUser ? currentUser.email : '',
+      userName: currentUser ? (currentUser.displayName || currentUser.email) : ''
+    };
+    saveState();
+    logActivity('auth',
+      `Acuse digital firmado: ${l.name} · ${a.name} · ${slotInfo ? slotInfo.label : ctx.slotKey}`,
+      `Firmado por ${r.nombre}${r.cargo ? ' (' + r.cargo + ')' : ''}`);
+    showToast('ACUSE FIRMADO POR ' + r.nombre, 'green');
+    renderAcusesRecepcion();
+    renderAvance();
+  } catch(e) {
+    console.error(e);
+    showToast('ERROR GUARDANDO LA FIRMA: ' + (e.message || ''), 'red');
+  }
+  closeModal('QRScanner');
+}
+
+/* Vista del comprobante digital (cuando el usuario hace VER en un acuse digital) */
+function viewDigitalAcuse(slot){
+  if (!slot) return;
+  const fecha = slot.ts ? new Date(slot.ts).toLocaleString('es-GT') : '';
+  alert(
+    'COMPROBANTE DE ACUSE DIGITAL\n\n' +
+    'Receptor: ' + (slot.receptorNombre || '') + '\n' +
+    (slot.receptorCargo ? slot.receptorCargo + '\n' : '') +
+    '\nFirmado por: ' + (slot.userName || slot.user || '') + '\n' +
+    'Fecha: ' + fecha + '\n\n' +
+    'Esta firma quedó registrada de forma permanente vía QR.'
+  );
+}
 
 /* ─────────────── INIT (FIREBASE AUTH) ─────────────── */
 
