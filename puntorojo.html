@@ -21,10 +21,11 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600;9..144,700;9..144,900&family=Figtree:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 
-<!-- ════════ FIREBASE SDK · LOGIN Y BASE DE DATOS EN LA NUBE ════════ -->
+<!-- ════════ FIREBASE SDK · LOGIN, BASE DE DATOS Y FOTOS EN LA NUBE ════════ -->
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-storage-compat.js"></script>
 <script>
 /* Inicialización de Firebase. Estas claves son "publishable" (van en código cliente).
    La seguridad real vive en las Reglas de Firestore, no acá. */
@@ -3075,15 +3076,36 @@ const CloudSync = {
     return false;
   },
 
-  /* Quita las fotos del state antes de subirlo a la nube — siguen en localStorage */
+  /* Limpia el state antes de subirlo a la nube:
+     - URLs de Storage: SE MANTIENEN (son chiquitas, ~200 bytes, y todos las necesitan)
+     - Base64 legacy: SE QUITAN (ocupan mucho, sólo viven en localStorage hasta migrarlas)
+     Esta función NO modifica el state original, devuelve una copia. */
   stripLocal(s){
     const clone = JSON.parse(JSON.stringify(s));
     (clone.projects || []).forEach(p =>
       (p.towers || []).forEach(t =>
         (t.levels || []).forEach(l =>
           (l.aptos || []).forEach(a => {
-            a.photos = {};
-            a.acuseRecepcion = null;
+            // Fotos: quitar slots con base64 (data:), mantener URLs
+            if (a.photos) {
+              for (let i = 0; i < 6; i++) {
+                const slots = a.photos[i];
+                if (Array.isArray(slots)) {
+                  slots.forEach((v, idx) => {
+                    if (typeof v === 'string' && v.startsWith('data:')) slots[idx] = null;
+                  });
+                  if (!slots[0] && !slots[1]) delete a.photos[i];
+                }
+              }
+            }
+            // Acuse: quitar si es base64 legacy (mantener si tiene url)
+            if (a.acuseRecepcion) {
+              if (a.acuseRecepcion.url) {
+                // URL nueva — mantener
+              } else if (a.acuseRecepcion.data && typeof a.acuseRecepcion.data === 'string' && a.acuseRecepcion.data.startsWith('data:')) {
+                a.acuseRecepcion = null;
+              }
+            }
           })
         )
       )
@@ -3124,6 +3146,115 @@ const CloudSync = {
     );
   }
 };
+
+/* ═══════════════════════════════════════════════════════════════
+   MIGRACIÓN DE FOTOS · base64 (localStorage) → Firebase Storage
+   ═══════════════════════════════════════════════════════════════
+   Una sola vez, después de Fase 4: detecta fotos en base64 que estaban
+   guardadas en localStorage y las sube a Storage, reemplazándolas por URLs.
+   Es seguro correrla varias veces — si no hay base64, no hace nada.
+   ═══════════════════════════════════════════════════════════════ */
+async function migrateBase64PhotosToStorage(){
+  if (typeof firebase === 'undefined' || !firebase.storage) return { migrated: 0, errors: 0 };
+  if (!currentUser) return { migrated: 0, errors: 0 };
+
+  // Contar primero cuántas fotos hay para migrar (sin bloquear UI por las dudas)
+  let toMigrate = 0;
+  (state.projects || []).forEach(p =>
+    (p.towers || []).forEach(t =>
+      (t.levels || []).forEach(l =>
+        (l.aptos || []).forEach(a => {
+          if (a.photos) {
+            for (let i = 0; i < 6; i++) {
+              const slots = a.photos[i];
+              if (Array.isArray(slots)) {
+                slots.forEach(v => { if (typeof v === 'string' && v.startsWith('data:')) toMigrate++; });
+              }
+            }
+          }
+          if (a.acuseRecepcion && a.acuseRecepcion.data
+              && typeof a.acuseRecepcion.data === 'string'
+              && a.acuseRecepcion.data.startsWith('data:')) {
+            toMigrate++;
+          }
+        })
+      )
+    )
+  );
+
+  if (toMigrate === 0) return { migrated: 0, errors: 0 };
+
+  showToast(`SUBIENDO ${toMigrate} FOTO${toMigrate !== 1 ? 'S' : ''} A LA NUBE...`, '');
+  let migrated = 0, errors = 0;
+
+  const storage = firebase.storage();
+
+  for (const p of (state.projects || [])) {
+    for (const t of (p.towers || [])) {
+      for (const l of (t.levels || [])) {
+        for (const a of (l.aptos || [])) {
+          // Fotos por etapa/slot
+          if (a.photos) {
+            for (let etapa = 0; etapa < 6; etapa++) {
+              const slots = a.photos[etapa];
+              if (!Array.isArray(slots)) continue;
+              for (let slot = 0; slot < 2; slot++) {
+                const data = slots[slot];
+                if (typeof data === 'string' && data.startsWith('data:')) {
+                  try {
+                    const blob = await (await fetch(data)).blob();
+                    const path = `photos/${a.id}/${etapa}/${slot}`;
+                    const ref = storage.ref(path);
+                    await ref.put(blob, { contentType: 'image/jpeg' });
+                    slots[slot] = await ref.getDownloadURL();
+                    migrated++;
+                    if (migrated % 5 === 0) {
+                      showToast(`MIGRANDO FOTOS · ${migrated}/${toMigrate}`, '');
+                    }
+                  } catch(e) {
+                    console.error('Migración foto fallida', a.id, etapa, slot, e);
+                    errors++;
+                  }
+                }
+              }
+            }
+          }
+          // Acuse de recepción
+          if (a.acuseRecepcion && a.acuseRecepcion.data
+              && typeof a.acuseRecepcion.data === 'string'
+              && a.acuseRecepcion.data.startsWith('data:')) {
+            try {
+              const blob = await (await fetch(a.acuseRecepcion.data)).blob();
+              const path = `acuses/${a.id}`;
+              const ref = storage.ref(path);
+              await ref.put(blob, { contentType: 'image/jpeg' });
+              const url = await ref.getDownloadURL();
+              a.acuseRecepcion = {
+                url,
+                ts: a.acuseRecepcion.ts || Date.now(),
+                user: a.acuseRecepcion.user || ''
+              };
+              migrated++;
+            } catch(e) {
+              console.error('Migración acuse fallida', a.id, e);
+              errors++;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (migrated > 0) {
+    try { saveState(); } catch(e) { console.error('saveState falló post-migración:', e); }
+    showToast(`✓ ${migrated} FOTO${migrated !== 1 ? 'S' : ''} MIGRADA${migrated !== 1 ? 'S' : ''} A LA NUBE${errors > 0 ? ' (' + errors + ' fallidas)' : ''}`, errors > 0 ? '' : 'green');
+    try { renderAvance(); renderAcusesRecepcion(); } catch(e) {}
+  } else if (errors > 0) {
+    showToast(`MIGRACIÓN: ${errors} FOTOS NO PUDIERON SUBIRSE`, 'red');
+  }
+
+  return { migrated, errors };
+}
 
 /* Estimar uso de localStorage. Navegadores típicamente dan 5-10 MB por origen */
 const STORAGE_LIMIT_BYTES = 5 * 1024 * 1024; // 5MB conservador
@@ -4248,46 +4379,64 @@ async function uploadPhoto(event, etapaIdx, slotIdx){
   const file = event.target.files[0];
   if (!file) return;
   if (!file.type.startsWith('image/')) return showToast('ARCHIVO NO ES IMAGEN', 'red');
+  if (typeof firebase === 'undefined' || !firebase.storage) {
+    return showToast('FIREBASE STORAGE NO DISPONIBLE — RECARGÁ', 'red');
+  }
 
-  showToast('COMPRIMIENDO FOTO...', '');
+  showToast('COMPRIMIENDO Y SUBIENDO FOTO...', '');
   try {
+    // 1) Comprimir la foto a JPEG ~800px de ancho
     const base64 = await compressImage(file, 800, 0.75);
+    // 2) Convertir a blob para subir a Storage
+    const blob = await (await fetch(base64)).blob();
+    // 3) Subir a /photos/{aptoId}/{etapaIdx}/{slotIdx}
+    const aptoId = photoCtx.aptoId;
+    const path = `photos/${aptoId}/${etapaIdx}/${slotIdx}`;
+    const ref = firebase.storage().ref(path);
+    await ref.put(blob, { contentType: 'image/jpeg' });
+    const url = await ref.getDownloadURL();
+
+    // 4) Guardar la URL en el state (todos los dispositivos la van a ver)
     const p = activeProj();
     const t = p.towers.find(x => x.id === photoCtx.towerId);
     const l = t.levels.find(x => x.id === photoCtx.levelId);
-    const a = (l.aptos||[]).find(x => x.id === photoCtx.aptoId);
+    const a = (l.aptos||[]).find(x => x.id === aptoId);
     if (!a.photos[etapaIdx]) a.photos[etapaIdx] = [null, null];
-    a.photos[etapaIdx][slotIdx] = base64;
-
-    try {
-      saveState();
-    } catch(e) {
-      a.photos[etapaIdx][slotIdx] = null;
-      return showToast('ALMACENAMIENTO LLENO — EXPORTA Y LIMPIA', 'red');
-    }
+    a.photos[etapaIdx][slotIdx] = url;
+    saveState();
 
     logActivity('update', `Foto agregada: ${l.name} · ${a.name}`, `${p.name} · ${ETAPAS[etapaIdx].name} (foto ${slotIdx+1})`);
     renderPhotosModal();
     renderAvance();
-    showToast('FOTO GUARDADA', 'green');
+    showToast('FOTO GUARDADA EN LA NUBE', 'green');
   } catch(err) {
     console.error(err);
-    showToast('ERROR AL PROCESAR FOTO', 'red');
+    showToast('ERROR AL SUBIR FOTO: ' + (err.code || err.message || 'desconocido'), 'red');
   }
 }
 
-function deletePhoto(etapaIdx, slotIdx){
+async function deletePhoto(etapaIdx, slotIdx){
   if (!can('avance.edit')) return;
   if (!confirm('¿ELIMINAR ESTA FOTO?')) return;
   const p = activeProj();
   const t = p.towers.find(x => x.id === photoCtx.towerId);
   const l = t.levels.find(x => x.id === photoCtx.levelId);
   const a = (l.aptos||[]).find(x => x.id === photoCtx.aptoId);
+  const oldRef = (a.photos && a.photos[etapaIdx]) ? a.photos[etapaIdx][slotIdx] : null;
+
   if (a.photos && a.photos[etapaIdx]) {
     a.photos[etapaIdx][slotIdx] = null;
     if (!a.photos[etapaIdx][0] && !a.photos[etapaIdx][1]) delete a.photos[etapaIdx];
   }
   saveState();
+
+  // Borrar el archivo de Storage (best-effort, no bloquea la UI)
+  if (oldRef && typeof oldRef === 'string' && oldRef.startsWith('https://') && oldRef.includes('firebasestorage')) {
+    try {
+      firebase.storage().refFromURL(oldRef).delete().catch(e => console.warn('Storage delete falló:', e.message));
+    } catch(e) {}
+  }
+
   renderPhotosModal();
   renderAvance();
   showToast('FOTO ELIMINADA');
@@ -4316,9 +4465,11 @@ function renderAcusesRecepcion(){
   cont.innerHTML = (p.towers || []).map(t => {
     const levelsHtml = (t.levels || []).map(l => {
       const cards = (l.aptos || []).map(a => {
-        const has = !!(a.acuseRecepcion && a.acuseRecepcion.data);
+        // Soporta tanto URL nueva (Storage) como data (base64 legacy)
+        const acuseSrc = a.acuseRecepcion ? (a.acuseRecepcion.url || a.acuseRecepcion.data) : '';
+        const has = !!acuseSrc;
         const fecha = has && a.acuseRecepcion.ts ? new Date(a.acuseRecepcion.ts).toLocaleDateString('es-GT', {day:'2-digit',month:'2-digit',year:'numeric'}) : '';
-        const imgEsc = has ? String(a.acuseRecepcion.data).replace(/'/g,"\\'") : '';
+        const imgEsc = has ? String(acuseSrc).replace(/'/g,"\\'") : '';
         return `<div class="acuse-card${has ? ' has-acuse' : ''}">
           <div>
             <div class="acuse-name">${a.name}</div>
@@ -4348,34 +4499,38 @@ async function uploadAcuseRecepcion(event, towerId, levelId, aptoId){
   const file = event.target.files[0];
   if (!file) return;
   if (!file.type.startsWith('image/')) return showToast('ARCHIVO NO ES IMAGEN', 'red');
+  if (typeof firebase === 'undefined' || !firebase.storage) {
+    return showToast('FIREBASE STORAGE NO DISPONIBLE — RECARGÁ', 'red');
+  }
 
-  showToast('COMPRIMIENDO ACUSE...', '');
+  showToast('COMPRIMIENDO Y SUBIENDO ACUSE...', '');
   try {
     const base64 = await compressImage(file, 900, 0.78);
+    const blob = await (await fetch(base64)).blob();
+
+    const path = `acuses/${aptoId}`;
+    const ref = firebase.storage().ref(path);
+    await ref.put(blob, { contentType: 'image/jpeg' });
+    const url = await ref.getDownloadURL();
+
     const p = activeProj();
     const t = (p.towers || []).find(x => x.id === towerId);
     const l = t ? (t.levels || []).find(x => x.id === levelId) : null;
     const a = l ? (l.aptos || []).find(x => x.id === aptoId) : null;
     if (!a) return showToast('ELEMENTO NO ENCONTRADO', 'red');
-    const prev = a.acuseRecepcion || null;
-    a.acuseRecepcion = { data: base64, ts: Date.now(), user: getCurrentUser()?.username || '' };
-    try {
-      saveState();
-    } catch(e) {
-      a.acuseRecepcion = prev;
-      return showToast('ALMACENAMIENTO LLENO — EXPORTA Y LIMPIA FOTOS', 'red');
-    }
+    a.acuseRecepcion = { url, ts: Date.now(), user: getCurrentUser()?.username || '' };
+    saveState();
     logActivity('update', `Acuse de recepción cargado: ${l.name} · ${a.name}`, p.name);
     renderAcusesRecepcion();
     renderAvance();
-    showToast('ACUSE GUARDADO', 'green');
+    showToast('ACUSE GUARDADO EN LA NUBE', 'green');
   } catch(err) {
     console.error(err);
-    showToast('ERROR AL PROCESAR ACUSE', 'red');
+    showToast('ERROR AL SUBIR ACUSE: ' + (err.code || err.message || 'desconocido'), 'red');
   }
 }
 
-function deleteAcuseRecepcion(towerId, levelId, aptoId){
+async function deleteAcuseRecepcion(towerId, levelId, aptoId){
   if (!can('avance.edit')) return showToast('SIN PERMISO', 'red');
   if (!confirm('¿ELIMINAR ESTE ACUSE DE RECEPCIÓN?')) return;
   const p = activeProj();
@@ -4383,8 +4538,17 @@ function deleteAcuseRecepcion(towerId, levelId, aptoId){
   const l = t ? (t.levels || []).find(x => x.id === levelId) : null;
   const a = l ? (l.aptos || []).find(x => x.id === aptoId) : null;
   if (!a) return;
+  // Capturar la URL (si existe) antes de borrar el objeto
+  const oldUrl = a.acuseRecepcion ? (a.acuseRecepcion.url || (typeof a.acuseRecepcion.data === 'string' && a.acuseRecepcion.data.startsWith('https://') ? a.acuseRecepcion.data : null)) : null;
   a.acuseRecepcion = null;
   saveState();
+
+  if (oldUrl && oldUrl.includes('firebasestorage')) {
+    try {
+      firebase.storage().refFromURL(oldUrl).delete().catch(e => console.warn('Storage delete falló:', e.message));
+    } catch(e) {}
+  }
+
   logActivity('delete', `Acuse de recepción eliminado: ${l.name} · ${a.name}`, p.name);
   renderAcusesRecepcion();
   renderAvance();
@@ -7645,7 +7809,15 @@ function applyAuthSession(fbUser, profileData){
   updateStorageIndicator();
   // Arranca la sincronización con la nube. Si ya hay datos, los aplica.
   // Si no hay nada en la nube, sube el state local como punto de partida.
-  try { CloudSync.init(); } catch(e) { console.warn('CloudSync init falló:', e); }
+  try {
+    CloudSync.init().then(() => {
+      // Después del primer sync, migrar fotos viejas (base64) a Firebase Storage
+      // Es no-op si no hay nada que migrar.
+      setTimeout(() => {
+        migrateBase64PhotosToStorage().catch(e => console.error('Migración de fotos:', e));
+      }, 1500);
+    });
+  } catch(e) { console.warn('CloudSync init falló:', e); }
 }
 
 /* Agrega el link "¿Primera vez? Configurar administrador" en la pantalla de login,
