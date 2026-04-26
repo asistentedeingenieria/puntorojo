@@ -3113,17 +3113,38 @@ const CloudSync = {
     return clone;
   },
 
+  /* Extrae SOLO fotos base64 legacy del state local.
+     Las URLs de Storage ya viven en el cloud y se sincronizan solas — no las tocamos.
+     Esto solo importa durante la transición a Fase 4 (mientras quedan base64 sin migrar). */
   extractPhotos(s){
     const map = {};
     (s && s.projects || []).forEach(p =>
       (p.towers || []).forEach(t =>
         (t.levels || []).forEach(l =>
           (l.aptos || []).forEach(a => {
-            if (a.id) {
-              map[a.id] = {
-                photos: a.photos || {},
-                acuseRecepcion: a.acuseRecepcion || null
-              };
+            if (!a.id) return;
+            // Solo fotos en base64 (data:...)
+            const photos = {};
+            if (a.photos) {
+              for (let i = 0; i < 6; i++) {
+                const slots = a.photos[i];
+                if (!Array.isArray(slots)) continue;
+                const b64 = [
+                  (typeof slots[0] === 'string' && slots[0].startsWith('data:')) ? slots[0] : null,
+                  (typeof slots[1] === 'string' && slots[1].startsWith('data:')) ? slots[1] : null
+                ];
+                if (b64[0] || b64[1]) photos[i] = b64;
+              }
+            }
+            // Solo acuse en base64 (legacy)
+            let acuse = null;
+            if (a.acuseRecepcion && a.acuseRecepcion.data
+                && typeof a.acuseRecepcion.data === 'string'
+                && a.acuseRecepcion.data.startsWith('data:')) {
+              acuse = a.acuseRecepcion;
+            }
+            if (Object.keys(photos).length || acuse) {
+              map[a.id] = { photos, acuseRecepcion: acuse };
             }
           })
         )
@@ -3132,14 +3153,33 @@ const CloudSync = {
     return map;
   },
 
+  /* Reaplica fotos base64 legacy al state que vino del cloud.
+     - Las URLs del cloud SE MANTIENEN (no se tocan).
+     - Si un slot del cloud está vacío Y tengo base64 local, uso el base64
+       (queda hasta que se migre a Storage en el próximo refresh).
+     - Si el cloud tiene URL, ignoro el base64 local (cloud es la verdad). */
   injectPhotos(s, map){
     (s.projects || []).forEach(p =>
       (p.towers || []).forEach(t =>
         (t.levels || []).forEach(l =>
           (l.aptos || []).forEach(a => {
             const stored = map[a.id];
-            a.photos = stored ? (stored.photos || {}) : (a.photos || {});
-            a.acuseRecepcion = stored ? (stored.acuseRecepcion || null) : (a.acuseRecepcion || null);
+            if (!stored) return;
+
+            // Fotos: rellenar slots vacíos del cloud con base64 local
+            a.photos = a.photos || {};
+            for (const i in stored.photos) {
+              const localSlots = stored.photos[i];
+              const cloudSlots = (Array.isArray(a.photos[i]) ? a.photos[i] : [null, null]).slice();
+              cloudSlots[0] = cloudSlots[0] || localSlots[0];
+              cloudSlots[1] = cloudSlots[1] || localSlots[1];
+              if (cloudSlots[0] || cloudSlots[1]) a.photos[i] = cloudSlots;
+            }
+
+            // Acuse: solo usar local si el cloud no tiene ninguno
+            if (!a.acuseRecepcion && stored.acuseRecepcion) {
+              a.acuseRecepcion = stored.acuseRecepcion;
+            }
           })
         )
       )
