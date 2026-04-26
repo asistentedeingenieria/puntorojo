@@ -2012,6 +2012,15 @@ html,body,.main{background:#FFFFFF!important;}
     </div>
 
     <div class="field">
+      <label>NOTIFICACIONES EN ESTE DISPOSITIVO</label>
+      <div id="notifPermStatus" style="padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--cream);font-size:11px;letter-spacing:.3px;line-height:1.5;margin-bottom:8px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button id="notifEnableBtn" class="btn cafe sm" style="flex:1;padding:10px" onclick="handleNotifEnableClick()">ACTIVAR</button>
+      </div>
+      <div class="hint">Cuando alguien te asigne algo, te llegue un pedido o te autoricen una OC, te aparece una notificación en la barra del celular o computadora — incluso si no tenés la app abierta en este momento.</div>
+    </div>
+
+    <div class="field">
       <label>ACCESO BIOMÉTRICO</label>
       <div id="bioStatusBox" style="padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--cream);font-size:11px;letter-spacing:.3px;line-height:1.5;margin-bottom:8px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -2402,7 +2411,14 @@ async function anyUserExists(){
   }
 }
 
-/* ════════════════ NOTIFICACIONES POR USUARIO ════════════════ */
+/* ═══════════════════════════════════════════════════════════════
+   NOTIFICACIONES · FIRESTORE (subcolección por usuario)
+   ═══════════════════════════════════════════════════════════════
+   Estructura: /users/{uid}/notifications/{notifId}
+   - addNotification escribe en la subcolección del DESTINATARIO
+   - subscribeToMyNotifications hace onSnapshot a MIS notificaciones
+   - localStorage queda como cache offline para mostrar lo último
+   ═══════════════════════════════════════════════════════════════ */
 const NOTIFS_KEY = 'puntorojo_notifs';
 
 function loadNotifications(){
@@ -2417,46 +2433,236 @@ function saveNotifications(list){
   try { localStorage.setItem(NOTIFS_KEY, JSON.stringify(list)); } catch(e) { console.error(e); }
 }
 
-function addNotification({ forUser, type, title, body, refPedidoId, refOcId, projectId }){
+/* Encuentra el UID de Firestore de un usuario por su email (case-insensitive). */
+async function findUidByEmail(email){
+  if (!email || !firebase.firestore) return null;
+  const e = String(email).toLowerCase().trim();
+  // Primero buscar en la cache local de usuarios (rápido)
+  if (Array.isArray(cachedUsers)) {
+    const local = cachedUsers.find(u => (u.email || '').toLowerCase() === e);
+    if (local && local.uid) return local.uid;
+  }
+  // Si no, query a Firestore
+  try {
+    const snap = await firebase.firestore().collection('users')
+      .where('email', '==', e).limit(1).get();
+    if (!snap.empty) return snap.docs[0].id;
+  } catch(err) {
+    console.warn('findUidByEmail error:', err.message);
+  }
+  return null;
+}
+
+async function addNotification({ forUser, type, title, body, refPedidoId, refOcId, projectId }){
   if (!forUser) return;
-  const all = loadNotifications();
-  all.unshift({
-    id: 'notif-' + uid(),
-    forUser: String(forUser).toLowerCase(),
-    type: type || 'info',
-    title: title || '',
-    body: body || '',
-    refPedidoId: refPedidoId || null,
-    refOcId: refOcId || null,
-    projectId: projectId || null,
-    ts: Date.now(),
-    read: false
-  });
-  // Limitar a 200 por persona para no crecer sin límite
-  saveNotifications(all.slice(0, 1000));
+  if (!firebase.firestore) return;
+  try {
+    const targetUid = await findUidByEmail(forUser);
+    if (!targetUid) {
+      console.warn('Notif: no se encontró usuario con email', forUser);
+      return;
+    }
+    await firebase.firestore().collection('users').doc(targetUid)
+      .collection('notifications').add({
+        type: type || 'info',
+        title: title || '',
+        body: body || '',
+        refPedidoId: refPedidoId || null,
+        refOcId: refOcId || null,
+        projectId: projectId || null,
+        ts: firebase.firestore.FieldValue.serverTimestamp(),
+        read: false,
+        sentBy: (currentUser && currentUser.email) || 'sistema'
+      });
+  } catch(e) {
+    console.error('addNotification error:', e);
+  }
 }
 
 function getUserNotifications(username){
-  if (!username) return [];
-  const name = String(username).toLowerCase();
-  return loadNotifications().filter(n => n.forUser === name);
+  // El cache local YA contiene solo las notificaciones del usuario actual
+  // (la subscripción solo trae las suyas). Devolvemos todas.
+  return loadNotifications();
 }
 
 function getUnreadCount(username){
-  return getUserNotifications(username).filter(n => !n.read).length;
+  return loadNotifications().filter(n => !n.read).length;
 }
 
-function markNotifRead(id){
+async function markNotifRead(id){
+  // Optimistic update local
   const all = loadNotifications();
   const n = all.find(x => x.id === id);
   if (n) { n.read = true; saveNotifications(all); }
+  // Persist en Firestore
+  if (currentUser && firebase.firestore) {
+    try {
+      await firebase.firestore().collection('users').doc(currentUser.uid)
+        .collection('notifications').doc(id).update({ read: true });
+    } catch(e) { console.warn('markNotifRead error:', e.message); }
+  }
 }
 
-function markAllRead(username){
+async function markAllRead(username){
   const all = loadNotifications();
-  const name = String(username || '').toLowerCase();
-  all.forEach(n => { if (n.forUser === name) n.read = true; });
+  const unread = all.filter(n => !n.read);
+  // Optimistic
+  unread.forEach(n => n.read = true);
   saveNotifications(all);
+  // Persist
+  if (currentUser && firebase.firestore && unread.length) {
+    try {
+      const batch = firebase.firestore().batch();
+      const colRef = firebase.firestore().collection('users').doc(currentUser.uid).collection('notifications');
+      unread.forEach(n => batch.update(colRef.doc(n.id), { read: true }));
+      await batch.commit();
+    } catch(e) { console.warn('markAllRead error:', e.message); }
+  }
+}
+
+/* ═══ SUBSCRIPCIÓN EN TIEMPO REAL ═══
+   Cada vez que llega una notificación nueva en Firestore,
+   actualizamos el badge y disparamos una notificación del sistema. */
+let _notifUnsub = null;
+let _notifSubInit = false;
+
+function subscribeToMyNotifications(){
+  if (!currentUser || !firebase.firestore) return;
+  if (_notifUnsub) { try { _notifUnsub(); } catch(e){} }
+  _notifSubInit = false;
+
+  _notifUnsub = firebase.firestore()
+    .collection('users').doc(currentUser.uid)
+    .collection('notifications')
+    .orderBy('ts', 'desc')
+    .limit(200)
+    .onSnapshot((snap) => {
+      // Actualizar cache local
+      const list = snap.docs.map(d => {
+        const data = d.data();
+        let ts = Date.now();
+        if (data.ts && typeof data.ts.toMillis === 'function') ts = data.ts.toMillis();
+        else if (typeof data.ts === 'number') ts = data.ts;
+        return { id: d.id, ...data, ts };
+      });
+      saveNotifications(list);
+      try { updateNotifBadge(); } catch(e){}
+      // Re-render del modal de notificaciones si está abierto
+      try {
+        const modal = document.getElementById('modalNotifs');
+        if (modal && modal.classList.contains('show')) openNotifications();
+      } catch(e){}
+
+      // Para notificaciones NUEVAS (no la carga inicial) → disparar Notification del sistema
+      if (_notifSubInit) {
+        snap.docChanges().forEach(change => {
+          if (change.type !== 'added') return;
+          const data = change.doc.data();
+          fireSystemNotification({
+            id: change.doc.id,
+            title: data.title,
+            body: data.body,
+            refPedidoId: data.refPedidoId,
+            type: data.type
+          });
+        });
+      }
+      _notifSubInit = true;
+    }, (err) => {
+      console.warn('Notif subscription error:', err.message);
+    });
+}
+
+function unsubscribeFromMyNotifications(){
+  if (_notifUnsub) { try { _notifUnsub(); } catch(e){} _notifUnsub = null; }
+  _notifSubInit = false;
+}
+
+/* ═══ NOTIFICACIONES DEL SISTEMA (navegador / celular) ═══ */
+const NOTIF_PERM_KEY = 'puntorojo_notif_perm_asked';
+
+function notificationsSupported(){
+  return 'Notification' in window;
+}
+
+function notificationsPermission(){
+  if (!notificationsSupported()) return 'unsupported';
+  return Notification.permission; // 'granted' | 'denied' | 'default'
+}
+
+async function requestNotificationPermission(){
+  if (!notificationsSupported()) {
+    showToast('TU NAVEGADOR NO SOPORTA NOTIFICACIONES', 'red');
+    return false;
+  }
+  if (Notification.permission === 'granted') {
+    showToast('NOTIFICACIONES YA ACTIVADAS', '');
+    return true;
+  }
+  if (Notification.permission === 'denied') {
+    showToast('NOTIFICACIONES BLOQUEADAS — ACTIVALAS DESDE LA CONFIGURACIÓN DEL NAVEGADOR', 'red');
+    return false;
+  }
+  try {
+    const result = await Notification.requestPermission();
+    try { localStorage.setItem(NOTIF_PERM_KEY, '1'); } catch(e){}
+    if (result === 'granted') {
+      showToast('NOTIFICACIONES ACTIVADAS — RECIBIRÁS ALERTAS EN TU CELULAR', 'green');
+      // Notificación de prueba
+      try {
+        new Notification('PUNTO ROJO', {
+          body: 'Notificaciones activadas correctamente',
+          icon: 'logo.png',
+          badge: 'logo.png'
+        });
+      } catch(e){}
+      return true;
+    }
+    showToast('PERMISO RECHAZADO', 'red');
+    return false;
+  } catch(e) {
+    console.error('Notification.requestPermission:', e);
+    return false;
+  }
+}
+
+/* Dispara una notificación del sistema (la que aparece en la barra del celular).
+   Solo si:
+   - Se tiene permiso
+   - La pestaña/app NO está en primer plano (si está visible, ya verá el badge) */
+function fireSystemNotification(data){
+  if (!notificationsSupported()) return;
+  if (Notification.permission !== 'granted') return;
+  if (document.visibilityState === 'visible' && document.hasFocus()) return;
+  try {
+    const n = new Notification(data.title || 'PUNTO ROJO', {
+      body: data.body || '',
+      icon: 'logo.png',
+      badge: 'logo.png',
+      tag: data.id || ('pr-' + Date.now()), // reemplaza si ya hay una
+      renotify: false,
+      silent: false
+    });
+    n.onclick = () => {
+      try { window.focus(); } catch(e){}
+      // Si la noti referencia un pedido, abrirlo
+      if (data.refPedidoId) {
+        try {
+          if (typeof setView === 'function') setView('materiales');
+          if (typeof setMatTab === 'function') setMatTab('pedidos');
+          setTimeout(() => {
+            try { if (typeof openPedidoDetalle === 'function') openPedidoDetalle(data.refPedidoId); } catch(e){}
+          }, 200);
+        } catch(e){}
+      }
+      if (data.id && typeof markNotifRead === 'function') markNotifRead(data.id);
+      n.close();
+    };
+    // Auto-cerrar después de 8s para no saturar (en algunos OS las notis quedan persistentes)
+    setTimeout(() => { try { n.close(); } catch(e){} }, 8000);
+  } catch(e) {
+    console.warn('fireSystemNotification error:', e);
+  }
 }
 
 /* ═══ SESIÓN ═══
@@ -3920,6 +4126,8 @@ function openSettingsModal(){
   if (sel) sel.value = q;
   // Refrescar el cuadro de estado biométrico
   try { refreshBioStatusBox(); } catch(e){}
+  // Refrescar el cuadro de estado de notificaciones
+  try { refreshNotifPermBox(); } catch(e){}
   document.getElementById('modalSettings').classList.add('show');
 }
 
@@ -8829,6 +9037,35 @@ function hasBiometricEnabled(){
   return !!getStoredBiometric(currentUser.uid);
 }
 
+/* ═════════ HANDLER NOTIFICACIONES (AJUSTES) ═════════ */
+async function handleNotifEnableClick(){
+  await requestNotificationPermission();
+  refreshNotifPermBox();
+}
+
+function refreshNotifPermBox(){
+  const box = document.getElementById('notifPermStatus');
+  const btn = document.getElementById('notifEnableBtn');
+  if (!box) return;
+
+  if (!notificationsSupported()) {
+    box.innerHTML = '<strong style="color:var(--amber)">NO DISPONIBLE</strong> · Tu navegador no soporta notificaciones.';
+    if (btn) { btn.disabled = true; btn.style.opacity = '.5'; }
+    return;
+  }
+  const perm = notificationsPermission();
+  if (perm === 'granted') {
+    box.innerHTML = '<strong style="color:var(--green-dark)">ACTIVADAS</strong> · Vas a recibir alertas en este dispositivo cuando alguien te asigne algo.';
+    if (btn) btn.style.display = 'none';
+  } else if (perm === 'denied') {
+    box.innerHTML = '<strong style="color:var(--red)">BLOQUEADAS POR EL NAVEGADOR</strong> · Activalas desde la configuración del sitio en el navegador (candado en la barra de URL).';
+    if (btn) { btn.disabled = true; btn.style.opacity = '.5'; btn.style.display = ''; btn.textContent = 'BLOQUEADAS'; }
+  } else {
+    box.innerHTML = '<strong style="color:var(--mute)">DESACTIVADAS</strong> · Solo verás un punto rojo en la app, sin alertas en la barra del celular.';
+    if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.display = ''; btn.textContent = 'ACTIVAR'; }
+  }
+}
+
 /* ═════════ HANDLERS DEL TOGGLE EN AJUSTES ═════════ */
 async function handleBioEnableClick(){
   const ok = await setupBiometricForCurrentUser();
@@ -9260,6 +9497,8 @@ function initAuthListener(){
       // No logueado → mostrar pantalla de login.
       currentUser = null;
       cachedUsers = [];
+      try { unsubscribeFromMyNotifications(); } catch(e){}
+      try { saveNotifications([]); } catch(e){}
       hideSplash('INGRESÁ A TU CUENTA');
       showAuthScreen('login');
       // Mostrar el botón "Configurar administrador" solo si no hay usuarios todavía.
@@ -9328,6 +9567,8 @@ function applyAuthSession(fbUser, profileData){
   try {
     if (!_bioLockSkipped && hasBiometricEnabled()) showBioLock();
   } catch(e) { console.warn('Bio lock check failed:', e); }
+  // Suscribirse a las notificaciones del usuario (tiempo real)
+  try { subscribeToMyNotifications(); } catch(e) { console.warn('Notif subscribe:', e); }
   // Arranca la sincronización con la nube. Si ya hay datos, los aplica.
   // Si no hay nada en la nube, sube el state local como punto de partida.
   try {
