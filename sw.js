@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v6-darkmode-prefs';
+const CACHE_VERSION = 'v7-new-logo';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
@@ -16,6 +16,7 @@ const CORE_ASSETS = [
   './index.html',
   './puntorojo.html',
   './manifest.json',
+  './logo.png',
   './icon.svg'
 ];
 
