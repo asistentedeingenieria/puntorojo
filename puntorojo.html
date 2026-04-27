@@ -3958,6 +3958,16 @@ function migrateData(data){
     // para corregir proyectos viejos que pudieran tener valores diferentes.
     p.amortPct = p.anticipoPct;
 
+    //  Limpieza defensiva: remover estimaciones auto-agregadas del Excel (versiones viejas).
+    // Estas tienen id terminado en "_auto" y solo se usaban como placeholder.
+    if (p.cobro && Array.isArray(p.cobro.rows)) {
+      const before = p.cobro.rows.length;
+      p.cobro.rows = p.cobro.rows.filter(r => !String(r.id || '').endsWith('_auto'));
+      if (p.cobro.rows.length < before) {
+        console.warn(`Auto-limpieza: ${before - p.cobro.rows.length} estimaciones placeholder removidas de ${p.name}`);
+      }
+    }
+
     // AUTO-LIMPIEZA: detecta modelos Essenza contaminando un proyecto que no es Essenza
     // y los borra. Las claves Essenza típicas son: NIVEL_1, 2_6_XX, 7_12_XX, PASILLO_*, AZOTEA, CINE_N1
     if (p.id !== 'essenza-f2' && p.planilla && Array.isArray(p.planilla.modelos)) {
@@ -11716,32 +11726,9 @@ function deleteCurrentProveedor(){
         if (m) idByEstNum[parseInt(m[1])] = r.id;
       });
 
-      // Auto-agregar estimaciones que el Excel tiene pero el proyecto aún no.
-      // Esto pasa cuando el Excel está más adelantado que la app (ej: Excel tiene EST 1-13 pero la app solo EST 1-7).
-      if (interpret.tipo === 'oficial' && Array.isArray(interpret.ejecutadoCols)) {
-        const maxEstEnExcel = Math.max(...interpret.ejecutadoCols.map(x => x.estNum));
-        let agregadas = 0;
-        for (let n = estNumCounter + 1; n <= maxEstEnExcel; n++) {
-          if (!p.cobro) p.cobro = { rows: [] };
-          if (!p.cobro.rows) p.cobro.rows = [];
-          const newId = 'e' + n + '_auto';
-          p.cobro.rows.push({
-            id: newId,
-            f: '',
-            d: 'ESTIMACIÓN #' + n,
-            vp_ci: 0,
-            sf: 'PENDIENTE',
-            sc: 'PENDIENTE',
-            fp: '',
-            factura: ''
-          });
-          idByEstNum[n] = newId;
-          agregadas++;
-        }
-        if (agregadas > 0) {
-          try { console.log(`[Parser] Auto-agregadas ${agregadas} estimaciones (EST ${estNumCounter + 1} a EST ${maxEstEnExcel}) que el Excel tenía pero el proyecto no.`); } catch(e){}
-        }
-      }
+      // (Auto-agregar estimaciones removido — solo queremos las estimaciones que el usuario
+      //  ya emitió oficialmente. El Excel/PDF puede tener columnas para EST 8+ que aún no
+      //  existen como filas reales en el proyecto; esas no deben crearse automáticamente.)
 
       if (interpret.tipo === 'oficial') {
         // FORMATO OFICIAL: el Excel tiene "ESTIMACIÓN NO.X" + "% EJECUTADO" (per-estimación).
