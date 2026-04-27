@@ -10957,11 +10957,13 @@ function deleteCurrentProveedor(){
       return;
     }
 
-    // Recolectar todos los aptos con su % acumulado
+    // Recolectar todos los aptos con su % acumulado.
+    // IMPORTANTE: sumamos TODAS las claves de porEstimacion (incluso est_8, est_9, etc.)
+    // que corresponden a estimaciones del Excel que tal vez aún no están cargadas en cobro.rows.
     const allAptos = [];
     (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
       const rec = p.cobro.avanceAptos[a.id]?.porEstimacion || {};
-      const cumul = estimaciones.reduce((s, est) => s + (Number(rec[est.id] ?? rec[est.d] ?? 0) || 0), 0);
+      const cumul = Object.values(rec).reduce((s, v) => s + (Number(v) || 0), 0);
       allAptos.push({ torre: t, level: l, apto: a, cumul: Math.min(100, cumul) });
     })));
 
@@ -11417,6 +11419,33 @@ function deleteCurrentProveedor(){
         const m = String(r.d || '').match(/(\d+)/);
         if (m) idByEstNum[parseInt(m[1])] = r.id;
       });
+
+      // Auto-agregar estimaciones que el Excel tiene pero el proyecto aún no.
+      // Esto pasa cuando el Excel está más adelantado que la app (ej: Excel tiene EST 1-13 pero la app solo EST 1-7).
+      if (interpret.tipo === 'oficial' && Array.isArray(interpret.ejecutadoCols)) {
+        const maxEstEnExcel = Math.max(...interpret.ejecutadoCols.map(x => x.estNum));
+        let agregadas = 0;
+        for (let n = estNumCounter + 1; n <= maxEstEnExcel; n++) {
+          if (!p.cobro) p.cobro = { rows: [] };
+          if (!p.cobro.rows) p.cobro.rows = [];
+          const newId = 'e' + n + '_auto';
+          p.cobro.rows.push({
+            id: newId,
+            f: '',
+            d: 'ESTIMACIÓN #' + n,
+            vp_ci: 0,
+            sf: 'PENDIENTE',
+            sc: 'PENDIENTE',
+            fp: '',
+            factura: ''
+          });
+          idByEstNum[n] = newId;
+          agregadas++;
+        }
+        if (agregadas > 0) {
+          try { console.log(`[Parser] Auto-agregadas ${agregadas} estimaciones (EST ${estNumCounter + 1} a EST ${maxEstEnExcel}) que el Excel tenía pero el proyecto no.`); } catch(e){}
+        }
+      }
 
       if (interpret.tipo === 'oficial') {
         // FORMATO OFICIAL: el Excel tiene "ESTIMACIÓN NO.X" + "% EJECUTADO" (per-estimación).
