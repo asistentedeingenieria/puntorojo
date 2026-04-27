@@ -1413,13 +1413,14 @@ html,body,.main{background:#FFFFFF!important;}
       </div>
 
       <div class="card" id="cobro-avance-panel" style="display:none">
-        <div class="card-hd"><h3>AVANCE DE COBRO POR APTO</h3>
+        <div class="card-hd"><h3>AVANCE DE COBRO POR APTO Y ESTIMACIÓN</h3>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <label class="btn ghost sm" style="cursor:pointer;margin:0">SUBIR ESTIMACIÓN CSV/JSON<input type="file" accept=".csv,.json,.txt" style="display:none" onchange="uploadEstimacionCobro(event)"></label>
-            <button class="btn ghost sm" onclick="renderCobroAvanceApto()">ACTUALIZAR</button>
+            <label class="btn primary sm" style="cursor:pointer;margin:0" data-perm="cobro.edit">📤 SUBIR EXCEL ESTIMACIÓN<input type="file" accept=".xlsx,.xls,.csv,.json,.txt" style="display:none" onchange="uploadEstimacionCobro(event)"></label>
+            <button class="btn ghost sm" onclick="descargarTemplateEstimacion()" title="Descargar plantilla de Excel para llenar">📥 PLANTILLA</button>
+            <button class="btn ghost sm" onclick="renderCobroAvanceApto()">↻ ACTUALIZAR</button>
           </div>
         </div>
-        <p class="receta-intro">SUBÍ UN ARCHIVO CSV/JSON CON COLUMNAS APTO, ETAPA Y PORCENTAJE. TAMBIÉN PODÉS EDITAR MANUALMENTE CADA ETAPA.</p>
+        <p class="receta-intro">SUBÍ UN EXCEL (.XLSX) O CSV CON COLUMNAS: APTO + UNA COLUMNA POR ESTIMACIÓN (ANTICIPO, EST 1, EST 2, ...). LOS VALORES SON % COBRADO EN CADA ESTIMACIÓN. TAMBIÉN PODÉS EDITAR MANUALMENTE.</p>
         <div id="cobroAvanceApto"></div>
       </div>
     </section>
@@ -10950,13 +10951,90 @@ function deleteCurrentProveedor(){
     const cont = document.getElementById('cobroAvanceApto');
     if (!cont) return;
     const canEdit = can('cobro.avance') || can('cobro.edit') || can('users.manage');
-    let html = `<div class="cobro-matrix-row head"><div>APTO / ÁREA</div>${ETAPAS_INFO.map(e=>`<div>ET. ${e.idx+1}</div>`).join('')}<div>PROM.</div></div>`;
+    if (!p.cobro.avanceAptos) p.cobro.avanceAptos = {};
+
+    const estimaciones = p.cobro.rows || [];
+    if (estimaciones.length === 0) {
+      cont.innerHTML = `<div class="empty" style="padding:40px"><p style="font-size:11px;letter-spacing:.5px">SIN ESTIMACIONES — AGREGÁ AL MENOS UNA EN LA SECCIÓN DE ESTIMACIONES.</p></div>`;
+      return;
+    }
+
+    // Helper: color de fondo según %
+    const colorPct = (pct) => {
+      if (pct >= 100) return 'background:#1e6b1e;color:#fff';
+      if (pct >= 70)  return 'background:#a3c47a;color:#1a1a1a';
+      if (pct >= 40)  return 'background:#f0d264;color:#1a1a1a';
+      if (pct > 0)    return 'background:#f6b89c;color:#1a1a1a';
+      return 'background:transparent;color:var(--mute)';
+    };
+
+    // KPIs arriba
+    let totalAptos = 0, totalEstimaciones = estimaciones.length;
+    let sumAcumulado = 0;
     (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
-      const rec = p.cobro.avanceAptos[a.id] || {stages:[0,0,0,0,0,0]};
-      const vals = Array.from({length:6},(_,i)=>Number(rec.stages?.[i]||0));
-      const avg = Math.round(vals.reduce((s,v)=>s+v,0)/6);
-      html += `<div class="cobro-matrix-row"><div><div class="apt-name">${a.name}</div><div class="apt-meta">${t.name} · ${l.name}</div></div>` + vals.map((v,i)=> canEdit ? `<input type="number" min="0" max="100" value="${v}" onchange="updateCobroApto('${a.id}',${i},this.value)">` : `<div style="text-align:center;font-weight:700;color:var(--red)">${v}%</div>`).join('') + `<div style="text-align:center;font-weight:700;color:var(--ink)">${avg}%</div></div>`;
+      totalAptos++;
+      const rec = p.cobro.avanceAptos[a.id]?.porEstimacion || {};
+      const acum = estimaciones.reduce((s, est) => s + (Number(rec[est.id] ?? rec[est.d] ?? 0) || 0), 0);
+      sumAcumulado += acum;
     })));
+    const promGlobal = totalAptos > 0 ? (sumAcumulado / totalAptos).toFixed(1) : '0.0';
+
+    let html = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:16px">
+        <div class="kpi"><div class="lbl">Apartamentos</div><div class="val">${totalAptos}</div></div>
+        <div class="kpi cafe"><div class="lbl">Estimaciones</div><div class="val">${totalEstimaciones}</div></div>
+        <div class="kpi olive"><div class="lbl">Acumulado promedio</div><div class="val">${promGlobal}%</div></div>
+      </div>
+    `;
+
+    // Matriz: APTO + 1 col por estimación + ACUMULADO
+    const colCount = estimaciones.length + 2; // apto + estimaciones + acumulado
+    html += `
+      <div style="overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:var(--white)">
+        <div style="min-width:${300 + estimaciones.length * 110}px">
+          <div style="display:grid;grid-template-columns:1.5fr repeat(${estimaciones.length}, 100px) 110px;gap:0;background:var(--cream);border-bottom:2px solid var(--line);padding:10px 12px;font-size:9px;letter-spacing:1.2px;font-weight:700;text-transform:uppercase;color:var(--mute)">
+            <div>APTO / ÁREA</div>
+            ${estimaciones.map(e => `<div style="text-align:center" title="${e.d || e.id}">${(e.d || e.id).replace(/^ESTIMACIÓN /, 'EST ').substring(0, 12)}</div>`).join('')}
+            <div style="text-align:center;color:var(--rojo)">ACUMULADO</div>
+          </div>
+    `;
+
+    (p.towers||[]).forEach(t => {
+      html += `<div style="background:var(--ink);color:var(--paper);padding:6px 12px;font-size:10px;letter-spacing:1.5px;font-weight:700">${t.name}</div>`;
+      (t.levels||[]).forEach(l => {
+        (l.aptos||[]).forEach(a => {
+          const rec = p.cobro.avanceAptos[a.id]?.porEstimacion || {};
+          const valores = estimaciones.map(est => Number(rec[est.id] ?? rec[est.d] ?? 0) || 0);
+          const acumulado = valores.reduce((s, v) => s + v, 0);
+          html += `
+            <div style="display:grid;grid-template-columns:1.5fr repeat(${estimaciones.length}, 100px) 110px;gap:0;align-items:center;border-bottom:1px solid var(--line-soft);padding:6px 12px">
+              <div>
+                <div style="font-weight:700;font-size:11px">${a.name}</div>
+                <div style="font-size:9px;color:var(--mute);letter-spacing:.5px">${l.name}</div>
+              </div>
+              ${estimaciones.map((est, idx) => {
+                const v = valores[idx];
+                if (canEdit) {
+                  return `<div style="padding:0 4px"><input type="number" min="0" max="100" step="0.01" value="${v || ''}" placeholder="0" onchange="updateCobroAptoEst('${a.id}','${est.id}',this.value)" style="width:100%;padding:5px;font-size:10px;text-align:center;border:1px solid var(--line);border-radius:3px;${v > 0 ? colorPct(v) : ''}"></div>`;
+                }
+                return `<div style="text-align:center;font-size:10px;font-weight:700;padding:4px;${colorPct(v)}">${v > 0 ? v + '%' : '—'}</div>`;
+              }).join('')}
+              <div style="text-align:center;font-weight:800;font-size:12px;padding:4px;${colorPct(acumulado)}">${acumulado.toFixed(1)}%</div>
+            </div>
+          `;
+        });
+      });
+    });
+
+    html += `</div></div>`;
+
+    // Resumen totales por estimación al final
+    html += `
+      <div style="margin-top:12px;padding:10px 14px;background:var(--cream);border:1px solid var(--line);border-radius:4px;font-size:10px;letter-spacing:.3px;color:var(--mute)">
+        ⓘ Cada celda muestra el % cobrado por apto en esa estimación. La columna ACUMULADO suma todos los % de cada apto. Los colores: <span style="background:#1e6b1e;color:#fff;padding:2px 6px;border-radius:2px">≥100%</span> <span style="background:#a3c47a;color:#1a1a1a;padding:2px 6px;border-radius:2px">≥70%</span> <span style="background:#f0d264;color:#1a1a1a;padding:2px 6px;border-radius:2px">≥40%</span> <span style="background:#f6b89c;color:#1a1a1a;padding:2px 6px;border-radius:2px">&lt;40%</span>
+      </div>
+    `;
+
     cont.innerHTML = html;
   };
 
@@ -10970,42 +11048,302 @@ function deleteCurrentProveedor(){
     renderCobroAvanceApto();
   };
 
-  window.uploadEstimacionCobro = function(event){
+  window.updateCobroAptoEst = function(aptoId, estId, val){
+    if (!can('cobro.avance') && !can('cobro.edit') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
+    const p = activeProj(); ensureEnhancedData();
+    if (!p.cobro.avanceAptos[aptoId]) p.cobro.avanceAptos[aptoId] = { stages:[0,0,0,0,0,0], porEstimacion:{} };
+    if (!p.cobro.avanceAptos[aptoId].porEstimacion) p.cobro.avanceAptos[aptoId].porEstimacion = {};
+    let pct = Number(val) || 0;
+    pct = Math.max(0, Math.min(100, pct));
+    if (pct === 0) delete p.cobro.avanceAptos[aptoId].porEstimacion[estId];
+    else p.cobro.avanceAptos[aptoId].porEstimacion[estId] = pct;
+    saveState();
+    renderCobroAvanceApto();
+  };
+
+  // Helper: parsea un .xlsx a un array de filas (cada fila = array de strings/numbers)
+  async function _parseXlsxToRows(file){
+    if (typeof JSZip === 'undefined') throw new Error('JSZip no disponible');
+    const zip = await JSZip.loadAsync(file);
+    const sstFile = zip.file('xl/sharedStrings.xml');
+    const sst = [];
+    if (sstFile) {
+      const xmlText = await sstFile.async('text');
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(xmlText, 'text/xml');
+      doc.querySelectorAll('si').forEach(si => {
+        // Concatenar todos los <t> de cada <si>
+        const ts = si.querySelectorAll('t');
+        let s = '';
+        ts.forEach(t => s += t.textContent || '');
+        sst.push(s);
+      });
+    }
+    // Buscar la primera worksheet
+    const sheetFile = zip.file('xl/worksheets/sheet1.xml') || Object.values(zip.files).find(f => f.name.startsWith('xl/worksheets/'));
+    if (!sheetFile) throw new Error('Excel sin hojas');
+    const sheetText = await sheetFile.async('text');
+    const sheetDoc = new DOMParser().parseFromString(sheetText, 'text/xml');
+    // Helper: A1 → {row, col}
+    const colLetterToNum = (letters) => {
+      let n = 0;
+      for (let i = 0; i < letters.length; i++) n = n * 26 + (letters.charCodeAt(i) - 64);
+      return n - 1;
+    };
+    const rows = [];
+    sheetDoc.querySelectorAll('row').forEach(row => {
+      const rowArr = [];
+      row.querySelectorAll('c').forEach(c => {
+        const ref = c.getAttribute('r') || '';
+        const m = ref.match(/^([A-Z]+)(\d+)$/);
+        if (!m) return;
+        const colIdx = colLetterToNum(m[1]);
+        const type = c.getAttribute('t') || 'n';
+        const vEl = c.querySelector('v');
+        const isEl = c.querySelector('is t');
+        let val = '';
+        if (type === 's' && vEl) {
+          const idx = parseInt(vEl.textContent);
+          val = sst[idx] || '';
+        } else if (type === 'inlineStr' && isEl) {
+          val = isEl.textContent || '';
+        } else if (vEl) {
+          const raw = vEl.textContent;
+          val = isNaN(Number(raw)) ? raw : Number(raw);
+        }
+        rowArr[colIdx] = val;
+      });
+      // Rellenar huecos con string vacío
+      for (let i = 0; i < rowArr.length; i++) if (rowArr[i] === undefined) rowArr[i] = '';
+      rows.push(rowArr);
+    });
+    return rows;
+  }
+
+  // Detecta y normaliza formato MATRIZ (APTO + columnas por estimación)
+  // o FORMATO TRIPLE (apto, etapa, porcentaje)
+  function _interpretarFilasEstimacion(rows){
+    // Buscar fila de cabeceras (la primera con una celda que matchee /apto|apart|área|area/i)
+    let headerIdx = -1;
+    for (let i = 0; i < Math.min(rows.length, 30); i++) {
+      const r = rows[i];
+      if (!Array.isArray(r)) continue;
+      const headerCellIdx = r.findIndex(c => /apto|apart|área|area/i.test(String(c || '')));
+      if (headerCellIdx >= 0) { headerIdx = i; break; }
+    }
+    if (headerIdx < 0) throw new Error('No se encontró fila de cabeceras (APTO)');
+
+    const headers = rows[headerIdx].map(h => String(h || '').trim());
+    const aptoCol = headers.findIndex(h => /apto|apart|área|area/i.test(h));
+
+    // Detectar columnas de estimaciones
+    const estColumns = []; // [{idx, label}]
+    headers.forEach((h, idx) => {
+      if (idx === aptoCol) return;
+      if (!h) return;
+      const norm = h.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (norm.includes('ANTICIPO') || norm.startsWith('EST') || norm.includes('ESTIMACION')) {
+        estColumns.push({ idx, label: h });
+      } else if (/^\d+$/.test(norm) || /^E\d+$/.test(norm)) {
+        estColumns.push({ idx, label: h });
+      }
+    });
+
+    if (estColumns.length === 0) {
+      // Detectar formato triple (etapa + porcentaje)
+      const etapaCol = headers.findIndex(h => /etapa|stage/i.test(h));
+      const pctCol = headers.findIndex(h => /porcent|pct|avance/i.test(h));
+      if (etapaCol >= 0 && pctCol >= 0) {
+        return {
+          tipo: 'triple',
+          aptoCol, etapaCol, pctCol,
+          dataRows: rows.slice(headerIdx + 1)
+        };
+      }
+      throw new Error('No se encontraron columnas de estimaciones ni de etapa/porcentaje');
+    }
+
+    return {
+      tipo: 'matriz',
+      aptoCol, estColumns,
+      dataRows: rows.slice(headerIdx + 1)
+    };
+  }
+
+  window.uploadEstimacionCobro = async function(event){
     const file = event.target.files && event.target.files[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = e => {
-      try {
-        const txt = String(e.target.result || '');
-        let rows = [];
-        if (file.name.toLowerCase().endsWith('.json')) rows = JSON.parse(txt);
-        else {
-          const lines = txt.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
-          const headers = lines.shift().split(',').map(h=>h.trim().toLowerCase());
-          rows = lines.map(line => {
-            const cols = line.split(',').map(c=>c.trim());
-            const obj = {}; headers.forEach((h,i)=>obj[h]=cols[i]); return obj;
-          });
+    const lname = file.name.toLowerCase();
+    try {
+      let rows = [];
+      if (lname.endsWith('.xlsx') || lname.endsWith('.xls')) {
+        rows = await _parseXlsxToRows(file);
+      } else if (lname.endsWith('.json')) {
+        const txt = await file.text();
+        const arr = JSON.parse(txt);
+        // Convertir JSON a array de arrays con headers
+        if (Array.isArray(arr) && arr.length > 0) {
+          const keys = Object.keys(arr[0]);
+          rows = [keys].concat(arr.map(o => keys.map(k => o[k])));
         }
-        const p = activeProj(); ensureEnhancedData();
-        let updated = 0;
-        rows.forEach(r => {
-          const aptoTxt = String(r.apto || r.apartamento || r.area || '').toUpperCase();
-          const etapa = Math.max(1, Math.min(6, Number(r.etapa || r.stage || 1))) - 1;
-          const pct = Math.max(0, Math.min(100, Number(r.porcentaje || r.pct || r.avance || 0)));
-          (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
-            if (aptoTxt && String(a.name).toUpperCase().includes(aptoTxt)) {
-              if (!p.cobro.avanceAptos[a.id]) p.cobro.avanceAptos[a.id] = {stages:[0,0,0,0,0,0]};
-              p.cobro.avanceAptos[a.id].stages[etapa] = pct; updated++;
-            }
-          })));
+      } else {
+        // CSV / TXT
+        const txt = await file.text();
+        rows = txt.split(/\r?\n/).filter(Boolean).map(line => line.split(',').map(c => c.trim()));
+      }
+
+      if (rows.length === 0) throw new Error('Archivo vacío');
+
+      const p = activeProj();
+      ensureEnhancedData();
+      if (!p.cobro.avanceAptos) p.cobro.avanceAptos = {};
+
+      const interpret = _interpretarFilasEstimacion(rows);
+      let updated = 0, sinMatch = [];
+
+      const findApto = (aptoTxt) => {
+        const txtUp = String(aptoTxt || '').toUpperCase().trim();
+        if (!txtUp) return null;
+        // Match exacto por nombre
+        let found = null;
+        (p.towers || []).forEach(t => (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
+          if (found) return;
+          const aname = String(a.name).toUpperCase();
+          if (aname === txtUp) { found = a; return; }
+          // Match por número (ej: "201" matchea "APARTAMENTO 201")
+          const numMatch = txtUp.match(/(\d{3,4})/);
+          if (numMatch && aname.includes(numMatch[1])) { found = a; return; }
+          // Match parcial por nombre
+          if (aname.includes(txtUp) || txtUp.includes(aname)) { found = a; return; }
+        })));
+        return found;
+      };
+
+      if (interpret.tipo === 'matriz') {
+        // Una fila por apto, varias columnas (cada una = una estimación)
+        // Mapear cada estColumn a un cobro.row.id si existe (matching por label)
+        const rowIdByLabel = {};
+        (p.cobro.rows || []).forEach(r => {
+          const lblUp = String(r.d || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+          rowIdByLabel[lblUp] = r.id;
         });
-        saveState(); renderCobroAvanceApto();
-        showToast(`ESTIMACIÓN CARGADA · ${updated} REGISTROS`, 'green');
-      } catch(err) { console.error(err); showToast('NO SE PUDO LEER EL ARCHIVO', 'red'); }
-      event.target.value = '';
-    };
-    reader.readAsText(file);
+
+        interpret.dataRows.forEach(dr => {
+          if (!Array.isArray(dr)) return;
+          const aptoTxt = String(dr[interpret.aptoCol] || '').trim();
+          if (!aptoTxt) return;
+          // Saltar filas que parecen títulos (TORRE X, NIVEL X, OTROS, TOTAL, etc.)
+          if (/^(TORRE|NIVEL|OTROS|TOTAL|CHEQUEO|SUBTOTAL)\b/i.test(aptoTxt)) return;
+          const apto = findApto(aptoTxt);
+          if (!apto) { sinMatch.push(aptoTxt); return; }
+          if (!p.cobro.avanceAptos[apto.id]) p.cobro.avanceAptos[apto.id] = { stages:[0,0,0,0,0,0], porEstimacion:{} };
+          if (!p.cobro.avanceAptos[apto.id].porEstimacion) p.cobro.avanceAptos[apto.id].porEstimacion = {};
+          interpret.estColumns.forEach(col => {
+            const raw = dr[col.idx];
+            if (raw === '' || raw === null || raw === undefined) return;
+            let pct = Number(raw);
+            if (isNaN(pct)) return;
+            // Si viene como decimal (0.05), convertir a 5%
+            if (pct > 0 && pct < 1) pct *= 100;
+            pct = Math.max(0, Math.min(100, pct));
+            // Buscar el row.id que matchea el label de la columna
+            const labelUp = col.label.toUpperCase().replace(/[^A-Z0-9]/g, '');
+            let rid = rowIdByLabel[labelUp];
+            // Match alternativo: "EST1" con "ESTIMACION1" o "ESTIMACIÓN#1"
+            if (!rid) {
+              const numMatch = labelUp.match(/(\d+)/);
+              if (numMatch) {
+                const n = numMatch[1];
+                rid = Object.keys(rowIdByLabel).find(k => k.includes('ESTIMACION' + n) || k === 'EST' + n) ;
+                if (rid) rid = rowIdByLabel[rid];
+              }
+              if (!rid && labelUp.includes('ANTICIPO')) {
+                rid = (p.cobro.rows || []).find(r => r.isAnticipo)?.id;
+              }
+            }
+            // Usar el label tal cual como key fallback
+            const key = rid || col.label;
+            p.cobro.avanceAptos[apto.id].porEstimacion[key] = pct;
+            updated++;
+          });
+        });
+      } else {
+        // Formato TRIPLE: apto + etapa + porcentaje (legacy)
+        interpret.dataRows.forEach(dr => {
+          if (!Array.isArray(dr)) return;
+          const aptoTxt = String(dr[interpret.aptoCol] || '').trim();
+          if (!aptoTxt) return;
+          const etapa = Math.max(1, Math.min(6, Number(dr[interpret.etapaCol]) || 1)) - 1;
+          let pct = Number(dr[interpret.pctCol]) || 0;
+          if (pct > 0 && pct < 1) pct *= 100;
+          pct = Math.max(0, Math.min(100, pct));
+          const apto = findApto(aptoTxt);
+          if (!apto) { sinMatch.push(aptoTxt); return; }
+          if (!p.cobro.avanceAptos[apto.id]) p.cobro.avanceAptos[apto.id] = { stages:[0,0,0,0,0,0], porEstimacion:{} };
+          p.cobro.avanceAptos[apto.id].stages[etapa] = pct;
+          updated++;
+        });
+      }
+
+      saveState();
+      try { renderCobroAvanceApto(); } catch(e){}
+
+      let msg = `ESTIMACIÓN CARGADA · ${updated} REGISTROS`;
+      if (sinMatch.length > 0) msg += ` · ${sinMatch.length} sin match`;
+      showToast(msg, 'green');
+
+      logActivity('update', 'Excel de estimación cargado',
+        `${p.name} · ${file.name} · ${updated} actualizados${sinMatch.length > 0 ? ' · ' + sinMatch.length + ' sin match' : ''}`);
+
+      if (sinMatch.length > 0) {
+        setTimeout(() => alert(
+          `⚠ APTOS QUE NO SE PUDIERON MAPEAR (${sinMatch.length})\n\n` +
+          sinMatch.slice(0, 30).join('\n') +
+          (sinMatch.length > 30 ? `\n...y ${sinMatch.length - 30} más` : '') +
+          `\n\nVerificá los nombres en el Excel vs los aptos del proyecto.`
+        ), 1000);
+      }
+    } catch (err) {
+      console.error('Upload error:', err);
+      showToast('ERROR: ' + (err.message || err), 'red');
+    }
+    event.target.value = '';
+  };
+
+  window.descargarTemplateEstimacion = function(){
+    const p = activeProj();
+    if (!p) return;
+    const headers = ['APTO'];
+    (p.cobro.rows || []).forEach(r => {
+      headers.push(r.d || r.id);
+    });
+    if (headers.length === 1) headers.push('ANTICIPO', 'ESTIMACIÓN #1', 'ESTIMACIÓN #2');
+
+    const rows = [headers];
+    (p.towers || []).forEach(t => (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
+      const row = [a.name];
+      const rec = p.cobro.avanceAptos?.[a.id]?.porEstimacion || {};
+      (p.cobro.rows || []).forEach(r => {
+        row.push(rec[r.id] ?? rec[r.d] ?? '');
+      });
+      rows.push(row);
+    })));
+
+    const csv = '﻿' + rows.map(r => r.map(c => {
+      const s = String(c == null ? '' : c).replace(/"/g, '""');
+      return /[",\n]/.test(s) ? `"${s}"` : s;
+    }).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const safe = (p.name || 'proyecto').replace(/[^a-zA-Z0-9]/g, '_');
+    a.href = url;
+    a.download = `template_estimacion_${safe}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    showToast('TEMPLATE DESCARGADO', 'green');
   };
 
   window.currentPersonalSubTab = 'lista';
