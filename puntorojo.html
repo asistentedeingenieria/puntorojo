@@ -1269,6 +1269,10 @@ html,body,.main{background:#FFFFFF!important;}
           <span class="ki-emoji">📄</span>
           <span class="ki-label">Reporte mensual PDF</span>
         </button>
+        <button class="kebab-item" data-perm="users.manage" onclick="kebabAction(openReporteUsoModal)" title="Estadísticas de uso de la app por usuario y proyecto">
+          <span class="ki-emoji">📊</span>
+          <span class="ki-label">Reporte de uso</span>
+        </button>
         <button class="kebab-item" data-perm="data.import" onclick="kebabAction(function(){ document.getElementById('importFile').click(); })">
           <span class="ki-emoji">↑</span>
           <span class="ki-label">Importar JSON</span>
@@ -2188,6 +2192,20 @@ html,body,.main{background:#FFFFFF!important;}
     <div class="modal-actions">
       <button class="btn ghost" onclick="closeModal('pdfMensual')">CANCELAR</button>
       <button class="btn primary" onclick="generarPDFMensual()">GENERAR PDF</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════ REPORTE DE USO (admin) ═════════════ -->
+<div class="modal-bg" id="modalReporteUso" onclick="closeModalBg(event,'reporteUso')">
+  <div class="modal" style="max-width:920px">
+    <h3>📊 REPORTE DE USO</h3>
+    <p class="desc">Estadísticas de actividad de la app y los usuarios. Sirve para ver quién está usando el sistema, identificar usuarios inactivos, y saber qué proyectos tienen más movimiento.</p>
+
+    <div id="reporteUsoBody" style="margin-top:8px"></div>
+
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('reporteUso')">CERRAR</button>
     </div>
   </div>
 </div>
@@ -8876,6 +8894,213 @@ async function generarPDFMensual(){
   }
 }
 
+/* ─────────────── REPORTE DE USO (admin) ─────────────── */
+function _formatRelativeTime(ts){
+  if (!ts) return '—';
+  const now = Date.now();
+  const diff = now - ts;
+  const min = 60_000, hora = 60 * min, dia = 24 * hora;
+  if (diff < 0) return new Date(ts).toLocaleDateString('es-ES');
+  if (diff < min) return 'Ahora';
+  if (diff < hora) return `Hace ${Math.floor(diff/min)} min`;
+  if (diff < dia) return `Hace ${Math.floor(diff/hora)} h`;
+  if (diff < 7 * dia) return `Hace ${Math.floor(diff/dia)} día${Math.floor(diff/dia) === 1 ? '' : 's'}`;
+  return new Date(ts).toLocaleDateString('es-ES');
+}
+
+async function openReporteUsoModal(){
+  if (!can('users.manage')) return showToast('SOLO ADMINISTRADOR', 'red');
+
+  const body = document.getElementById('reporteUsoBody');
+  body.innerHTML = `<div style="padding:40px;text-align:center;color:var(--mute);font-size:11px;letter-spacing:.5px">CARGANDO...</div>`;
+  openModal('reporteUso');
+
+  try {
+    await refreshUsersCache();
+    renderReporteUso();
+  } catch(e) {
+    console.error('Error cargando reporte:', e);
+    body.innerHTML = `<div style="padding:40px;text-align:center;color:var(--rojo)">ERROR: ${e.message || e}</div>`;
+  }
+}
+
+function renderReporteUso(){
+  const now = Date.now();
+  const ms_7d = 7 * 24 * 60 * 60 * 1000;
+  const ms_30d = 30 * 24 * 60 * 60 * 1000;
+
+  const users = (typeof cachedUsers !== 'undefined' && Array.isArray(cachedUsers)) ? cachedUsers : [];
+  const activity = state.activity || [];
+  const events_7d = activity.filter(e => e.ts && (now - e.ts) < ms_7d);
+  const events_30d = activity.filter(e => e.ts && (now - e.ts) < ms_30d);
+
+  // Usuarios activos (tuvieron eventos o login reciente)
+  const active7 = new Set();
+  const active30 = new Set();
+  events_7d.forEach(e => { if (e.role) active7.add(e.role); });
+  events_30d.forEach(e => { if (e.role) active30.add(e.role); });
+  users.forEach(u => {
+    if (u.lastLogin && (now - u.lastLogin) < ms_7d) active7.add(u.username);
+    if (u.lastLogin && (now - u.lastLogin) < ms_30d) active30.add(u.username);
+  });
+
+  // ── KPIs ──
+  const kpis = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px">
+      <div class="kpi"><div class="lbl">Usuarios totales</div><div class="val">${users.length}</div><div class="sub">En el sistema</div></div>
+      <div class="kpi olive"><div class="lbl">Activos · 7 días</div><div class="val">${active7.size}</div><div class="sub">De ${users.length} totales</div></div>
+      <div class="kpi cafe"><div class="lbl">Activos · 30 días</div><div class="val">${active30.size}</div><div class="sub">Con actividad</div></div>
+      <div class="kpi"><div class="lbl">Eventos · 30 días</div><div class="val">${events_30d.length}</div><div class="sub">Total registrados</div></div>
+      <div class="kpi"><div class="lbl">Promedio diario</div><div class="val">${(events_30d.length / 30).toFixed(1)}</div><div class="sub">Eventos por día</div></div>
+    </div>
+  `;
+
+  // ── Tabla de usuarios ──
+  const usersOrdenados = [...users].sort((a, b) => {
+    const aL = a.lastLogin || 0;
+    const bL = b.lastLogin || 0;
+    return bL - aL;
+  });
+
+  const tablaUsers = `
+    <h4 style="margin:24px 0 10px;font-size:12px;letter-spacing:1.5px;color:var(--rojo)">USUARIOS · ACTIVIDAD INDIVIDUAL</h4>
+    <div style="overflow-x:auto;border:1px solid var(--line);border-radius:6px">
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead>
+          <tr style="background:var(--cream);border-bottom:2px solid var(--line)">
+            <th style="padding:10px;text-align:left;letter-spacing:.5px;font-size:10px">USUARIO</th>
+            <th style="padding:10px;text-align:left;letter-spacing:.5px;font-size:10px">CARGO</th>
+            <th style="padding:10px;text-align:left;letter-spacing:.5px;font-size:10px">ÚLTIMO LOGIN</th>
+            <th style="padding:10px;text-align:right;letter-spacing:.5px;font-size:10px">7 DÍAS</th>
+            <th style="padding:10px;text-align:right;letter-spacing:.5px;font-size:10px">30 DÍAS</th>
+            <th style="padding:10px;text-align:center;letter-spacing:.5px;font-size:10px">ESTADO</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${usersOrdenados.map(u => {
+            const e7 = events_7d.filter(e => e.role === u.username).length;
+            const e30 = events_30d.filter(e => e.role === u.username).length;
+            const isActive = active7.has(u.username);
+            const isInactive30 = !active30.has(u.username);
+            const status = isActive
+              ? '<span style="color:#4d8c2c;font-weight:700">● Activo</span>'
+              : isInactive30
+                ? '<span style="color:#c8141c;font-weight:700">○ Inactivo</span>'
+                : '<span style="color:#a98142;font-weight:700">◐ Bajo uso</span>';
+            const founderTag = u.isFounder ? '<span style="background:var(--rojo);color:#fff;padding:1px 5px;border-radius:3px;font-size:8px;letter-spacing:.5px;margin-left:6px">★</span>' : '';
+            return `<tr style="border-top:1px solid var(--line)">
+              <td style="padding:10px;font-weight:600">${u.displayName || u.username}${founderTag}<div style="font-size:9px;color:var(--mute);font-weight:400;margin-top:2px">${u.email || u.username}</div></td>
+              <td style="padding:10px;font-size:10px">${u.cargo || '—'}</td>
+              <td style="padding:10px;font-size:10px">${_formatRelativeTime(u.lastLogin)}</td>
+              <td style="padding:10px;text-align:right;font-weight:700">${e7}</td>
+              <td style="padding:10px;text-align:right;font-weight:700">${e30}</td>
+              <td style="padding:10px;text-align:center;font-size:10px">${status}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  // ── Actividad por día (últimos 30 días) ──
+  const dayBuckets = {};
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(now - i * 24 * 60 * 60 * 1000);
+    const key = d.toISOString().slice(0, 10);
+    dayBuckets[key] = 0;
+  }
+  events_30d.forEach(e => {
+    const key = new Date(e.ts).toISOString().slice(0, 10);
+    if (Object.prototype.hasOwnProperty.call(dayBuckets, key)) dayBuckets[key]++;
+  });
+  const sortedDays = Object.entries(dayBuckets);
+  const maxDay = Math.max(...sortedDays.map(([_, c]) => c), 1);
+
+  const dayChart = `
+    <h4 style="margin:24px 0 10px;font-size:12px;letter-spacing:1.5px;color:var(--rojo)">ACTIVIDAD POR DÍA · ÚLTIMOS 30 DÍAS</h4>
+    <div style="background:var(--cream);padding:12px;border-radius:6px;border:1px solid var(--line)">
+      <div style="display:flex;align-items:flex-end;gap:2px;height:80px">
+        ${sortedDays.map(([day, count]) => {
+          const h = Math.max(2, (count / maxDay) * 100);
+          const d = new Date(day + 'T12:00:00');
+          const lbl = String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth()+1).padStart(2,'0');
+          return `<div title="${lbl}: ${count} evento${count === 1 ? '' : 's'}" style="flex:1;background:${count > 0 ? 'var(--rojo)' : 'rgba(0,0,0,.1)'};border-radius:2px 2px 0 0;height:${h}%;transition:height .3s;cursor:help"></div>`;
+        }).join('')}
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--mute);margin-top:6px;letter-spacing:.5px">
+        <span>${sortedDays[0] ? sortedDays[0][0].slice(8) + '/' + sortedDays[0][0].slice(5,7) : '—'}</span>
+        <span>HOY</span>
+      </div>
+    </div>
+  `;
+
+  // ── Top proyectos ──
+  const projectCounts = {};
+  events_30d.forEach(e => {
+    if (e.projectId) projectCounts[e.projectId] = (projectCounts[e.projectId] || 0) + 1;
+  });
+  const topProjects = Object.entries(projectCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([projId, count]) => {
+      const proj = (state.projects || []).find(p => p.id === projId);
+      return { name: proj ? proj.name : projId, count };
+    });
+  const maxProj = Math.max(...topProjects.map(p => p.count), 1);
+
+  const proyectosBlock = topProjects.length === 0 ? '' : `
+    <h4 style="margin:24px 0 10px;font-size:12px;letter-spacing:1.5px;color:var(--rojo)">PROYECTOS MÁS ACTIVOS · 30 DÍAS</h4>
+    <div style="background:var(--white);padding:12px;border-radius:6px;border:1px solid var(--line)">
+      ${topProjects.map(p => `
+        <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--cream)">
+          <div style="width:200px;font-size:11px;font-weight:600">${p.name}</div>
+          <div style="flex:1;background:var(--cream);border-radius:3px;height:20px;position:relative;overflow:hidden">
+            <div style="height:100%;width:${(p.count / maxProj) * 100}%;background:var(--rojo);transition:width .4s"></div>
+          </div>
+          <div style="width:50px;text-align:right;font-size:11px;font-weight:700">${p.count}</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  // ── Tipos de eventos ──
+  const tipoCounts = {};
+  events_30d.forEach(e => {
+    const t = e.type || 'otro';
+    tipoCounts[t] = (tipoCounts[t] || 0) + 1;
+  });
+  const topTipos = Object.entries(tipoCounts).sort((a, b) => b[1] - a[1]);
+  const maxTipo = Math.max(...topTipos.map(([_, c]) => c), 1);
+  const tipoIcons = { create: '➕', update: '✎', delete: '✕', auth: '🔐', paid: '💰', otro: '•' };
+  const tipoLabels = { create: 'Creaciones', update: 'Actualizaciones', delete: 'Eliminaciones', auth: 'Autenticaciones', paid: 'Pagos', otro: 'Otros' };
+
+  const tiposBlock = topTipos.length === 0 ? '' : `
+    <h4 style="margin:24px 0 10px;font-size:12px;letter-spacing:1.5px;color:var(--rojo)">TIPOS DE EVENTOS · 30 DÍAS</h4>
+    <div style="background:var(--white);padding:12px;border-radius:6px;border:1px solid var(--line)">
+      ${topTipos.map(([tipo, count]) => `
+        <div style="display:flex;align-items:center;gap:12px;padding:6px 0">
+          <div style="width:24px;text-align:center;font-size:13px">${tipoIcons[tipo] || '•'}</div>
+          <div style="width:160px;font-size:11px;font-weight:600">${tipoLabels[tipo] || tipo.toUpperCase()}</div>
+          <div style="flex:1;background:var(--cream);border-radius:3px;height:14px;position:relative;overflow:hidden">
+            <div style="height:100%;width:${(count / maxTipo) * 100}%;background:var(--cafe);transition:width .4s"></div>
+          </div>
+          <div style="width:50px;text-align:right;font-size:11px;font-weight:700">${count}</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  // ── Footer informativo ──
+  const footer = `
+    <div style="margin-top:20px;padding:10px 12px;background:var(--cream);border-radius:4px;font-size:10px;color:var(--mute);letter-spacing:.3px;line-height:1.5">
+      ⓘ El registro de actividad guarda los últimos 200 eventos. El campo "Último login" se empieza a registrar desde esta versión — usuarios sin login reciente pueden mostrar "—" hasta que vuelvan a entrar.
+    </div>
+  `;
+
+  document.getElementById('reporteUsoBody').innerHTML =
+    kpis + tablaUsers + dayChart + proyectosBlock + tiposBlock + footer;
+}
+
 async function resetToFactory(){
   if (!can('users.manage') && !can('data.import')) return showToast('SIN PERMISO', 'red');
   const msg = `¿RESTABLECER A FÁBRICA?
@@ -10540,6 +10765,13 @@ function applyAuthSession(fbUser, profileData){
     createdAt: profileData.createdAt
   };
   hideAuthScreen();
+  // Registrar último login (solo si pasó al menos 1 minuto desde el último, para no escribir en cada hot-reload)
+  try {
+    const lastLoginPrev = profileData.lastLogin || 0;
+    if (Date.now() - lastLoginPrev > 60_000) {
+      saveUserDoc(fbUser.uid, { lastLogin: Date.now() }).catch(()=>{});
+    }
+  } catch(e){}
   refreshUsersCache().catch(()=>{});
   renderAll();
   applyPermissions();
