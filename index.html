@@ -6044,9 +6044,9 @@ function renderAcusesRecepcion(){
             ? `<label class="btn sm ${has ? 'ghost' : 'cafe'}" style="cursor:pointer;margin:0" title="${has ? 'Reemplazar con foto' : 'Subir foto firmada'}">${has ? 'CAMBIAR' : 'FOTO'}<input type="file" accept="image/*" capture="environment" style="display:none" onchange="uploadAcuseRecepcion(event,'${t.id}','${l.id}','${a.id}','${s.key}')"></label>
                <button class="btn sm ${has ? 'ghost' : 'cafe'}" onclick="openQRScanForAcuse('${t.id}','${l.id}','${a.id}','${s.key}')" title="Firmar digitalmente con QR del receptor">QR</button>`
             : '';
-          // Eliminar
-          const delBtn = has && canEdit
-            ? `<button class="btn-icon danger" onclick="deleteAcuseRecepcion('${t.id}','${l.id}','${a.id}','${s.key}')" title="Eliminar este acuse">✕</button>`
+          // Eliminar — SOLO admin (users.manage). Acuses firmados son evidencia legal y no deben poder borrarse por usuarios normales.
+          const delBtn = has && can('users.manage')
+            ? `<button class="btn-icon danger" onclick="deleteAcuseRecepcion('${t.id}','${l.id}','${a.id}','${s.key}')" title="Eliminar este acuse (solo admin · requiere confirmación escrita)">✕</button>`
             : '';
           return `<div class="acuse-slot-row${has ? ' has' : ''}${isLast ? ' final' : ''}${isDigital ? ' digital' : ''}">
             <div class="acuse-slot-label">${s.label}</div>
@@ -6130,11 +6130,16 @@ async function uploadAcuseRecepcion(event, towerId, levelId, aptoId, slotKey){
 }
 
 async function deleteAcuseRecepcion(towerId, levelId, aptoId, slotKey){
-  if (!can('avance.edit')) return showToast('SIN PERMISO', 'red');
+  // ─── BLINDAJE LEGAL ───
+  // Los acuses firmados son evidencia formal de entrega al cliente.
+  // Solo admin (users.manage) puede eliminarlos, y debe escribir "ELIMINAR" exactamente.
+  if (!can('users.manage')) {
+    showToast('SOLO EL ADMINISTRADOR PUEDE ELIMINAR ACUSES', 'red');
+    return;
+  }
   if (!slotKey) slotKey = 'final';
   const slotInfo = ACUSE_SLOTS.find(s => s.key === String(slotKey));
   const slotLabel = slotInfo ? slotInfo.label : slotKey;
-  if (!confirm(`¿ELIMINAR EL ACUSE DE ${slotLabel}?`)) return;
 
   const p = activeProj();
   const t = (p.towers || []).find(x => x.id === towerId);
@@ -6143,8 +6148,54 @@ async function deleteAcuseRecepcion(towerId, levelId, aptoId, slotKey){
   if (!a || !a.acuseRecepciones) return;
 
   const slot = a.acuseRecepciones[slotKey];
-  const oldUrl = slot ? (slot.url || (typeof slot.data === 'string' && slot.data.startsWith('https://') ? slot.data : null)) : null;
+  if (!slot) return;
+
+  // Resumen de la evidencia que se va a borrar
+  const fechaFirma = slot.ts ? new Date(slot.ts).toLocaleString('es-GT') : '—';
+  const receptor = slot.receptorNombre ? `${slot.receptorNombre}${slot.receptorCargo ? ' (' + slot.receptorCargo + ')' : ''}` : '—';
+  const supervisor = slot.userName || slot.user || '—';
+  const tipoFirma = slot.type === 'digital' ? 'FIRMA DIGITAL VÍA QR' : 'FOTO/PAPEL';
+
+  // Primera confirmación con todos los datos
+  const aviso = `⚠ ATENCIÓN — ELIMINACIÓN DE EVIDENCIA LEGAL\n\n` +
+    `Estás por eliminar un acuse de recepción FIRMADO. Esto borra evidencia formal de entrega al cliente.\n\n` +
+    `── DATOS DEL ACUSE ──\n` +
+    `Proyecto: ${p.name}\n` +
+    `Ubicación: ${l.name} · ${a.name}\n` +
+    `Etapa: ${slotLabel}\n` +
+    `Tipo: ${tipoFirma}\n` +
+    `Recibido y firmado por: ${receptor}\n` +
+    `Entregado por: ${supervisor}\n` +
+    `Fecha de firma: ${fechaFirma}\n\n` +
+    `Esta acción NO se puede deshacer y queda registrada en el log de actividad.\n\n` +
+    `¿Continuar al siguiente paso?`;
+  if (!confirm(aviso)) return;
+
+  // Segunda confirmación: escribir "ELIMINAR" exactamente
+  const tipeo = prompt(
+    'CONFIRMACIÓN FINAL\n\n' +
+    'Para confirmar la eliminación, escribí en mayúsculas la palabra:\n\n' +
+    'ELIMINAR\n\n' +
+    'Cualquier otra cosa cancelará la operación.'
+  );
+  if (tipeo === null) return;
+  if (tipeo.trim() !== 'ELIMINAR') {
+    showToast('ELIMINACIÓN CANCELADA · TEXTO INCORRECTO', 'red');
+    return;
+  }
+
+  const oldUrl = slot.url || (typeof slot.data === 'string' && slot.data.startsWith('https://') ? slot.data : null);
   delete a.acuseRecepciones[slotKey];
+
+  // Como el acuse anterior no existe más, también desmarcamos las etapas que dependían de él
+  const slotIdxNum = parseInt(slotKey);
+  if (!isNaN(slotIdxNum) && slotIdxNum >= 0 && slotIdxNum < 6) {
+    if (Array.isArray(a.stages)) {
+      // Desmarca esta etapa y todas las posteriores (porque el orden ya no se cumple)
+      for (let i = slotIdxNum; i < 6; i++) a.stages[i] = false;
+    }
+  }
+
   saveState();
 
   if (oldUrl && oldUrl.includes('firebasestorage')) {
@@ -6153,10 +6204,13 @@ async function deleteAcuseRecepcion(towerId, levelId, aptoId, slotKey){
     } catch(e) {}
   }
 
-  logActivity('delete', `Acuse eliminado: ${l.name} · ${a.name} · ${slotLabel}`, p.name);
+  // Log con detalles para auditoría
+  logActivity('delete',
+    `⚠ ACUSE ELIMINADO POR ADMIN: ${l.name} · ${a.name} · ${slotLabel}`,
+    `${p.name} · Receptor: ${receptor} · Firma: ${fechaFirma} · Borrado por: ${(getCurrentUser()?.displayName || getCurrentUser()?.username || '—')}`);
   renderAcusesRecepcion();
   renderAvance();
-  showToast(`ACUSE ELIMINADO · ${slotLabel}`);
+  showToast(`ACUSE ELIMINADO · ${slotLabel}`, 'red');
 }
 
 function loadNotasStructureToCurrentProject(){
