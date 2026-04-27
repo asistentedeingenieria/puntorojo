@@ -9757,8 +9757,11 @@ async function ejecutarLimpiezaSelectiva(){
       p.planilla.aptoModelMap = {};
       // Colaboradores (instaladores / masilleros)
       p.planilla.colaboradores = [];
-      // Marcar que el seed automático ya se aplicó para que NO vuelva a auto-cargar Essenza
+      // Banderas anti-reseed: previenen que CUALQUIER capa de ensureEnhancedData
+      // reinyecte los modelos Essenza después de la limpieza.
       p.planilla._costosEssenzaImagenes20260424 = true;
+      p.planilla._etapasPlanillaOficiales5 = true;
+      p.planilla._userClearedPlanilla = true;
     }
   });
 
@@ -12375,11 +12378,40 @@ window.addEventListener('load', () => {
   function selectedColab5(p){ return (p.planilla.colaboradores||[]).find(c=>c.id===activeColabId5(p)); }
 
   const prevEnsure = window.ensureEnhancedData;
-  window.ensureEnhancedData = function(){ if(prevEnsure) prevEnsure(); try{ (state.projects||[]).forEach(p=>normalizarPlanilla5(p,true)); }catch(e){} };
+  window.ensureEnhancedData = function(){
+    if(prevEnsure) prevEnsure();
+    try{
+      (state.projects||[]).forEach(p => {
+        if(!p.planilla) p.planilla = {pagos:[], retencionesPagadas:[], ajustes:[], modelos:[], aptoModelMap:{}, colaboradores:[]};
+        if(!Array.isArray(p.planilla.modelos)) p.planilla.modelos = [];
+        if(!p.planilla.aptoModelMap || typeof p.planilla.aptoModelMap !== 'object') p.planilla.aptoModelMap = {};
+        // Auto-seed de modelos Essenza:
+        // - Solo en el proyecto Essenza
+        // - Solo si NO fue limpiado por el usuario (_userClearedPlanilla)
+        if (p.id === 'essenza-f2' && !p.planilla._userClearedPlanilla) {
+          normalizarPlanilla5(p, true);
+        }
+      });
+    }catch(e){ console.warn('ensureEnhancedData error:', e); }
+  };
 
   window.cargarCostosEssenzaPlanilla = function(){
     if(!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
-    const p=activeProj(); normalizarPlanilla5(p,false); saveState(); renderPlanilla(); showToast('COSTOS ESSENZA CARGADOS EN 5 ETAPAS','green');
+    const p = activeProj();
+    // Advertencia cross-project: cargar Essenza en otro proyecto solo si el usuario lo confirma
+    if (p.id !== 'essenza-f2') {
+      const ok = confirm(
+        `⚠ ATENCIÓN\n\n` +
+        `Estás por cargar los modelos y costos de ESSENZA en el proyecto:\n\n${p.name}\n\n` +
+        `Esto solo tiene sentido para Essenza. Cada proyecto debe tener sus propios modelos.\n\n` +
+        `¿Continuar de todos modos?`
+      );
+      if (!ok) return;
+    }
+    normalizarPlanilla5(p, false);
+    // Cuando el usuario carga manualmente, levantamos la marca de "limpiado"
+    delete p.planilla._userClearedPlanilla;
+    saveState(); renderPlanilla(); showToast('COSTOS ESSENZA CARGADOS EN 5 ETAPAS','green');
   };
   window.updatePlanillaModeloCosto = function(key,idx,val){
     if(!can('planilla.generate')&&!can('users.manage')) return;
