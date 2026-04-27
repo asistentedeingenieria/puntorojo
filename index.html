@@ -25,6 +25,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
+<!-- ════════ JSZip · BACKUP MANUAL EN ZIP ════════ -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
 <!-- ════════ FIREBASE SDK · LOGIN, BASE DE DATOS Y FOTOS EN LA NUBE ════════ -->
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
@@ -1206,6 +1209,7 @@ html,body,.main{background:#FFFFFF!important;}
       <button class="btn-top" onclick="openModal('newProject')" data-perm="projects.create">+ NUEVO</button>
       <button class="btn-top" onclick="openEditProjectModal()" data-perm="users.manage" title="Editar especificaciones del proyecto activo">EDITAR PROYECTO</button>
       <button class="btn-top" onclick="exportJSON()">↓ EXPORTAR</button>
+      <button class="btn-top" data-perm="data.import" onclick="openModal('backup')" title="Backup completo en ZIP (datos + fotos + acuses + usuarios)">📦 BACKUP</button>
       <button class="btn-top" onclick="document.getElementById('importFile').click()" data-perm="data.import">↑ IMPORTAR</button>
       <input type="file" id="importFile" accept="application/json" style="display:none" onchange="importJSON(event)">
       <button class="btn-top" onclick="resetToFactory()" data-perm="data.import" title="Restablecer datos de fábrica">⟲ RESET</button>
@@ -2035,6 +2039,44 @@ html,body,.main{background:#FFFFFF!important;}
 
     <div class="modal-actions">
       <button class="btn" onclick="closeModal('settings')">CERRAR</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════ BACKUP MANUAL EN ZIP ═════════════ -->
+<div class="modal-bg" id="modalBackup" onclick="closeModalBg(event,'backup')">
+  <div class="modal" style="max-width:520px">
+    <h3>📦 BACKUP COMPLETO</h3>
+    <p class="desc">Descargar un respaldo en formato ZIP. Útil para guardar offline antes de un cambio grande, o como archivo histórico mensual.</p>
+
+    <div id="backupOptions">
+      <button class="btn primary" style="width:100%;margin-bottom:10px;text-align:left;padding:14px" onclick="iniciarBackup('rapido')">
+        <div style="font-weight:700;letter-spacing:1px">📄 BACKUP RÁPIDO &nbsp;·&nbsp; SOLO DATOS</div>
+        <div style="font-size:10px;font-weight:400;opacity:.85;margin-top:4px;line-height:1.5">
+          ZIP con proyectos, pedidos, planillas, personal, materiales y usuarios. Tarda segundos.
+        </div>
+      </button>
+      <button class="btn cafe" style="width:100%;text-align:left;padding:14px" onclick="iniciarBackup('completo')">
+        <div style="font-weight:700;letter-spacing:1px">🗂 BACKUP COMPLETO &nbsp;·&nbsp; DATOS + FOTOS</div>
+        <div style="font-size:10px;font-weight:400;opacity:.85;margin-top:4px;line-height:1.5">
+          Todo lo anterior + todas las fotos de avance + acuses firmados. Puede pesar varios MB y tardar minutos según conexión.
+        </div>
+      </button>
+    </div>
+
+    <div id="backupProgress" style="display:none">
+      <div style="text-align:center;padding:14px 4px">
+        <div id="backupTitle" style="font-weight:700;font-size:13px;letter-spacing:1px;margin-bottom:10px">PREPARANDO RESPALDO...</div>
+        <div style="background:var(--cream);border:1px solid var(--line);border-radius:6px;overflow:hidden;height:22px;margin:12px 0;position:relative">
+          <div id="backupBar" style="background:var(--rojo);height:100%;width:0%;transition:width .3s"></div>
+          <div id="backupPct" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#000;mix-blend-mode:difference;color:#fff">0%</div>
+        </div>
+        <div id="backupStatus" style="font-size:11px;color:var(--mute);margin-top:8px;letter-spacing:.3px;line-height:1.5">Iniciando...</div>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn" id="backupCloseBtn" onclick="closeModal('backup')">CERRAR</button>
     </div>
   </div>
 </div>
@@ -8090,6 +8132,206 @@ function importJSON(event){
   };
   reader.readAsText(file);
   event.target.value = '';
+}
+
+/* ─────────────── BACKUP MANUAL EN ZIP ─────────────── */
+function _backupSetProgress(pct, status){
+  const bar = document.getElementById('backupBar');
+  const pctEl = document.getElementById('backupPct');
+  const st = document.getElementById('backupStatus');
+  if (bar) bar.style.width = pct + '%';
+  if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+  if (st && status) st.textContent = status;
+}
+
+function _backupSafePath(s){
+  return String(s || '').replace(/[^a-zA-Z0-9\-_]/g, '_').slice(0, 60) || 'sin_nombre';
+}
+
+async function iniciarBackup(tipo){
+  if (!can('users.manage') && !can('data.import')) return showToast('SIN PERMISO', 'red');
+  if (typeof JSZip === 'undefined') {
+    showToast('JSZIP NO CARGÓ — RECARGÁ LA APP', 'red');
+    return;
+  }
+
+  document.getElementById('backupOptions').style.display = 'none';
+  document.getElementById('backupProgress').style.display = 'block';
+  document.getElementById('backupCloseBtn').disabled = true;
+  document.getElementById('backupTitle').textContent = tipo === 'completo' ? 'BACKUP COMPLETO EN CURSO' : 'BACKUP RÁPIDO EN CURSO';
+
+  const restoreUI = () => {
+    document.getElementById('backupOptions').style.display = '';
+    document.getElementById('backupProgress').style.display = 'none';
+    document.getElementById('backupCloseBtn').disabled = false;
+    _backupSetProgress(0, 'Iniciando...');
+  };
+
+  try {
+    const zip = new JSZip();
+    const fechaISO = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const fechaLeg = new Date().toLocaleString('es-ES');
+
+    _backupSetProgress(3, 'Empaquetando estado de la app...');
+    zip.file('estado.json', JSON.stringify(state, null, 2));
+
+    _backupSetProgress(8, 'Descargando usuarios desde Firestore...');
+    let usuarios = [];
+    try {
+      if (typeof firebase !== 'undefined' && firebase.firestore) {
+        const snap = await firebase.firestore().collection('users').get();
+        usuarios = snap.docs.map(d => ({ uid: d.id, ...d.data() }));
+      }
+    } catch(e) {
+      console.warn('Backup: no se pudieron descargar usuarios:', e);
+    }
+    zip.file('usuarios.json', JSON.stringify(usuarios, null, 2));
+
+    let fotosTotal = 0, fotosOK = 0, fotosErr = 0;
+    let acusesTotal = 0, acusesOK = 0, acusesErr = 0;
+
+    if (tipo === 'completo') {
+      const cola = [];
+      (state.projects || []).forEach(p => {
+        const projDir = _backupSafePath(p.name || p.id);
+        (p.towers || []).forEach(t => {
+          const torreDir = _backupSafePath(t.name || t.id);
+          (t.levels || []).forEach(l => {
+            const nivelDir = _backupSafePath(l.name || l.id);
+            (l.aptos || []).forEach(a => {
+              const aptoDir = _backupSafePath(a.name || a.id);
+              if (a.photos && typeof a.photos === 'object') {
+                Object.keys(a.photos).forEach(etapaIdx => {
+                  const slots = a.photos[etapaIdx];
+                  if (!Array.isArray(slots)) return;
+                  slots.forEach((url, slotIdx) => {
+                    if (typeof url === 'string' && url.startsWith('http')) {
+                      cola.push({
+                        url,
+                        path: `fotos/${projDir}/${torreDir}/${nivelDir}/${aptoDir}/etapa-${etapaIdx}_slot-${slotIdx}.jpg`,
+                        kind: 'foto'
+                      });
+                    }
+                  });
+                });
+              }
+              if (a.acuseRecepciones && typeof a.acuseRecepciones === 'object') {
+                Object.entries(a.acuseRecepciones).forEach(([slotKey, item]) => {
+                  let url = null;
+                  if (item && typeof item === 'object') url = item.url || null;
+                  else if (typeof item === 'string') url = item;
+                  if (url && url.startsWith('http')) {
+                    cola.push({
+                      url,
+                      path: `acuses/${projDir}/${torreDir}/${nivelDir}/${aptoDir}/${_backupSafePath(slotKey)}.jpg`,
+                      kind: 'acuse'
+                    });
+                  }
+                });
+              }
+            });
+          });
+        });
+      });
+
+      const total = cola.length;
+      fotosTotal = cola.filter(c => c.kind === 'foto').length;
+      acusesTotal = cola.filter(c => c.kind === 'acuse').length;
+
+      if (total === 0) {
+        _backupSetProgress(85, 'No se encontraron fotos ni acuses en la nube.');
+      } else {
+        for (let i = 0; i < total; i++) {
+          const item = cola[i];
+          const pct = 10 + Math.floor((i / total) * 80);
+          _backupSetProgress(pct, `Descargando ${i + 1} de ${total} (${item.kind === 'foto' ? 'foto' : 'acuse'})...`);
+          try {
+            const res = await fetch(item.url);
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const blob = await res.blob();
+            zip.file(item.path, blob);
+            if (item.kind === 'foto') fotosOK++; else acusesOK++;
+          } catch(e) {
+            console.warn('Backup: falló descarga', item.url, e);
+            if (item.kind === 'foto') fotosErr++; else acusesErr++;
+          }
+        }
+      }
+    }
+
+    const readme = `PUNTO ROJO · BACKUP ${tipo.toUpperCase()}
+═══════════════════════════════════════════════
+
+Fecha: ${fechaLeg}
+Tipo: ${tipo}
+Versión datos: ${state.version || 'N/A'}
+
+CONTENIDO:
+- estado.json ........ Estado completo de la app (proyectos, pedidos, planillas, personal, materiales, actividad).
+- usuarios.json ...... Colección de usuarios y sus permisos desde Firestore (${usuarios.length} usuario${usuarios.length === 1 ? '' : 's'}).
+${tipo === 'completo' ? `- fotos/ ............. Imágenes de avance físico (${fotosOK} OK, ${fotosErr} con error de ${fotosTotal} totales).
+- acuses/ ............ Acuses de recepción firmados (${acusesOK} OK, ${acusesErr} con error de ${acusesTotal} totales).
+` : ''}
+CÓMO RESTAURAR DATOS:
+1. Abrí la app, login como administrador.
+2. Click en "↑ IMPORTAR" del toolbar.
+3. Seleccioná el archivo "estado.json" extraído del ZIP.
+4. Confirmá. Los datos se reemplazan en la nube y se sincronizan a todos los dispositivos.
+
+NOTA SOBRE USUARIOS:
+- usuarios.json es un respaldo de referencia. Para restaurarlos, hay que recrearlos en Firebase Console > Authentication.
+
+NOTA SOBRE FOTOS Y ACUSES:
+- Las imágenes en fotos/ y acuses/ son respaldo OFFLINE. No se restauran automáticamente al importar.
+- Si necesitás restaurar fotos, hay que volver a subirlas manualmente desde la app.
+
+GENERADO POR: Punto Rojo S.A. — App de gestión de obra.
+`;
+    zip.file('README.txt', readme);
+
+    _backupSetProgress(94, 'Comprimiendo ZIP final...');
+    const blob = await zip.generateAsync({
+      type: 'blob',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 }
+    }, (meta) => {
+      const pct = 94 + Math.min(5, Math.floor(meta.percent / 20));
+      _backupSetProgress(pct, `Comprimiendo... ${meta.percent.toFixed(0)}%`);
+    });
+
+    _backupSetProgress(100, '¡Listo! Descargando archivo...');
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `puntorojo_backup_${tipo}_${fechaISO}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+    const tamMB = (blob.size / 1024 / 1024).toFixed(2);
+    showToast(`BACKUP DESCARGADO · ${tamMB} MB`, 'green');
+
+    try {
+      logActivity('update', 'Backup descargado', `${tipo.toUpperCase()} · ${tamMB} MB${tipo === 'completo' ? ` · ${fotosOK + acusesOK} archivos` : ''}`);
+    } catch(e){}
+
+    setTimeout(() => {
+      closeModal('backup');
+      restoreUI();
+    }, 1800);
+
+  } catch(e) {
+    console.error('Error backup:', e);
+    const st = document.getElementById('backupStatus');
+    if (st) {
+      st.textContent = 'ERROR: ' + (e.message || e);
+      st.style.color = 'var(--rojo)';
+    }
+    showToast('ERROR EN BACKUP', 'red');
+    document.getElementById('backupCloseBtn').disabled = false;
+  }
 }
 
 async function resetToFactory(){
