@@ -12042,15 +12042,21 @@ window.addEventListener('load', () => {
   function normalizeAllPlanillaData(){
     if(!window.state || !state.projects) return;
     state.projects.forEach(p=>{
-      if(!p.planilla) p.planilla={recetaCostos:[0,0,0,0,0,0],pagos:[],retencionesPagadas:[],ajustes:[]};
+      // Asegura la estructura mínima — pero NO inyecta data cross-project.
+      // Cada proyecto es independiente y arranca con modelos / colaboradores vacíos.
+      if(!p.planilla) p.planilla={recetaCostos:[0,0,0,0,0,0],pagos:[],retencionesPagadas:[],ajustes:[],modelos:[],aptoModelMap:{},colaboradores:[]};
       if(!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores=[];
-      BASE_COLABS_ROLES.forEach(base=>{
-        let c=p.planilla.colaboradores.find(x=>upper(x.nombre)===upper(base.nombre));
-        if(!c) p.planilla.colaboradores.push({...base});
-        else c.rol = normalizeRole(c.rol);
-      });
+      if(!Array.isArray(p.planilla.modelos)) p.planilla.modelos=[];
+      if(!p.planilla.aptoModelMap || typeof p.planilla.aptoModelMap !== 'object') p.planilla.aptoModelMap={};
+      // Normalizar nombres y roles de los colaboradores que YA existen en este proyecto (sin agregar nuevos).
       p.planilla.colaboradores.forEach(c=>{ c.nombre=upper(c.nombre); c.rol=normalizeRole(c.rol); });
-      if(!p.planilla._costosEssenzaImagenes20260424) applyEssenzaCosts(p,false);
+      // Auto-seed de modelos Essenza: SOLO al proyecto Essenza, nunca a Vicinia ni a otros.
+      if(p.id === 'essenza-f2' && !p.planilla._costosEssenzaImagenes20260424){
+        applyEssenzaCosts(p,false);
+      } else if(p.id !== 'essenza-f2' && !p.planilla._costosEssenzaImagenes20260424){
+        // Marcar el flag para los proyectos NO-Essenza también, para que nunca se intente seedear
+        p.planilla._costosEssenzaImagenes20260424 = true;
+      }
     });
   }
   const prevEnsure = window.ensureEnhancedData;
@@ -12058,7 +12064,19 @@ window.addEventListener('load', () => {
 
   window.cargarCostosEssenzaPlanilla = function(){
     if(!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
-    const p=activeProj(); applyEssenzaCosts(p,true); saveState(); renderPlanilla(); showToast('COSTOS Y MODELOS ESSENZA CARGADOS','green');
+    const p=activeProj();
+    // Advertir si se está cargando data Essenza en un proyecto que NO es Essenza
+    if (p.id !== 'essenza-f2') {
+      const ok = confirm(
+        `⚠ ATENCIÓN\n\n` +
+        `Estás por cargar los modelos y costos de ESSENZA FASE 2 en el proyecto:\n\n` +
+        `${p.name}\n\n` +
+        `Esto solo tiene sentido para Essenza. Cada proyecto debe tener sus propios modelos con sus propios precios.\n\n` +
+        `¿Continuar de todos modos?`
+      );
+      if (!ok) return;
+    }
+    applyEssenzaCosts(p,true); saveState(); renderPlanilla(); showToast('COSTOS Y MODELOS ESSENZA CARGADOS','green');
   };
 
   window.updatePlanillaColaboradorRol = function(id, rol){
