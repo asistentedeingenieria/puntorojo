@@ -3947,6 +3947,28 @@ function migrateData(data){
     // Regla de negocio: amortización SIEMPRE = anticipo. Forzar la igualdad en cada carga
     // para corregir proyectos viejos que pudieran tener valores diferentes.
     p.amortPct = p.anticipoPct;
+
+    // ⚠ AUTO-LIMPIEZA: detecta modelos Essenza contaminando un proyecto que no es Essenza
+    // y los borra. Las claves Essenza típicas son: NIVEL_1, 2_6_XX, 7_12_XX, PASILLO_*, AZOTEA, CINE_N1
+    if (p.id !== 'essenza-f2' && p.planilla && Array.isArray(p.planilla.modelos)) {
+      const ESSENZA_KEY_PATTERNS = /^(NIVEL_1|2_6_\d+|7_12_\d+|PASILLO_N(1|2_N6|7_N12|\d+)|AZOTEA|CINE(_N1)?)$/i;
+      const before = p.planilla.modelos.length;
+      p.planilla.modelos = p.planilla.modelos.filter(m => !ESSENZA_KEY_PATTERNS.test(String(m.key || '')));
+      const removed = before - p.planilla.modelos.length;
+      if (removed > 0) {
+        console.warn(`Auto-limpieza: ${removed} modelos Essenza removidos de ${p.name}`);
+        // También limpiar el mapeo apto→modelo de las claves removidas
+        const validKeys = new Set(p.planilla.modelos.map(m => m.key));
+        validKeys.add('GENERAL');
+        Object.keys(p.planilla.aptoModelMap || {}).forEach(aid => {
+          if (!validKeys.has(p.planilla.aptoModelMap[aid])) delete p.planilla.aptoModelMap[aid];
+        });
+        // Marcar como limpiado para evitar re-seed en el futuro
+        p.planilla._userClearedPlanilla = true;
+        p.planilla._costosEssenzaImagenes20260424 = true;
+        p.planilla._etapasPlanillaOficiales5 = true;
+      }
+    }
     if (p.totalSinIva === undefined) p.totalSinIva = p.totalAmount || 0;
     if (p.totalConIva === undefined) p.totalConIva = (p.totalSinIva || 0) * (1 + p.ivaPct);
 
@@ -12648,15 +12670,33 @@ window.addEventListener('load', () => {
     if(!p) return;
     if(!p.planilla) p.planilla={pagos:[],retencionesPagadas:[],ajustes:[],modelos:[],aptoModelMap:{}};
     if(!Array.isArray(p.planilla.modelos)) p.planilla.modelos=[];
-    ESSENZA_COSTOS_5.forEach(([key,nombre,costos])=>{
-      let m=p.planilla.modelos.find(x=>x.key===key);
-      if(!m) p.planilla.modelos.push({key,nombre,costos:[...costos]});
-      else if(!addMissingOnly){ m.nombre=nombre; m.costos=[...costos]; }
-      else { m.costos=(Array.isArray(m.costos)?m.costos:[]).slice(0,5); while(m.costos.length<5) m.costos.push(0); }
-    });
+    if(!p.planilla.aptoModelMap || typeof p.planilla.aptoModelMap !== 'object') p.planilla.aptoModelMap={};
+
+    // ⚠ FIX CROSS-PROJECT: solo inyectar/asignar modelos ESSENZA si:
+    //   1. El proyecto es essenza-f2 (no contaminar Vicinia ni otros)
+    //   2. El usuario NO limpió la planilla (respetar limpieza manual)
+    //   3. addMissingOnly=false (es decir, una carga manual forzada via botón)
+    const esEssenza = p.id === 'essenza-f2';
+    const limpiadoPorUsuario = !!p.planilla._userClearedPlanilla;
+    const debeSeedearEssenza = esEssenza && !limpiadoPorUsuario;
+
+    if (debeSeedearEssenza) {
+      ESSENZA_COSTOS_5.forEach(([key,nombre,costos])=>{
+        let m=p.planilla.modelos.find(x=>x.key===key);
+        if(!m) p.planilla.modelos.push({key,nombre,costos:[...costos]});
+        else if(!addMissingOnly){ m.nombre=nombre; m.costos=[...costos]; }
+        else { m.costos=(Array.isArray(m.costos)?m.costos:[]).slice(0,5); while(m.costos.length<5) m.costos.push(0); }
+      });
+    }
+
+    // Normalizar largo del array de costos (5 etapas) para los modelos que SÍ existen en este proyecto.
     p.planilla.modelos.forEach(m=>{ m.costos=(Array.isArray(m.costos)?m.costos:[]).slice(0,5); while(m.costos.length<5) m.costos.push(0); });
-    if(!p.planilla.aptoModelMap) p.planilla.aptoModelMap={};
-    allAptos(p).forEach(({t,l,a})=>{ if(!p.planilla.aptoModelMap[a.id] || p.planilla.aptoModelMap[a.id]==='GENERAL') p.planilla.aptoModelMap[a.id]=defaultKeyForPlanilla(t,l,a); });
+
+    // Mapeo automático apto→modelo: SOLO en Essenza (otros proyectos arrancan con mapeo vacío)
+    if (debeSeedearEssenza) {
+      allAptos(p).forEach(({t,l,a})=>{ if(!p.planilla.aptoModelMap[a.id] || p.planilla.aptoModelMap[a.id]==='GENERAL') p.planilla.aptoModelMap[a.id]=defaultKeyForPlanilla(t,l,a); });
+    }
+
     p.planilla._etapasPlanillaOficiales5 = true;
   }
   function stageTotal5(p,a,idx){ const mo=modeloObj5(p,p.planilla?.aptoModelMap?.[a.id] || 'GENERAL'); return Number(mo?.costos?.[idx] || 0); }
