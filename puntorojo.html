@@ -4279,17 +4279,35 @@ const CloudSync = {
     this.injectPhotos(merged, localPhotos);
 
     // Si el usuario está ocupado editando, no destruimos su input.
-    // Guardamos los datos pendientes y los aplicamos cuando termine.
     if (!opts.initial && this.isUserBusy()) {
       this.pendingRemoteData = merged;
       return;
     }
+
+    // CRÍTICO: aplicar migraciones/limpiezas (ensureDataV9) a los datos remotos
+    // antes de asignarlos al state. Esto remueve estimaciones vacías, normaliza
+    // amortPct = anticipoPct, etc. Sin esto, los bugs de versiones viejas persisten.
+    let needsResync = false;
+    try {
+      const beforeRowCount = (merged.projects || []).reduce((s, pr) => s + ((pr.cobro && pr.cobro.rows) ? pr.cobro.rows.length : 0), 0);
+      ensureDataV9(merged);
+      const afterRowCount = (merged.projects || []).reduce((s, pr) => s + ((pr.cobro && pr.cobro.rows) ? pr.cobro.rows.length : 0), 0);
+      if (afterRowCount !== beforeRowCount) {
+        needsResync = true;
+        console.warn(`CloudSync: limpieza removió ${beforeRowCount - afterRowCount} filas vacías. Se re-subirá.`);
+      }
+    } catch(e) { console.warn('ensureDataV9 falló en applyRemote:', e); }
 
     state = merged;
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e) {}
     try { renderAll(); applyPermissions(); } catch(e) { console.error('Render error tras applyRemote:', e); }
     if (!opts.initial) {
       try { showToast('DATOS ACTUALIZADOS DESDE LA NUBE', ''); } catch(e) {}
+    }
+    // Si la limpieza removió filas, re-subir el state limpio a la nube para que
+    // todos los dispositivos se sincronicen sin la basura.
+    if (needsResync && this.ref) {
+      this.uploadCurrent().catch(e => console.warn('Re-sync post-limpieza falló:', e));
     }
   },
 
