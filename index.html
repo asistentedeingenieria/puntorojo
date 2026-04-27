@@ -1278,6 +1278,10 @@ html,body,.main{background:#FFFFFF!important;}
           <span class="ki-emoji">📄</span>
           <span class="ki-label">Reporte mensual PDF</span>
         </button>
+        <button class="kebab-item" data-perm="users.manage" onclick="kebabAction(openAcusesMaestrosModal)" title="PDF consolidado con todos los acuses firmados — para entregar al cliente final">
+          <span class="ki-emoji">📋</span>
+          <span class="ki-label">Acuses maestros (PDF)</span>
+        </button>
         <button class="kebab-item" data-perm="users.manage" onclick="kebabAction(openReporteUsoModal)" title="Estadísticas de uso de la app por usuario y proyecto">
           <span class="ki-emoji">📊</span>
           <span class="ki-label">Reporte de uso</span>
@@ -2240,6 +2244,44 @@ html,body,.main{background:#FFFFFF!important;}
 
     <div class="modal-actions">
       <button class="btn" onclick="closeModal('reporteUso')">CERRAR</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════ ACUSES MAESTROS (PDF para cliente) ═════════════ -->
+<div class="modal-bg" id="modalAcusesMaestros" onclick="closeModalBg(event,'acusesMaestros')">
+  <div class="modal" style="max-width:520px">
+    <h3>📋 ACUSES MAESTROS · PDF CONSOLIDADO</h3>
+    <p class="desc">Generá un PDF profesional con TODOS los acuses de recepción firmados — uno por cada etapa entregada de cada apartamento. Incluye foto del trabajo, datos del receptor que firmó, fecha y hora. Listo para entregar al cliente final como evidencia consolidada.</p>
+
+    <div class="field">
+      <label>PROYECTO</label>
+      <select id="amProyecto"></select>
+      <div class="hint">Elegí el proyecto del que querés generar los acuses.</div>
+    </div>
+
+    <div class="field">
+      <label>INCLUIR</label>
+      <select id="amFiltro">
+        <option value="firmados">Solo etapas con acuse firmado (recomendado)</option>
+        <option value="todas">Todas las etapas (incluye sin firmar — marcar pendientes)</option>
+      </select>
+    </div>
+
+    <div id="amProgress" style="display:none">
+      <div style="text-align:center;padding:14px 4px">
+        <div id="amTitle" style="font-weight:700;font-size:13px;letter-spacing:1px;margin-bottom:10px">PREPARANDO PDF...</div>
+        <div style="background:var(--cream);border:1px solid var(--line);border-radius:6px;overflow:hidden;height:22px;margin:12px 0;position:relative">
+          <div id="amBar" style="background:var(--rojo);height:100%;width:0%;transition:width .3s"></div>
+          <div id="amPct" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff">0%</div>
+        </div>
+        <div id="amStatus" style="font-size:11px;color:var(--mute);margin-top:8px;letter-spacing:.3px;line-height:1.5">Iniciando...</div>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn ghost" id="amCancelBtn" onclick="closeModal('acusesMaestros')">CANCELAR</button>
+      <button class="btn primary" id="amGenBtn" onclick="generarAcusesMaestros()">GENERAR PDF</button>
     </div>
   </div>
 </div>
@@ -8928,6 +8970,369 @@ async function generarPDFMensual(){
   }
 }
 
+/* ─────────────── ACUSES MAESTROS (PDF) ─────────────── */
+function openAcusesMaestrosModal(){
+  if (!can('users.manage') && !can('data.import')) return showToast('SIN PERMISO', 'red');
+
+  const projSel = document.getElementById('amProyecto');
+  projSel.innerHTML = (state.projects || [])
+    .map(p => `<option value="${p.id}" ${p.id === state.activeProjectId ? 'selected' : ''}>${p.name}</option>`)
+    .join('');
+
+  // Reset UI
+  document.getElementById('amProgress').style.display = 'none';
+  document.getElementById('amGenBtn').disabled = false;
+  document.getElementById('amCancelBtn').disabled = false;
+  _amSetProgress(0, 'Iniciando...');
+
+  openModal('acusesMaestros');
+}
+
+function _amSetProgress(pct, status){
+  const bar = document.getElementById('amBar');
+  const pctEl = document.getElementById('amPct');
+  const st = document.getElementById('amStatus');
+  if (bar) bar.style.width = pct + '%';
+  if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+  if (st && status) st.textContent = status;
+}
+
+function _amFormatFechaHora(ts){
+  if (!ts) return '—';
+  const d = new Date(ts);
+  return d.toLocaleString('es-GT', { dateStyle: 'long', timeStyle: 'short' });
+}
+
+async function _amCargarImagen(url){
+  // Devuelve { dataUrl, w, h } o null si falla
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const blob = await res.blob();
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => resolve({ dataUrl: reader.result, w: img.naturalWidth, h: img.naturalHeight });
+        img.onerror = () => reject(new Error('Imagen inválida'));
+        img.src = reader.result;
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  } catch(e) {
+    console.warn('No se pudo cargar imagen:', url, e);
+    return null;
+  }
+}
+
+async function generarAcusesMaestros(){
+  if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) {
+    showToast('JSPDF NO CARGÓ — RECARGÁ LA APP', 'red');
+    return;
+  }
+
+  const projId = document.getElementById('amProyecto').value;
+  const filtro = document.getElementById('amFiltro').value;
+  const p = (state.projects || []).find(pp => pp.id === projId);
+  if (!p) { showToast('PROYECTO NO ENCONTRADO', 'red'); return; }
+
+  // Recolectar acuses
+  const acuses = [];
+  (p.towers || []).forEach(t => (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
+    for (let i = 0; i < 6; i++) {
+      const key = String(i);
+      const acuse = a.acuseRecepciones && a.acuseRecepciones[key];
+      const tieneAcuse = acuse && (acuse.type || acuse.url || acuse.data || acuse.receptorNombre);
+      if (filtro === 'firmados' && !tieneAcuse) continue;
+      if (filtro === 'todas' || tieneAcuse) {
+        // Buscar foto principal de la etapa (slot 0 o 1)
+        const photos = a.photos && a.photos[i];
+        let fotoUrl = null;
+        if (Array.isArray(photos)) {
+          for (const ph of photos) {
+            if (typeof ph === 'string' && ph.startsWith('http')) { fotoUrl = ph; break; }
+          }
+        }
+        acuses.push({
+          torre: t.name, torreId: t.id,
+          nivel: l.name, nivelId: l.id,
+          apto: a.name, aptoId: a.id,
+          etapaIdx: i,
+          etapaLabel: ACUSE_SLOTS[i] ? ACUSE_SLOTS[i].label : `ETAPA ${i+1}`,
+          acuse: acuse || null,
+          fotoUrl
+        });
+      }
+    }
+  })));
+
+  if (acuses.length === 0) {
+    showToast('NO HAY ACUSES PARA INCLUIR', 'red');
+    return;
+  }
+
+  // UI: progreso
+  document.getElementById('amProgress').style.display = 'block';
+  document.getElementById('amGenBtn').disabled = true;
+  document.getElementById('amCancelBtn').disabled = true;
+  document.getElementById('amTitle').textContent = `GENERANDO ${acuses.length} ACUSE${acuses.length === 1 ? '' : 'S'}`;
+  _amSetProgress(2, 'Inicializando documento PDF...');
+
+  try {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
+
+    const ROJO = [200, 20, 28];
+    const CAFE = [110, 80, 50];
+    const GRIS = [80, 80, 80];
+    const CREMA = [250, 247, 242];
+    const NEGRO = [30, 30, 30];
+
+    const pageW = doc.internal.pageSize.width;
+    const pageH = doc.internal.pageSize.height;
+
+    // ═══════════ PORTADA ═══════════
+    doc.setFillColor(...ROJO);
+    doc.rect(0, 0, pageW, 240, 'F');
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(42);
+    doc.text('PUNTO ROJO', pageW/2, 110, { align: 'center' });
+
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'normal');
+    doc.text('GESTIÓN DE OBRA · DRYWALL', pageW/2, 135, { align: 'center' });
+
+    doc.setDrawColor(255, 255, 255);
+    doc.line(pageW/2 - 80, 155, pageW/2 + 80, 155);
+
+    doc.setFontSize(28);
+    doc.setFont('helvetica', 'bold');
+    doc.text('ACUSES DE RECEPCIÓN', pageW/2, 195, { align: 'center' });
+
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'normal');
+    doc.text('CONSOLIDADO POR ETAPA Y APARTAMENTO', pageW/2, 222, { align: 'center' });
+
+    // Datos del proyecto
+    let y = 290;
+    doc.setTextColor(...NEGRO);
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.text('DATOS DEL PROYECTO', 50, y);
+    y += 8;
+
+    doc.autoTable({
+      startY: y + 6,
+      body: [
+        ['Proyecto', p.name],
+        ['Cliente', p.client || '—'],
+        ['Ubicación', p.location || '—'],
+        ['Total acuses incluidos', String(acuses.length)],
+        ['Fecha de emisión', new Date().toLocaleString('es-GT', { dateStyle: 'long', timeStyle: 'short' })]
+      ],
+      margin: { left: 50, right: 50 },
+      styles: { fontSize: 10, cellPadding: 6 },
+      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 160, fillColor: CREMA }, 1: { cellWidth: 'auto' } },
+      theme: 'grid'
+    });
+    let yp = doc.lastAutoTable.finalY + 24;
+
+    // Resumen ejecutivo (cuántos acuses por etapa)
+    const conteoPorEtapa = [0,0,0,0,0,0];
+    acuses.forEach(ac => { if (ac.acuse) conteoPorEtapa[ac.etapaIdx]++; });
+
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...ROJO);
+    doc.text('RESUMEN POR ETAPA', 50, yp);
+
+    doc.autoTable({
+      startY: yp + 8,
+      head: [['ETAPA', 'DESCRIPCIÓN', 'FIRMADOS']],
+      body: ACUSE_SLOTS.map((s, i) => [
+        String(i + 1),
+        s.label.replace(/^ETAPA \d+ · /, ''),
+        String(conteoPorEtapa[i])
+      ]),
+      headStyles: { fillColor: ROJO, textColor: 255, fontSize: 9 },
+      bodyStyles: { fontSize: 9, cellPadding: 5 },
+      alternateRowStyles: { fillColor: CREMA },
+      margin: { left: 50, right: 50 }
+    });
+
+    // Pie de portada
+    doc.setFontSize(8);
+    doc.setTextColor(...GRIS);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Generado por ${getCurrentUser()?.displayName || getCurrentUser()?.username || 'Usuario'}`, pageW/2, pageH - 50, { align: 'center' });
+    doc.text('PUNTO ROJO S.A. · 13 calle 12-33 zona 10, Colonia Oakland · www.puntorojo.com.gt', pageW/2, pageH - 35, { align: 'center' });
+
+    // ═══════════ UNA PÁGINA POR CADA ACUSE ═══════════
+    for (let i = 0; i < acuses.length; i++) {
+      const ac = acuses[i];
+      const pct = 5 + Math.floor((i / acuses.length) * 90);
+      _amSetProgress(pct, `Procesando acuse ${i+1} de ${acuses.length}: ${ac.apto}`);
+
+      doc.addPage();
+
+      // Header rojo
+      doc.setFillColor(...ROJO);
+      doc.rect(0, 0, pageW, 60, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(16);
+      doc.setFont('helvetica', 'bold');
+      doc.text('ACUSE DE RECEPCIÓN', 50, 28);
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`No. ${String(i + 1).padStart(4, '0')} de ${String(acuses.length).padStart(4, '0')}`, pageW - 50, 28, { align: 'right' });
+      doc.text(p.name, 50, 48);
+      doc.text((p.client || '—') + ' · ' + (p.location || '—'), pageW - 50, 48, { align: 'right' });
+
+      let yc = 90;
+      doc.setTextColor(...NEGRO);
+
+      // Datos del apartamento y etapa
+      doc.autoTable({
+        startY: yc,
+        body: [
+          ['Torre', ac.torre],
+          ['Nivel', ac.nivel],
+          ['Apartamento / Espacio', ac.apto],
+          ['Etapa entregada', ac.etapaLabel]
+        ],
+        margin: { left: 50, right: 50 },
+        styles: { fontSize: 10, cellPadding: 6 },
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 160, fillColor: CREMA }, 1: { cellWidth: 'auto' } },
+        theme: 'grid'
+      });
+      yc = doc.lastAutoTable.finalY + 16;
+
+      // Foto del trabajo
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...ROJO);
+      doc.text('EVIDENCIA FOTOGRÁFICA', 50, yc);
+      yc += 6;
+
+      if (ac.fotoUrl) {
+        try {
+          const img = await _amCargarImagen(ac.fotoUrl);
+          if (img) {
+            // Calcular dimensiones manteniendo proporción
+            const maxW = pageW - 100;
+            const maxH = 280;
+            let w = maxW, h = (img.h / img.w) * maxW;
+            if (h > maxH) { h = maxH; w = (img.w / img.h) * maxH; }
+            const x = 50 + (maxW - w) / 2;
+            doc.addImage(img.dataUrl, 'JPEG', x, yc + 6, w, h, undefined, 'FAST');
+            yc += h + 14;
+          } else {
+            doc.setFontSize(9);
+            doc.setFont('helvetica', 'italic');
+            doc.setTextColor(...GRIS);
+            doc.text('No se pudo cargar la foto (puede haber sido eliminada o sin conexión).', 50, yc + 18);
+            yc += 30;
+          }
+        } catch(e) {
+          doc.setFontSize(9);
+          doc.setFont('helvetica', 'italic');
+          doc.setTextColor(...GRIS);
+          doc.text('Error al cargar la foto.', 50, yc + 18);
+          yc += 30;
+        }
+      } else {
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(...GRIS);
+        doc.text('Sin foto registrada para esta etapa.', 50, yc + 18);
+        yc += 30;
+      }
+
+      // Datos del receptor (si firmado)
+      if (yc > pageH - 200) { doc.addPage(); yc = 50; }
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...ROJO);
+      doc.text('FIRMA DIGITAL DEL RECEPTOR', 50, yc);
+      yc += 6;
+
+      if (ac.acuse && (ac.acuse.receptorNombre || ac.acuse.type)) {
+        doc.autoTable({
+          startY: yc + 6,
+          body: [
+            ['Receptor (firmó)', ac.acuse.receptorNombre || '—'],
+            ['Cargo', ac.acuse.receptorCargo || '—'],
+            ['Tipo de firma', (ac.acuse.type || 'digital').toUpperCase() + ' · QR PRE-VALIDADO'],
+            ['Fecha y hora de firma', _amFormatFechaHora(ac.acuse.ts)],
+            ['Supervisor Punto Rojo', ac.acuse.userName || ac.acuse.user || '—']
+          ],
+          margin: { left: 50, right: 50 },
+          styles: { fontSize: 10, cellPadding: 6 },
+          columnStyles: { 0: { fontStyle: 'bold', cellWidth: 180, fillColor: CREMA }, 1: { cellWidth: 'auto' } },
+          theme: 'grid'
+        });
+      } else {
+        // Sin firmar — marcar pendiente
+        doc.setFillColor(255, 240, 200);
+        doc.rect(50, yc + 6, pageW - 100, 50, 'F');
+        doc.setDrawColor(...CAFE);
+        doc.rect(50, yc + 6, pageW - 100, 50);
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(...CAFE);
+        doc.text('⚠ ETAPA SIN FIRMAR', pageW/2, yc + 28, { align: 'center' });
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(...GRIS);
+        doc.text('Esta etapa todavía no tiene acuse firmado por el receptor.', pageW/2, yc + 46, { align: 'center' });
+      }
+    }
+
+    // ═══════════ PIE DE PÁGINA EN TODAS ═══════════
+    const totalPag = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= totalPag; i++) {
+      doc.setPage(i);
+      doc.setFontSize(7);
+      doc.setTextColor(...GRIS);
+      doc.setFont('helvetica', 'normal');
+      doc.text(
+        `Punto Rojo S.A.  ·  ${p.name}  ·  Acuses consolidados  ·  Página ${i} de ${totalPag}`,
+        pageW/2, pageH - 20, { align: 'center' }
+      );
+    }
+
+    _amSetProgress(98, 'Generando archivo final...');
+
+    const fechaISO = new Date().toISOString().slice(0, 10);
+    const safeName = p.name.replace(/[^a-zA-Z0-9]/g, '_');
+    const filename = `puntorojo_acuses_${safeName}_${fechaISO}.pdf`;
+    doc.save(filename);
+
+    _amSetProgress(100, '¡Listo! PDF descargado.');
+    showToast(`PDF GENERADO · ${acuses.length} acuse${acuses.length === 1 ? '' : 's'}`, 'green');
+
+    try {
+      logActivity('update', 'Acuses maestros generados',
+        `${p.name} · ${acuses.length} acuse${acuses.length === 1 ? '' : 's'} (${filtro === 'firmados' ? 'solo firmados' : 'todas las etapas'})`);
+    } catch(e){}
+
+    setTimeout(() => {
+      closeModal('acusesMaestros');
+    }, 1500);
+
+  } catch(e) {
+    console.error('Error PDF acuses:', e);
+    document.getElementById('amStatus').textContent = 'ERROR: ' + (e.message || e);
+    document.getElementById('amStatus').style.color = 'var(--rojo)';
+    document.getElementById('amGenBtn').disabled = false;
+    document.getElementById('amCancelBtn').disabled = false;
+    showToast('ERROR EN PDF: ' + (e.message || e), 'red');
+  }
+}
+
 /* ─────────────── REPORTE DE USO (admin) ─────────────── */
 function _formatRelativeTime(ts){
   if (!ts) return '—';
@@ -10758,6 +11163,49 @@ function openQRScanForAcuse(towerId, levelId, aptoId, slotKey){
     showToast('LIBRERÍA QR NO CARGADA — RECARGÁ', 'red');
     return;
   }
+
+  // ── Validación de orden secuencial: la etapa anterior debe estar firmada ──
+  const slotIdx = parseInt(slotKey);
+  if (!isNaN(slotIdx) && slotIdx > 0) {
+    const p = activeProj();
+    const t = p && (p.towers || []).find(x => x.id === towerId);
+    const l = t && (t.levels || []).find(x => x.id === levelId);
+    const a = l && (l.aptos || []).find(x => x.id === aptoId);
+    if (a) {
+      // Buscar etapas anteriores sin firmar
+      const sinFirmar = [];
+      for (let i = 0; i < slotIdx; i++) {
+        const acuse = a.acuseRecepciones && a.acuseRecepciones[String(i)];
+        const tieneAcuse = acuse && (acuse.type || acuse.url || acuse.data || acuse.receptorNombre);
+        if (!tieneAcuse) sinFirmar.push(i);
+      }
+      if (sinFirmar.length > 0) {
+        const labelsPendientes = sinFirmar.map(i => ACUSE_SLOTS[i].label).join('\n• ');
+        if (can('users.manage')) {
+          // Admin puede saltar el orden con doble confirmación
+          const ok = confirm(
+            `⚠ ATENCIÓN — ENTREGA FUERA DE ORDEN\n\n` +
+            `Las siguientes etapas anteriores NO están firmadas:\n• ${labelsPendientes}\n\n` +
+            `Lo recomendado es entregar las etapas en orden (1 → 2 → 3 → ...).\n\n` +
+            `Como administrador, podés saltar el orden si hubo una excepción real en obra.\n\n` +
+            `¿CONFIRMÁS QUE QUERÉS SALTAR EL ORDEN?`
+          );
+          if (!ok) return;
+          const ok2 = confirm('ÚLTIMA CONFIRMACIÓN — ¿Saltar el orden y firmar igual?');
+          if (!ok2) return;
+        } else {
+          showToast(`PRIMERO ENTREGÁ: ${ACUSE_SLOTS[sinFirmar[0]].label}`, 'red');
+          alert(
+            `NO SE PUEDE FIRMAR ESTA ETAPA TODAVÍA\n\n` +
+            `Faltan firmar las etapas anteriores:\n• ${labelsPendientes}\n\n` +
+            `Las etapas se deben entregar en orden. Si necesitás saltar el orden por una excepción, pedile al administrador que haga la firma.`
+          );
+          return;
+        }
+      }
+    }
+  }
+
   _qrScanCtx = { towerId, levelId, aptoId, slotKey };
   const slotInfo = ACUSE_SLOTS.find(s => s.key === String(slotKey));
   document.getElementById('qrScanTitle').textContent = 'ESCANEAR QR · ' + (slotInfo ? slotInfo.label : 'ACUSE');
@@ -10837,11 +11285,23 @@ async function processQRScan(decoded){
       user: currentUser ? currentUser.email : '',
       userName: currentUser ? (currentUser.displayName || currentUser.email) : ''
     };
+
+    // ── Auto-marcar la etapa (y todas las anteriores) como completadas ──
+    const slotIdxNum = parseInt(ctx.slotKey);
+    let etapaMarcada = false;
+    if (!isNaN(slotIdxNum) && slotIdxNum >= 0 && slotIdxNum < 6) {
+      if (!Array.isArray(a.stages)) a.stages = [false,false,false,false,false,false];
+      for (let i = 0; i <= slotIdxNum; i++) {
+        if (!a.stages[i]) etapaMarcada = true;
+        a.stages[i] = true;
+      }
+    }
+
     saveState();
     logActivity('auth',
       `Acuse digital firmado: ${l.name} · ${a.name} · ${slotInfo ? slotInfo.label : ctx.slotKey}`,
-      `Firmado por ${r.nombre}${r.cargo ? ' (' + r.cargo + ')' : ''}`);
-    showToast('ACUSE FIRMADO POR ' + r.nombre, 'green');
+      `Firmado por ${r.nombre}${r.cargo ? ' (' + r.cargo + ')' : ''}${etapaMarcada ? ' · Etapa marcada como entregada' : ''}`);
+    showToast('ACUSE FIRMADO POR ' + r.nombre + (etapaMarcada ? ' · ETAPA ENTREGADA' : ''), 'green');
     renderAcusesRecepcion();
     renderAvance();
   } catch(e) {
