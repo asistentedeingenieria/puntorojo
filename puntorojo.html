@@ -11373,39 +11373,64 @@ function deleteCurrentProveedor(){
         if (m && roman[m[1]] !== undefined) return roman[m[1]];
         m = s.match(/TORRE\s+(\d+)/);
         if (m) return parseInt(m[1]);
-        m = s.match(/^T(\d+)/);
+        m = s.match(/^T(\d+)$/);
         if (m) return parseInt(m[1]);
         return null;
       };
 
-      // Busca apto en el proyecto. Si se pasa torreNum, prefiere aptos en esa torre.
-      const findApto = (aptoTxt, preferredTorreNum) => {
+      // Convierte "NIVEL 1" / "Nivel 02" / "n1" / "t3-n1" a número 1
+      const nivelNumOf = (name) => {
+        const s = String(name || '').toUpperCase().trim();
+        let m = s.match(/NIVEL\s+(\d+)/);
+        if (m) return parseInt(m[1]);
+        m = s.match(/N(\d+)/);
+        if (m) return parseInt(m[1]);
+        return null;
+      };
+
+      // Busca apto en el proyecto. Si se pasa torre y/o nivel, prefiere aptos en ese contexto.
+      const findApto = (aptoTxt, preferredTorreNum, preferredNivelNum) => {
         const txtUp = String(aptoTxt || '').toUpperCase().trim();
         if (!txtUp) return null;
         const numMatch = txtUp.match(/(\d{3,4})/);
 
-        const tryInTowers = (towers) => {
+        const tryInLevels = (levels) => {
           let found = null;
-          towers.forEach(t => (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
+          levels.forEach(l => (l.aptos || []).forEach(a => {
             if (found) return;
             const aname = String(a.name).toUpperCase();
             if (aname === txtUp) { found = a; return; }
             if (numMatch && aname.includes(numMatch[1])) { found = a; return; }
             if (aname.includes(txtUp) || txtUp.includes(aname)) { found = a; return; }
-          })));
+          }));
           return found;
         };
 
-        // 1) Si hay torre preferida, buscar SOLO en esa torre primero
+        // 1) Filtrar torres
+        let towersToSearch = p.towers || [];
         if (preferredTorreNum != null) {
-          const matchingTowers = (p.towers || []).filter(t => torreNumOf(t.name) === preferredTorreNum || torreNumOf(t.id) === preferredTorreNum);
-          if (matchingTowers.length > 0) {
-            const f = tryInTowers(matchingTowers);
+          const matching = towersToSearch.filter(t => torreNumOf(t.name) === preferredTorreNum || torreNumOf(t.id) === preferredTorreNum);
+          if (matching.length > 0) towersToSearch = matching;
+        }
+
+        // 2) Si hay nivel preferido, intentar con torre+nivel primero
+        if (preferredNivelNum != null) {
+          const matchingLevels = [];
+          towersToSearch.forEach(t => (t.levels || []).forEach(l => {
+            if (nivelNumOf(l.name) === preferredNivelNum || nivelNumOf(l.id) === preferredNivelNum) {
+              matchingLevels.push(l);
+            }
+          }));
+          if (matchingLevels.length > 0) {
+            const f = tryInLevels(matchingLevels);
             if (f) return f;
           }
         }
-        // 2) Fallback: buscar en todas las torres
-        return tryInTowers(p.towers || []);
+
+        // 3) Fallback: solo con torre
+        const allLevels = [];
+        towersToSearch.forEach(t => (t.levels || []).forEach(l => allLevels.push(l)));
+        return tryInLevels(allLevels);
       };
 
       // Mapeo: número de estimación (1,2,3...) → row.id en p.cobro.rows
@@ -11455,6 +11480,7 @@ function deleteCurrentProveedor(){
         // se asignen a la torre correcta.
         let aptosDetectados = 0, aptosMatcheados = 0;
         let currentTorreNum = null;
+        let currentNivelNum = null;
         const debugTorres = {}; // { torreNum: { detectados, matcheados } }
         for (let i = interpret.subHeaderRow + 1; i < interpret.dataRows.length; i++) {
           const dr = interpret.dataRows[i];
@@ -11466,15 +11492,33 @@ function deleteCurrentProveedor(){
             const v = String(dr[col] || '').trim();
             if (!v) continue;
             const tn = torreNumOf(v);
-            if (tn != null) { torreFila = tn; break; }
-            // Si la celda no era TORRE pero tiene contenido distinto, no seguir buscando torre en esta fila
+            // Solo aceptar si la celda parece "TORRE X" (no cualquier número)
+            if (tn != null && /TORRE/i.test(v)) { torreFila = tn; break; }
             if (v.length > 2) break;
           }
           if (torreFila != null) {
             currentTorreNum = torreFila;
+            currentNivelNum = null; // resetear nivel al cambiar de torre
             try { console.log(`[Parser] >>> TORRE ${torreFila} detectada en fila ${i + 1}`); } catch(e){}
             if (!debugTorres[torreFila]) debugTorres[torreFila] = { detectados: 0, matcheados: 0 };
             continue; // fila de torre, no procesar como apto
+          }
+
+          // Detectar si esta fila es un header de NIVEL
+          let nivelFila = null;
+          for (let col = 0; col < dr.length; col++) {
+            const v = String(dr[col] || '').trim();
+            if (!v) continue;
+            // Solo aceptar si la celda dice "NIVEL X" explícitamente
+            if (/^NIVEL\s+\d+/i.test(v)) {
+              const nn = nivelNumOf(v);
+              if (nn != null) { nivelFila = nn; break; }
+            }
+            if (v.length > 2) break;
+          }
+          if (nivelFila != null) {
+            currentNivelNum = nivelFila;
+            continue; // fila de nivel, no procesar como apto
           }
 
           // Buscar la celda que contenga un nombre de apto válido
@@ -11489,8 +11533,12 @@ function deleteCurrentProveedor(){
           aptosDetectados++;
           if (currentTorreNum != null && debugTorres[currentTorreNum]) debugTorres[currentTorreNum].detectados++;
 
-          const apto = findApto(aptoTxt, currentTorreNum);
-          if (!apto) { sinMatch.push(aptoTxt + (currentTorreNum != null ? ` (T${currentTorreNum})` : ' (SIN TORRE)')); continue; }
+          const apto = findApto(aptoTxt, currentTorreNum, currentNivelNum);
+          if (!apto) {
+            const ctxTxt = (currentTorreNum != null ? `T${currentTorreNum}` : '?') + '/' + (currentNivelNum != null ? `N${currentNivelNum}` : '?');
+            sinMatch.push(`${aptoTxt} (${ctxTxt})`);
+            continue;
+          }
           aptosMatcheados++;
           if (currentTorreNum != null && debugTorres[currentTorreNum]) debugTorres[currentTorreNum].matcheados++;
 
