@@ -28,6 +28,10 @@
 <!-- ════════ JSZip · BACKUP MANUAL EN ZIP ════════ -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
+<!-- ════════ jsPDF + AUTOTABLE · REPORTE MENSUAL EN PDF ════════ -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+
 <!-- ════════ FIREBASE SDK · LOGIN, BASE DE DATOS Y FOTOS EN LA NUBE ════════ -->
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
@@ -1210,6 +1214,7 @@ html,body,.main{background:#FFFFFF!important;}
       <button class="btn-top" onclick="openEditProjectModal()" data-perm="users.manage" title="Editar especificaciones del proyecto activo">EDITAR PROYECTO</button>
       <button class="btn-top" onclick="exportJSON()">↓ EXPORTAR</button>
       <button class="btn-top" data-perm="data.import" onclick="openModal('backup')" title="Backup completo en ZIP (datos + fotos + acuses + usuarios)">📦 BACKUP</button>
+      <button class="btn-top" data-perm="users.manage" onclick="openPDFMensualModal()" title="Generar reporte mensual profesional en PDF">📄 REPORTE PDF</button>
       <button class="btn-top" onclick="document.getElementById('importFile').click()" data-perm="data.import">↑ IMPORTAR</button>
       <input type="file" id="importFile" accept="application/json" style="display:none" onchange="importJSON(event)">
       <button class="btn-top" onclick="resetToFactory()" data-perm="data.import" title="Restablecer datos de fábrica">⟲ RESET</button>
@@ -2077,6 +2082,33 @@ html,body,.main{background:#FFFFFF!important;}
 
     <div class="modal-actions">
       <button class="btn" id="backupCloseBtn" onclick="closeModal('backup')">CERRAR</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════ PDF MENSUAL ═════════════ -->
+<div class="modal-bg" id="modalPdfMensual" onclick="closeModalBg(event,'pdfMensual')">
+  <div class="modal" style="max-width:480px">
+    <h3>📄 REPORTE MENSUAL EN PDF</h3>
+    <p class="desc">Generá un PDF profesional con el resumen del mes: avance físico, cobros emitidos/pagados, pedidos de materiales y registro de actividad. Ideal para presentar a clientes o archivar como histórico.</p>
+
+    <div class="field">
+      <label>MES</label>
+      <select id="pdfMes"></select>
+    </div>
+    <div class="field">
+      <label>AÑO</label>
+      <select id="pdfAnio"></select>
+    </div>
+    <div class="field">
+      <label>PROYECTO</label>
+      <select id="pdfProyecto"></select>
+      <div class="hint">Elegí "TODOS" para un reporte consolidado o uno específico para enfocar en un solo cliente.</div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeModal('pdfMensual')">CANCELAR</button>
+      <button class="btn primary" onclick="generarPDFMensual()">GENERAR PDF</button>
     </div>
   </div>
 </div>
@@ -8331,6 +8363,394 @@ GENERADO POR: Punto Rojo S.A. — App de gestión de obra.
     }
     showToast('ERROR EN BACKUP', 'red');
     document.getElementById('backupCloseBtn').disabled = false;
+  }
+}
+
+/* ─────────────── PDF MENSUAL ─────────────── */
+const _MESES_PDF = ['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
+
+function openPDFMensualModal(){
+  if (!can('users.manage') && !can('data.import')) return showToast('SIN PERMISO', 'red');
+
+  const now = new Date();
+  const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+  const mesSel = document.getElementById('pdfMes');
+  const anioSel = document.getElementById('pdfAnio');
+  const projSel = document.getElementById('pdfProyecto');
+
+  mesSel.innerHTML = _MESES_PDF.map((m, i) => `<option value="${i}" ${i === prevMonth.getMonth() ? 'selected' : ''}>${m}</option>`).join('');
+
+  const anioActual = now.getFullYear();
+  const anios = [anioActual - 1, anioActual, anioActual + 1];
+  anioSel.innerHTML = anios.map(a => `<option value="${a}" ${a === prevMonth.getFullYear() ? 'selected' : ''}>${a}</option>`).join('');
+
+  projSel.innerHTML = '<option value="all">TODOS LOS PROYECTOS</option>' +
+    (state.projects || []).map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+
+  openModal('pdfMensual');
+}
+
+function _parseDDMMYYYY(s){
+  if (!s) return null;
+  const m = String(s).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function _isInMonth(date, mes, anio){
+  if (!date) return false;
+  const d = (typeof date === 'number') ? new Date(date) : date;
+  if (isNaN(d.getTime())) return false;
+  return d.getMonth() === mes && d.getFullYear() === anio;
+}
+
+function _avanceProyecto(p){
+  let totalEtapas = 0, completadas = 0, totalAptos = 0;
+  (p.towers || []).forEach(t => (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
+    totalAptos++;
+    const stages = a.stages || [];
+    for (let i = 0; i < 6; i++) {
+      totalEtapas++;
+      if (stages[i]) completadas++;
+    }
+  })));
+  return {
+    totalAptos,
+    totalEtapas,
+    completadas,
+    pct: totalEtapas > 0 ? (completadas / totalEtapas) * 100 : 0
+  };
+}
+
+function _fmtQ(n){
+  return 'Q ' + (Number(n) || 0).toLocaleString('es-GT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+async function generarPDFMensual(){
+  if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) {
+    showToast('JSPDF NO CARGÓ — RECARGÁ LA APP', 'red');
+    return;
+  }
+
+  const mes = parseInt(document.getElementById('pdfMes').value);
+  const anio = parseInt(document.getElementById('pdfAnio').value);
+  const projId = document.getElementById('pdfProyecto').value;
+
+  const proyectos = projId === 'all'
+    ? (state.projects || [])
+    : (state.projects || []).filter(p => p.id === projId);
+
+  if (proyectos.length === 0) {
+    showToast('NO HAY PROYECTOS PARA INCLUIR', 'red');
+    return;
+  }
+
+  showToast('GENERANDO PDF...', '');
+  closeModal('pdfMensual');
+
+  try {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
+
+    const ROJO = [200, 20, 28];
+    const CAFE = [110, 80, 50];
+    const GRIS = [80, 80, 80];
+    const CREMA = [250, 247, 242];
+
+    const pageW = doc.internal.pageSize.width;
+    const pageH = doc.internal.pageSize.height;
+
+    // ═══════════ PORTADA ═══════════
+    doc.setFillColor(...ROJO);
+    doc.rect(0, 0, pageW, 240, 'F');
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(42);
+    doc.text('PUNTO ROJO', pageW/2, 110, { align: 'center' });
+
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'normal');
+    doc.text('GESTIÓN DE OBRA · DRYWALL', pageW/2, 135, { align: 'center' });
+
+    doc.setDrawColor(255, 255, 255);
+    doc.setLineWidth(0.5);
+    doc.line(pageW/2 - 80, 155, pageW/2 + 80, 155);
+
+    doc.setFontSize(28);
+    doc.setFont('helvetica', 'bold');
+    doc.text('REPORTE MENSUAL', pageW/2, 195, { align: 'center' });
+
+    doc.setFontSize(18);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`${_MESES_PDF[mes]} ${anio}`, pageW/2, 222, { align: 'center' });
+
+    let y = 290;
+    doc.setTextColor(...GRIS);
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.text('PROYECTOS INCLUIDOS', 50, y);
+    y += 8;
+
+    const filasResumen = proyectos.map(p => {
+      const av = _avanceProyecto(p);
+      const cobrado = (p.cobro?.rows || []).filter(r => r.sc === 'PAGADO').reduce((s, r) => s + (Number(r.vp_ci) || 0), 0);
+      return [p.name, p.client || '—', av.pct.toFixed(1) + '%', _fmtQ(cobrado)];
+    });
+
+    doc.autoTable({
+      startY: y + 10,
+      head: [['PROYECTO', 'CLIENTE', 'AVANCE', 'COBRADO TOTAL']],
+      body: filasResumen,
+      headStyles: { fillColor: ROJO, textColor: 255, fontStyle: 'bold', fontSize: 9 },
+      bodyStyles: { fontSize: 9, cellPadding: 6 },
+      alternateRowStyles: { fillColor: CREMA },
+      margin: { left: 50, right: 50 }
+    });
+
+    doc.setFontSize(8);
+    doc.setTextColor(...GRIS);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Generado el ${new Date().toLocaleString('es-ES')}`, pageW/2, pageH - 70, { align: 'center' });
+    doc.text(`Por: ${getCurrentUser()?.displayName || getCurrentUser()?.username || 'Usuario'}`, pageW/2, pageH - 55, { align: 'center' });
+
+    // ═══════════ POR CADA PROYECTO ═══════════
+    for (const p of proyectos) {
+      doc.addPage();
+      let yp = 0;
+
+      // Header del proyecto
+      doc.setFillColor(...ROJO);
+      doc.rect(0, 0, pageW, 80, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(20);
+      doc.setFont('helvetica', 'bold');
+      doc.text(p.name, 50, 38);
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      const subtitle = [p.client, p.location].filter(Boolean).join('  ·  ');
+      if (subtitle) doc.text(subtitle, 50, 60);
+
+      yp = 110;
+      doc.setTextColor(0, 0, 0);
+
+      // Resumen ejecutivo
+      const av = _avanceProyecto(p);
+      const total = Number(p.totalConIva || p.totalAmount || 0);
+      const cobrado = (p.cobro?.rows || []).filter(r => r.sc === 'PAGADO').reduce((s, r) => s + (Number(r.vp_ci) || 0), 0);
+      const facturado = (p.cobro?.rows || []).filter(r => r.sf === 'EMITIDA').reduce((s, r) => s + (Number(r.vp_ci) || 0), 0);
+      const pendiente = facturado - cobrado;
+
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...ROJO);
+      doc.text('RESUMEN EJECUTIVO', 50, yp);
+      yp += 6;
+
+      doc.autoTable({
+        startY: yp + 6,
+        body: [
+          ['Avance físico global', `${av.pct.toFixed(1)}%   (${av.completadas} / ${av.totalEtapas} etapas completadas)`],
+          ['Apartamentos del proyecto', String(av.totalAptos)],
+          ['Total contrato (con IVA)', _fmtQ(total)],
+          ['Total facturado', _fmtQ(facturado)],
+          ['Total cobrado', _fmtQ(cobrado)],
+          ['Pendiente de cobro', _fmtQ(pendiente)]
+        ],
+        margin: { left: 50, right: 50 },
+        styles: { fontSize: 10, cellPadding: 6 },
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 200, fillColor: CREMA }, 1: { cellWidth: 'auto' } },
+        theme: 'grid'
+      });
+      yp = doc.lastAutoTable.finalY + 25;
+
+      // Avance por torre
+      if (yp > pageH - 200) { doc.addPage(); yp = 50; }
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...ROJO);
+      doc.text('AVANCE POR TORRE', 50, yp);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(...GRIS);
+      doc.text('(Estado actual al momento del reporte)', 175, yp);
+
+      const filasTorres = (p.towers || []).map(t => {
+        let totalT = 0, compT = 0, aptosT = 0;
+        (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
+          aptosT++;
+          for (let i = 0; i < 6; i++) {
+            totalT++;
+            if ((a.stages || [])[i]) compT++;
+          }
+        }));
+        return [
+          t.name,
+          String(aptosT),
+          `${compT} / ${totalT}`,
+          totalT > 0 ? (compT/totalT*100).toFixed(1) + '%' : '0.0%'
+        ];
+      });
+
+      doc.autoTable({
+        startY: yp + 10,
+        head: [['TORRE', 'APARTAMENTOS', 'ETAPAS', '% AVANCE']],
+        body: filasTorres.length > 0 ? filasTorres : [['—', '—', '—', '—']],
+        headStyles: { fillColor: CAFE, textColor: 255, fontSize: 9 },
+        bodyStyles: { fontSize: 9, cellPadding: 6 },
+        alternateRowStyles: { fillColor: CREMA },
+        margin: { left: 50, right: 50 }
+      });
+      yp = doc.lastAutoTable.finalY + 25;
+
+      // Cobros del mes
+      const cobrosMes = (p.cobro?.rows || []).filter(r => {
+        const fEm = _parseDDMMYYYY(r.f);
+        const fPa = _parseDDMMYYYY(r.fp);
+        return _isInMonth(fEm, mes, anio) || _isInMonth(fPa, mes, anio);
+      });
+
+      if (yp > pageH - 150) { doc.addPage(); yp = 50; }
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...ROJO);
+      doc.text(`COBROS · ${_MESES_PDF[mes]} ${anio}`, 50, yp);
+
+      if (cobrosMes.length > 0) {
+        doc.autoTable({
+          startY: yp + 10,
+          head: [['F. EMISIÓN', 'DESCRIPCIÓN', 'MONTO', 'EST. FACT.', 'EST. COBRO', 'F. PAGO']],
+          body: cobrosMes.map(r => [
+            r.f || '—',
+            r.d || '',
+            _fmtQ(r.vp_ci),
+            r.sf || '—',
+            r.sc || '—',
+            r.fp || '—'
+          ]),
+          headStyles: { fillColor: CAFE, textColor: 255, fontSize: 8 },
+          bodyStyles: { fontSize: 8, cellPadding: 5 },
+          alternateRowStyles: { fillColor: CREMA },
+          margin: { left: 50, right: 50 }
+        });
+        yp = doc.lastAutoTable.finalY + 25;
+      } else {
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(...GRIS);
+        doc.text('Sin movimientos de cobro emitidos o pagados en el período.', 50, yp + 18);
+        yp += 35;
+      }
+
+      // Pedidos del mes
+      const pedidosMes = (p.materiales?.pedidos || []).filter(pd => {
+        const ts = pd.ts ? new Date(pd.ts) : _parseDDMMYYYY(pd.fecha);
+        return _isInMonth(ts, mes, anio);
+      });
+
+      if (yp > pageH - 150) { doc.addPage(); yp = 50; }
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...ROJO);
+      doc.text(`PEDIDOS DE MATERIALES · ${_MESES_PDF[mes]} ${anio}`, 50, yp);
+
+      if (pedidosMes.length > 0) {
+        doc.autoTable({
+          startY: yp + 10,
+          head: [['NÚMERO', 'FECHA', 'SOLICITANTE', 'NIVEL / APTO', 'ESTADO']],
+          body: pedidosMes.map(pd => [
+            pd.numero || '—',
+            pd.fecha || '—',
+            pd.solicitante || '—',
+            [pd.nivel, pd.apto].filter(Boolean).join(' · ') || '—',
+            pd.status || '—'
+          ]),
+          headStyles: { fillColor: CAFE, textColor: 255, fontSize: 8 },
+          bodyStyles: { fontSize: 8, cellPadding: 5 },
+          alternateRowStyles: { fillColor: CREMA },
+          margin: { left: 50, right: 50 }
+        });
+      } else {
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(...GRIS);
+        doc.text('Sin pedidos de materiales en el período.', 50, yp + 18);
+      }
+    }
+
+    // ═══════════ ACTIVIDAD DEL MES ═══════════
+    const eventos = (state.activity || []).filter(e => {
+      if (!_isInMonth(e.ts, mes, anio)) return false;
+      if (projId !== 'all' && e.projectId !== projId) return false;
+      return true;
+    });
+
+    if (eventos.length > 0) {
+      doc.addPage();
+      doc.setFillColor(...CAFE);
+      doc.rect(0, 0, pageW, 60, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(18);
+      doc.setFont('helvetica', 'bold');
+      doc.text('REGISTRO DE ACTIVIDAD', 50, 35);
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`${_MESES_PDF[mes]} ${anio}  ·  ${eventos.length} eventos`, 50, 52);
+
+      doc.autoTable({
+        startY: 85,
+        head: [['FECHA', 'TIPO', 'TÍTULO', 'DETALLE', 'USUARIO']],
+        body: eventos.map(e => {
+          const d = new Date(e.ts);
+          return [
+            d.toLocaleDateString('es-ES') + ' ' + d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }),
+            String(e.type || '').toUpperCase(),
+            (e.title || '').substring(0, 60),
+            (e.desc || '').substring(0, 100),
+            e.role || '—'
+          ];
+        }),
+        headStyles: { fillColor: ROJO, textColor: 255, fontSize: 8 },
+        bodyStyles: { fontSize: 7, cellPadding: 4 },
+        alternateRowStyles: { fillColor: CREMA },
+        margin: { left: 30, right: 30 },
+        columnStyles: {
+          0: { cellWidth: 75 },
+          1: { cellWidth: 50 },
+          2: { cellWidth: 120 },
+          3: { cellWidth: 'auto' },
+          4: { cellWidth: 65 }
+        }
+      });
+    }
+
+    // ═══════════ PIE DE PÁGINA EN TODAS LAS HOJAS ═══════════
+    const totalPaginas = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= totalPaginas; i++) {
+      doc.setPage(i);
+      doc.setFontSize(7);
+      doc.setTextColor(...GRIS);
+      doc.setFont('helvetica', 'normal');
+      doc.text(
+        `Punto Rojo S.A.  ·  Reporte ${_MESES_PDF[mes]} ${anio}  ·  Página ${i} de ${totalPaginas}`,
+        pageW/2, pageH - 20, { align: 'center' }
+      );
+    }
+
+    const nombre = `puntorojo_reporte_${anio}-${String(mes+1).padStart(2,'0')}_${_MESES_PDF[mes]}.pdf`;
+    doc.save(nombre);
+
+    showToast('PDF GENERADO', 'green');
+    try {
+      logActivity('update', 'PDF mensual generado',
+        `${_MESES_PDF[mes]} ${anio} · ${proyectos.length} proyecto${proyectos.length !== 1 ? 's' : ''}`);
+    } catch(e){}
+
+  } catch(e) {
+    console.error('Error PDF:', e);
+    showToast('ERROR EN PDF: ' + (e.message || e), 'red');
   }
 }
 
