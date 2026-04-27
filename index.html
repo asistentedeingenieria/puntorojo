@@ -1332,6 +1332,10 @@ html,body,.main{background:#FFFFFF!important;}
 
         <div class="kebab-divider"></div>
 
+        <button class="kebab-item" data-perm="data.import" onclick="kebabAction(openLimpiezaSelectivaModal)" title="Borrar selectivamente pedidos, OC, recetas, precios o planilla — sin tocar proyectos ni fotos">
+          <span class="ki-emoji">🧹</span>
+          <span class="ki-label">Limpieza selectiva</span>
+        </button>
         <button class="kebab-item kebab-danger" data-perm="data.import" onclick="kebabAction(resetToFactory)" title="Restablecer datos de fábrica">
           <span class="ki-emoji">⟲</span>
           <span class="ki-label">Reset a fábrica</span>
@@ -2304,6 +2308,40 @@ html,body,.main{background:#FFFFFF!important;}
     <div class="modal-actions">
       <button class="btn ghost" id="amCancelBtn" onclick="closeModal('acusesMaestros')">CANCELAR</button>
       <button class="btn primary" id="amGenBtn" onclick="generarAcusesMaestros()">GENERAR PDF</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════ LIMPIEZA SELECTIVA ═════════════ -->
+<div class="modal-bg" id="modalLimpiezaSelectiva" onclick="closeModalBg(event,'limpiezaSelectiva')">
+  <div class="modal" style="max-width:540px">
+    <h3>🧹 LIMPIEZA SELECTIVA</h3>
+    <p class="desc">Reseteá secciones específicas a cero sin tocar el resto. Útil al empezar un proyecto nuevo o para borrar datos de prueba.</p>
+    <p class="desc" style="color:var(--rojo);font-weight:700;margin-top:-4px">⚠ Esta acción es PERMANENTE. Hacé un BACKUP primero (📦 BACKUP del menú) si querés tener respaldo.</p>
+
+    <div class="field">
+      <label>PROYECTO(S)</label>
+      <select id="lsProyecto">
+        <option value="all">TODOS LOS PROYECTOS</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label>QUÉ DATOS LIMPIAR</label>
+      <div style="display:grid;gap:8px;padding:6px 0;font-size:11px;letter-spacing:.3px;line-height:1.4">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 8px;background:var(--cream);border-radius:3px"><input type="checkbox" id="lsPedidos" checked style="width:16px;height:16px;cursor:pointer"> Pedidos de materiales</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 8px;background:var(--cream);border-radius:3px"><input type="checkbox" id="lsOrdenes" checked style="width:16px;height:16px;cursor:pointer"> Órdenes de compra</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 8px;background:var(--cream);border-radius:3px"><input type="checkbox" id="lsReceta" checked style="width:16px;height:16px;cursor:pointer"> Receta de materiales</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 8px;background:var(--cream);border-radius:3px"><input type="checkbox" id="lsPrecios" checked style="width:16px;height:16px;cursor:pointer"> Catálogo de precios (productos por proveedor)</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 8px;background:var(--cream);border-radius:3px"><input type="checkbox" id="lsPlanilla" checked style="width:16px;height:16px;cursor:pointer"> Planilla completa (recetaCostos, pagos, ajustes, retenciones)</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 8px;background:var(--white);border:1px solid var(--line);border-radius:3px"><input type="checkbox" id="lsItems" style="width:16px;height:16px;cursor:pointer"> Catálogo de materiales del proyecto (items / inventario)</label>
+      </div>
+      <div class="hint" style="margin-top:8px"><strong>NO se tocan:</strong> torres, niveles, apartamentos, cobro, personal, fotos de avance, acuses firmados, usuarios.</div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeModal('limpiezaSelectiva')">CANCELAR</button>
+      <button class="btn primary" onclick="ejecutarLimpiezaSelectiva()">LIMPIAR SELECCIONADOS</button>
     </div>
   </div>
 </div>
@@ -9590,6 +9628,147 @@ function renderReporteUso(){
 
   document.getElementById('reporteUsoBody').innerHTML =
     kpis + tablaUsers + dayChart + proyectosBlock + tiposBlock + footer;
+}
+
+/* ─────────────── LIMPIEZA SELECTIVA ─────────────── */
+function openLimpiezaSelectivaModal(){
+  if (!can('users.manage') && !can('data.import')) return showToast('SIN PERMISO', 'red');
+
+  const sel = document.getElementById('lsProyecto');
+  sel.innerHTML = '<option value="all">TODOS LOS PROYECTOS</option>' +
+    (state.projects || []).map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+
+  // Reset checkboxes a valores por defecto
+  ['lsPedidos','lsOrdenes','lsReceta','lsPrecios','lsPlanilla'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.checked = true;
+  });
+  const lsItems = document.getElementById('lsItems');
+  if (lsItems) lsItems.checked = false;
+
+  openModal('limpiezaSelectiva');
+}
+
+async function ejecutarLimpiezaSelectiva(){
+  if (!can('users.manage') && !can('data.import')) return showToast('SIN PERMISO', 'red');
+
+  const projId = document.getElementById('lsProyecto').value;
+  const opciones = {
+    pedidos:  document.getElementById('lsPedidos').checked,
+    ordenes:  document.getElementById('lsOrdenes').checked,
+    receta:   document.getElementById('lsReceta').checked,
+    precios:  document.getElementById('lsPrecios').checked,
+    planilla: document.getElementById('lsPlanilla').checked,
+    items:    document.getElementById('lsItems').checked
+  };
+
+  const seleccionadas = Object.entries(opciones).filter(([k,v]) => v).map(([k]) => k);
+  if (seleccionadas.length === 0) {
+    showToast('SELECCIONÁ AL MENOS UNA OPCIÓN', 'red');
+    return;
+  }
+
+  const proyectos = projId === 'all'
+    ? (state.projects || [])
+    : (state.projects || []).filter(p => p.id === projId);
+
+  if (proyectos.length === 0) {
+    showToast('NO HAY PROYECTOS', 'red');
+    return;
+  }
+
+  const labels = {
+    pedidos:  'Pedidos de materiales',
+    ordenes:  'Órdenes de compra',
+    receta:   'Receta de materiales',
+    precios:  'Catálogo de precios (productos por proveedor)',
+    planilla: 'Planilla completa',
+    items:    'Catálogo de materiales (items)'
+  };
+  const seleccionadasTexto = seleccionadas.map(k => '• ' + labels[k]).join('\n');
+  const projNames = projId === 'all' ? 'TODOS LOS PROYECTOS' : (proyectos[0].name || projId);
+
+  const aviso =
+    `⚠ LIMPIEZA SELECTIVA\n\n` +
+    `Proyecto(s): ${projNames}\n\n` +
+    `Se van a borrar permanentemente:\n${seleccionadasTexto}\n\n` +
+    `NO se tocan: torres, niveles, apartamentos, cobro, personal, fotos, acuses, usuarios.\n\n` +
+    `¿Continuar al siguiente paso?`;
+  if (!confirm(aviso)) return;
+
+  const tipeo = prompt(
+    'CONFIRMACIÓN FINAL\n\n' +
+    'Para confirmar, escribí en mayúsculas la palabra:\n\n' +
+    'LIMPIAR\n\n' +
+    'Cualquier otra cosa cancelará la operación.'
+  );
+  if (tipeo === null || tipeo.trim() !== 'LIMPIAR') {
+    showToast('OPERACIÓN CANCELADA', 'red');
+    return;
+  }
+
+  showToast('LIMPIANDO... NO CIERRES LA APP', '');
+
+  let totalAfectados = 0;
+
+  proyectos.forEach(p => {
+    if (!p.materiales) {
+      p.materiales = { items:[], pedidos:[], pedidoCounter:0, ordenes:[], ordenCounter:0, proveedores:[], direccionesEntrega:[], receta:[{},{},{},{},{},{}], etapasPedidas:{} };
+    }
+
+    if (opciones.pedidos) {
+      totalAfectados += (p.materiales.pedidos || []).length;
+      p.materiales.pedidos = [];
+      p.materiales.pedidoCounter = 0;
+      p.materiales.etapasPedidas = {};
+    }
+    if (opciones.ordenes) {
+      totalAfectados += (p.materiales.ordenes || []).length;
+      p.materiales.ordenes = [];
+      p.materiales.ordenCounter = 0;
+    }
+    if (opciones.receta) {
+      p.materiales.receta = [{},{},{},{},{},{}];
+    }
+    if (opciones.precios) {
+      (p.materiales.proveedores || []).forEach(prv => {
+        totalAfectados += (prv.productos || []).length;
+        prv.productos = [];
+      });
+    }
+    if (opciones.items) {
+      totalAfectados += (p.materiales.items || []).length;
+      p.materiales.items = [];
+    }
+    if (opciones.planilla) {
+      if (!p.planilla) p.planilla = { recetaCostos:[0,0,0,0,0,0], pagos:[], retencionesPagadas:[], ajustes:[] };
+      totalAfectados += (p.planilla.pagos || []).length + (p.planilla.ajustes || []).length;
+      p.planilla.recetaCostos = [0,0,0,0,0,0];
+      p.planilla.pagos = [];
+      p.planilla.retencionesPagadas = [];
+      p.planilla.ajustes = [];
+    }
+  });
+
+  saveState();
+
+  // Empuja inmediatamente a Firestore (sin esperar al debounce)
+  if (typeof CloudSync !== 'undefined' && CloudSync.ref) {
+    try { await CloudSync.uploadCurrent(); } catch(e) { console.warn('Cloud upload error en limpieza:', e); }
+  }
+
+  try {
+    logActivity('delete',
+      `🧹 Limpieza selectiva: ${seleccionadas.length} secciones`,
+      `${projNames} · ${totalAfectados} registro${totalAfectados === 1 ? '' : 's'} eliminado${totalAfectados === 1 ? '' : 's'} · Por: ${getCurrentUser()?.displayName || getCurrentUser()?.username || '—'}`
+    );
+  } catch(e){}
+
+  closeModal('limpiezaSelectiva');
+  showToast(`LIMPIEZA COMPLETA · ${totalAfectados} registro${totalAfectados === 1 ? '' : 's'} eliminado${totalAfectados === 1 ? '' : 's'}`, 'green');
+  setTimeout(() => {
+    try { renderAll(); } catch(e){}
+  }, 400);
 }
 
 async function resetToFactory(){
