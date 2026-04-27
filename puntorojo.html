@@ -1416,11 +1416,10 @@ html,body,.main{background:#FFFFFF!important;}
         <div class="card-hd"><h3>AVANCE DE COBRO POR APTO Y ESTIMACIÓN</h3>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <label class="btn primary sm" style="cursor:pointer;margin:0" data-perm="cobro.edit">📤 SUBIR EXCEL ESTIMACIÓN<input type="file" accept=".xlsx,.xls,.csv,.json,.txt" style="display:none" onchange="uploadEstimacionCobro(event)"></label>
-            <button class="btn ghost sm" onclick="descargarTemplateEstimacion()" title="Descargar plantilla de Excel para llenar">📥 PLANTILLA</button>
             <button class="btn ghost sm" onclick="renderCobroAvanceApto()">↻ ACTUALIZAR</button>
           </div>
         </div>
-        <p class="receta-intro">SUBÍ UN EXCEL (.XLSX) O CSV CON COLUMNAS: APTO + UNA COLUMNA POR ESTIMACIÓN (ANTICIPO, EST 1, EST 2, ...). LOS VALORES SON % COBRADO EN CADA ESTIMACIÓN. TAMBIÉN PODÉS EDITAR MANUALMENTE.</p>
+        <p class="receta-intro">SUBÍ EL EXCEL OFICIAL DE LA ESTIMACIÓN. EL SISTEMA DETECTA AUTOMÁTICAMENTE LOS APARTAMENTOS VÁLIDOS Y LEE EL "% EJECUTADO A LA FECHA" DE CADA ESTIMACIÓN. FUNCIONA IGUAL PARA TODOS LOS PROYECTOS — CADA UNO USA SU PROPIA ESTIMACIÓN.</p>
         <div id="cobroAvanceApto"></div>
       </div>
     </section>
@@ -11120,54 +11119,84 @@ function deleteCurrentProveedor(){
     return rows;
   }
 
-  // Detecta y normaliza formato MATRIZ (APTO + columnas por estimación)
-  // o FORMATO TRIPLE (apto, etapa, porcentaje)
+  // Patrón de nombres de aptos válidos (no torres, no niveles, no totales)
+  const APTO_PATTERN = /^(apartamento\s*\d+|apto\s*\d+|pasillo|cine(ma)?|sal[óo]n|azotea|gimnasio|lobby|local|cowork|game\s*zone|piscina|área\s*social|coworking|recepci[óo]n|penthouse|s[óo]tano)/i;
+  const ROW_SKIP_PATTERN = /^(torre|nivel|otros|total|chequeo|subtotal|amortizaci|anticipo|saldo|empresa|punto\s*rojo|estimaci[óo]n\s*no|fecha|descripci[óo]n)\b/i;
+
+  /* ─── PARSER INTELIGENTE DEL EXCEL OFICIAL DE ESTIMACIÓN ───
+     Detecta automáticamente:
+       1. La fila con headers "ESTIMACIÓN NO.X" (define grupos de columnas).
+       2. La fila con sub-headers "% EJECUTADO A LA FECHA" (define la columna útil
+          dentro de cada grupo de 5 sub-columnas).
+       3. Las filas de aptos válidos (filtra torres/niveles/totales/etc).
+     Si no encuentra estructura oficial, cae a formato matriz simple (APTO + columnas por est).
+  */
   function _interpretarFilasEstimacion(rows){
-    // Buscar fila de cabeceras (la primera con una celda que matchee /apto|apart|área|area/i)
+    // PASO 1: buscar fila con múltiples "ESTIMACIÓN NO.X"
+    let estHeaderRow = -1;
+    for (let i = 0; i < Math.min(rows.length, 40); i++) {
+      const r = rows[i];
+      if (!Array.isArray(r)) continue;
+      const matches = r.filter(c => /ESTIMACI[ÓO]N\s*NO/i.test(String(c || ''))).length;
+      if (matches >= 2) { estHeaderRow = i; break; }
+    }
+
+    if (estHeaderRow >= 0) {
+      // PASO 2: buscar fila con sub-headers "% EJECUTADO A LA FECHA" cerca
+      let subHeaderRow = -1;
+      for (let i = estHeaderRow; i < Math.min(rows.length, estHeaderRow + 8); i++) {
+        const r = rows[i];
+        if (!Array.isArray(r)) continue;
+        if (r.some(c => /EJECUTADO\s*A\s*LA\s*FECHA/i.test(String(c || '')))) {
+          subHeaderRow = i; break;
+        }
+      }
+
+      if (subHeaderRow >= 0) {
+        const subHeader = rows[subHeaderRow];
+        const estHeader = rows[estHeaderRow];
+
+        // PASO 3: para cada columna con "% EJECUTADO A LA FECHA",
+        // identificar a qué número de estimación pertenece (buscar a la izquierda en estHeader).
+        const ejecutadoCols = [];
+        for (let col = 0; col < subHeader.length; col++) {
+          if (!/EJECUTADO\s*A\s*LA\s*FECHA/i.test(String(subHeader[col] || ''))) continue;
+          // Buscar el ESTIMACIÓN NO.X más cercano hacia la izquierda
+          let estNum = null;
+          for (let c = col; c >= 0; c--) {
+            const m = String(estHeader[c] || '').match(/ESTIMACI[ÓO]N\s*NO\s*\.?\s*(\d+)/i);
+            if (m) { estNum = parseInt(m[1]); break; }
+          }
+          if (estNum) ejecutadoCols.push({ colIdx: col, estNum });
+        }
+
+        if (ejecutadoCols.length > 0) {
+          return { tipo: 'oficial', subHeaderRow, ejecutadoCols, dataRows: rows };
+        }
+      }
+    }
+
+    // FALLBACK: formato matriz simple (APTO + columnas por estimación)
     let headerIdx = -1;
     for (let i = 0; i < Math.min(rows.length, 30); i++) {
       const r = rows[i];
       if (!Array.isArray(r)) continue;
-      const headerCellIdx = r.findIndex(c => /apto|apart|área|area/i.test(String(c || '')));
-      if (headerCellIdx >= 0) { headerIdx = i; break; }
+      if (r.findIndex(c => /apto|apart|área|area/i.test(String(c || ''))) >= 0) { headerIdx = i; break; }
     }
-    if (headerIdx < 0) throw new Error('No se encontró fila de cabeceras (APTO)');
+    if (headerIdx < 0) throw new Error('Formato no reconocido. El Excel debe tener headers "ESTIMACIÓN NO.X" + "% EJECUTADO A LA FECHA", o columna APTO + columnas por estimación.');
 
     const headers = rows[headerIdx].map(h => String(h || '').trim());
     const aptoCol = headers.findIndex(h => /apto|apart|área|area/i.test(h));
-
-    // Detectar columnas de estimaciones
-    const estColumns = []; // [{idx, label}]
+    const estColumns = [];
     headers.forEach((h, idx) => {
-      if (idx === aptoCol) return;
-      if (!h) return;
+      if (idx === aptoCol || !h) return;
       const norm = h.toUpperCase().replace(/[^A-Z0-9]/g, '');
-      if (norm.includes('ANTICIPO') || norm.startsWith('EST') || norm.includes('ESTIMACION')) {
-        estColumns.push({ idx, label: h });
-      } else if (/^\d+$/.test(norm) || /^E\d+$/.test(norm)) {
+      if (norm.includes('ANTICIPO') || norm.startsWith('EST') || norm.includes('ESTIMACION') || /^\d+$/.test(norm) || /^E\d+$/.test(norm)) {
         estColumns.push({ idx, label: h });
       }
     });
-
-    if (estColumns.length === 0) {
-      // Detectar formato triple (etapa + porcentaje)
-      const etapaCol = headers.findIndex(h => /etapa|stage/i.test(h));
-      const pctCol = headers.findIndex(h => /porcent|pct|avance/i.test(h));
-      if (etapaCol >= 0 && pctCol >= 0) {
-        return {
-          tipo: 'triple',
-          aptoCol, etapaCol, pctCol,
-          dataRows: rows.slice(headerIdx + 1)
-        };
-      }
-      throw new Error('No se encontraron columnas de estimaciones ni de etapa/porcentaje');
-    }
-
-    return {
-      tipo: 'matriz',
-      aptoCol, estColumns,
-      dataRows: rows.slice(headerIdx + 1)
-    };
+    if (estColumns.length === 0) throw new Error('No se detectaron columnas de estimaciones.');
+    return { tipo: 'matriz', aptoCol, estColumns, dataRows: rows.slice(headerIdx + 1) };
   }
 
   window.uploadEstimacionCobro = async function(event){
@@ -11219,9 +11248,57 @@ function deleteCurrentProveedor(){
         return found;
       };
 
-      if (interpret.tipo === 'matriz') {
-        // Una fila por apto, varias columnas (cada una = una estimación)
-        // Mapear cada estColumn a un cobro.row.id si existe (matching por label)
+      // Mapeo: número de estimación (1,2,3...) → row.id en p.cobro.rows
+      const idByEstNum = {};
+      let estNumCounter = 0;
+      (p.cobro.rows || []).forEach(r => {
+        if (r.isAnticipo) { idByEstNum[0] = r.id; return; }
+        estNumCounter++;
+        idByEstNum[estNumCounter] = r.id;
+        // Match alternativo si la descripción tiene número explícito
+        const m = String(r.d || '').match(/(\d+)/);
+        if (m) idByEstNum[parseInt(m[1])] = r.id;
+      });
+
+      if (interpret.tipo === 'oficial') {
+        // FORMATO OFICIAL: el Excel tiene "ESTIMACIÓN NO.X" + "% EJECUTADO A LA FECHA".
+        // Recorremos TODAS las filas, identificamos las que contienen un nombre de apto válido,
+        // y leemos la columna correspondiente al "% EJECUTADO A LA FECHA" de cada estimación.
+        for (let i = interpret.subHeaderRow + 1; i < interpret.dataRows.length; i++) {
+          const dr = interpret.dataRows[i];
+          if (!Array.isArray(dr)) continue;
+
+          // Buscar la celda que contenga un nombre de apto válido
+          let aptoTxt = '';
+          for (let col = 0; col < dr.length; col++) {
+            const v = String(dr[col] || '').trim();
+            if (!v) continue;
+            if (ROW_SKIP_PATTERN.test(v)) break; // Es una fila de torre/nivel/total — skipear toda la fila
+            if (APTO_PATTERN.test(v)) { aptoTxt = v; break; }
+          }
+          if (!aptoTxt) continue;
+
+          const apto = findApto(aptoTxt);
+          if (!apto) { sinMatch.push(aptoTxt); continue; }
+
+          if (!p.cobro.avanceAptos[apto.id]) p.cobro.avanceAptos[apto.id] = { stages:[0,0,0,0,0,0], porEstimacion:{} };
+          if (!p.cobro.avanceAptos[apto.id].porEstimacion) p.cobro.avanceAptos[apto.id].porEstimacion = {};
+
+          interpret.ejecutadoCols.forEach(({ colIdx, estNum }) => {
+            const raw = dr[colIdx];
+            if (raw === '' || raw === null || raw === undefined) return;
+            let pct = Number(raw);
+            if (isNaN(pct)) return;
+            // El Excel guarda el % como decimal (0.05 = 5%). Si viene en formato decimal, convertir.
+            if (pct > 0 && pct <= 1) pct *= 100;
+            pct = Math.max(0, Math.min(100, +pct.toFixed(2)));
+            const rid = idByEstNum[estNum] || ('est_' + estNum);
+            p.cobro.avanceAptos[apto.id].porEstimacion[rid] = pct;
+            updated++;
+          });
+        }
+      } else {
+        // FORMATO MATRIZ simple: una fila por apto, varias columnas (cada una = una estimación)
         const rowIdByLabel = {};
         (p.cobro.rows || []).forEach(r => {
           const lblUp = String(r.d || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -11232,8 +11309,7 @@ function deleteCurrentProveedor(){
           if (!Array.isArray(dr)) return;
           const aptoTxt = String(dr[interpret.aptoCol] || '').trim();
           if (!aptoTxt) return;
-          // Saltar filas que parecen títulos (TORRE X, NIVEL X, OTROS, TOTAL, etc.)
-          if (/^(TORRE|NIVEL|OTROS|TOTAL|CHEQUEO|SUBTOTAL)\b/i.test(aptoTxt)) return;
+          if (ROW_SKIP_PATTERN.test(aptoTxt)) return;
           const apto = findApto(aptoTxt);
           if (!apto) { sinMatch.push(aptoTxt); return; }
           if (!p.cobro.avanceAptos[apto.id]) p.cobro.avanceAptos[apto.id] = { stages:[0,0,0,0,0,0], porEstimacion:{} };
@@ -11243,45 +11319,23 @@ function deleteCurrentProveedor(){
             if (raw === '' || raw === null || raw === undefined) return;
             let pct = Number(raw);
             if (isNaN(pct)) return;
-            // Si viene como decimal (0.05), convertir a 5%
-            if (pct > 0 && pct < 1) pct *= 100;
-            pct = Math.max(0, Math.min(100, pct));
-            // Buscar el row.id que matchea el label de la columna
+            if (pct > 0 && pct <= 1) pct *= 100;
+            pct = Math.max(0, Math.min(100, +pct.toFixed(2)));
             const labelUp = col.label.toUpperCase().replace(/[^A-Z0-9]/g, '');
             let rid = rowIdByLabel[labelUp];
-            // Match alternativo: "EST1" con "ESTIMACION1" o "ESTIMACIÓN#1"
             if (!rid) {
               const numMatch = labelUp.match(/(\d+)/);
               if (numMatch) {
-                const n = numMatch[1];
-                rid = Object.keys(rowIdByLabel).find(k => k.includes('ESTIMACION' + n) || k === 'EST' + n) ;
-                if (rid) rid = rowIdByLabel[rid];
+                rid = idByEstNum[parseInt(numMatch[1])];
               }
               if (!rid && labelUp.includes('ANTICIPO')) {
                 rid = (p.cobro.rows || []).find(r => r.isAnticipo)?.id;
               }
             }
-            // Usar el label tal cual como key fallback
             const key = rid || col.label;
             p.cobro.avanceAptos[apto.id].porEstimacion[key] = pct;
             updated++;
           });
-        });
-      } else {
-        // Formato TRIPLE: apto + etapa + porcentaje (legacy)
-        interpret.dataRows.forEach(dr => {
-          if (!Array.isArray(dr)) return;
-          const aptoTxt = String(dr[interpret.aptoCol] || '').trim();
-          if (!aptoTxt) return;
-          const etapa = Math.max(1, Math.min(6, Number(dr[interpret.etapaCol]) || 1)) - 1;
-          let pct = Number(dr[interpret.pctCol]) || 0;
-          if (pct > 0 && pct < 1) pct *= 100;
-          pct = Math.max(0, Math.min(100, pct));
-          const apto = findApto(aptoTxt);
-          if (!apto) { sinMatch.push(aptoTxt); return; }
-          if (!p.cobro.avanceAptos[apto.id]) p.cobro.avanceAptos[apto.id] = { stages:[0,0,0,0,0,0], porEstimacion:{} };
-          p.cobro.avanceAptos[apto.id].stages[etapa] = pct;
-          updated++;
         });
       }
 
@@ -11310,41 +11364,8 @@ function deleteCurrentProveedor(){
     event.target.value = '';
   };
 
-  window.descargarTemplateEstimacion = function(){
-    const p = activeProj();
-    if (!p) return;
-    const headers = ['APTO'];
-    (p.cobro.rows || []).forEach(r => {
-      headers.push(r.d || r.id);
-    });
-    if (headers.length === 1) headers.push('ANTICIPO', 'ESTIMACIÓN #1', 'ESTIMACIÓN #2');
-
-    const rows = [headers];
-    (p.towers || []).forEach(t => (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
-      const row = [a.name];
-      const rec = p.cobro.avanceAptos?.[a.id]?.porEstimacion || {};
-      (p.cobro.rows || []).forEach(r => {
-        row.push(rec[r.id] ?? rec[r.d] ?? '');
-      });
-      rows.push(row);
-    })));
-
-    const csv = '﻿' + rows.map(r => r.map(c => {
-      const s = String(c == null ? '' : c).replace(/"/g, '""');
-      return /[",\n]/.test(s) ? `"${s}"` : s;
-    }).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    const safe = (p.name || 'proyecto').replace(/[^a-zA-Z0-9]/g, '_');
-    a.href = url;
-    a.download = `template_estimacion_${safe}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-    showToast('TEMPLATE DESCARGADO', 'green');
-  };
+  // (descargarTemplateEstimacion eliminado — ya no se usa el sistema de plantilla.
+  //  El parser ahora detecta automáticamente el formato oficial del Excel.)
 
   window.currentPersonalSubTab = 'lista';
   const _renderPersonal = renderPersonal;
