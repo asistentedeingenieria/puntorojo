@@ -3911,6 +3911,84 @@ function logActivity(type, title, desc){
   if (state.activity.length > 200) state.activity = state.activity.slice(0, 200);
   saveState();
   updateActivityBadge();
+
+  // ── NOTIFICAR A ADMINS DE TODA ACCIÓN DE NO-ADMINS ──
+  // El admin recibe push de cualquier movimiento. Se ejecuta async para no bloquear.
+  // No se notifica al admin de SUS propias acciones (sería ruido).
+  try { _notifyAdminsOfActivity(type, title, desc).catch(()=>{}); } catch(e){}
+}
+
+/* Manda push notification a todos los administradores cuando un usuario NO-admin
+   hace algo (logActivity). El admin recibe alerta de TODA actividad para tener
+   trazabilidad en tiempo real. */
+let _adminEmailsCache = null;
+let _adminEmailsCacheTs = 0;
+const _ADMIN_CACHE_TTL_MS = 5 * 60 * 1000; // 5 min
+
+async function _getAdminEmails(){
+  // Cache para no consultar Firestore en cada acción.
+  const now = Date.now();
+  if (_adminEmailsCache && (now - _adminEmailsCacheTs) < _ADMIN_CACHE_TTL_MS) {
+    return _adminEmailsCache;
+  }
+  try {
+    if (typeof firebase === 'undefined' || !firebase.firestore) return [];
+    const snap = await firebase.firestore().collection('users').get();
+    const list = [];
+    snap.forEach(d => {
+      const u = d.data();
+      if (!u || !u.email) return;
+      if (Array.isArray(u.perms) && (u.perms.includes('*') || u.perms.includes('users.manage'))) {
+        list.push(u.email);
+      }
+    });
+    _adminEmailsCache = list;
+    _adminEmailsCacheTs = now;
+    return list;
+  } catch(e) {
+    console.warn('_getAdminEmails:', e && e.message);
+    return _adminEmailsCache || [];
+  }
+}
+
+async function _notifyAdminsOfActivity(type, title, desc){
+  // Si no hay user logueado o si quien actúa ES admin → no notificar (sería ruido propio).
+  const u = currentUser;
+  if (!u || !u.email) return;
+  const isActorAdmin = Array.isArray(u.perms) && (u.perms.includes('*') || u.perms.includes('users.manage'));
+  if (isActorAdmin) return;
+
+  const admins = await _getAdminEmails();
+  if (!admins || admins.length === 0) return;
+
+  const actorName = (u.displayName || u.email || 'USUARIO').toUpperCase();
+  // Título corto: nombre del actor + tipo de acción.
+  const tipoMap = {
+    create: 'CREÓ',
+    update: 'ACTUALIZÓ',
+    delete: 'ELIMINÓ',
+    auth: 'AUTORIZÓ',
+    paid: 'PAGÓ',
+    approve: 'APROBÓ',
+    reject: 'RECHAZÓ'
+  };
+  const accion = tipoMap[type] || type.toUpperCase();
+  const notifTitle = `${actorName} · ${accion}`;
+  const notifBody = String(title || '') + (desc ? ' · ' + desc : '');
+
+  // Mandar a todos los admins (excluyendo al actor por si se autoincluye).
+  for (const adminEmail of admins) {
+    if (adminEmail === u.email) continue;
+    try {
+      await addNotification({
+        forUser: adminEmail,
+        type: 'admin_alert',
+        title: notifTitle,
+        body: notifBody.slice(0, 300),
+        projectId: state.activeProjectId || null
+      });
+    } catch(e) { /* ignorar errores individuales para no bloquear */ }
+  }
 }
 
 function unreadActivityCount(){

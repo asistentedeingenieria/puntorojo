@@ -167,7 +167,11 @@ exports.onNotificationCreated = onDocumentCreated(
 exports.getReceptorAcuses = onRequest(
   {
     cors: ['https://puntorojo.app', 'https://www.puntorojo.app', 'https://asistentedeingenieria.github.io', 'http://localhost', 'http://localhost:8080'],
-    invoker: 'public',  // ← CRÍTICO: el receptor no está autenticado, la función debe ser pública
+    // El acceso público se setea MANUALMENTE en Cloud Run console:
+    // https://console.cloud.google.com/run/detail/us-central1/getreceptoracuses/security?project=punto-rojo-3fcf1
+    // Agregar principal "allUsers" con rol "Cloud Run Invoker".
+    // (El intento de hacerlo desde firebase deploy con invoker:'public' falla
+    // porque la cuenta corporativa no tiene roles/functions.admin.)
     timeoutSeconds: 20,
     memory: '256MiB'
   },
