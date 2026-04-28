@@ -5593,11 +5593,13 @@ function renderCobroRow(r, cfg, canEdit, p){
     const tienePdf = !!r.facturaPdfUrl;
     const facNum = r.factura ? `<div style="font-size:9px;color:var(--mute);margin-top:2px">N° ${r.factura}</div>` : '';
     if (tienePdf) {
+      const isAdmin = (typeof can === 'function') && can('users.manage');
       facCell = `<td>
         <span class="status-emitida" style="font-size:10px;letter-spacing:.5px">EMITIDA</span>
-        <div style="display:flex;gap:4px;margin-top:3px">
+        <div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap">
           <a href="${r.facturaPdfUrl}" target="_blank" class="btn-icon" style="font-size:9px;padding:2px 6px;background:var(--cream);border:1px solid var(--line);color:var(--ink);text-decoration:none;border-radius:2px">VER PDF</a>
           ${canEdit ? `<label class="btn-icon" style="font-size:9px;padding:2px 6px;cursor:pointer;background:transparent;border:1px solid var(--line);color:var(--mute);border-radius:2px">REEMPLAZAR<input type="file" accept="application/pdf" style="display:none" onchange="uploadFacturaPDF(event,'${r.id}')"></label>` : ''}
+          ${isAdmin ? `<button type="button" class="btn-icon" style="font-size:9px;padding:2px 6px;cursor:pointer;background:transparent;border:1px solid var(--red);color:var(--red);border-radius:2px" title="Eliminar factura (solo admin)" onclick="deleteFacturaPDF('${r.id}')">ELIMINAR</button>` : ''}
         </div>
         ${facNum}
       </td>`;
@@ -5697,6 +5699,59 @@ async function uploadFacturaPDF(event, rowId) {
     showToast('ERROR: ' + (e.message || e), 'red');
   }
   event.target.value = '';
+}
+
+// Eliminar PDF de factura — SOLO ADMIN. Borra el archivo de Storage y limpia
+// los campos del row para que vuelva a su estado "PENDIENTE".
+async function deleteFacturaPDF(rowId) {
+  // Solo el administrador puede eliminar facturas (no incluso usuarios con cobro.edit).
+  if (!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE ELIMINAR FACTURAS', 'red');
+  const p = activeProj();
+  const r = p && p.cobro && (p.cobro.rows || []).find(x => x.id === rowId);
+  if (!r) return;
+  if (!r.facturaPdfUrl) { showToast('NO HAY FACTURA QUE ELIMINAR', ''); return; }
+
+  // Doble confirmación porque es destructivo y afecta el estado de cobranza.
+  const ok1 = confirm(
+    `ELIMINAR FACTURA — ${r.d || 'ESTIMACIÓN'}\n\n` +
+    `Vas a borrar el PDF de la factura del Storage y limpiar los datos asociados.\n\n` +
+    `Esta estimación volverá al estado:\n` +
+    `  • Factura: PENDIENTE\n` +
+    `  • Cobro: PENDIENTE\n` +
+    `  • Fecha de pago: borrada\n\n` +
+    `¿CONTINUAR?`
+  );
+  if (!ok1) return;
+  const ok2 = confirm('ÚLTIMA CONFIRMACIÓN — ¿Borrar la factura definitivamente?');
+  if (!ok2) return;
+
+  try {
+    const oldUrl = r.facturaPdfUrl;
+    // 1) Borrar archivo del Storage (best-effort — si falla, igual limpiamos el row)
+    if (oldUrl && typeof oldUrl === 'string' && oldUrl.startsWith('https://') && oldUrl.includes('firebasestorage')) {
+      try {
+        await firebase.storage().refFromURL(oldUrl).delete();
+      } catch (delErr) {
+        console.warn('No se pudo borrar el PDF de Storage:', delErr && delErr.message);
+        // Continuamos igual — limpiar el row es lo más importante.
+      }
+    }
+
+    // 2) Limpiar los campos del row para que vuelva a PENDIENTE
+    delete r.facturaPdfUrl;
+    r.sf = 'PENDIENTE';
+    r.sc = 'PENDIENTE';
+    delete r.fp;                      // fecha de pago
+    delete r.facturaFechaEmision;     // fecha de emisión
+
+    saveState();
+    renderCobro();
+    logActivity('delete', `Factura PDF eliminada: ${r.d}`, `${p.name} · Por ${(getCurrentUser()?.displayName || getCurrentUser()?.username || 'admin')}`);
+    showToast('FACTURA ELIMINADA — ESTIMACIÓN VUELVE A PENDIENTE', 'green');
+  } catch (e) {
+    console.error('Error eliminando factura:', e);
+    showToast('ERROR: ' + (e.message || e), 'red');
+  }
 }
 
 function renderCobroFoot(cfg, t, p){
