@@ -1335,7 +1335,7 @@ html,body,.main{background:#FFFFFF!important;}
 <div id="prSplash" class="pr-splash" aria-hidden="true">
   <img src="logo.png" alt="Punto Rojo" class="pr-splash-logo-img">
   <div class="pr-splash-spinner"></div>
-  <div class="pr-splash-status" id="prSplashStatus">CARGANDO...</div>
+  <div class="pr-splash-status" id="prSplashStatus"></div>
 </div>
 
 <!-- ═════════════════ VISTA RECEPTOR (QR ROTATIVO) ═════════════════
@@ -15265,21 +15265,45 @@ function initAuthListener(){
     return;
   }
 
+  // Estado interno del listener: el primer disparo de onAuthStateChanged a veces
+  // viene con null mientras Firebase está leyendo el cache (IndexedDB en iOS).
+  // Esperamos un grace period antes de mostrar la pantalla de login para evitar
+  // el "flash" del login cuando el usuario sí está logueado.
+  let _authFiredOnce = false;
+  let _authGraceTimer = null;
+
+  function _showLoginScreenNow(){
+    currentUser = null;
+    cachedUsers = [];
+    try { unsubscribeFromMyNotifications(); } catch(e){}
+    try { saveNotifications([]); } catch(e){}
+    hideSplash('');           // sin texto extra — se va el logo limpio
+    showAuthScreen('login');
+    ensureSetupLink();
+  }
+
   firebase.auth().onAuthStateChanged(async (fbUser) => {
+    // Cancelar grace timer si estaba pendiente (llegó respuesta concreta)
+    if (_authGraceTimer) { clearTimeout(_authGraceTimer); _authGraceTimer = null; }
+
     if (!fbUser) {
-      // No logueado → mostrar pantalla de login.
-      currentUser = null;
-      cachedUsers = [];
-      try { unsubscribeFromMyNotifications(); } catch(e){}
-      try { saveNotifications([]); } catch(e){}
-      hideSplash('INGRESÁ A TU CUENTA');
-      showAuthScreen('login');
-      // Mostrar el botón "Configurar administrador" solo si no hay usuarios todavía.
-      // (Esto requiere una lectura sin auth, que las reglas no permiten.
-      // En su lugar, dejamos que el usuario haga click en el link y maneje el caso.)
-      ensureSetupLink();
+      if (!_authFiredOnce) {
+        // Primera vez con null: puede ser que Firebase aún no leyó el cache.
+        // Mantenemos el splash visible y esperamos un toque a ver si llega
+        // un disparo posterior con el usuario real (común en iOS PWA).
+        _authFiredOnce = true;
+        _authGraceTimer = setTimeout(() => {
+          // Si pasaron 600ms y sigue sin usuario, asumimos que NO está logueado.
+          if (!firebase.auth().currentUser) _showLoginScreenNow();
+        }, 600);
+        return;
+      }
+      // Disparo subsiguiente con null = logout real, mostrar login inmediato.
+      _showLoginScreenNow();
       return;
     }
+
+    _authFiredOnce = true;
     updateSplashStatus('CARGANDO TU PERFIL...');
 
     // Usuario autenticado en Firebase. Cargar su perfil de Firestore.
