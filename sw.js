@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v61-acuse-inmutable-qr-10s';
+const CACHE_VERSION = 'v62-foto-antes-de-firma';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
@@ -59,6 +59,14 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
 
   const url = new URL(req.url);
+
+  // NO interferir con llamadas a Cloud Functions (siempre van a la red, frescas).
+  if (url.hostname.endsWith('cloudfunctions.net') ||
+      url.hostname.endsWith('run.app') ||
+      url.hostname.endsWith('firebaseapp.com') ||
+      url.hostname.endsWith('googleapis.com')) {
+    return; // dejar que el browser haga la request directo, sin caché del SW
+  }
 
   // Para navegación (HTML), intentar red primero (para tener última versión),
   // pero si no hay internet, usar lo cacheado.

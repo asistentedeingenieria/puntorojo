@@ -7318,37 +7318,57 @@ function renderAcusesRecepcion(){
         // 6 filas de slot (E1-E5 + E6 con entrega final)
         const slotRows = ACUSE_SLOTS.map((s, sIdx) => {
           const slot = getAcuseSlot(a, s.key);
-          const isDigital = !!(slot && slot.type === 'digital' && slot.receptorId);
+          // Tres estados:
+          //   EMPTY        = no hay foto ni firma
+          //   PHOTO_ONLY   = hay foto pero NO firma del receptor
+          //   COMPLETO     = hay foto + firma (firma puede ser legacy sin foto)
           const src = getAcuseSlotSrc(slot);
-          const has = !!(src || isDigital);
-          const fecha = has && slot.ts ? new Date(slot.ts).toLocaleDateString('es-GT', {day:'2-digit',month:'2-digit',year:'numeric'}) : '';
-          const imgEsc = src ? String(src).replace(/'/g,"\\'") : '';
-          // Última etapa (E6) destacada porque incluye entrega final
+          const hasPhoto = !!src;
+          const hasSig = !!(slot && (slot.receptorId || slot.receptorNombre));
+          const isDigital = hasSig;            // legacy: signed = digital
+          const has = hasPhoto || hasSig;       // existe algo
           const isLast = sIdx === ACUSE_SLOTS.length - 1;
-          // Status text: distinto si es digital o foto
+          const imgEsc = src ? String(src).replace(/'/g,"\\'") : '';
+
+          const fechaFirma = hasSig && (slot.signatureTs || slot.ts) ? new Date(slot.signatureTs || slot.ts).toLocaleDateString('es-GT', {day:'2-digit',month:'2-digit',year:'numeric'}) : '';
+          const fechaFoto  = hasPhoto && (slot.photoTs || slot.ts) ? new Date(slot.photoTs || slot.ts).toLocaleDateString('es-GT', {day:'2-digit',month:'2-digit',year:'numeric'}) : '';
+
+          // Status text por estado
           let statusText = 'PENDIENTE';
-          if (has) {
-            if (isDigital) {
-              statusText = `<strong style="color:var(--green-dark)">FIRMA DIGITAL</strong> · ${slot.receptorNombre || ''} · ${fecha}`;
-            } else {
-              statusText = `FOTO · ${fecha}${slot.user ? ' · ' + slot.user.split('@')[0] : ''}`;
+          if (hasSig && hasPhoto) {
+            statusText = `<strong style="color:var(--green-dark)">FIRMADO</strong> · ${slot.receptorNombre || ''} · ${fechaFirma}`;
+          } else if (hasSig) {
+            // Legacy: firma sin foto
+            statusText = `<strong style="color:var(--green-dark)">FIRMADO</strong> · ${slot.receptorNombre || ''} · ${fechaFirma}`;
+          } else if (hasPhoto) {
+            statusText = `<strong style="color:var(--cafe)">FOTO SUBIDA</strong> · ESPERANDO FIRMA DEL CLIENTE · ${fechaFoto}`;
+          }
+
+          // Botones VER:
+          //   - VER FOTO (si hay foto)
+          //   - VER FIRMA (si hay firma) — el modal muestra foto + firma
+          let verBtn = '';
+          if (hasPhoto) {
+            verBtn += `<button class="btn ghost sm" onclick="viewPhoto('${imgEsc}')" title="Ver foto de la entrega">VER FOTO</button>`;
+          }
+          if (hasSig) {
+            verBtn += `<button class="btn ghost sm" onclick='viewDigitalAcuse(${JSON.stringify(slot).replace(/'/g, "&apos;")})' title="Ver comprobante de firma">VER FIRMA</button>`;
+          }
+
+          // Botones de carga según estado:
+          //   EMPTY      → [ FOTO ] (solo permite foto, NO QR)
+          //   PHOTO_ONLY → [ QR ]   (foto ya está, falta firma)
+          //   COMPLETO   → ningún botón de carga
+          let cargarBtns = '';
+          if (canEdit) {
+            if (!hasPhoto && !hasSig) {
+              cargarBtns = `<label class="btn sm cafe" style="cursor:pointer;margin:0" title="Subir foto de la entrega">FOTO<input type="file" accept="image/*" capture="environment" style="display:none" onchange="uploadAcuseRecepcion(event,'${t.id}','${l.id}','${a.id}','${s.key}')"></label>`;
+            } else if (hasPhoto && !hasSig) {
+              cargarBtns = `<button class="btn sm cafe" onclick="openQRScanForAcuse('${t.id}','${l.id}','${a.id}','${s.key}')" title="Firmar con QR del receptor">FIRMAR QR</button>`;
             }
           }
-          // Acción VER: foto vs comprobante digital
-          const verBtn = has
-            ? (isDigital
-                ? `<button class="btn ghost sm" onclick='viewDigitalAcuse(${JSON.stringify(slot).replace(/'/g, "&apos;")})'>VER</button>`
-                : `<button class="btn ghost sm" onclick="viewPhoto('${imgEsc}')">VER</button>`)
-            : '';
-          // Botones de carga: foto + firma digital.
-          // ⚠️ Una vez subida una foto / firmado un acuse, NO se puede reemplazar.
-          //    Para cambiarla, el admin tiene que ELIMINAR primero (botón de delete).
-          //    Esto preserva la integridad del acuse como evidencia legal.
-          const cargarBtns = (canEdit && !has)
-            ? `<label class="btn sm cafe" style="cursor:pointer;margin:0" title="Subir foto firmada">FOTO<input type="file" accept="image/*" capture="environment" style="display:none" onchange="uploadAcuseRecepcion(event,'${t.id}','${l.id}','${a.id}','${s.key}')"></label>
-               <button class="btn sm cafe" onclick="openQRScanForAcuse('${t.id}','${l.id}','${a.id}','${s.key}')" title="Firmar digitalmente con QR del receptor">QR</button>`
-            : '';
-          // Eliminar — SOLO admin (users.manage). Acuses firmados son evidencia legal y no deben poder borrarse por usuarios normales.
+
+          // Eliminar — SOLO admin. Borra todo el slot (foto + firma).
           const delBtn = has && can('users.manage')
             ? `<button class="btn-icon danger" onclick="deleteAcuseRecepcion('${t.id}','${l.id}','${a.id}','${s.key}')" title="Eliminar este acuse (solo admin · requiere confirmación escrita)">✕</button>`
             : '';
@@ -7438,12 +7458,25 @@ async function uploadAcuseRecepcion(event, towerId, levelId, aptoId, slotKey){
     const a = l ? (l.aptos || []).find(x => x.id === aptoId) : null;
     if (!a) return showToast('ELEMENTO NO ENCONTRADO', 'red');
     if (!a.acuseRecepciones) a.acuseRecepciones = {};
-    a.acuseRecepciones[slotKey] = { url, ts: Date.now(), user: getCurrentUser()?.username || '' };
+    const _now = Date.now();
+    const _user = getCurrentUser()?.username || '';
+    const _userName = (getCurrentUser()?.displayName) || _user || '';
+    // Guardamos foto + metadata específica. Si después se firma con QR, esos campos
+    // se preservan (la firma se "merge" sobre esto).
+    a.acuseRecepciones[slotKey] = {
+      url,
+      ts: _now,
+      user: _user,
+      userName: _userName,
+      photoTs: _now,
+      photoUser: _user,
+      photoUserName: _userName
+    };
     saveState();
-    logActivity('update', `Acuse cargado: ${l.name} · ${a.name} · ${slotLabel}`, p.name);
+    logActivity('update', `Foto de acuse cargada: ${l.name} · ${a.name} · ${slotLabel}`, p.name + ' · ESPERANDO FIRMA DEL CLIENTE');
     renderAcusesRecepcion();
     renderAvance();
-    showToast(`ACUSE GUARDADO · ${slotLabel}`, 'green');
+    showToast(`FOTO GUARDADA · AHORA ESCANEÁ EL QR DEL CLIENTE PARA FIRMAR`, 'green');
   } catch(err) {
     console.error(err);
     showToast('ERROR AL SUBIR ACUSE: ' + (err.code || err.message || 'desconocido'), 'red');
@@ -14777,13 +14810,24 @@ function _startReceptorRotatingMode(){
   if (_rqrTimer) clearInterval(_rqrTimer);
   _rqrTimer = setInterval(_renderRotatingQRForReceptor, 1000);
 
-  // Cargar el historial de acuses del receptor (vía Cloud Function) y refrescar cada 30s.
+  // Cargar el historial de acuses del receptor (vía Cloud Function) y refrescar cada 15s.
   try {
     window._fetchReceptorAcuses();
     if (window._rqrAcusesTimer) clearInterval(window._rqrAcusesTimer);
     window._rqrAcusesTimer = setInterval(() => {
       try { window._fetchReceptorAcuses(); } catch(e){}
-    }, 30000);
+    }, 15000);
+
+    // En iOS, cuando la app pasa a background los timers se pausan. Cuando vuelve,
+    // forzamos refresh para que el receptor vea datos actuales sin tener que tocar nada.
+    if (!window._rqrVisibilityListenerAttached) {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && _rqrToken) {
+          try { window._fetchReceptorAcuses(); } catch(e){}
+        }
+      });
+      window._rqrVisibilityListenerAttached = true;
+    }
   } catch(e) { console.warn('No se pudo iniciar fetch de acuses:', e && e.message); }
 
   return true;
@@ -14803,22 +14847,37 @@ window._fetchReceptorAcuses = async function(){
   if (!subEl || !listEl) return;
   if (btn) { btn.disabled = true; btn.textContent = 'CARGANDO...'; }
   try {
-    const res = await fetch(RECEPTOR_ACUSES_URL, {
+    // Cache-busting: forzar a saltar cualquier cache (browser, SW, CDN).
+    // Sin esto, el SW podría devolver una respuesta vieja en vez de la fresca.
+    const url = RECEPTOR_ACUSES_URL + '?_t=' + Date.now();
+    const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache'
+      },
+      cache: 'no-store',
       body: JSON.stringify({ token: _rqrToken, secret: _rqrSecret })
     });
     if (!res.ok) {
       const txt = await res.text().catch(() => '');
-      throw new Error('HTTP ' + res.status + (txt ? ' · ' + txt : ''));
+      // Mensaje más explicativo según el código de error.
+      let detail = 'HTTP ' + res.status;
+      if (res.status === 404) detail = 'FUNCIÓN NO DESPLEGADA EN EL SERVIDOR';
+      else if (res.status === 403) detail = 'LINK NO VÁLIDO';
+      else if (res.status === 0) detail = 'SIN INTERNET';
+      throw new Error(detail + (txt ? ' · ' + txt.slice(0, 60) : ''));
     }
     const data = await res.json();
     _renderReceptorAcuses(data);
+    // Marcar timestamp del último refresh exitoso (visible en el subtítulo).
+    window._rqrLastRefreshTs = Date.now();
   } catch(err) {
     console.warn('Fetch acuses falló:', err && err.message);
-    if (subEl) subEl.textContent = 'NO SE PUDO CARGAR · TOCÁ "ACTUALIZAR" PARA REINTENTAR';
+    if (subEl) subEl.textContent = 'ERROR: ' + (err.message || 'NO SE PUDO CARGAR') + ' · TOCÁ "ACTUALIZAR"';
     if (listEl && !listEl.children.length) {
-      listEl.innerHTML = `<div style="padding:18px;text-align:center;color:#94A3B8;font-size:11px;letter-spacing:.5px">SIN CONEXIÓN — INTENTÁ DE NUEVO EN UN MOMENTO</div>`;
+      listEl.innerHTML = `<div style="padding:18px;text-align:center;color:#94A3B8;font-size:11px;letter-spacing:.5px">SIN CONEXIÓN O FUNCIÓN NO DESPLEGADA — REINTENTÁ EN UN MOMENTO</div>`;
     }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'ACTUALIZAR'; }
@@ -14847,11 +14906,13 @@ function _renderReceptorAcuses(data){
   const acuses = (data && Array.isArray(data.acuses)) ? data.acuses : [];
 
   if (subEl) {
+    const ahora = new Date();
+    const hora = ahora.toLocaleTimeString('es-GT', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
     if (acuses.length === 0) {
-      subEl.textContent = 'TODAVÍA NO FIRMASTE NINGÚN ACUSE';
+      subEl.textContent = `SIN ACUSES TODAVÍA · ACTUALIZADO ${hora}`;
     } else {
       const total = acuses.length;
-      subEl.textContent = `${total} ENTREGA${total === 1 ? '' : 'S'} FIRMADA${total === 1 ? '' : 'S'} CON TU QR`;
+      subEl.textContent = `${total} ENTREGA${total === 1 ? '' : 'S'} FIRMADA${total === 1 ? '' : 'S'} · ACTUALIZADO ${hora}`;
     }
   }
 
@@ -14923,6 +14984,32 @@ function openQRScanForAcuse(towerId, levelId, aptoId, slotKey){
     showToast('LIBRERÍA QR NO CARGADA — RECARGÁ', 'red');
     return;
   }
+
+  // ⚠️ NUEVA REGLA: NO permitir firmar QR si no hay foto subida en este slot.
+  // El supervisor primero sube la foto evidencia, después escanea el QR del receptor.
+  try {
+    const _p0 = activeProj();
+    const _t0 = _p0 && (_p0.towers || []).find(x => x.id === towerId);
+    const _l0 = _t0 && (_t0.levels || []).find(x => x.id === levelId);
+    const _a0 = _l0 && (_l0.aptos || []).find(x => x.id === aptoId);
+    const _slot0 = _a0 && _a0.acuseRecepciones && _a0.acuseRecepciones[String(slotKey)];
+    const _hasPhoto = !!(_slot0 && (_slot0.url || _slot0.data));
+    const _hasSig = !!(_slot0 && (_slot0.receptorId || _slot0.receptorNombre));
+    if (_hasSig) {
+      showToast('ESTE ACUSE YA FUE FIRMADO', 'red');
+      return;
+    }
+    if (!_hasPhoto) {
+      const _slotInfo0 = ACUSE_SLOTS.find(s => s.key === String(slotKey));
+      const _slotLabel0 = _slotInfo0 ? _slotInfo0.label : ('ETAPA ' + slotKey);
+      alert(
+        `NO SE PUEDE FIRMAR TODAVÍA\n\n` +
+        `Para firmar el acuse de "${_slotLabel0}" primero tenés que subir la FOTO de la entrega.\n\n` +
+        `Tocá el botón FOTO y subí la imagen. Después aparece el botón QR para firmar.`
+      );
+      return;
+    }
+  } catch(e) { /* si falla la verificación, seguimos — no bloqueamos */ }
 
   // ── Validación de orden secuencial: la etapa anterior debe estar firmada ──
   const slotIdx = parseInt(slotKey);
@@ -15045,17 +15132,24 @@ async function processQRScan(decoded){
     if (!a) { showToast('APTO NO ENCONTRADO', 'red'); closeModal('QRScanner'); return; }
     if (!a.acuseRecepciones) a.acuseRecepciones = {};
 
-    // ⚠️ DEFENSA: si ya hay un acuse para este slot, NO permitir reemplazo.
-    // Una vez firmado/subido es evidencia legal. El admin debe ELIMINAR primero.
-    const _existing = a.acuseRecepciones[ctx.slotKey];
-    const _has = !!(_existing && (_existing.type || _existing.url || _existing.data || _existing.receptorNombre));
-    if (_has) {
+    // ⚠️ DEFENSA 1: si ya hay FIRMA en este slot, NO permitir re-firmar (sería reemplazo).
+    const _existing = a.acuseRecepciones[ctx.slotKey] || {};
+    const _hasSig = !!(_existing.receptorId || _existing.receptorNombre);
+    const _hasPhoto = !!(_existing.url || _existing.data);
+    if (_hasSig) {
       showToast('ESTE ACUSE YA FUE FIRMADO — NO SE PUEDE REEMPLAZAR', 'red');
       closeModal('QRScanner');
       return;
     }
+    // ⚠️ DEFENSA 2: NO permitir firma sin foto previa.
+    if (!_hasPhoto) {
+      showToast('FALTA SUBIR LA FOTO ANTES DE FIRMAR', 'red');
+      closeModal('QRScanner');
+      return;
+    }
 
-    a.acuseRecepciones[ctx.slotKey] = {
+    // MERGEAR la firma SOBRE la foto existente (mantenemos url, data, etc.)
+    a.acuseRecepciones[ctx.slotKey] = Object.assign({}, _existing, {
       type: 'digital',
       receptorId: r.id,
       receptorNombre: r.nombre,
@@ -15063,10 +15157,14 @@ async function processQRScan(decoded){
       receptorSignatureUrl: r.signatureImageUrl || '',
       qrBucket: (valid.bucket != null) ? valid.bucket : null,
       qrLegacy: !!valid.legacy,
-      ts: Date.now(),
+      // Conservar timestamp original de la foto si existe; agregar el de la firma aparte.
+      photoTs: _existing.photoTs || _existing.ts || null,
+      photoUser: _existing.photoUser || _existing.user || '',
+      signatureTs: Date.now(),
+      ts: Date.now(),  // ts global = timestamp de "completar" el acuse (foto+firma)
       user: currentUser ? currentUser.email : '',
       userName: currentUser ? (currentUser.displayName || currentUser.email) : ''
-    };
+    });
 
     // ── Auto-marcar la etapa (y todas las anteriores) como completadas ──
     const slotIdxNum = parseInt(ctx.slotKey);
