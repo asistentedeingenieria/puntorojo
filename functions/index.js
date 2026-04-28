@@ -61,93 +61,86 @@ exports.onNotificationCreated = onDocumentCreated(
       return;
     }
 
-    const tokens = [];
-    const tokenDocsByToken = {};
-    tokensSnap.forEach(d => {
-      const data = d.data();
-      if (data && data.token) {
-        tokens.push(data.token);
-        tokenDocsByToken[data.token] = d.ref;
-      }
-    });
-
-    if (tokens.length === 0) return;
+    if (tokensSnap.empty) {
+      console.log(`Usuario ${uid} sin tokens FCM — sin push para notif ${notifId}`);
+      return;
+    }
 
     const fallbackTitle = TYPE_TITLES[notif.type] || TYPE_TITLES.info;
     const title = notif.title || fallbackTitle;
     const body  = notif.body  || '';
 
-    // Datos auxiliares para el click handler
-    const data = {
-      type: notif.type || 'info',
-      notifId: notifId,
-      ...(notif.refPedidoId   ? { refPedidoId: String(notif.refPedidoId) } : {}),
-      ...(notif.refOcId       ? { refOcId: String(notif.refOcId) } : {}),
-      ...(notif.projectId     ? { projectId: String(notif.projectId) } : {}),
-      click_url: 'https://puntorojo.app/'
-    };
+    // Enviamos UN MENSAJE POR CADA TOKEN individualmente (en vez de multicast).
+    // Esto es exactamente lo que Firebase Console hace cuando funciona en iOS.
+    // Formato del mensaje copiado directamente de "Test Message" de Firebase Console.
+    let okCount = 0;
+    let failCount = 0;
+    const stale = [];
 
-    // sendEachForMulticast permite mandar a hasta 500 tokens en una sola llamada.
-    // Formato MÍNIMO web push — el más robusto, mismo que usa Firebase Console "Test Message".
-    // iOS Safari es estricto con el payload; cualquier campo extra puede silenciar el push.
-    const message = {
-      tokens,
-      notification: { title, body },
-      webpush: {
-        notification: {
-          title,
-          body,
-          icon: 'https://puntorojo.app/logo.png'
-        },
-        fcmOptions: {
-          link: 'https://puntorojo.app/'
-        }
-      }
-    };
+    for (const doc of tokensSnap.docs) {
+      const tokenData = doc.data();
+      const token = tokenData && tokenData.token;
+      if (!token) continue;
 
-    try {
-      const resp = await getMessaging().sendEachForMulticast(message);
-      console.log(`Push enviado: ${resp.successCount} ok, ${resp.failureCount} fail. Notif ${notifId} → user ${uid}`);
+      const platform = tokenData.platform || 'unknown';
 
-      // Limpiar tokens muertos
-      const stale = [];
-      resp.responses.forEach((r, i) => {
-        if (!r.success) {
-          const code = r.error && r.error.code;
-          if (
-            code === 'messaging/registration-token-not-registered' ||
-            code === 'messaging/invalid-registration-token' ||
-            code === 'messaging/invalid-argument'
-          ) {
-            stale.push(tokens[i]);
-          } else {
-            console.warn('Push falló por otra razón:', code, r.error && r.error.message);
+      // Formato MÍNIMO compatible con iOS Safari + Chrome desktop + Android.
+      // Sin `data` payload (algunos browsers iOS lo rechazan en silencio).
+      // Sin `tag` (puede causar problemas en iOS).
+      const message = {
+        token,
+        notification: { title, body },
+        webpush: {
+          notification: {
+            title,
+            body,
+            icon: 'https://puntorojo.app/logo.png'
+          },
+          fcmOptions: {
+            link: 'https://puntorojo.app/'
           }
         }
-      });
-      if (stale.length > 0) {
-        const batch = db.batch();
-        stale.forEach(tok => {
-          const ref = tokenDocsByToken[tok];
-          if (ref) batch.delete(ref);
-        });
+      };
+
+      try {
+        const msgId = await getMessaging().send(message);
+        okCount++;
+        console.log(`✓ Push OK [${platform}] msgId=${msgId} token=${token.slice(0, 20)}...`);
+      } catch (err) {
+        failCount++;
+        const code = err && err.code;
+        const errMsg = err && err.message;
+        console.warn(`✗ Push FAIL [${platform}] code=${code} msg=${errMsg} token=${token.slice(0, 20)}...`);
+        if (
+          code === 'messaging/registration-token-not-registered' ||
+          code === 'messaging/invalid-registration-token' ||
+          code === 'messaging/invalid-argument'
+        ) {
+          stale.push(doc.ref);
+        }
+      }
+    }
+
+    console.log(`Push total: ${okCount} ok, ${failCount} fail. Notif ${notifId} → user ${uid}`);
+
+    // Limpiar tokens muertos
+    if (stale.length > 0) {
+      const batch = db.batch();
+      stale.forEach(ref => batch.delete(ref));
+      try {
         await batch.commit();
         console.log(`Borrados ${stale.length} tokens muertos.`);
-      }
-
-      // Marcar la notif con el resultado del envío (para auditar)
-      try {
-        await snap.ref.set({
-          pushSentAt: FieldValue.serverTimestamp(),
-          pushSuccessCount: resp.successCount,
-          pushFailureCount: resp.failureCount
-        }, { merge: true });
-      } catch(e) {
-        // best-effort
-      }
-    } catch(e) {
-      console.error('Error mandando push:', e && e.message);
+      } catch(e) { console.warn('No se pudieron borrar tokens muertos:', e.message); }
     }
+
+    // Marcar la notif con el resultado
+    try {
+      await snap.ref.set({
+        pushSentAt: FieldValue.serverTimestamp(),
+        pushSuccessCount: okCount,
+        pushFailureCount: failCount
+      }, { merge: true });
+    } catch(e) {}
   }
 );
 
