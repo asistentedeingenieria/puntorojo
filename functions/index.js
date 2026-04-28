@@ -14,6 +14,7 @@
    ════════════════════════════════════════════════════════════════ */
 
 const { onDocumentCreated } = require('firebase-functions/v2/firestore');
+const { onRequest } = require('firebase-functions/v2/https');
 const { setGlobalOptions } = require('firebase-functions/v2');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
@@ -145,6 +146,114 @@ exports.onNotificationCreated = onDocumentCreated(
       }
     } catch(e) {
       console.error('Error mandando push:', e && e.message);
+    }
+  }
+);
+
+/* ════════════════════════════════════════════════════════════════
+   getReceptorAcuses — endpoint HTTP que devuelve los acuses firmados
+   por un receptor identificado por (token, secret).
+
+   Llamada (POST):
+     fetch('https://us-central1-punto-rojo-3fcf1.cloudfunctions.net/getReceptorAcuses', {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ token: 'PR-RECEP-...', secret: '...' })
+     })
+
+   Auth: el secret va en el body. Si el secret guardado en state.receptores
+   coincide con el provisto, se devuelve la lista de acuses. Si no, 403.
+   ════════════════════════════════════════════════════════════════ */
+exports.getReceptorAcuses = onRequest(
+  {
+    cors: ['https://puntorojo.app', 'https://www.puntorojo.app', 'https://asistentedeingenieria.github.io', 'http://localhost', 'http://localhost:8080'],
+    timeoutSeconds: 20,
+    memory: '256MiB'
+  },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Solo POST' });
+      return;
+    }
+    const body = req.body || {};
+    const token  = String(body.token  || '').trim();
+    const secret = String(body.secret || '').trim();
+    if (!token || !secret) {
+      res.status(400).json({ error: 'token y secret requeridos' });
+      return;
+    }
+
+    try {
+      const db = getFirestore();
+      const stateDoc = await db.collection('appState').doc('main').get();
+      if (!stateDoc.exists) {
+        res.status(404).json({ error: 'Estado no encontrado' });
+        return;
+      }
+      const state = stateDoc.data() || {};
+      const receptores = Array.isArray(state.receptores) ? state.receptores : [];
+      const receptor = receptores.find(r => r && r.token === token && r.secret === secret && !r.deleted);
+      if (!receptor) {
+        res.status(403).json({ error: 'Receptor no autorizado o link inválido' });
+        return;
+      }
+
+      // Recolectar acuses firmados por este receptor en todos los proyectos.
+      const ETAPAS = [
+        'ESTRUCTURA',
+        'PRIMERA CARA',
+        'REFUERZOS DE MADERA',
+        'FORRO DE SEGUNDA CARA',
+        'CIELO Y FORRO',
+        'MASILLA COMPLETA'
+      ];
+
+      const acuses = [];
+      const projects = Array.isArray(state.projects) ? state.projects : [];
+      for (const p of projects) {
+        for (const t of (p.towers || [])) {
+          for (const l of (t.levels || [])) {
+            for (const a of (l.aptos || [])) {
+              if (!a.acuseRecepciones) continue;
+              for (const slotKey of Object.keys(a.acuseRecepciones)) {
+                const ac = a.acuseRecepciones[slotKey];
+                if (!ac) continue;
+                // Coincidencia por receptorId (preferido) o por receptorToken (legacy)
+                const isMine = (ac.receptorId === receptor.id) || (ac.receptorToken === receptor.token);
+                if (!isMine) continue;
+                const idxNum = parseInt(slotKey, 10);
+                acuses.push({
+                  proyecto: p.name || '',
+                  torre: t.name || '',
+                  nivel: l.name || '',
+                  apto: a.name || '',
+                  slotKey: String(slotKey),
+                  etapaIdx: isNaN(idxNum) ? -1 : idxNum,
+                  etapaNombre: (ETAPAS[idxNum] || ('ETAPA ' + (idxNum + 1))),
+                  ts: ac.ts || 0,
+                  supervisor: ac.userName || ac.user || ''
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // Ordenar por fecha descendente (más reciente primero).
+      acuses.sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0));
+
+      res.json({
+        receptor: {
+          nombre: receptor.nombre || '',
+          cargo: receptor.cargo || ''
+        },
+        acuses,
+        totalAcuses: acuses.length,
+        generadoEn: Date.now()
+      });
+    } catch (e) {
+      console.error('getReceptorAcuses error:', e && e.message);
+      res.status(500).json({ error: 'Error interno: ' + (e.message || '') });
     }
   }
 );

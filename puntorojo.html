@@ -1307,19 +1307,33 @@ html,body,.main{background:#FFFFFF!important;}
         <circle cx="24" cy="24" r="20" stroke="#1E293B" stroke-width="4" fill="none"/>
         <circle id="rqrTimerCircle" cx="24" cy="24" r="20" stroke="#C8141C" stroke-width="4" fill="none" stroke-dasharray="125.66" stroke-dashoffset="0" transform="rotate(-90 24 24)" style="transition:stroke-dashoffset .9s linear"/>
       </svg>
-      <div id="rqrTimerNum" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff">60</div>
+      <div id="rqrTimerNum" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff">20</div>
     </div>
     <div style="font-size:10px;color:#94A3B8;letter-spacing:1.4px;text-transform:uppercase;line-height:1.5">
-      EL QR CAMBIA<br>EN <span id="rqrSecLeft" style="color:#fff;font-weight:700">60</span> SEG
+      EL QR CAMBIA<br>EN <span id="rqrSecLeft" style="color:#fff;font-weight:700">20</span> SEG
     </div>
   </div>
 
   <div style="margin-top:26px;max-width:340px;text-align:center;font-size:11px;color:#94A3B8;letter-spacing:.5px;line-height:1.6">
     CUANDO HAYA UNA ENTREGA, MOSTRÁ ESTA PANTALLA AL SUPERVISOR DE PUNTO ROJO PARA QUE ESCANEE EL QR.<br><br>
-    <strong style="color:#FCA5A5">FOTOS DE ESTA PANTALLA NO SIRVEN</strong> — EL QR SE VENCE EN UN MINUTO.
+    <strong style="color:#FCA5A5">FOTOS DE ESTA PANTALLA NO SIRVEN</strong> — EL QR SE VENCE EN 20 SEGUNDOS.
   </div>
 
   <div id="rqrError" style="display:none;margin-top:24px;padding:14px 18px;border:1px solid #DC2626;background:#7F1D1D;border-radius:8px;font-size:12px;letter-spacing:.5px;text-align:center;max-width:340px"></div>
+
+  <!-- ════ HISTORIAL DE ACUSES FIRMADOS POR ESTE RECEPTOR ════
+       Se carga vía Cloud Function (httpsCallable getReceptorAcuses) cada 30s.
+       Solo lectura — el receptor ve qué entregas firmó con su QR. -->
+  <div id="rqrAcusesSection" style="width:100%;max-width:560px;margin-top:36px;padding:18px 16px;background:#1E293B;border:1px solid #334155;border-radius:10px;color:#fff">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:11px;letter-spacing:1.6px;color:#94A3B8;font-weight:700">MIS ACUSES FIRMADOS</div>
+        <div id="rqrAcusesSub" style="font-size:9.5px;letter-spacing:.5px;color:#64748B;margin-top:2px">CARGANDO...</div>
+      </div>
+      <button id="rqrAcusesRefresh" type="button" onclick="_fetchReceptorAcuses()" style="background:transparent;border:1px solid #475569;color:#94A3B8;padding:6px 14px;border-radius:4px;font-size:10px;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase">ACTUALIZAR</button>
+    </div>
+    <div id="rqrAcusesList" style="display:flex;flex-direction:column;gap:8px;max-height:50vh;overflow-y:auto"></div>
+  </div>
 </div>
 
 <!-- ═════════════════ BANNER SIN CONEXIÓN ═════════════════ -->
@@ -14203,8 +14217,8 @@ window.rechazarExcepcionUI = async function(){
    ═══════════════════════════════════════════════════════════════ */
 
 const QR_TOKEN_PREFIX = 'PR-RECEP-';
-const QR_BUCKET_MS = 60000;            // 1 minuto por bucket
-const QR_BUCKET_TOLERANCE = 1;         // aceptar el bucket actual y el anterior (±60s de gracia)
+const QR_BUCKET_MS = 20000;            // 20 segundos por bucket — rota cada 20s
+const QR_BUCKET_TOLERANCE = 1;         // aceptar bucket actual + 1 anterior = 40s de ventana real
 
 function makeReceptorToken(){
   // Random ~16 chars (suficiente entropía)
@@ -14693,7 +14707,131 @@ function _startReceptorRotatingMode(){
   if (_rqrTimer) clearInterval(_rqrTimer);
   _rqrTimer = setInterval(_renderRotatingQRForReceptor, 1000);
 
+  // Cargar el historial de acuses del receptor (vía Cloud Function) y refrescar cada 30s.
+  try {
+    window._fetchReceptorAcuses();
+    if (window._rqrAcusesTimer) clearInterval(window._rqrAcusesTimer);
+    window._rqrAcusesTimer = setInterval(() => {
+      try { window._fetchReceptorAcuses(); } catch(e){}
+    }, 30000);
+  } catch(e) { console.warn('No se pudo iniciar fetch de acuses:', e && e.message); }
+
   return true;
+}
+
+/* ─────── HISTORIAL DE ACUSES DEL RECEPTOR ───────
+   Llamamos a la Cloud Function HTTP getReceptorAcuses con (token, secret)
+   y renderizamos la lista. Read-only desde la perspectiva del receptor. */
+
+const RECEPTOR_ACUSES_URL = 'https://us-central1-punto-rojo-3fcf1.cloudfunctions.net/getReceptorAcuses';
+
+window._fetchReceptorAcuses = async function(){
+  if (!_rqrToken || !_rqrSecret) return;
+  const subEl = document.getElementById('rqrAcusesSub');
+  const listEl = document.getElementById('rqrAcusesList');
+  const btn = document.getElementById('rqrAcusesRefresh');
+  if (!subEl || !listEl) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'CARGANDO...'; }
+  try {
+    const res = await fetch(RECEPTOR_ACUSES_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: _rqrToken, secret: _rqrSecret })
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error('HTTP ' + res.status + (txt ? ' · ' + txt : ''));
+    }
+    const data = await res.json();
+    _renderReceptorAcuses(data);
+  } catch(err) {
+    console.warn('Fetch acuses falló:', err && err.message);
+    if (subEl) subEl.textContent = 'NO SE PUDO CARGAR · TOCÁ "ACTUALIZAR" PARA REINTENTAR';
+    if (listEl && !listEl.children.length) {
+      listEl.innerHTML = `<div style="padding:18px;text-align:center;color:#94A3B8;font-size:11px;letter-spacing:.5px">SIN CONEXIÓN — INTENTÁ DE NUEVO EN UN MOMENTO</div>`;
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'ACTUALIZAR'; }
+  }
+};
+
+function _renderReceptorAcuses(data){
+  const subEl = document.getElementById('rqrAcusesSub');
+  const listEl = document.getElementById('rqrAcusesList');
+  if (!listEl) return;
+
+  // Si vino el nombre del receptor desde el server y no lo teníamos local, ponerlo.
+  if (data && data.receptor && data.receptor.nombre) {
+    const nameEl = document.getElementById('rqrName');
+    const cargoEl = document.getElementById('rqrCargo');
+    if (nameEl && (!_rqrName || _rqrName === '')) {
+      nameEl.textContent = data.receptor.nombre;
+      _rqrName = data.receptor.nombre;
+    }
+    if (cargoEl && (!_rqrCargo || _rqrCargo === '')) {
+      cargoEl.textContent = data.receptor.cargo || '';
+      _rqrCargo = data.receptor.cargo || '';
+    }
+  }
+
+  const acuses = (data && Array.isArray(data.acuses)) ? data.acuses : [];
+
+  if (subEl) {
+    if (acuses.length === 0) {
+      subEl.textContent = 'TODAVÍA NO FIRMASTE NINGÚN ACUSE';
+    } else {
+      const total = acuses.length;
+      subEl.textContent = `${total} ENTREGA${total === 1 ? '' : 'S'} FIRMADA${total === 1 ? '' : 'S'} CON TU QR`;
+    }
+  }
+
+  if (acuses.length === 0) {
+    listEl.innerHTML = `<div style="padding:24px 18px;text-align:center;color:#94A3B8;font-size:11px;letter-spacing:.6px;line-height:1.5">CUANDO EL SUPERVISOR ESCANEE TU QR Y FIRMES UNA ENTREGA, VA A APARECER ACÁ.</div>`;
+    return;
+  }
+
+  // Agrupar por proyecto para que sea más fácil de leer cuando hay muchos.
+  const byProyecto = {};
+  acuses.forEach(ac => {
+    const k = ac.proyecto || '(SIN PROYECTO)';
+    if (!byProyecto[k]) byProyecto[k] = [];
+    byProyecto[k].push(ac);
+  });
+
+  let html = '';
+  Object.keys(byProyecto).forEach(proyectoNombre => {
+    const items = byProyecto[proyectoNombre];
+    html += `<div style="background:#0F172A;border:1px solid #334155;border-radius:6px;padding:12px 14px">
+      <div style="font-size:10px;letter-spacing:1.4px;color:#FCA5A5;font-weight:700;margin-bottom:8px;text-transform:uppercase">${_esc(proyectoNombre)}</div>
+      <div style="display:flex;flex-direction:column;gap:6px">`;
+    items.forEach(ac => {
+      const fecha = ac.ts ? new Date(ac.ts).toLocaleString('es-GT', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
+      html += `<div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:8px 10px;background:#1E293B;border-radius:4px">
+        <div style="min-width:0">
+          <div style="font-size:11px;font-weight:700;color:#fff;letter-spacing:.3px;text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_esc(ac.apto || '')}</div>
+          <div style="font-size:9px;color:#94A3B8;letter-spacing:.5px;margin-top:2px;text-transform:uppercase">${_esc(ac.torre || '')} · ${_esc(ac.nivel || '')}</div>
+          <div style="font-size:9.5px;color:#5a8bb8;letter-spacing:.5px;margin-top:3px;text-transform:uppercase;font-weight:600">${_esc(ac.etapaNombre || ('ETAPA ' + ((ac.etapaIdx||0)+1)))}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:9px;color:#64748B;letter-spacing:.4px">${_esc(fecha)}</div>
+          ${ac.supervisor ? `<div style="font-size:8.5px;color:#94A3B8;letter-spacing:.4px;margin-top:2px;text-transform:uppercase">POR ${_esc(ac.supervisor)}</div>` : ''}
+        </div>
+      </div>`;
+    });
+    html += `</div></div>`;
+  });
+
+  listEl.innerHTML = html;
+}
+
+// Mini helper de escape para evitar inyección HTML
+function _esc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /* Hook temprano: si el hash es de receptor, NO inicializamos auth/app — solo la pantalla del QR. */
