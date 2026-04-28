@@ -2504,6 +2504,53 @@ html,body,.main{background:#FFFFFF!important;}
   </div>
 </div>
 
+<!-- ════════ MODAL: SOLICITAR EXCEPCIÓN DE PAGO SIN ACUSE (supervisor) ════════ -->
+<div class="modal-bg" id="modalSolicitarExcepcion" onclick="closeModalBg(event,'solicitarExcepcion')">
+  <div class="modal" style="max-width:560px">
+    <h3>ENTREGAR A CLIENTE LA ETAPA PRIMERO</h3>
+    <p class="desc">Esta etapa todavía no tiene acuse de recepción firmado por el cliente. <strong>El pago no se puede generar hasta que el receptor firme.</strong></p>
+
+    <div id="solExcInfoBox" style="border:1px solid var(--line);border-left:3px solid var(--red);background:var(--cream);padding:12px 14px;border-radius:4px;margin-bottom:14px;font-size:11px;letter-spacing:.3px;line-height:1.6"></div>
+
+    <p class="desc" style="margin-top:0">Si es una emergencia (el obrero necesita el pago hoy y entregamos mañana, etc.) podés <strong>solicitar una excepción al administrador</strong>. Si la aprueba, vas a poder generar este pago aunque el acuse aún no esté firmado.</p>
+
+    <div class="field">
+      <label>OBRERO A PAGAR</label>
+      <input id="solExcObrero" placeholder="EJ: PEDRO LÓPEZ" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>MOTIVO DE LA EXCEPCIÓN (REQUERIDO)</label>
+      <textarea id="solExcRazon" rows="3" placeholder="EJ: EL OBRERO SE VA DE VIAJE EL LUNES Y ENTREGAMOS AL CLIENTE EL MARTES"></textarea>
+    </div>
+    <div id="solExcError" class="auth-error"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeModal('solicitarExcepcion')">CANCELAR</button>
+      <button class="btn cafe" onclick="confirmarSolicitudExcepcion()">ENVIAR SOLICITUD AL ADMIN</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════ MODAL: APROBAR/RECHAZAR EXCEPCIÓN (admin) ════════ -->
+<div class="modal-bg" id="modalAprobarExcepcion" onclick="closeModalBg(event,'aprobarExcepcion')">
+  <div class="modal" style="max-width:580px">
+    <h3>SOLICITUD DE EXCEPCIÓN DE PAGO</h3>
+    <p class="desc">El supervisor pide pagar una etapa que <strong>todavía no tiene acuse firmado</strong> por el cliente. Revisá los datos antes de aprobar.</p>
+
+    <div id="aprExcContent"></div>
+
+    <div class="field" id="aprExcRechazoBox" style="display:none">
+      <label>NOTA DE RECHAZO (OPCIONAL)</label>
+      <textarea id="aprExcNota" rows="2" placeholder="EJ: NO — EL CLIENTE TIENE QUE FIRMAR ANTES DE PAGAR."></textarea>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeModal('aprobarExcepcion')">CERRAR</button>
+      <button class="btn" id="aprExcRechazarBtn" onclick="rechazarExcepcionUI()" style="background:var(--red);color:#fff;border:none">RECHAZAR</button>
+      <button class="btn" id="aprExcAprobarBtn" onclick="aprobarExcepcionUI()" style="background:var(--green-dark);color:#fff;border:none">APROBAR</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal de RECUPERAR CLAVE (z-index alto para que aparezca sobre la auth-screen) -->
 <div class="modal-bg" id="modalForgotPass" onclick="closeModalBg(event,'forgotPass')" style="z-index:1010">
   <div class="modal" style="max-width:440px">
@@ -2876,7 +2923,7 @@ async function findUidByEmail(email){
   return null;
 }
 
-async function addNotification({ forUser, type, title, body, refPedidoId, refOcId, projectId }){
+async function addNotification({ forUser, type, title, body, refPedidoId, refOcId, projectId, refExcepcion }){
   if (!forUser) return;
   if (!firebase.firestore) return;
   try {
@@ -2892,6 +2939,7 @@ async function addNotification({ forUser, type, title, body, refPedidoId, refOcI
         body: body || '',
         refPedidoId: refPedidoId || null,
         refOcId: refOcId || null,
+        refExcepcion: refExcepcion || null,
         projectId: projectId || null,
         ts: firebase.firestore.FieldValue.serverTimestamp(),
         read: false,
@@ -3658,10 +3706,28 @@ function handleNotifClick(id){
   // Re-render para mostrar como leída
   openNotifications();
 
-  // Si apunta a un pedido, ir al detalle
   const all = loadNotifications();
   const n = all.find(x => x.id === id);
-  if (n && n.refPedidoId) {
+  if (!n) return;
+
+  // ── Solicitud o decisión de excepción de pago sin acuse ──
+  if (n.refExcepcion) {
+    if (n.projectId && n.projectId !== state.activeProjectId) {
+      try { setActiveProject(n.projectId); } catch(e){}
+    }
+    closeModal('notifs');
+    // Si soy admin → modal de aprobación. Si soy supervisor (solicitante) → solo ver el estado.
+    if (typeof can === 'function' && can('users.manage')) {
+      setTimeout(() => { try { window.abrirModalAprobarExcepcion(n.refExcepcion); } catch(e){ console.error(e); } }, 120);
+    } else {
+      // Supervisor que ve el resultado de su solicitud — mostramos el mismo modal en modo lectura.
+      setTimeout(() => { try { window.abrirModalAprobarExcepcion(n.refExcepcion); } catch(e){ console.error(e); } }, 120);
+    }
+    return;
+  }
+
+  // Si apunta a un pedido, ir al detalle
+  if (n.refPedidoId) {
     // Cambiar al proyecto si aplica
     if (n.projectId && n.projectId !== state.activeProjectId) {
       setActiveProject(n.projectId);
@@ -4021,6 +4087,8 @@ function ensureDataV9(data){
         }
         delete a.acuseRecepciones.final;
       }
+      // Excepciones de pago sin acuse (apto.pagoExcepciones[stageIdx])
+      if (!a.pagoExcepciones || typeof a.pagoExcepciones !== 'object') a.pagoExcepciones = {};
     })));
     p.materiales.pedidos.forEach(pd => {
       if (pd.proyectoManual === undefined) pd.proyectoManual = false;
@@ -12390,7 +12458,47 @@ function deleteCurrentProveedor(){
   window.renderPlanillaPagosList = function(canAuth){
     const p = activeProj(); const pagos = [...(p.planilla.pagos||[])].sort((a,b)=>(b.ts||0)-(a.ts||0));
     if (!pagos.length) return `<div class="card"><div class="empty" style="padding:30px">SIN PAGOS GENERADOS</div></div>`;
-    return `<div class="card"><div class="card-hd"><h3>PAGOS GENERADOS</h3></div><div class="planilla-pay-list">${pagos.map(pg=>`<div class="planilla-pay-item"><div><strong>${pg.aptoName||pg.tipo}</strong><br><span style="font-size:9px;color:var(--mute);letter-spacing:1px;text-transform:uppercase">${pg.detalle||''}</span></div><div>${pg.colaborador||'—'}</div><div>${fQ(pg.neto||pg.monto||0)}</div><div><span class="planilla-badge ${pg.autorizado?'ok':'pending'}">${pg.autorizado?'AUTORIZADO':'PENDIENTE'}</span></div><div>${(!pg.autorizado && canAuth)?`<button class="btn sm" onclick="autorizarPagoPlanilla('${pg.id}')">AUTORIZAR</button>`:''}</div></div>`).join('')}</div></div>`;
+    return `<div class="card"><div class="card-hd"><h3>PAGOS GENERADOS</h3></div><div class="planilla-pay-list">${pagos.map(pg=>{
+      // Si el pago es de tipo ETAPA y se generó sin acuse, verificamos si SIGUE sin acuse
+      // (puede haber sido firmado posteriormente — en ese caso ya no mostramos la alerta).
+      let alertaAcuse = '';
+      if (pg.tipo === 'ETAPA' && pg.pagoSinAcuse && pg.aptoId != null && pg.stageIdx != null) {
+        const t = (p.towers||[]).find(x=>x.id===pg.towerId);
+        const l = t && (t.levels||[]).find(x=>x.id===pg.levelId);
+        const a = l && (l.aptos||[]).find(x=>x.id===pg.aptoId);
+        if (a && !window.tieneAcuseFirmado(a, pg.stageIdx)) {
+          alertaAcuse = `<span class="planilla-badge" style="background:#FEF3C7;color:#92400E;border:1px solid #F59E0B;margin-left:6px">SIN ACUSE</span>`;
+        }
+      }
+      return `<div class="planilla-pay-item"><div><strong>${pg.aptoName||pg.tipo}</strong>${alertaAcuse}<br><span style="font-size:9px;color:var(--mute);letter-spacing:1px;text-transform:uppercase">${pg.detalle||''}</span></div><div>${pg.colaborador||'—'}</div><div>${fQ(pg.neto||pg.monto||0)}</div><div><span class="planilla-badge ${pg.autorizado?'ok':'pending'}">${pg.autorizado?'AUTORIZADO':'PENDIENTE'}</span></div><div>${(!pg.autorizado && canAuth)?`<button class="btn sm" onclick="autorizarPagoPlanilla('${pg.id}')">AUTORIZAR</button>`:''}</div></div>`;
+    }).join('')}</div></div>`;
+  };
+
+  // ─────── HELPERS DE EXCEPCIÓN DE PAGO SIN ACUSE ───────
+  // Una etapa solo se puede pagar si el receptor ya firmó su acuse.
+  // Si no, el supervisor debe pedir excepción al admin.
+  window.tieneAcuseFirmado = function(apto, stageIdx){
+    const acuse = apto && apto.acuseRecepciones && apto.acuseRecepciones[String(stageIdx)];
+    return !!(acuse && (acuse.type || acuse.url || acuse.data || acuse.receptorNombre));
+  };
+
+  window.tieneExcepcionAprobada = function(apto, stageIdx){
+    const exc = apto && apto.pagoExcepciones && apto.pagoExcepciones[String(stageIdx)];
+    return !!(exc && exc.estado === 'aprobada');
+  };
+
+  window.estadoExcepcionPago = function(apto, stageIdx){
+    const exc = apto && apto.pagoExcepciones && apto.pagoExcepciones[String(stageIdx)];
+    return exc ? exc.estado : null; // 'pendiente' | 'aprobada' | 'rechazada' | 'usada' | null
+  };
+
+  window._consumirExcepcionPago = function(apto, stageIdx, pagoId){
+    const exc = apto && apto.pagoExcepciones && apto.pagoExcepciones[String(stageIdx)];
+    if (exc && exc.estado === 'aprobada') {
+      exc.estado = 'usada';
+      exc.usadaEn = Date.now();
+      exc.pagoId = pagoId;
+    }
   };
 
   window.pagarEtapaPlanilla = function(tid,lid,aid,stageIdx){
@@ -12398,12 +12506,88 @@ function deleteCurrentProveedor(){
     const p = activeProj(); const t=(p.towers||[]).find(x=>x.id===tid); const l=t&&(t.levels||[]).find(x=>x.id===lid); const a=l&&(l.aptos||[]).find(x=>x.id===aid); if(!a) return;
     const bruto = Number(p.planilla.recetaCostos?.[stageIdx]||0); if (bruto<=0) return showToast('DEFINÍ EL MONTO DE ESTA ETAPA', 'red');
     if ((p.planilla.pagos||[]).some(x=>x.tipo==='ETAPA' && x.aptoId===aid && x.stageIdx===stageIdx)) return showToast('ESTA ETAPA YA FUE PAGADA', 'red');
+
+    // ─── BLOQUEO POR FALTA DE ACUSE FIRMADO ───
+    const tieneAcuse = window.tieneAcuseFirmado(a, stageIdx);
+    const excAprobada = window.tieneExcepcionAprobada(a, stageIdx);
+    const esAdmin = can('users.manage');
+    const etapaNombreCorto = (ETAPAS_INFO[stageIdx] && ETAPAS_INFO[stageIdx].name) || ('ETAPA ' + (stageIdx+1));
+
+    if (!tieneAcuse && !excAprobada) {
+      if (esAdmin) {
+        // Admin puede saltar el bloqueo con confirmación doble
+        const ok = confirm(
+          `ATENCIÓN — SIN ACUSE FIRMADO\n\n` +
+          `${a.name} · ${etapaNombreCorto}\n\n` +
+          `Esta etapa NO tiene acuse de recepción firmado por el cliente. ` +
+          `Como administrador podés pagar igual, pero el pago va a quedar marcado como "PAGADO SIN ACUSE" hasta que el receptor firme.\n\n` +
+          `¿CONFIRMÁS PAGAR SIN ACUSE?`
+        );
+        if (!ok) return;
+      } else {
+        // Supervisor: bloqueado. Ofrecer solicitar excepción.
+        const estadoActual = window.estadoExcepcionPago(a, stageIdx);
+        if (estadoActual === 'pendiente') {
+          alert(
+            `ESPERANDO RESPUESTA DEL ADMINISTRADOR\n\n` +
+            `${a.name} · ${etapaNombreCorto}\n\n` +
+            `Ya hay una solicitud de excepción pendiente para esta etapa. ` +
+            `El administrador todavía no la respondió.`
+          );
+          return;
+        }
+        if (estadoActual === 'rechazada') {
+          const exc = a.pagoExcepciones[String(stageIdx)];
+          const nota = (exc && exc.notaDecision) ? ('\n\nNOTA DEL ADMIN: ' + exc.notaDecision) : '';
+          alert(
+            `EXCEPCIÓN RECHAZADA\n\n` +
+            `${a.name} · ${etapaNombreCorto}\n\n` +
+            `El administrador rechazó tu pedido de pagar sin acuse.${nota}\n\n` +
+            `Para pagar esta etapa: entregá la etapa al cliente y que firme su acuse.`
+          );
+          return;
+        }
+        // Sin pedido previo (o usada antes pero ese registro ya se movió a pagos): abrir modal
+        window.abrirModalSolicitarExcepcion(p.id, tid, lid, aid, stageIdx, bruto);
+        return;
+      }
+    }
+
     const colaborador = prompt('INSTALADOR O MASILLERO A PAGAR:'); if (!colaborador) return;
     const retencion = bruto * 0.10; const neto = bruto - retencion;
-    if (!confirm(`GENERAR PAGO\n${a.name} · ETAPA ${stageIdx+1}\nBRUTO: ${fQ(bruto)}\nRETENCIÓN 10%: ${fQ(retencion)}\nNETO: ${fQ(neto)}`)) return;
-    p.planilla.pagos.push({id:'plp-'+uid(), tipo:'ETAPA', ts:Date.now(), towerId:tid, levelId:lid, aptoId:aid, aptoName:a.name, towerName:t.name, levelName:l.name, stageIdx, detalle:`ETAPA ${stageIdx+1} · ${ETAPAS_INFO[stageIdx].name}`, bruto, retencion, neto, colaborador:colaborador.toUpperCase(), autorizado:false, retencionPagada:false});
-    logActivity('create', `Pago planilla generado`, `${p.name} · ${a.name} · ETAPA ${stageIdx+1} · ${colaborador.toUpperCase()} · ${fQ(neto)}`);
-    saveState(); renderPlanilla(); showToast('PAGO GENERADO · PENDIENTE AUTORIZACIÓN','green');
+    const sinAcuseTexto = (!tieneAcuse) ? '\n\n⚠ ESTE PAGO SE VA A REGISTRAR SIN ACUSE FIRMADO.' : '';
+    if (!confirm(`GENERAR PAGO\n${a.name} · ETAPA ${stageIdx+1}\nBRUTO: ${fQ(bruto)}\nRETENCIÓN 10%: ${fQ(retencion)}\nNETO: ${fQ(neto)}${sinAcuseTexto}`)) return;
+
+    const pagoId = 'plp-'+uid();
+    const pagoSinAcuse = !tieneAcuse;
+    let excepcionAplicadaPor = null;
+    if (pagoSinAcuse && excAprobada) {
+      const exc = a.pagoExcepciones[String(stageIdx)];
+      excepcionAplicadaPor = (exc && exc.decididoPor) || null;
+    }
+
+    p.planilla.pagos.push({
+      id: pagoId, tipo:'ETAPA', ts:Date.now(),
+      towerId:tid, levelId:lid, aptoId:aid,
+      aptoName:a.name, towerName:t.name, levelName:l.name,
+      stageIdx, detalle:`ETAPA ${stageIdx+1} · ${ETAPAS_INFO[stageIdx].name}`,
+      bruto, retencion, neto,
+      colaborador:colaborador.toUpperCase(),
+      autorizado:false, retencionPagada:false,
+      pagoSinAcuse,
+      excepcionAplicadaPor,
+      excepcionRazon: (pagoSinAcuse && a.pagoExcepciones && a.pagoExcepciones[String(stageIdx)]) ? (a.pagoExcepciones[String(stageIdx)].razon || '') : ''
+    });
+
+    if (pagoSinAcuse && excAprobada) {
+      window._consumirExcepcionPago(a, stageIdx, pagoId);
+    }
+
+    logActivity('create',
+      `Pago planilla generado${pagoSinAcuse ? ' (SIN ACUSE)' : ''}`,
+      `${p.name} · ${a.name} · ETAPA ${stageIdx+1} · ${colaborador.toUpperCase()} · ${fQ(neto)}${pagoSinAcuse ? ' · ⚠ FALTA ACUSE' : ''}`);
+    saveState(); renderPlanilla();
+    showToast(pagoSinAcuse ? 'PAGO GENERADO · ¡FALTA ACUSE!' : 'PAGO GENERADO · PENDIENTE AUTORIZACIÓN', pagoSinAcuse ? '' : 'green');
   };
 
   window.autorizarPagoPlanilla = function(id){
@@ -12785,6 +12969,271 @@ async function confirmBioEmergencyReset(){
   try { await firebase.auth().signOut(); } catch(e){}
   location.reload();
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   EXCEPCIÓN DE PAGO SIN ACUSE (supervisor solicita, admin aprueba/rechaza)
+   ═══════════════════════════════════════════════════════════════
+   Una etapa no se puede pagar al obrero si el cliente todavía no firmó el
+   acuse. Si el supervisor necesita pagar antes (emergencia), pide excepción
+   al admin. El admin recibe notif y aprueba/rechaza. Si aprueba, el supervisor
+   ya puede generar el pago de esa etapa específica (la excepción se "consume"
+   al usarla).
+   ═══════════════════════════════════════════════════════════════ */
+
+let _excepcionPendingCtx = null;        // { projectId, towerId, levelId, aptoId, stageIdx, monto }
+let _excepcionAdminCtx = null;          // { projectId, towerId, levelId, aptoId, stageIdx } — para aprobar/rechazar
+
+window.abrirModalSolicitarExcepcion = function(projectId, towerId, levelId, aptoId, stageIdx, monto){
+  if (!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
+  const p = (state.projects||[]).find(x=>x.id===projectId);
+  const t = p && (p.towers||[]).find(x=>x.id===towerId);
+  const l = t && (t.levels||[]).find(x=>x.id===levelId);
+  const a = l && (l.aptos||[]).find(x=>x.id===aptoId);
+  if (!a) return;
+
+  _excepcionPendingCtx = { projectId, towerId, levelId, aptoId, stageIdx, monto };
+
+  const etapaInfo = (typeof ETAPAS_INFO !== 'undefined' && ETAPAS_INFO[stageIdx]) ? ETAPAS_INFO[stageIdx] : null;
+  const etapaNombre = etapaInfo ? etapaInfo.name : ('ETAPA ' + (stageIdx+1));
+
+  document.getElementById('solExcInfoBox').innerHTML = `
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px">
+      <strong>PROYECTO:</strong><span>${p.name}</span>
+      <strong>TORRE / NIVEL:</strong><span>${t.name} · ${l.name}</span>
+      <strong>APARTAMENTO:</strong><span>${a.name}</span>
+      <strong>ETAPA:</strong><span>${etapaNombre}</span>
+      <strong>MONTO BRUTO:</strong><span>${typeof fQ==='function'?fQ(monto):('Q'+monto)}</span>
+    </div>
+  `;
+  document.getElementById('solExcObrero').value = '';
+  document.getElementById('solExcRazon').value = '';
+  document.getElementById('solExcError').textContent = '';
+  document.getElementById('modalSolicitarExcepcion').classList.add('show');
+};
+
+window.confirmarSolicitudExcepcion = async function(){
+  if (!_excepcionPendingCtx) return;
+  const ctx = _excepcionPendingCtx;
+  const obrero = (document.getElementById('solExcObrero').value || '').trim().toUpperCase();
+  const razon = (document.getElementById('solExcRazon').value || '').trim();
+  const err = document.getElementById('solExcError');
+  err.textContent = '';
+
+  if (!obrero) { err.textContent = 'INDICÁ EL NOMBRE DEL OBRERO'; return; }
+  if (razon.length < 8) { err.textContent = 'EL MOTIVO DEBE TENER AL MENOS 8 LETRAS'; return; }
+
+  const p = (state.projects||[]).find(x=>x.id===ctx.projectId);
+  const t = p && (p.towers||[]).find(x=>x.id===ctx.towerId);
+  const l = t && (t.levels||[]).find(x=>x.id===ctx.levelId);
+  const a = l && (l.aptos||[]).find(x=>x.id===ctx.aptoId);
+  if (!a) { showToast('APTO NO ENCONTRADO', 'red'); return; }
+
+  if (!a.pagoExcepciones) a.pagoExcepciones = {};
+  const etapaInfo = (typeof ETAPAS_INFO !== 'undefined' && ETAPAS_INFO[ctx.stageIdx]) ? ETAPAS_INFO[ctx.stageIdx] : null;
+  const etapaNombre = etapaInfo ? etapaInfo.name : ('ETAPA ' + (ctx.stageIdx+1));
+
+  a.pagoExcepciones[String(ctx.stageIdx)] = {
+    estado: 'pendiente',
+    razon,
+    obrero,
+    monto: ctx.monto,
+    aptoNombre: a.name,
+    nivelNombre: l.name,
+    torreNombre: t.name,
+    proyectoNombre: p.name,
+    etapaNombre,
+    stageIdx: ctx.stageIdx,
+    solicitadoPor: (currentUser && currentUser.email) || '',
+    solicitadoPorNombre: (currentUser && (currentUser.displayName || currentUser.email)) || '',
+    solicitadoEn: Date.now(),
+    decididoPor: null,
+    decididoPorNombre: null,
+    decididoEn: null,
+    notaDecision: null,
+    usadaEn: null,
+    pagoId: null
+  };
+  saveState();
+  closeModal('solicitarExcepcion');
+  showToast('SOLICITUD ENVIADA — TE AVISAMOS CUANDO RESUELVAN', 'green');
+
+  // Notificar a TODOS los admins
+  try {
+    let admins = [];
+    if (typeof firebase !== 'undefined' && firebase.firestore) {
+      const snap = await firebase.firestore().collection('users').get();
+      admins = snap.docs
+        .map(d => ({ uid: d.id, ...d.data() }))
+        .filter(u => Array.isArray(u.perms) && (u.perms.includes('*') || u.perms.includes('users.manage')))
+        .filter(u => u.email && (!currentUser || u.email !== currentUser.email));
+    }
+    const supervisorNombre = (currentUser && (currentUser.displayName || currentUser.email)) || 'UN SUPERVISOR';
+    const refExcepcion = {
+      projectId: ctx.projectId,
+      towerId: ctx.towerId,
+      levelId: ctx.levelId,
+      aptoId: ctx.aptoId,
+      stageIdx: ctx.stageIdx
+    };
+    const title = 'EXCEPCIÓN DE PAGO SOLICITADA';
+    const fmtMonto = (typeof fQ === 'function') ? fQ(ctx.monto) : ('Q' + ctx.monto);
+    const body = `${supervisorNombre} pide pagar ${fmtMonto} a ${obrero} por ${a.name} · ${etapaNombre} sin acuse firmado. Motivo: "${razon}"`;
+    for (const adm of admins) {
+      try {
+        await addNotification({
+          forUser: adm.email,
+          type: 'pago_excepcion_solicitud',
+          title, body,
+          projectId: p.id,
+          refExcepcion
+        });
+      } catch(e) { console.warn('Notif a', adm.email, 'falló:', e); }
+    }
+    if (admins.length === 0) {
+      showToast('SOLICITUD GUARDADA · NO HAY ADMINS PARA NOTIFICAR', '');
+    }
+  } catch(e) {
+    console.error('Error notificando a admins:', e);
+  }
+
+  _excepcionPendingCtx = null;
+};
+
+window.abrirModalAprobarExcepcion = function(refExcepcion){
+  if (!refExcepcion) return;
+  const { projectId, towerId, levelId, aptoId, stageIdx } = refExcepcion;
+  const p = (state.projects||[]).find(x=>x.id===projectId);
+  const t = p && (p.towers||[]).find(x=>x.id===towerId);
+  const l = t && (t.levels||[]).find(x=>x.id===levelId);
+  const a = l && (l.aptos||[]).find(x=>x.id===aptoId);
+  if (!a) return showToast('APTO YA NO EXISTE', 'red');
+
+  const exc = a.pagoExcepciones && a.pagoExcepciones[String(stageIdx)];
+  if (!exc) return showToast('LA SOLICITUD YA NO EXISTE', 'red');
+
+  _excepcionAdminCtx = { projectId, towerId, levelId, aptoId, stageIdx };
+
+  const esAdmin = (typeof can === 'function') && can('users.manage');
+  const fmtMonto = (typeof fQ === 'function') ? fQ(exc.monto || 0) : ('Q' + (exc.monto||0));
+  const fechaSol = exc.solicitadoEn ? new Date(exc.solicitadoEn).toLocaleString('es-GT') : '—';
+
+  let estadoBox = '';
+  // Solo el admin puede aprobar/rechazar. Si no es admin, igual abrimos el modal pero sin botones de acción.
+  let mostrarBotones = esAdmin && (exc.estado === 'pendiente');
+  if (exc.estado === 'aprobada') {
+    const cuandoDec = exc.decididoEn ? new Date(exc.decididoEn).toLocaleString('es-GT') : '—';
+    estadoBox = `<div style="background:#DCFCE7;border:1px solid var(--green-dark);color:var(--green-dark);padding:10px 14px;border-radius:4px;font-size:11px;letter-spacing:.5px;margin-bottom:14px"><strong>YA FUE APROBADA</strong> POR ${exc.decididoPorNombre || exc.decididoPor || '—'} EL ${cuandoDec}.</div>`;
+  } else if (exc.estado === 'rechazada') {
+    const cuandoDec = exc.decididoEn ? new Date(exc.decididoEn).toLocaleString('es-GT') : '—';
+    estadoBox = `<div style="background:#FEE2E2;border:1px solid var(--red);color:var(--red);padding:10px 14px;border-radius:4px;font-size:11px;letter-spacing:.5px;margin-bottom:14px"><strong>YA FUE RECHAZADA</strong> POR ${exc.decididoPorNombre || exc.decididoPor || '—'} EL ${cuandoDec}.${exc.notaDecision ? '<br>NOTA: ' + exc.notaDecision : ''}</div>`;
+  } else if (exc.estado === 'usada') {
+    estadoBox = `<div style="background:var(--cream);border:1px solid var(--line);color:var(--mute);padding:10px 14px;border-radius:4px;font-size:11px;letter-spacing:.5px;margin-bottom:14px"><strong>YA FUE USADA</strong> — EL SUPERVISOR YA GENERÓ EL PAGO CON ESTA EXCEPCIÓN.</div>`;
+  }
+
+  document.getElementById('aprExcContent').innerHTML = `
+    ${estadoBox}
+    <div style="border:1px solid var(--line);border-left:3px solid var(--red);background:var(--cream);padding:12px 14px;border-radius:4px;margin-bottom:14px;font-size:11px;letter-spacing:.3px;line-height:1.7">
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px">
+        <strong>SOLICITADA POR:</strong><span>${exc.solicitadoPorNombre || exc.solicitadoPor || '—'}</span>
+        <strong>FECHA:</strong><span>${fechaSol}</span>
+        <strong>PROYECTO:</strong><span>${exc.proyectoNombre || (p && p.name) || '—'}</span>
+        <strong>TORRE / NIVEL:</strong><span>${(exc.torreNombre||'')} · ${(exc.nivelNombre||'')}</span>
+        <strong>APARTAMENTO:</strong><span>${exc.aptoNombre || a.name}</span>
+        <strong>ETAPA:</strong><span>${exc.etapaNombre || ('ETAPA ' + (stageIdx+1))}</span>
+        <strong>OBRERO:</strong><span>${exc.obrero || '—'}</span>
+        <strong>MONTO BRUTO:</strong><span style="font-weight:700;color:var(--ink)">${fmtMonto}</span>
+      </div>
+    </div>
+    <div style="background:#FEF3C7;border:1px solid var(--cafe);padding:12px 14px;border-radius:4px;margin-bottom:14px">
+      <div style="font-size:9px;font-weight:700;letter-spacing:1.4px;color:var(--cafe);margin-bottom:6px">MOTIVO DEL SUPERVISOR</div>
+      <div style="font-size:12px;line-height:1.5;color:var(--ink)">${(exc.razon||'—').replace(/</g,'&lt;')}</div>
+    </div>
+  `;
+
+  document.getElementById('aprExcRechazoBox').style.display = mostrarBotones ? 'block' : 'none';
+  document.getElementById('aprExcAprobarBtn').style.display = mostrarBotones ? 'inline-flex' : 'none';
+  document.getElementById('aprExcRechazarBtn').style.display = mostrarBotones ? 'inline-flex' : 'none';
+  document.getElementById('aprExcNota').value = '';
+  document.getElementById('modalAprobarExcepcion').classList.add('show');
+};
+
+window.aprobarExcepcionUI = async function(){
+  if (!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR', 'red');
+  if (!_excepcionAdminCtx) return;
+  const { projectId, towerId, levelId, aptoId, stageIdx } = _excepcionAdminCtx;
+  const p = (state.projects||[]).find(x=>x.id===projectId);
+  const t = p && (p.towers||[]).find(x=>x.id===towerId);
+  const l = t && (t.levels||[]).find(x=>x.id===levelId);
+  const a = l && (l.aptos||[]).find(x=>x.id===aptoId);
+  if (!a) return;
+  const exc = a.pagoExcepciones && a.pagoExcepciones[String(stageIdx)];
+  if (!exc || exc.estado !== 'pendiente') return showToast('LA SOLICITUD YA FUE RESPONDIDA', 'red');
+
+  if (!confirm(`¿APROBAR LA EXCEPCIÓN?\n\nEl supervisor ${exc.solicitadoPorNombre || exc.solicitadoPor} podrá generar el pago de ${a.name} · ${exc.etapaNombre || ('ETAPA ' + (stageIdx+1))} sin que el cliente haya firmado el acuse.\n\nEl pago quedará marcado como "PAGADO SIN ACUSE" hasta que el receptor firme.`)) return;
+
+  exc.estado = 'aprobada';
+  exc.decididoPor = (currentUser && currentUser.email) || '';
+  exc.decididoPorNombre = (currentUser && (currentUser.displayName || currentUser.email)) || '';
+  exc.decididoEn = Date.now();
+  saveState();
+  closeModal('aprobarExcepcion');
+  showToast('EXCEPCIÓN APROBADA — SE NOTIFICÓ AL SUPERVISOR', 'green');
+  logActivity('approve', 'Excepción de pago aprobada', `${p.name} · ${a.name} · ${exc.etapaNombre || ('ETAPA ' + (stageIdx+1))} · ${exc.obrero || '—'}`);
+
+  // Notificar al supervisor
+  try {
+    if (exc.solicitadoPor) {
+      await addNotification({
+        forUser: exc.solicitadoPor,
+        type: 'pago_excepcion_decision',
+        title: 'EXCEPCIÓN APROBADA',
+        body: `Ya podés generar el pago de ${a.name} · ${exc.etapaNombre || ('ETAPA ' + (stageIdx+1))} sin acuse. Recordá que el cliente todavía debe firmar después.`,
+        projectId: p.id,
+        refExcepcion: { projectId, towerId, levelId, aptoId, stageIdx }
+      });
+    }
+  } catch(e) { console.warn('No se pudo avisar al supervisor:', e); }
+};
+
+window.rechazarExcepcionUI = async function(){
+  if (!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR', 'red');
+  if (!_excepcionAdminCtx) return;
+  const { projectId, towerId, levelId, aptoId, stageIdx } = _excepcionAdminCtx;
+  const p = (state.projects||[]).find(x=>x.id===projectId);
+  const t = p && (p.towers||[]).find(x=>x.id===towerId);
+  const l = t && (t.levels||[]).find(x=>x.id===levelId);
+  const a = l && (l.aptos||[]).find(x=>x.id===aptoId);
+  if (!a) return;
+  const exc = a.pagoExcepciones && a.pagoExcepciones[String(stageIdx)];
+  if (!exc || exc.estado !== 'pendiente') return showToast('LA SOLICITUD YA FUE RESPONDIDA', 'red');
+
+  const nota = (document.getElementById('aprExcNota').value || '').trim();
+  if (!confirm(`¿RECHAZAR LA EXCEPCIÓN?\n\nEl supervisor NO podrá pagar esa etapa hasta que el cliente firme el acuse.`)) return;
+
+  exc.estado = 'rechazada';
+  exc.decididoPor = (currentUser && currentUser.email) || '';
+  exc.decididoPorNombre = (currentUser && (currentUser.displayName || currentUser.email)) || '';
+  exc.decididoEn = Date.now();
+  exc.notaDecision = nota || null;
+  saveState();
+  closeModal('aprobarExcepcion');
+  showToast('EXCEPCIÓN RECHAZADA — SE NOTIFICÓ AL SUPERVISOR', '');
+  logActivity('reject', 'Excepción de pago rechazada', `${p.name} · ${a.name} · ${exc.etapaNombre || ('ETAPA ' + (stageIdx+1))}${nota ? ' · NOTA: ' + nota : ''}`);
+
+  // Notificar al supervisor
+  try {
+    if (exc.solicitadoPor) {
+      await addNotification({
+        forUser: exc.solicitadoPor,
+        type: 'pago_excepcion_decision',
+        title: 'EXCEPCIÓN RECHAZADA',
+        body: `No vas a poder pagar ${a.name} · ${exc.etapaNombre || ('ETAPA ' + (stageIdx+1))} hasta que el cliente firme el acuse.${nota ? ' NOTA: ' + nota : ''}`,
+        projectId: p.id,
+        refExcepcion: { projectId, towerId, levelId, aptoId, stageIdx }
+      });
+    }
+  } catch(e) { console.warn('No se pudo avisar al supervisor:', e); }
+};
 
 /* ═══════════════════════════════════════════════════════════════
    RECEPTORES + ACUSES DIGITALES VÍA QR
