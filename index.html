@@ -3923,13 +3923,23 @@ function logActivity(type, title, desc){
    trazabilidad en tiempo real. */
 let _adminEmailsCache = null;
 let _adminEmailsCacheTs = 0;
+let _allUsersCache = null;          // [{email, username, displayName, perms, ...}]
+let _allUsersCacheTs = 0;
 const _ADMIN_CACHE_TTL_MS = 5 * 60 * 1000; // 5 min
 
 async function _getAdminEmails(){
-  // Cache para no consultar Firestore en cada acción.
+  const list = await _getAllUsersList();
+  return list
+    .filter(u => Array.isArray(u.perms) && (u.perms.includes('*') || u.perms.includes('users.manage')))
+    .map(u => u.email)
+    .filter(Boolean);
+}
+
+/* Trae la lista cacheada de TODOS los usuarios (con sus perms y emails). */
+async function _getAllUsersList(){
   const now = Date.now();
-  if (_adminEmailsCache && (now - _adminEmailsCacheTs) < _ADMIN_CACHE_TTL_MS) {
-    return _adminEmailsCache;
+  if (_allUsersCache && (now - _allUsersCacheTs) < _ADMIN_CACHE_TTL_MS) {
+    return _allUsersCache;
   }
   try {
     if (typeof firebase === 'undefined' || !firebase.firestore) return [];
@@ -3937,18 +3947,64 @@ async function _getAdminEmails(){
     const list = [];
     snap.forEach(d => {
       const u = d.data();
-      if (!u || !u.email) return;
-      if (Array.isArray(u.perms) && (u.perms.includes('*') || u.perms.includes('users.manage'))) {
-        list.push(u.email);
-      }
+      if (u && u.email) list.push(u);
     });
-    _adminEmailsCache = list;
-    _adminEmailsCacheTs = now;
+    _allUsersCache = list;
+    _allUsersCacheTs = now;
     return list;
   } catch(e) {
-    console.warn('_getAdminEmails:', e && e.message);
-    return _adminEmailsCache || [];
+    console.warn('_getAllUsersList:', e && e.message);
+    return _allUsersCache || [];
   }
+}
+
+/* Notifica a TODOS los usuarios que tienen un permiso específico (excluye al que
+   está actuando para no auto-notificarse). Útil para "cuando un user hace X, avisar
+   a todos los del rol que sigue en el flujo".
+
+   Uso típico:
+     _notifyByPerm('compras.autorizar', { type, title, body, projectId, refPedidoId })
+*/
+async function _notifyByPerm(perm, payload){
+  if (!perm || !payload) return;
+  const list = await _getAllUsersList();
+  const u = currentUser;
+  const myEmail = u && u.email;
+  const targets = list.filter(usr =>
+    Array.isArray(usr.perms) &&
+    (usr.perms.includes(perm) || usr.perms.includes('*'))
+  );
+  for (const usr of targets) {
+    if (myEmail && usr.email === myEmail) continue; // no autonotificar
+    try {
+      await addNotification({ forUser: usr.email, ...payload });
+    } catch(e){}
+  }
+}
+
+/* Notifica a un usuario específico por su username (lowercase). Si no hay match,
+   no hace nada. */
+async function _notifyByUsername(username, payload){
+  if (!username || !payload) return;
+  const target = String(username).toLowerCase().trim();
+  const u = currentUser;
+  if (u && (u.username || '').toLowerCase() === target) return; // no autonotificar
+  const list = await _getAllUsersList();
+  const usr = list.find(x => (x.username || '').toLowerCase() === target);
+  if (!usr || !usr.email) return;
+  try {
+    await addNotification({ forUser: usr.email, ...payload });
+  } catch(e){}
+}
+
+/* Notifica directamente por email. */
+async function _notifyByEmail(email, payload){
+  if (!email || !payload) return;
+  const u = currentUser;
+  if (u && u.email === email) return;
+  try {
+    await addNotification({ forUser: email, ...payload });
+  } catch(e){}
 }
 
 async function _notifyAdminsOfActivity(type, title, desc){
@@ -7909,6 +7965,47 @@ function advancePedido(id){
   const actType = pd.status === 'RECIBIDO' ? 'paid' : pd.status === 'APROBADO' ? 'auth' : 'update';
   logActivity(actType, `Pedido ${pd.numero}: ${pd.status}`, `${p.name} · ${getCurrentUser()?.displayName || 'SISTEMA'}`);
 
+  // ── Notificaciones según el nuevo estado ──
+  try {
+    const numeroP = pd.numero;
+    const projectName = p.name;
+    if (pd.status === 'EN COMPRA') {
+      // El equipo de compras está procesando — avisar al solicitante.
+      _notifyByUsername(pd.solicitanteUsername, {
+        type: 'pedido_en_compras',
+        title: 'TU PEDIDO ENTRÓ A COMPRAS',
+        body: `${numeroP} está en proceso de aprobación · ${projectName}`,
+        projectId: p.id,
+        refPedidoId: pd.id
+      }).catch(()=>{});
+    } else if (pd.status === 'APROBADO') {
+      // OC ya generada — avisar a Finanzas para autorizar + al solicitante.
+      _notifyByPerm('compras.autorizar', {
+        type: 'oc_pendiente_autorizacion',
+        title: 'OC PENDIENTE DE AUTORIZAR',
+        body: `${numeroP} aprobado por compras — falta autorización de Finanzas · ${projectName}`,
+        projectId: p.id,
+        refPedidoId: pd.id
+      }).catch(()=>{});
+      _notifyByUsername(pd.solicitanteUsername, {
+        type: 'pedido_aprobado',
+        title: 'TU PEDIDO FUE APROBADO',
+        body: `${numeroP} aprobado por compras · esperando OC autorizada`,
+        projectId: p.id,
+        refPedidoId: pd.id
+      }).catch(()=>{});
+    } else if (pd.status === 'RECIBIDO') {
+      // Solicitante recibió el material — avisar a compras y finanzas.
+      _notifyByPerm('pedidos.advance', {
+        type: 'pedido_recibido',
+        title: 'PEDIDO MARCADO COMO RECIBIDO',
+        body: `${numeroP} confirmado como recibido por ${pd.solicitante || 'el solicitante'} · ${projectName}`,
+        projectId: p.id,
+        refPedidoId: pd.id
+      }).catch(()=>{});
+    }
+  } catch(e){}
+
   saveState();
   renderPedidosList();
   showToast(`PEDIDO ${pd.status}`, pd.status === 'RECIBIDO' ? 'green' : '');
@@ -8410,6 +8507,17 @@ function submitPedido(){
   const extraLabel = validExtras.length > 0 ? ` (${validExtras.length} extraordinario${validExtras.length!==1?'s':''})` : '';
   const metalLabel = validMetal.length > 0 ? ` · ${validMetal.length} fabricación${validMetal.length!==1?'es':''} metal` : '';
   logActivity('create', `Pedido ${numero} creado`, `${p.name} · ${totalCount} materiales${extraLabel}${metalLabel} · ${solicitante}`);
+
+  // ── Notificar al equipo de COMPRAS (los que pueden avanzar pedidos) ──
+  try {
+    _notifyByPerm('pedidos.advance', {
+      type: 'pedido_nuevo',
+      title: 'NUEVO PEDIDO PARA REVISAR',
+      body: `${solicitante} solicitó ${numero} · ${p.name}${aptoLabel ? ' · ' + aptoLabel : ''} · ${totalCount} material${totalCount === 1 ? '' : 'es'}`,
+      projectId: p.id,
+      refPedidoId: pedido.id
+    }).catch(()=>{});
+  } catch(e){}
 
   saveState();
 
@@ -9093,6 +9201,26 @@ function generarOrdenCompra(){
 
   const proveedoresTxt = created.map(oc => oc.proveedorNombre).join(' · ');
   logActivity('create', `${created.length} OC generadas por proveedor para pedido ${pd.numero}`, `${p.name} · ${proveedoresTxt}`);
+
+  // ── Notificar a Finanzas (compras.autorizar) — tienen OC pendiente de autorizar ──
+  try {
+    _notifyByPerm('compras.autorizar', {
+      type: 'oc_pendiente_autorizacion',
+      title: 'OC PARA AUTORIZAR',
+      body: `${created.length} orden${created.length !== 1 ? 'es' : ''} de compra del pedido ${pd.numero} esperando autorización · ${proveedoresTxt}`,
+      projectId: p.id,
+      refPedidoId: pd.id
+    }).catch(()=>{});
+    // Y avisar al solicitante que su pedido ya tiene OC generada.
+    _notifyByUsername(pd.solicitanteUsername, {
+      type: 'pedido_oc_generada',
+      title: 'TU PEDIDO YA TIENE ORDEN DE COMPRA',
+      body: `${pd.numero} · ${created.length} OC generada${created.length !== 1 ? 's' : ''} · esperando autorización de Finanzas`,
+      projectId: p.id,
+      refPedidoId: pd.id
+    }).catch(()=>{});
+  } catch(e){}
+
   saveState();
 
   closeModal('ordenCompra');
@@ -13306,9 +13434,19 @@ function deleteCurrentProveedor(){
 
     logActivity('create',
       `Pago planilla generado${pagoSinAcuse ? ' (SIN ACUSE)' : ''}`,
-      `${p.name} · ${a.name} · ETAPA ${stageIdx+1} · ${colaborador.toUpperCase()} · ${fQ(neto)}${pagoSinAcuse ? ' · ⚠ FALTA ACUSE' : ''}`);
+      `${p.name} · ${a.name} · ETAPA ${stageIdx+1} · ${colaborador.toUpperCase()} · ${fQ(neto)}${pagoSinAcuse ? ' · FALTA ACUSE' : ''}`);
     saveState(); renderPlanilla();
     showToast(pagoSinAcuse ? 'PAGO GENERADO · ¡FALTA ACUSE!' : 'PAGO GENERADO · PENDIENTE AUTORIZACIÓN', pagoSinAcuse ? '' : 'green');
+
+    // ── Notif a Finanzas (planilla.authorize) — hay pago pendiente de autorizar ──
+    try {
+      _notifyByPerm('planilla.authorize', {
+        type: 'pago_pendiente_autorizacion',
+        title: 'PAGO DE PLANILLA PARA AUTORIZAR',
+        body: `${a.name} · ETAPA ${stageIdx+1} · ${colaborador.toUpperCase()} · ${fQ(neto)} · ${p.name}${pagoSinAcuse ? ' · SIN ACUSE' : ''}`,
+        projectId: p.id
+      }).catch(()=>{});
+    } catch(e){}
   };
 
   window.autorizarPagoPlanilla = function(id){
@@ -13317,6 +13455,20 @@ function deleteCurrentProveedor(){
     pg.autorizado = true; pg.autorizadoPor = (getCurrentUser()?.displayName || getCurrentUser()?.username || '').toUpperCase(); pg.autorizadoTs = Date.now();
     logActivity('auth', `Pago planilla autorizado`, `${p.name} · ${pg.aptoName||pg.tipo} · ${pg.colaborador||''}`);
     saveState(); renderPlanilla(); showToast('PAGO AUTORIZADO','green');
+
+    // ── Notif al supervisor que generó el pago — para que sepa que se autorizó ──
+    try {
+      // Buscar al supervisor que originó el pago. Si el pago tiene `colaborador` username, usamos eso.
+      // Si no, intentamos por displayName/email del actor original (no siempre se guarda — best-effort).
+      // Para robustez, notificamos a todos los que tengan permiso planilla.generate (los que crean pagos).
+      _notifyByPerm('planilla.generate', {
+        type: 'pago_autorizado',
+        title: 'PAGO AUTORIZADO',
+        body: `${pg.aptoName || pg.tipo} · ${pg.colaborador || ''} · ${fQ(pg.neto || pg.monto || 0)} · ${p.name}`,
+        projectId: p.id
+      }).catch(()=>{});
+    } catch(e){}
+
     // Tras autorizar, vemos si ya hay volumen para presentar estimación.
     try { window.chequearYNotificarEstimacion(p); } catch(e) { console.warn(e); }
   };
