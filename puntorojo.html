@@ -1426,6 +1426,9 @@ html,body,.main{background:#FFFFFF!important;}
         <button class="mat-tab" data-cobrotab="avance" onclick="setCobroSubTab('avance')">AVANCE DE COBRO POR APTO</button>
       </div>
 
+      <!-- Banner: avance ya listo para presentar estimación -->
+      <div id="estimacionListaBanner"></div>
+
       <div class="kpi-grid" id="cobroKpis"></div>
 
       <div class="card">
@@ -1845,6 +1848,7 @@ html,body,.main{background:#FFFFFF!important;}
       <div class="field"><label>RETENCIÓN %</label><input id="epRet" type="number" step="0.01"></div>
       <div class="field"><label>DESCUENTO AUTORIZADO (Q)</label><input id="epDescuento" type="number" step="0.01"></div>
       <div class="field"><label>DÍAS PARA PAGAR FACTURA</label><input id="epDiasPago" type="number" min="1" step="1" value="30"><div class="hint">Cuántos días después de emitir la factura el cliente tiene para pagar. Si pasa más tiempo, la app marca la estimación como vencida.</div></div>
+      <div class="field"><label>UMBRAL DE ETAPAS PARA NOTIFICAR ESTIMACIÓN</label><input id="epUmbralEst" type="number" min="1" step="1" value="18"><div class="hint">Cantidad de etapas terminadas (pago autorizado + acuse firmado) que disparan la notif "ya podés presentar una estimación". Default 18 = 3 aptos completos.</div></div>
     </div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="closeModal('editProject')">CANCELAR</button>
@@ -2530,6 +2534,23 @@ html,body,.main{background:#FFFFFF!important;}
   </div>
 </div>
 
+<!-- ════════ MODAL: ETAPAS LISTAS PARA ESTIMACIÓN ════════ -->
+<div class="modal-bg" id="modalEtapasListas" onclick="closeModalBg(event,'etapasListas')">
+  <div class="modal" style="max-width:720px">
+    <h3>ETAPAS LISTAS PARA ESTIMACIÓN</h3>
+    <p class="desc">Estas son las etapas que ya tienen <strong>pago autorizado al obrero</strong> y <strong>acuse firmado por el cliente</strong>, pero todavía no fueron incluidas en una estimación. Marcalas como facturadas cuando las metas en la próxima estimación.</p>
+
+    <div id="etapasListasResumen" style="display:flex;align-items:center;gap:14px;padding:12px 14px;background:var(--cream);border-left:3px solid var(--green-dark);border-radius:4px;margin-bottom:14px;font-size:11px;letter-spacing:.4px"></div>
+
+    <div id="etapasListasLista" style="max-height:55vh;overflow-y:auto;border:1px solid var(--line);border-radius:4px"></div>
+
+    <div class="modal-actions" style="margin-top:14px">
+      <button class="btn ghost" onclick="closeModal('etapasListas')">CERRAR</button>
+      <button class="btn" id="btnMarcarTodasFacturadas" onclick="marcarTodasComoFacturadas()" style="background:var(--green-dark);color:#fff;border:none">MARCAR TODAS COMO FACTURADAS</button>
+    </div>
+  </div>
+</div>
+
 <!-- ════════ MODAL: APROBAR/RECHAZAR EXCEPCIÓN (admin) ════════ -->
 <div class="modal-bg" id="modalAprobarExcepcion" onclick="closeModalBg(event,'aprobarExcepcion')">
   <div class="modal" style="max-width:580px">
@@ -2923,7 +2944,7 @@ async function findUidByEmail(email){
   return null;
 }
 
-async function addNotification({ forUser, type, title, body, refPedidoId, refOcId, projectId, refExcepcion }){
+async function addNotification({ forUser, type, title, body, refPedidoId, refOcId, projectId, refExcepcion, refEstimacionLista }){
   if (!forUser) return;
   if (!firebase.firestore) return;
   try {
@@ -2940,6 +2961,7 @@ async function addNotification({ forUser, type, title, body, refPedidoId, refOcI
         refPedidoId: refPedidoId || null,
         refOcId: refOcId || null,
         refExcepcion: refExcepcion || null,
+        refEstimacionLista: refEstimacionLista || null,
         projectId: projectId || null,
         ts: firebase.firestore.FieldValue.serverTimestamp(),
         read: false,
@@ -3726,6 +3748,21 @@ function handleNotifClick(id){
     return;
   }
 
+  // ── Notif "ya podés presentar estimación" — abrir el modal de detalle de etapas listas ──
+  if (n.refEstimacionLista) {
+    if (n.projectId && n.projectId !== state.activeProjectId) {
+      try { setActiveProject(n.projectId); } catch(e){}
+    }
+    closeModal('notifs');
+    setTimeout(() => {
+      try {
+        if (typeof setView === 'function') setView('cobro');
+        if (typeof window.abrirModalEtapasListas === 'function') window.abrirModalEtapasListas();
+      } catch(e){ console.error(e); }
+    }, 150);
+    return;
+  }
+
   // Si apunta a un pedido, ir al detalle
   if (n.refPedidoId) {
     // Cambiar al proyecto si aplica
@@ -4089,7 +4126,14 @@ function ensureDataV9(data){
       }
       // Excepciones de pago sin acuse (apto.pagoExcepciones[stageIdx])
       if (!a.pagoExcepciones || typeof a.pagoExcepciones !== 'object') a.pagoExcepciones = {};
+      // Etapas marcadas como ya incluidas en una estimación facturada al cliente.
+      // Estructura: { '0': { ts, por, nota }, '1': {...}, ... }
+      if (!a.facturadoEnEstimacion || typeof a.facturadoEnEstimacion !== 'object') a.facturadoEnEstimacion = {};
     })));
+    // Umbral de etapas listas que dispara la notif "ya podés presentar estimación" (default 18 = 3 aptos completos)
+    if (p.umbralEstimacion === undefined || p.umbralEstimacion === null) p.umbralEstimacion = 18;
+    // Para anti-spam de la notif: cantidad de etapas listas en el momento de la última notif.
+    if (typeof p.estimacionUltimaNotifEtapas !== 'number') p.estimacionUltimaNotifEtapas = 0;
     p.materiales.pedidos.forEach(pd => {
       if (pd.proyectoManual === undefined) pd.proyectoManual = false;
       if (pd.proyectoPedido === undefined) pd.proyectoPedido = p.name;
@@ -8954,6 +8998,8 @@ function openEditProjectModal(){
   document.getElementById('epRet').value = ((p.retencionPct || 0) * 100).toFixed(2);
   document.getElementById('epDescuento').value = Number(p.descuentoAutorizado || 0).toFixed(2);
   document.getElementById('epDiasPago').value = Number(p.diasPagoFactura || 30);
+  const umbralEl = document.getElementById('epUmbralEst');
+  if (umbralEl) umbralEl.value = Number(p.umbralEstimacion || 18);
   document.getElementById('modalEditProject').classList.add('show');
 }
 
@@ -8978,6 +9024,8 @@ function saveProjectSpecs(){
   p.retencionPct = (Number(document.getElementById('epRet').value) || 0) / 100;
   p.descuentoAutorizado = Math.max(0, Number(document.getElementById('epDescuento').value) || 0);
   p.diasPagoFactura = Math.max(1, Number(document.getElementById('epDiasPago').value) || 30);
+  const umbralVal = Number(document.getElementById('epUmbralEst') && document.getElementById('epUmbralEst').value) || 18;
+  p.umbralEstimacion = Math.max(1, umbralVal);
   saveState();
   closeModal('editProject');
   renderAll();
@@ -11356,7 +11404,11 @@ function deleteCurrentProveedor(){
   };
 
   const _renderCobro = renderCobro;
-  window.renderCobro = renderCobro = function(){ _renderCobro(); setCobroSubTab(window.currentCobroSubTab || 'estimaciones', true); };
+  window.renderCobro = renderCobro = function(){
+    _renderCobro();
+    setCobroSubTab(window.currentCobroSubTab || 'estimaciones', true);
+    try { if (typeof window.renderEstimacionListaBanner === 'function') window.renderEstimacionListaBanner(); } catch(e){}
+  };
 
   window.currentCobroSubTab = 'estimaciones';
   window.setCobroSubTab = function(tab, silent){
@@ -12596,6 +12648,253 @@ function deleteCurrentProveedor(){
     pg.autorizado = true; pg.autorizadoPor = (getCurrentUser()?.displayName || getCurrentUser()?.username || '').toUpperCase(); pg.autorizadoTs = Date.now();
     logActivity('auth', `Pago planilla autorizado`, `${p.name} · ${pg.aptoName||pg.tipo} · ${pg.colaborador||''}`);
     saveState(); renderPlanilla(); showToast('PAGO AUTORIZADO','green');
+    // Tras autorizar, vemos si ya hay volumen para presentar estimación.
+    try { window.chequearYNotificarEstimacion(p); } catch(e) { console.warn(e); }
+  };
+
+  /* ─────── DETECCIÓN DE VOLUMEN PARA PRESENTAR ESTIMACIÓN ───────
+     Una etapa cuenta como LISTA si:
+       - Existe un pago en p.planilla.pagos con autorizado:true para ese aptoId+stageIdx
+       - El receptor firmó el acuse de esa etapa
+       - La etapa NO está marcada como ya facturada (a.facturadoEnEstimacion[stageIdx])
+     Cuando el total de etapas listas en el proyecto cruza el umbral configurado
+     (default 18 = ~3 aptos completos), notificamos al admin. La notif vuelve a
+     dispararse cada +UMBRAL etapas adicionales para evitar spam. */
+
+  window.contarEtapasListasParaEstimacion = function(p){
+    if (!p) return { total: 0, porApto: [] };
+    const pagos = (p.planilla && p.planilla.pagos) || [];
+    const porApto = [];
+    let total = 0;
+    (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
+      let cnt = 0;
+      const etapasListas = [];
+      for (let i = 0; i < 6; i++) {
+        const yaFacturada = !!(a.facturadoEnEstimacion && a.facturadoEnEstimacion[String(i)]);
+        if (yaFacturada) continue;
+        const tieneAcuse = (typeof window.tieneAcuseFirmado === 'function') ? window.tieneAcuseFirmado(a, i) : false;
+        if (!tieneAcuse) continue;
+        const tienePagoAutorizado = pagos.some(pg => pg.tipo === 'ETAPA' && pg.aptoId === a.id && pg.stageIdx === i && pg.autorizado);
+        if (!tienePagoAutorizado) continue;
+        cnt++;
+        etapasListas.push(i);
+      }
+      if (cnt > 0) {
+        porApto.push({
+          aptoId: a.id, aptoNombre: a.name,
+          torreId: t.id, torreNombre: t.name,
+          levelId: l.id, levelNombre: l.name,
+          count: cnt, etapas: etapasListas
+        });
+        total += cnt;
+      }
+    })));
+    return { total, porApto };
+  };
+
+  window.chequearYNotificarEstimacion = async function(p){
+    if (!p) return;
+    const umbral = Number(p.umbralEstimacion || 18) || 18;
+    const baseline = Number(p.estimacionUltimaNotifEtapas || 0) || 0;
+    const { total, porApto } = window.contarEtapasListasParaEstimacion(p);
+
+    // Re-render del banner si está visible (la pantalla COBRO lo muestra siempre)
+    try { if (typeof window.renderEstimacionListaBanner === 'function') window.renderEstimacionListaBanner(); } catch(e){}
+
+    // Si el total bajó por debajo del baseline (porque marcaron etapas como facturadas), bajamos el baseline.
+    if (total < baseline) {
+      p.estimacionUltimaNotifEtapas = total;
+      saveState();
+      return;
+    }
+
+    // ¿Cruzamos otro múltiplo del umbral desde la última notif?
+    const tramosNuevos = Math.floor((total - baseline) / umbral);
+    if (tramosNuevos < 1) return; // todavía no hay suficiente volumen nuevo
+
+    // Tomamos los aptos con más etapas listas para mostrar en la notif (top 5)
+    const top = [...porApto].sort((a,b) => b.count - a.count).slice(0, 5);
+    const topTxt = top.map(x => `${x.aptoNombre} (${x.count})`).join(', ');
+    const masTxt = (porApto.length > top.length) ? ` y ${porApto.length - top.length} apto(s) más` : '';
+    const title = 'YA PODÉS PRESENTAR UNA ESTIMACIÓN';
+    const body = `Hay ${total} etapas terminadas y pagadas en ${p.name} que aún no fueron facturadas. Volumen suficiente para una nueva estimación. Aptos: ${topTxt}${masTxt}.`;
+
+    // Marcamos el baseline ANTES de mandar la notif para evitar duplicados si hay errores async.
+    p.estimacionUltimaNotifEtapas = baseline + tramosNuevos * umbral;
+    saveState();
+
+    // Notif a TODOS los admins
+    try {
+      let admins = [];
+      if (typeof firebase !== 'undefined' && firebase.firestore) {
+        const snap = await firebase.firestore().collection('users').get();
+        admins = snap.docs
+          .map(d => ({ uid: d.id, ...d.data() }))
+          .filter(u => Array.isArray(u.perms) && (u.perms.includes('*') || u.perms.includes('users.manage')));
+      }
+      const refEstimacionLista = { projectId: p.id };
+      for (const adm of admins) {
+        try {
+          await addNotification({
+            forUser: adm.email,
+            type: 'estimacion_lista',
+            title, body,
+            projectId: p.id,
+            refEstimacionLista
+          });
+        } catch(e) { console.warn('Notif estim lista a', adm.email, 'falló:', e); }
+      }
+    } catch(e) { console.error('Error notificando estimación lista:', e); }
+  };
+
+  /* Banner permanente que se renderiza arriba del dashboard de COBRO. Llamarlo desde renderCobro o equivalente. */
+  window.renderEstimacionListaBanner = function(){
+    const cont = document.getElementById('estimacionListaBanner');
+    if (!cont) return;
+    const p = activeProj();
+    if (!p) { cont.innerHTML = ''; return; }
+    const { total, porApto } = window.contarEtapasListasParaEstimacion(p);
+    const umbral = Number(p.umbralEstimacion || 18) || 18;
+
+    if (total === 0) {
+      cont.innerHTML = '';
+      return;
+    }
+
+    const cumplido = (total >= umbral);
+    const colorPrincipal = cumplido ? 'var(--green-dark)' : 'var(--cafe)';
+    const fondo = cumplido ? '#DCFCE7' : 'var(--cream)';
+    const titulo = cumplido ? 'YA PODÉS PRESENTAR UNA ESTIMACIÓN' : 'AVANCE LISTO PARA FACTURAR';
+    const sub = cumplido
+      ? `${total} etapas terminadas y pagadas en ${porApto.length} apto(s) — volumen suficiente (umbral: ${umbral}).`
+      : `${total} etapa(s) listas en ${porApto.length} apto(s). Faltan ${umbral - total} para llegar al umbral de notificación (${umbral}).`;
+
+    cont.innerHTML = `
+      <div style="display:flex;align-items:center;gap:14px;padding:12px 16px;background:${fondo};border:1px solid var(--line);border-left:4px solid ${colorPrincipal};border-radius:4px;margin-bottom:14px">
+        <div style="flex:1">
+          <div style="font-size:11px;font-weight:700;letter-spacing:1.2px;color:${colorPrincipal};margin-bottom:2px">● ${titulo}</div>
+          <div style="font-size:10px;color:var(--ink);letter-spacing:.4px;line-height:1.5">${sub}</div>
+        </div>
+        <button class="btn sm" onclick="abrirModalEtapasListas()">VER DETALLE</button>
+      </div>
+    `;
+  };
+
+  window.abrirModalEtapasListas = function(){
+    const p = activeProj();
+    if (!p) return;
+    const { total, porApto } = window.contarEtapasListasParaEstimacion(p);
+    const umbral = Number(p.umbralEstimacion || 18) || 18;
+
+    const resumen = document.getElementById('etapasListasResumen');
+    if (resumen) {
+      resumen.innerHTML = `
+        <div style="font-size:24px;font-weight:700;color:var(--green-dark);min-width:54px;text-align:center">${total}</div>
+        <div style="flex:1">
+          <div style="font-size:11px;font-weight:700;letter-spacing:.6px;color:var(--ink)">ETAPAS LISTAS PARA ESTIMACIÓN</div>
+          <div style="font-size:9.5px;color:var(--mute);letter-spacing:.5px;margin-top:2px">DISTRIBUIDAS EN ${porApto.length} APTO(S) · UMBRAL DE NOTIFICACIÓN: ${umbral}</div>
+        </div>
+      `;
+    }
+
+    const lista = document.getElementById('etapasListasLista');
+    if (!lista) return;
+
+    if (total === 0) {
+      lista.innerHTML = `<div class="empty" style="padding:30px;text-align:center;font-size:11px;letter-spacing:.5px">SIN ETAPAS LISTAS — TODAVÍA NADA QUE FACTURAR</div>`;
+      const btnAll = document.getElementById('btnMarcarTodasFacturadas');
+      if (btnAll) btnAll.style.display = 'none';
+      return;
+    }
+    const btnAll = document.getElementById('btnMarcarTodasFacturadas');
+    if (btnAll) btnAll.style.display = 'inline-flex';
+
+    const etapaShortName = (i) => (typeof ETAPAS_INFO !== 'undefined' && ETAPAS_INFO[i]) ? ETAPAS_INFO[i].name : ('ETAPA ' + (i+1));
+
+    lista.innerHTML = porApto.map(item => `
+      <div style="border-bottom:1px solid var(--line-soft);padding:11px 14px;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center">
+        <div>
+          <div style="font-size:12px;font-weight:700;color:var(--ink);letter-spacing:.3px;text-transform:uppercase">${item.aptoNombre}</div>
+          <div style="font-size:9.5px;color:var(--mute);letter-spacing:.5px;margin-top:2px;text-transform:uppercase">${item.torreNombre} · ${item.levelNombre}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px">
+            ${item.etapas.map(i => `<span style="display:inline-block;padding:2px 7px;font-size:8.5px;letter-spacing:.5px;background:#DCFCE7;color:var(--green-dark);border-radius:3px;font-weight:600">E${i+1} · ${etapaShortName(i)}</span>`).join('')}
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+          <div style="font-size:18px;font-weight:700;color:var(--green-dark);line-height:1">${item.count}</div>
+          <button class="btn ghost sm" onclick="marcarAptoComoFacturado('${item.aptoId}')">MARCAR FACTURADAS</button>
+        </div>
+      </div>
+    `).join('');
+
+    document.getElementById('modalEtapasListas').classList.add('show');
+  };
+
+  window.marcarAptoComoFacturado = function(aptoId){
+    if (!can('cobro.edit') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
+    const p = activeProj();
+    if (!p) return;
+    let aptoTarget = null, etapasMarcadas = [];
+    (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
+      if (a.id !== aptoId) return;
+      aptoTarget = a;
+      if (!a.facturadoEnEstimacion) a.facturadoEnEstimacion = {};
+      const pagos = (p.planilla && p.planilla.pagos) || [];
+      for (let i = 0; i < 6; i++) {
+        if (a.facturadoEnEstimacion[String(i)]) continue;
+        const tieneAcuse = (typeof window.tieneAcuseFirmado === 'function') ? window.tieneAcuseFirmado(a, i) : false;
+        const tienePagoAut = pagos.some(pg => pg.tipo === 'ETAPA' && pg.aptoId === a.id && pg.stageIdx === i && pg.autorizado);
+        if (tieneAcuse && tienePagoAut) {
+          a.facturadoEnEstimacion[String(i)] = {
+            ts: Date.now(),
+            por: (currentUser && (currentUser.displayName || currentUser.email)) || '',
+            porEmail: (currentUser && currentUser.email) || ''
+          };
+          etapasMarcadas.push(i);
+        }
+      }
+    })));
+    if (!aptoTarget) return;
+    if (etapasMarcadas.length === 0) { showToast('NO HABÍA ETAPAS LISTAS QUE MARCAR', ''); return; }
+    saveState();
+    logActivity('update', 'Etapas marcadas como facturadas', `${p.name} · ${aptoTarget.name} · etapas ${etapasMarcadas.map(i=>i+1).join(', ')}`);
+    showToast(`${etapasMarcadas.length} ETAPA(S) MARCADAS COMO FACTURADAS`, 'green');
+    // Re-render del modal
+    window.abrirModalEtapasListas();
+    if (typeof window.renderEstimacionListaBanner === 'function') window.renderEstimacionListaBanner();
+  };
+
+  window.marcarTodasComoFacturadas = function(){
+    if (!can('cobro.edit') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
+    const p = activeProj();
+    if (!p) return;
+    const { total, porApto } = window.contarEtapasListasParaEstimacion(p);
+    if (total === 0) { showToast('NADA QUE MARCAR', ''); return; }
+    if (!confirm(`¿MARCAR LAS ${total} ETAPAS COMO FACTURADAS?\n\nDistribuidas en ${porApto.length} apto(s). Después de esto, el counter del banner vuelve a empezar.`)) return;
+    const pagos = (p.planilla && p.planilla.pagos) || [];
+    let marcadasTotal = 0;
+    (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
+      if (!a.facturadoEnEstimacion) a.facturadoEnEstimacion = {};
+      for (let i = 0; i < 6; i++) {
+        if (a.facturadoEnEstimacion[String(i)]) continue;
+        const tieneAcuse = (typeof window.tieneAcuseFirmado === 'function') ? window.tieneAcuseFirmado(a, i) : false;
+        const tienePagoAut = pagos.some(pg => pg.tipo === 'ETAPA' && pg.aptoId === a.id && pg.stageIdx === i && pg.autorizado);
+        if (tieneAcuse && tienePagoAut) {
+          a.facturadoEnEstimacion[String(i)] = {
+            ts: Date.now(),
+            por: (currentUser && (currentUser.displayName || currentUser.email)) || '',
+            porEmail: (currentUser && currentUser.email) || ''
+          };
+          marcadasTotal++;
+        }
+      }
+    })));
+    p.estimacionUltimaNotifEtapas = 0;
+    saveState();
+    logActivity('update', 'Etapas marcadas como facturadas (lote)', `${p.name} · ${marcadasTotal} etapas en ${porApto.length} apto(s)`);
+    showToast(`${marcadasTotal} ETAPA(S) MARCADAS — COUNTER REINICIADO`, 'green');
+    closeModal('etapasListas');
+    if (typeof window.renderEstimacionListaBanner === 'function') window.renderEstimacionListaBanner();
   };
 
   window.renderPlanillaReceta = function(){
@@ -13908,6 +14207,8 @@ async function processQRScan(decoded){
     showToast('ACUSE FIRMADO POR ' + r.nombre + (etapaMarcada ? ' · ETAPA ENTREGADA' : ''), 'green');
     renderAcusesRecepcion();
     renderAvance();
+    // El acuse recién firmado puede haber completado una etapa lista para estimación.
+    try { if (typeof window.chequearYNotificarEstimacion === 'function') window.chequearYNotificarEstimacion(p); } catch(e){ console.warn(e); }
   } catch(e) {
     console.error(e);
     showToast('ERROR GUARDANDO LA FIRMA: ' + (e.message || ''), 'red');
