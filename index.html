@@ -66,19 +66,32 @@ try {
   firebase.initializeApp(FIREBASE_CONFIG);
 
   // ── App Check (reCAPTCHA v3) ──
-  // Si falla por cualquier motivo (sin internet, reCAPTCHA bloqueado, etc.) NO rompe la app.
-  // En modo "Unenforced" en Firebase Console, esto solo genera tokens — no bloquea nada.
-  // Cuando pasemos a "Enforced", Firebase rechaza requests sin token válido.
-  try {
-    if (firebase.appCheck && typeof firebase.appCheck === 'function') {
+  // IMPORTANTE: el SDK de reCAPTCHA inyecta un <iframe> en document.body.
+  // Si lo activamos antes de que body exista (porque el script vive en <head>),
+  // tira "Cannot read properties of null (reading 'appendChild')" y deja
+  // a App Check en un estado roto que le pisa requests a Firestore.
+  // Por eso lo deferreamos hasta DOMContentLoaded.
+  function _initAppCheck(){
+    try {
+      if (!document.body) return; // todavía no listo
+      if (!firebase.appCheck || typeof firebase.appCheck !== 'function') return;
+      // Evitar doble activación si por algún motivo se llama 2 veces.
+      if (window.__pr_appCheckActivated) return;
+      window.__pr_appCheckActivated = true;
       const appCheck = firebase.appCheck();
       appCheck.activate(
         new firebase.appCheck.ReCaptchaV3Provider(RECAPTCHA_V3_SITE_KEY),
         true /* isTokenAutoRefreshEnabled */
       );
+    } catch(e) {
+      console.warn('App Check no se pudo activar (la app sigue funcionando):', e && e.message);
     }
-  } catch(e) {
-    console.warn('App Check no se pudo activar (la app sigue funcionando):', e && e.message);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _initAppCheck);
+  } else {
+    // Si el DOM ya está listo (carga tardía), ejecutar inmediatamente.
+    _initAppCheck();
   }
 
   // Hacer que la sesión persista en este navegador hasta que el usuario haga logout.
