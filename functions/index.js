@@ -167,6 +167,7 @@ exports.onNotificationCreated = onDocumentCreated(
 exports.getReceptorAcuses = onRequest(
   {
     cors: ['https://puntorojo.app', 'https://www.puntorojo.app', 'https://asistentedeingenieria.github.io', 'http://localhost', 'http://localhost:8080'],
+    invoker: 'public',  // ← CRÍTICO: el receptor no está autenticado, la función debe ser pública
     timeoutSeconds: 20,
     memory: '256MiB'
   },
