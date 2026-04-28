@@ -46,6 +46,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-storage-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-messaging-compat.js"></script>
 <script>
 /* Inicialización de Firebase. Estas claves son "publishable" (van en código cliente).
    La seguridad real vive en las Reglas de Firestore + App Check, no en estas claves. */
@@ -61,6 +62,11 @@ const FIREBASE_CONFIG = {
 /* reCAPTCHA v3 Site Key — pública, va en cliente. Generada en https://www.google.com/recaptcha/admin
    Usada por App Check para verificar que las requests salen de la app real (no de un script). */
 const RECAPTCHA_V3_SITE_KEY = '6LdkGc4sAAAAAGFluWZ4_NsZJSIOj-s4NXTEPmWF';
+
+/* VAPID key (Web Push certificate). Pública, va en cliente. Generada en
+   Firebase Console → Project Settings → Cloud Messaging → Web Push certificates.
+   Usada por FCM para que el browser firme las suscripciones de push. */
+const FCM_VAPID_KEY = 'BBoq4vfdIDLjXLj4uOqPQBTN6MDAz1RwwXnpUl8r9PeJ_GRJ5auEUorWyyj-O8XXMwFB44E6FxWmYj655NgsO14';
 
 try {
   firebase.initializeApp(FIREBASE_CONFIG);
@@ -3131,6 +3137,8 @@ async function requestNotificationPermission(){
     return false;
   }
   if (Notification.permission === 'granted') {
+    // Ya tiene permiso → asegurar registro FCM (idempotente)
+    try { await ensureFCMRegistered(); } catch(e){}
     showToast('NOTIFICACIONES YA ACTIVADAS', '');
     return true;
   }
@@ -3142,6 +3150,8 @@ async function requestNotificationPermission(){
     const result = await Notification.requestPermission();
     try { localStorage.setItem(NOTIF_PERM_KEY, '1'); } catch(e){}
     if (result === 'granted') {
+      // Registrar con FCM para recibir push también con app cerrada
+      try { await ensureFCMRegistered(); } catch(e) { console.warn('FCM register fail:', e); }
       showToast('NOTIFICACIONES ACTIVADAS — RECIBIRÁS ALERTAS EN TU CELULAR', 'green');
       // Notificación de prueba
       try {
@@ -3159,6 +3169,154 @@ async function requestNotificationPermission(){
     console.error('Notification.requestPermission:', e);
     return false;
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   FIREBASE CLOUD MESSAGING (FCM) — push notifications con app cerrada
+   ═══════════════════════════════════════════════════════════════
+   - Cuando el usuario otorga permiso de notificaciones, registramos
+     un FCM token en users/{uid}/fcmTokens/{tokenHash}.
+   - Una Cloud Function lee ese token cuando alguien le manda una notif
+     y dispara el push real al celular.
+   - En foreground (app abierta), Firebase NO muestra notif del sistema,
+     entonces lo manejamos manualmente con onMessage.
+   ═══════════════════════════════════════════════════════════════ */
+
+let _fcmMessaging = null;
+let _fcmCurrentToken = null;
+
+function fcmSupported(){
+  // FCM en web requiere Service Worker + Notification + Push Manager.
+  // Safari < 16.4 NO lo soporta. iOS solo si la PWA está instalada en home screen.
+  return (
+    typeof firebase !== 'undefined' &&
+    typeof firebase.messaging === 'function' &&
+    'serviceWorker' in navigator &&
+    'PushManager' in window &&
+    'Notification' in window
+  );
+}
+
+/* Hash corto del token para usarlo como ID de doc en Firestore (evita keys con `/`). */
+async function _fcmTokenHash(token){
+  if (!window.crypto || !window.crypto.subtle) {
+    // Fallback simple
+    let h = 5381;
+    for (let i = 0; i < token.length; i++) h = ((h << 5) + h + token.charCodeAt(i)) | 0;
+    return 't' + (h >>> 0).toString(36);
+  }
+  const buf = new TextEncoder().encode(token);
+  const hashBuf = await window.crypto.subtle.digest('SHA-256', buf);
+  const bytes = new Uint8Array(hashBuf);
+  let hex = '';
+  for (let i = 0; i < 8; i++) hex += ('00' + bytes[i].toString(16)).slice(-2);
+  return 't' + hex;
+}
+
+/* Registra (o renueva) el token FCM del dispositivo actual para el usuario logueado.
+   Idempotente: se puede llamar varias veces sin duplicar.
+   Devuelve el token o null. */
+async function ensureFCMRegistered(){
+  if (!fcmSupported()) {
+    console.warn('FCM no soportado en este navegador/dispositivo.');
+    return null;
+  }
+  if (!currentUser || !currentUser.uid) {
+    console.warn('FCM: no hay usuario logueado todavía.');
+    return null;
+  }
+  if (Notification.permission !== 'granted') {
+    console.warn('FCM: notificaciones no autorizadas.');
+    return null;
+  }
+  try {
+    // Asegurar que el SW de FCM esté registrado.
+    let swReg = null;
+    try {
+      swReg = await navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: '/firebase-cloud-messaging-push-scope' });
+    } catch(e) {
+      // Si la registración explícita falla (raro), Firebase intentará registrarlo solo.
+      console.warn('No se pudo registrar firebase-messaging-sw.js:', e && e.message);
+    }
+
+    if (!_fcmMessaging) {
+      _fcmMessaging = firebase.messaging();
+    }
+
+    const token = await _fcmMessaging.getToken({
+      vapidKey: FCM_VAPID_KEY,
+      serviceWorkerRegistration: swReg || undefined
+    });
+
+    if (!token) {
+      console.warn('FCM: getToken devolvió vacío.');
+      return null;
+    }
+
+    _fcmCurrentToken = token;
+
+    // Guardar en Firestore: users/{uid}/fcmTokens/{tokenHash}
+    if (firebase.firestore) {
+      const tokenId = await _fcmTokenHash(token);
+      const ua = (navigator.userAgent || '').slice(0, 200);
+      const platform = /iPhone|iPad|iPod/i.test(ua) ? 'iOS'
+                     : /Android/i.test(ua) ? 'Android'
+                     : /Windows/i.test(ua) ? 'Windows'
+                     : /Mac/i.test(ua) ? 'macOS'
+                     : 'Unknown';
+      await firebase.firestore()
+        .collection('users').doc(currentUser.uid)
+        .collection('fcmTokens').doc(tokenId)
+        .set({
+          token,
+          ua,
+          platform,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+    }
+
+    // Listener foreground: cuando llega un push y la app está abierta,
+    // Firebase NO muestra notif del sistema — la mostramos nosotros.
+    if (!_fcmMessaging.__pr_onMessageWired) {
+      _fcmMessaging.onMessage((payload) => {
+        try {
+          const title = (payload && payload.notification && payload.notification.title) || (payload && payload.data && payload.data.title) || 'PUNTO ROJO';
+          const body  = (payload && payload.notification && payload.notification.body)  || (payload && payload.data && payload.data.body)  || '';
+          // Refrescar el badge inmediatamente.
+          try { if (typeof updateNotifBadge === 'function') updateNotifBadge(); } catch(e){}
+          // Mostrar notif del sistema (si la app no tiene foco).
+          if (typeof fireSystemNotification === 'function') {
+            fireSystemNotification({
+              title, body,
+              id: (payload && payload.messageId) || ('fcm-' + Date.now()),
+              refPedidoId: payload && payload.data && payload.data.refPedidoId
+            });
+          }
+        } catch(e) {
+          console.warn('FCM onMessage handler:', e);
+        }
+      });
+      _fcmMessaging.__pr_onMessageWired = true;
+    }
+
+    return token;
+  } catch(e) {
+    console.warn('FCM register error:', e && e.message);
+    return null;
+  }
+}
+
+/* Llamar al hacer logout: borra el token del Firestore para no recibir push de un user que ya no está. */
+async function unregisterFCMToken(){
+  try {
+    if (!_fcmCurrentToken || !currentUser || !currentUser.uid || !firebase.firestore) return;
+    const tokenId = await _fcmTokenHash(_fcmCurrentToken);
+    await firebase.firestore()
+      .collection('users').doc(currentUser.uid)
+      .collection('fcmTokens').doc(tokenId)
+      .delete().catch(()=>{});
+    _fcmCurrentToken = null;
+  } catch(e) {}
 }
 
 /* Dispara una notificación del sistema (la que aparece en la barra del celular).
@@ -3265,6 +3423,8 @@ function applyPermissions(){
 async function logout(){
   if (!confirm('¿CERRAR SESIÓN?')) return;
   try {
+    // Borrar el token FCM ANTES de signOut para que no sigan llegando push.
+    try { await unregisterFCMToken(); } catch(e) {}
     await firebase.auth().signOut();
     // El listener onAuthStateChanged se encarga del resto (limpiar currentUser, mostrar login).
     location.reload();
@@ -14785,6 +14945,13 @@ function applyAuthSession(fbUser, profileData){
   } catch(e) { console.warn('Bio lock check failed:', e); }
   // Suscribirse a las notificaciones del usuario (tiempo real)
   try { subscribeToMyNotifications(); } catch(e) { console.warn('Notif subscribe:', e); }
+  // Si ya autorizó notifs en este dispositivo, registrar token FCM (idempotente)
+  // para recibir push también con la app cerrada.
+  try {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      setTimeout(() => { ensureFCMRegistered().catch(()=>{}); }, 1500);
+    }
+  } catch(e) {}
   // Arranca la sincronización con la nube. Si ya hay datos, los aplica.
   // Si no hay nada en la nube, sube el state local como punto de partida.
   try {
