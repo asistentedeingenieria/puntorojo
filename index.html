@@ -1357,16 +1357,16 @@ html,body,.main{background:#FFFFFF!important;}
         <circle cx="24" cy="24" r="20" stroke="#1E293B" stroke-width="4" fill="none"/>
         <circle id="rqrTimerCircle" cx="24" cy="24" r="20" stroke="#C8141C" stroke-width="4" fill="none" stroke-dasharray="125.66" stroke-dashoffset="0" transform="rotate(-90 24 24)" style="transition:stroke-dashoffset .9s linear"/>
       </svg>
-      <div id="rqrTimerNum" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff">20</div>
+      <div id="rqrTimerNum" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff">10</div>
     </div>
     <div style="font-size:10px;color:#94A3B8;letter-spacing:1.4px;text-transform:uppercase;line-height:1.5">
-      EL QR CAMBIA<br>EN <span id="rqrSecLeft" style="color:#fff;font-weight:700">20</span> SEG
+      EL QR CAMBIA<br>EN <span id="rqrSecLeft" style="color:#fff;font-weight:700">10</span> SEG
     </div>
   </div>
 
   <div style="margin-top:26px;max-width:340px;text-align:center;font-size:11px;color:#94A3B8;letter-spacing:.5px;line-height:1.6">
     CUANDO HAYA UNA ENTREGA, MOSTRÁ ESTA PANTALLA AL SUPERVISOR DE PUNTO ROJO PARA QUE ESCANEE EL QR.<br><br>
-    <strong style="color:#FCA5A5">FOTOS DE ESTA PANTALLA NO SIRVEN</strong> — EL QR SE VENCE EN 20 SEGUNDOS.
+    <strong style="color:#FCA5A5">FOTOS DE ESTA PANTALLA NO SIRVEN</strong> — EL QR SE VENCE EN 10 SEGUNDOS.
   </div>
 
   <div id="rqrError" style="display:none;margin-top:24px;padding:14px 18px;border:1px solid #DC2626;background:#7F1D1D;border-radius:8px;font-size:12px;letter-spacing:.5px;text-align:center;max-width:340px"></div>
@@ -7340,10 +7340,13 @@ function renderAcusesRecepcion(){
                 ? `<button class="btn ghost sm" onclick='viewDigitalAcuse(${JSON.stringify(slot).replace(/'/g, "&apos;")})'>VER</button>`
                 : `<button class="btn ghost sm" onclick="viewPhoto('${imgEsc}')">VER</button>`)
             : '';
-          // Botones de carga: foto + firma digital
-          const cargarBtns = canEdit
-            ? `<label class="btn sm ${has ? 'ghost' : 'cafe'}" style="cursor:pointer;margin:0" title="${has ? 'Reemplazar con foto' : 'Subir foto firmada'}">${has ? 'CAMBIAR' : 'FOTO'}<input type="file" accept="image/*" capture="environment" style="display:none" onchange="uploadAcuseRecepcion(event,'${t.id}','${l.id}','${a.id}','${s.key}')"></label>
-               <button class="btn sm ${has ? 'ghost' : 'cafe'}" onclick="openQRScanForAcuse('${t.id}','${l.id}','${a.id}','${s.key}')" title="Firmar digitalmente con QR del receptor">QR</button>`
+          // Botones de carga: foto + firma digital.
+          // ⚠️ Una vez subida una foto / firmado un acuse, NO se puede reemplazar.
+          //    Para cambiarla, el admin tiene que ELIMINAR primero (botón de delete).
+          //    Esto preserva la integridad del acuse como evidencia legal.
+          const cargarBtns = (canEdit && !has)
+            ? `<label class="btn sm cafe" style="cursor:pointer;margin:0" title="Subir foto firmada">FOTO<input type="file" accept="image/*" capture="environment" style="display:none" onchange="uploadAcuseRecepcion(event,'${t.id}','${l.id}','${a.id}','${s.key}')"></label>
+               <button class="btn sm cafe" onclick="openQRScanForAcuse('${t.id}','${l.id}','${a.id}','${s.key}')" title="Firmar digitalmente con QR del receptor">QR</button>`
             : '';
           // Eliminar — SOLO admin (users.manage). Acuses firmados son evidencia legal y no deben poder borrarse por usuarios normales.
           const delBtn = has && can('users.manage')
@@ -7398,6 +7401,23 @@ async function uploadAcuseRecepcion(event, towerId, levelId, aptoId, slotKey){
 
   const slotInfo = ACUSE_SLOTS.find(s => s.key === String(slotKey));
   const slotLabel = slotInfo ? slotInfo.label : slotKey;
+
+  // ⚠️ DEFENSA: si ya hay un acuse subido para este slot, NO permitir reemplazo.
+  // Una vez subido el acuse (foto o firma digital), es evidencia legal y queda inmutable.
+  // Si hubo error y hay que cambiarla, el admin debe ELIMINAR primero (acción separada y auditada).
+  try {
+    const _p = activeProj();
+    const _t = _p && (_p.towers || []).find(x => x.id === towerId);
+    const _l = _t && (_t.levels || []).find(x => x.id === levelId);
+    const _a = _l && (_l.aptos || []).find(x => x.id === aptoId);
+    const _existing = _a && _a.acuseRecepciones && _a.acuseRecepciones[String(slotKey)];
+    const _has = !!(_existing && (_existing.type || _existing.url || _existing.data || _existing.receptorNombre));
+    if (_has) {
+      event.target.value = '';
+      showToast('ESTE ACUSE YA FUE SUBIDO — NO SE PUEDE REEMPLAZAR', 'red');
+      return;
+    }
+  } catch(e) { /* si falla la verificación, no bloqueamos — el upload sigue */ }
 
   showToast(`SUBIENDO ACUSE · ${slotLabel}...`, '');
   try {
@@ -14267,8 +14287,8 @@ window.rechazarExcepcionUI = async function(){
    ═══════════════════════════════════════════════════════════════ */
 
 const QR_TOKEN_PREFIX = 'PR-RECEP-';
-const QR_BUCKET_MS = 20000;            // 20 segundos por bucket — rota cada 20s
-const QR_BUCKET_TOLERANCE = 1;         // aceptar bucket actual + 1 anterior = 40s de ventana real
+const QR_BUCKET_MS = 10000;            // 10 segundos por bucket — rota cada 10s
+const QR_BUCKET_TOLERANCE = 2;         // aceptar bucket actual + 2 anteriores = 30s de ventana real
 
 function makeReceptorToken(){
   // Random ~16 chars (suficiente entropía)
@@ -15024,6 +15044,17 @@ async function processQRScan(decoded){
     const a = l ? (l.aptos || []).find(x => x.id === ctx.aptoId) : null;
     if (!a) { showToast('APTO NO ENCONTRADO', 'red'); closeModal('QRScanner'); return; }
     if (!a.acuseRecepciones) a.acuseRecepciones = {};
+
+    // ⚠️ DEFENSA: si ya hay un acuse para este slot, NO permitir reemplazo.
+    // Una vez firmado/subido es evidencia legal. El admin debe ELIMINAR primero.
+    const _existing = a.acuseRecepciones[ctx.slotKey];
+    const _has = !!(_existing && (_existing.type || _existing.url || _existing.data || _existing.receptorNombre));
+    if (_has) {
+      showToast('ESTE ACUSE YA FUE FIRMADO — NO SE PUEDE REEMPLAZAR', 'red');
+      closeModal('QRScanner');
+      return;
+    }
+
     a.acuseRecepciones[ctx.slotKey] = {
       type: 'digital',
       receptorId: r.id,
