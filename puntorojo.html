@@ -1397,6 +1397,7 @@ html,body,.main{background:#FFFFFF!important;}
       <div class="card">
         <div class="card-hd"><h3>ESTIMACIONES</h3>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn sm ghost" data-perm="users.manage" onclick="limpiarEstimacionesVacias()" title="Eliminar filas de estimaciones que están 100% vacías (sin monto, sin factura, sin fecha)">LIMPIAR VACÍAS</button>
             <button class="btn sm" data-perm="users.manage" onclick="cargarEstimacionOficial()" title="Reemplaza las estimaciones por la última versión oficial del Excel del proyecto activo">CARGAR ESTIMACIÓN OFICIAL</button>
           </div>
         </div>
@@ -5439,6 +5440,50 @@ const ESTIMACIONES_OFICIALES = {
     ]
   }
 };
+
+async function limpiarEstimacionesVacias(){
+  if (!can('users.manage')) return showToast('SOLO ADMINISTRADOR', 'red');
+  const p = activeProj();
+  if (!p || !p.cobro || !Array.isArray(p.cobro.rows)) return;
+
+  const before = p.cobro.rows.length;
+  const eliminadas = p.cobro.rows.filter(r => {
+    if (r.isAnticipo) return false;
+    const monto = Number(r.vp_ci) > 0 || Number(r.vp_si) > 0;
+    const fecha = !!(r.f || r.fp);
+    const factura = !!(r.factura || r.facturaPdfUrl);
+    const estado = (r.sf && r.sf !== 'PENDIENTE') || (r.sc && r.sc !== 'PENDIENTE');
+    return !(monto || fecha || factura || estado);
+  });
+
+  if (eliminadas.length === 0) {
+    showToast('NO HAY ESTIMACIONES VACÍAS', '');
+    return;
+  }
+
+  const lista = eliminadas.map(r => '• ' + (r.d || r.id)).join('\n');
+  if (!confirm(`ELIMINAR ${eliminadas.length} ESTIMACIÓN${eliminadas.length === 1 ? '' : 'ES'} VACÍA${eliminadas.length === 1 ? '' : 'S'}\n\n${lista}\n\n¿Confirmás? Estas filas no tienen ningún dato y se eliminarán de la nube para todos los dispositivos.`)) {
+    return;
+  }
+
+  // Filtrar
+  p.cobro.rows = p.cobro.rows.filter(r => {
+    if (r.isAnticipo) return true;
+    const monto = Number(r.vp_ci) > 0 || Number(r.vp_si) > 0;
+    const fecha = !!(r.f || r.fp);
+    const factura = !!(r.factura || r.facturaPdfUrl);
+    const estado = (r.sf && r.sf !== 'PENDIENTE') || (r.sc && r.sc !== 'PENDIENTE');
+    return monto || fecha || factura || estado;
+  });
+
+  saveState();
+  if (typeof CloudSync !== 'undefined' && CloudSync.uploadCurrent) {
+    try { await CloudSync.uploadCurrent(); } catch(e) { console.warn('Cloud upload error:', e); }
+  }
+  renderCobro();
+  logActivity('delete', `Estimaciones vacías eliminadas: ${eliminadas.length}`, p.name);
+  showToast(`${eliminadas.length} ESTIMACIÓN${eliminadas.length === 1 ? '' : 'ES'} ELIMINADA${eliminadas.length === 1 ? '' : 'S'}`, 'green');
+}
 
 async function cargarEstimacionOficial(){
   if (!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR', 'red');
