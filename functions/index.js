@@ -87,16 +87,17 @@ exports.onNotificationCreated = onDocumentCreated(
       click_url: 'https://puntorojo.app/'
     };
 
-    // sendEachForMulticast permite mandar a hasta 500 tokens en una sola llamada
+    // sendEachForMulticast permite mandar a hasta 500 tokens en una sola llamada.
+    // Formato MÍNIMO web push — el más robusto, mismo que usa Firebase Console "Test Message".
+    // iOS Safari es estricto con el payload; cualquier campo extra puede silenciar el push.
     const message = {
       tokens,
       notification: { title, body },
-      data,
       webpush: {
         notification: {
-          icon: 'https://puntorojo.app/logo.png',
-          badge: 'https://puntorojo.app/logo.png',
-          tag: notifId
+          title,
+          body,
+          icon: 'https://puntorojo.app/logo.png'
         },
         fcmOptions: {
           link: 'https://puntorojo.app/'
