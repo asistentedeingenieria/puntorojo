@@ -1340,7 +1340,7 @@ html,body,.main{background:#FFFFFF!important;}
 
 <!-- ═════════════════ VISTA RECEPTOR (QR ROTATIVO) ═════════════════
      Se muestra cuando la URL incluye #qr=TOKEN.SECRET.
-     Es la pantalla que ve EL CLIENTE en su celular: un QR que cambia cada minuto.
+     Es la pantalla que ve EL CLIENTE en su celular: un QR que cambia cada 10 segundos.
      No requiere login — la URL ES la credencial. -->
 <div id="receptorQRStage" style="display:none;position:fixed;inset:0;z-index:99999;background:#0F172A;color:#fff;flex-direction:column;align-items:center;justify-content:flex-start;padding:24px 18px;overflow-y:auto;font-family:'Inter',system-ui,-apple-system,Arial,sans-serif">
   <img src="logo.png" alt="Punto Rojo" style="width:54px;height:54px;object-fit:contain;background:#fff;border-radius:8px;padding:6px;margin-bottom:12px">
@@ -2538,7 +2538,7 @@ html,body,.main{background:#FFFFFF!important;}
 <div class="modal-bg" id="modalReceptores" onclick="closeModalBg(event,'receptores')">
   <div class="modal" style="max-width:760px">
     <h3>RECEPTORES DE OBRA</h3>
-    <p class="desc">Personas externas (clientes, supervisores del cliente, residentes, etc.) que firman los acuses al recibir el trabajo. Cada uno tiene un <strong>link rotativo</strong> — lo abren en su celular y muestran un QR que cambia cada minuto. Solo el QR vivo sirve para firmar.</p>
+    <p class="desc">Personas externas (clientes, supervisores del cliente, residentes, etc.) que firman los acuses al recibir el trabajo. Cada uno tiene un <strong>link rotativo</strong> — lo abren en su celular y muestran un QR que cambia cada 10 segundos. Solo el QR vivo sirve para firmar.</p>
 
     <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
       <button class="btn cafe sm" onclick="openNewReceptor()">+ AGREGAR RECEPTOR</button>
@@ -2585,11 +2585,11 @@ html,body,.main{background:#FFFFFF!important;}
   </div>
 </div>
 
-<!-- Modal para mostrar el LINK ROTATIVO de un receptor (lo abre en su celular y ahí ve un QR que cambia cada minuto) -->
+<!-- Modal para mostrar el LINK ROTATIVO de un receptor (lo abre en su celular y ahí ve un QR que cambia cada 10 segundos) -->
 <div class="modal-bg" id="modalReceptorQR" onclick="closeModalBg(event,'receptorQR')">
   <div class="modal" style="max-width:480px">
     <h3 id="qrViewTitle">LINK ROTATIVO DEL RECEPTOR</h3>
-    <p class="desc" id="qrViewDesc">Compartile este link al receptor (por WhatsApp, email, lo que sea). Cuando lo abre en su celular, ve un QR que <strong>cambia cada minuto</strong>. Solo ese QR vivo sirve para firmar — fotos viejas se vencen automáticamente.</p>
+    <p class="desc" id="qrViewDesc">Compartile este link al receptor (por WhatsApp, email, lo que sea). Cuando lo abre en su celular, ve un QR que <strong>cambia cada 10 segundos</strong>. Solo ese QR vivo sirve para firmar — fotos viejas se vencen automáticamente.</p>
 
     <!-- QR que apunta al link rotativo del receptor (para que escanee con la cámara del celular y entre fácil) -->
     <div id="qrViewCanvas" style="display:flex;justify-content:center;padding:16px;background:#fff;border:1px solid var(--line);border-radius:8px;margin-bottom:10px"></div>
@@ -2610,7 +2610,7 @@ html,body,.main{background:#FFFFFF!important;}
       <ol style="margin:0;padding-left:18px;font-size:10px;color:var(--mute);line-height:1.5;letter-spacing:.3px">
         <li>EL RECEPTOR ABRE ESTE LINK EN SU CELULAR (UNA VEZ).</li>
         <li>QUEDA GUARDADO COMO PÁGINA — LA ABRE CUANDO HAY ENTREGA.</li>
-        <li>VE UN QR QUE CAMBIA CADA MINUTO.</li>
+        <li>VE UN QR QUE CAMBIA CADA 10 SEGUNDOS.</li>
         <li>EL SUPERVISOR ESCANEA ESE QR Y SE FIRMA EL ACUSE.</li>
       </ol>
     </div>
@@ -14693,7 +14693,7 @@ function shareReceptorLinkWA(){
 
 /* ─────── VISTA RECEPTOR (QR ROTATIVO) ───────
    Se activa cuando la URL trae #qr=TOKEN.SECRET. Renderiza un QR fullscreen que
-   cambia cada minuto. No requiere login — la URL es la credencial. */
+   cambia cada 10 segundos. No requiere login — la URL es la credencial. */
 
 let _rqrTimer = null;
 let _rqrCurrentBucket = null;
@@ -14847,16 +14847,12 @@ window._fetchReceptorAcuses = async function(){
   if (!subEl || !listEl) return;
   if (btn) { btn.disabled = true; btn.textContent = 'CARGANDO...'; }
   try {
-    // Cache-busting: forzar a saltar cualquier cache (browser, SW, CDN).
-    // Sin esto, el SW podría devolver una respuesta vieja en vez de la fresca.
+    // Cache-busting solo via query param — sin headers custom para no disparar
+    // preflight CORS innecesario que falla si la función no está desplegada.
     const url = RECEPTOR_ACUSES_URL + '?_t=' + Date.now();
     const res = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache'
-      },
+      headers: { 'Content-Type': 'application/json' },
       cache: 'no-store',
       body: JSON.stringify({ token: _rqrToken, secret: _rqrSecret })
     });
@@ -14874,10 +14870,20 @@ window._fetchReceptorAcuses = async function(){
     // Marcar timestamp del último refresh exitoso (visible en el subtítulo).
     window._rqrLastRefreshTs = Date.now();
   } catch(err) {
-    console.warn('Fetch acuses falló:', err && err.message);
-    if (subEl) subEl.textContent = 'ERROR: ' + (err.message || 'NO SE PUDO CARGAR') + ' · TOCÁ "ACTUALIZAR"';
+    const msg = (err && err.message) || 'ERROR DESCONOCIDO';
+    console.warn('Fetch acuses falló:', msg);
+    // "Failed to fetch" en JS = la función no está accesible (no deployada o CORS roto).
+    let userMsg;
+    if (/Failed to fetch|NetworkError|TypeError/i.test(msg)) {
+      userMsg = 'EL SERVIDOR DEL HISTORIAL NO ESTÁ ACTIVO — PEDILE A PUNTO ROJO QUE LO REVISE';
+    } else if (/HTTP 404/i.test(msg)) {
+      userMsg = 'FUNCIÓN NO DESPLEGADA EN EL SERVIDOR — PEDILE A PUNTO ROJO QUE LA DESPLIEGUE';
+    } else {
+      userMsg = 'ERROR: ' + msg;
+    }
+    if (subEl) subEl.textContent = userMsg + ' · TOCÁ "ACTUALIZAR"';
     if (listEl && !listEl.children.length) {
-      listEl.innerHTML = `<div style="padding:18px;text-align:center;color:#94A3B8;font-size:11px;letter-spacing:.5px">SIN CONEXIÓN O FUNCIÓN NO DESPLEGADA — REINTENTÁ EN UN MOMENTO</div>`;
+      listEl.innerHTML = `<div style="padding:18px;text-align:center;color:#94A3B8;font-size:11px;letter-spacing:.5px;line-height:1.5">${userMsg.toUpperCase()}</div>`;
     }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'ACTUALIZAR'; }
