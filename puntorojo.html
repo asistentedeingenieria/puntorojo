@@ -12882,15 +12882,11 @@ function deleteCurrentProveedor(){
           return tryInLevels(allLevels);
         };
 
-        // Reset porEstimacion de TODOS los aptos antes de procesar (limpia data vieja).
-        (p.towers || []).forEach(t => (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
-          if (p.cobro.avanceAptos[a.id]) {
-            p.cobro.avanceAptos[a.id].porEstimacion = {};
-          }
-        })));
-        // Reset también avanceLevels y avanceTorres del proyecto.
-        p.cobro.avanceLevels = {};
-        p.cobro.avanceTorres = {};
+        // ⚠ NO resetear globalmente. Solo modificamos lo que el PDF nuevo contiene.
+        // De lo contrario, subir un PDF que solo tiene TORRE 3 borraría los datos de TORRE 4.
+        // Inicializar contenedores si no existen.
+        if (!p.cobro.avanceLevels) p.cobro.avanceLevels = {};
+        if (!p.cobro.avanceTorres) p.cobro.avanceTorres = {};
 
         let updatedPDF = 0;
         const sinMatchPDF = [];
@@ -12904,8 +12900,8 @@ function deleteCurrentProveedor(){
             return;
           }
           if (!p.cobro.avanceAptos[apto.id]) p.cobro.avanceAptos[apto.id] = { stages:[0,0,0,0,0,0], porEstimacion:{} };
-          if (!p.cobro.avanceAptos[apto.id].porEstimacion) p.cobro.avanceAptos[apto.id].porEstimacion = {};
-          // Guardamos el % cumulative bajo una clave única (PDF solo da cumulative, no per-estimación)
+          // Reemplazo el porEstimacion completo (PDF solo da cumulative, no per-estimación).
+          // Solo afecta a los aptos que vienen en este PDF — los demás quedan intactos.
           p.cobro.avanceAptos[apto.id].porEstimacion = { 'pdf_cumulativo': d.pct };
           updatedPDF++;
           const tk = d.torreNum != null ? `T${d.torreNum}` : 'X';
@@ -13054,21 +13050,15 @@ function deleteCurrentProveedor(){
       //  ya emitió oficialmente. El Excel/PDF puede tener columnas para EST 8+ que aún no
       //  existen como filas reales en el proyecto; esas no deben crearse automáticamente.)
 
+      // ⚠ NO resetear globalmente. Solo limpiamos los aptos que aparecen en este Excel.
+      // Cada apto se resetea la PRIMERA vez que aparece en el procesamiento.
+      // Los aptos de otras torres que NO están en este Excel quedan intactos.
+      const _firstTouchExcel = new Set();
+
       if (interpret.tipo === 'oficial') {
         // FORMATO OFICIAL: el Excel tiene "ESTIMACIÓN NO.X" + "% EJECUTADO" (per-estimación).
         // Recorremos TODAS las filas, identificamos las que contienen un nombre de apto válido,
         // y leemos las columnas correspondientes al "% EJECUTADO" de cada estimación.
-        // IMPORTANTE: trackear "TORRE X" headers para que aptos repetidos (ej: 101 en T3 y T4)
-        // se asignen a la torre correcta.
-
-        // RESET: limpiar porEstimacion de TODOS los aptos antes de procesar.
-        // Esto evita que datos viejos de uploads anteriores (con keys como 'est_8') se sumen
-        // a los datos nuevos (con keys 'e8_auto') y duplicen los porcentajes.
-        (p.towers || []).forEach(t => (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
-          if (p.cobro.avanceAptos[a.id]) {
-            p.cobro.avanceAptos[a.id].porEstimacion = {};
-          }
-        })));
 
         let aptosDetectados = 0, aptosMatcheados = 0;
         let currentTorreNum = null;
@@ -13137,6 +13127,12 @@ function deleteCurrentProveedor(){
           if (!p.cobro.avanceAptos[apto.id]) p.cobro.avanceAptos[apto.id] = { stages:[0,0,0,0,0,0], porEstimacion:{} };
           if (!p.cobro.avanceAptos[apto.id].porEstimacion) p.cobro.avanceAptos[apto.id].porEstimacion = {};
 
+          // Reset solo del apto la PRIMERA vez que aparece en este Excel (no de los demás).
+          if (!_firstTouchExcel.has(apto.id)) {
+            p.cobro.avanceAptos[apto.id].porEstimacion = {};
+            _firstTouchExcel.add(apto.id);
+          }
+
           interpret.ejecutadoCols.forEach(({ colIdx, estNum }) => {
             const raw = dr[colIdx];
             if (raw === '' || raw === null || raw === undefined) return;
@@ -13174,6 +13170,11 @@ function deleteCurrentProveedor(){
           if (!apto) { sinMatch.push(aptoTxt); return; }
           if (!p.cobro.avanceAptos[apto.id]) p.cobro.avanceAptos[apto.id] = { stages:[0,0,0,0,0,0], porEstimacion:{} };
           if (!p.cobro.avanceAptos[apto.id].porEstimacion) p.cobro.avanceAptos[apto.id].porEstimacion = {};
+          // Reset por apto solo la PRIMERA vez (no afectar a otras torres no incluidas en este Excel).
+          if (!_firstTouchExcel.has(apto.id)) {
+            p.cobro.avanceAptos[apto.id].porEstimacion = {};
+            _firstTouchExcel.add(apto.id);
+          }
           interpret.estColumns.forEach(col => {
             const raw = dr[col.idx];
             if (raw === '' || raw === null || raw === undefined) return;
