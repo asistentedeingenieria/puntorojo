@@ -1651,7 +1651,7 @@ html,body,.main{background:#FFFFFF!important;}
         </div>
         <div style="margin-top:12px;padding:10px 12px;background:#FFF6E6;border-left:3px solid var(--amber);border-radius:2px;font-size:11px;color:var(--text);letter-spacing:.3px;line-height:1.45;text-transform:uppercase">
           <strong style="color:var(--amber);letter-spacing:1.5px;font-size:10px">IMPORTANTE:</strong>
-          PRIMERO SE DEBE SUBIR AL MENOS UNA FOTO DE CADA ETAPA DESDE EL ÍCONO DE CÁMARA. RECIÉN AHÍ SE DESBLOQUEA EL BOTÓN DE ESA ETAPA PARA MARCARLA COMO COMPLETADA. LOS BOTONES CON PUNTO AMARILLO TODAVÍA NO TIENEN FOTO.
+          PRIMERO SE DEBEN TOMAR <strong>2 FOTOS</strong> DE CADA ETAPA — DE ÁREAS DIFERENTES DEL APARTAMENTO. LAS FOTOS SE TOMAN EN EL MOMENTO CON LA CÁMARA (NO SE PUEDEN SUBIR FOTOS VIEJAS). RECIÉN CON LAS 2 FOTOS SE DESBLOQUEA EL BOTÓN DE LA ETAPA PARA MARCARLA COMO COMPLETADA. LOS BOTONES CON PUNTO AMARILLO TODAVÍA NO TIENEN LAS 2 FOTOS.
         </div>
       </div>
 
@@ -7078,10 +7078,22 @@ function filterAvance(term){
 /* Toggle de una etapa — activa/desactiva en cascada */
 /* ¿Esta etapa de este apto tiene al menos una foto cargada?
    Sirve como pre-requisito para poder marcarla como completada. */
+// Una etapa está lista cuando tiene LAS DOS fotos requeridas (no solo una).
+// Las fotos deben ser de áreas DIFERENTES del apartamento (validado por hash al subir).
 function stageHasPhoto(a, stageIdx){
   if (!a || !a.photos) return false;
   const slots = a.photos[stageIdx];
-  return Array.isArray(slots) && slots.some(v => !!v);
+  return Array.isArray(slots) && !!slots[0] && !!slots[1];
+}
+
+// Cuántas fotos faltan en una etapa (0, 1 o 2).
+function stagePhotosFaltantes(a, stageIdx){
+  if (!a || !a.photos) return 2;
+  const slots = a.photos[stageIdx] || [];
+  let faltan = 0;
+  if (!slots[0]) faltan++;
+  if (!slots[1]) faltan++;
+  return faltan;
 }
 
 function toggleStage(towerId, levelId, aptoId, stageIdx){
@@ -7100,14 +7112,14 @@ function toggleStage(towerId, levelId, aptoId, stageIdx){
     for (let i = stageIdx; i < 6; i++) a.stages[i] = false;
   } else {
     // Foto-primero: solo se puede activar una etapa si TODAS las etapas
-    // hasta esa (inclusive) tienen al menos una foto cargada.
+    // hasta esa (inclusive) tienen LAS DOS fotos requeridas (de áreas diferentes).
     const sinFoto = [];
     for (let i = 0; i <= stageIdx; i++) {
       if (!stageHasPhoto(a, i)) sinFoto.push(i + 1);
     }
     if (sinFoto.length > 0) {
       const labels = sinFoto.map(n => 'ETAPA ' + n).join(', ');
-      showToast('SUBÍ AL MENOS UNA FOTO DE: ' + labels, 'red');
+      showToast('FALTAN LAS 2 FOTOS REQUERIDAS DE: ' + labels, 'red');
       return;
     }
     for (let i = 0; i <= stageIdx; i++) a.stages[i] = true;
@@ -7278,7 +7290,7 @@ function renderPhotosModal(){
   if (!a.photos) a.photos = {};
 
   document.getElementById('photosTitle').textContent = `${t.name} · ${l.name} · ${a.name}`;
-  document.getElementById('photosSubtitle').textContent = `${aptoPct(a)}% ejecutado · Dos fotos por etapa`;
+  document.getElementById('photosSubtitle').textContent = `${aptoPct(a)}% ejecutado · Cada etapa requiere 2 fotos de áreas diferentes`;
 
   const body = document.getElementById('photosBody');
   body.innerHTML = ETAPAS.map((e, idx) => {
@@ -7303,14 +7315,15 @@ function renderPhotosModal(){
               </div>` : ''}
             </div>`;
           } else {
-            return `<label class="photo-slot" ${canEdit?'':'style="cursor:not-allowed;opacity:.5"'}>
+            // Slot vacío → abre la cámara EN VIVO (no permite galería).
+            // Esto garantiza que la foto se toma en el momento.
+            return `<div class="photo-slot" ${canEdit ? `onclick="openCameraModal(${idx},${slotIdx})" style="cursor:pointer"` : 'style="cursor:not-allowed;opacity:.5"'}>
               <div class="photo-slot-empty">
                 <div class="ic">+</div>
                 <div>FOTO ${slotIdx+1}</div>
-                <div style="font-size:9px;font-weight:500">TOCA PARA SUBIR</div>
+                <div style="font-size:9px;font-weight:500;color:var(--mute)">TOMAR EN EL MOMENTO</div>
               </div>
-              ${canEdit ? `<input type="file" accept="image/*" capture="environment" style="display:none" onchange="uploadPhoto(event,${idx},${slotIdx})">` : ''}
-            </label>`;
+            </div>`;
           }
         }).join('')}
       </div>
@@ -7339,6 +7352,215 @@ function compressImage(file, maxWidth = 800, quality = 0.75){
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+/* ════════════════════════════════════════════════════════════════
+   CÁMARA EN VIVO + HASH DE FOTOS
+   ────────────────────────────────────────────────────────────────
+   Para garantizar que las fotos se toman en el momento (no se sube
+   una foto vieja desde galería) usamos getUserMedia() y un canvas
+   para capturar directamente.
+   Para detectar fotos duplicadas (misma foto subida en los 2 slots)
+   calculamos hash SHA-256 del blob al subir y guardamos en
+   a.photoHashes[stageIdx][slotIdx].
+   ════════════════════════════════════════════════════════════════ */
+
+async function _hashBlobSHA256(blob){
+  try {
+    const buf = await blob.arrayBuffer();
+    const hashBuf = await crypto.subtle.digest('SHA-256', buf);
+    return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch(e) {
+    console.warn('Hash falló, no se podrá validar duplicado:', e);
+    return null;
+  }
+}
+
+// Estado del modal de cámara
+let _cameraModalState = { stream: null, etapaIdx: null, slotIdx: null, capturedBlob: null };
+
+// Abre el modal de cámara en vivo. Cuando el usuario captura y confirma,
+// llama a _cameraOnConfirm() que sube la foto.
+async function openCameraModal(etapaIdx, slotIdx){
+  if (!can('avance.edit')) return showToast('SIN PERMISO', 'red');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return showToast('TU NAVEGADOR NO SOPORTA CÁMARA EN VIVO', 'red');
+  }
+
+  _cameraModalState = { stream: null, etapaIdx, slotIdx, capturedBlob: null };
+
+  // Crear/reutilizar modal
+  let modal = document.getElementById('modalCamera');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'modal-bg';
+    modal.id = 'modalCamera';
+    modal.innerHTML = `
+      <div class="modal" style="max-width:560px">
+        <div class="modal-hd">
+          <h3>TOMAR FOTO EN EL MOMENTO</h3>
+          <button class="modal-x" onclick="closeCameraModal()">✕</button>
+        </div>
+        <div class="modal-bd" style="padding:16px">
+          <div style="background:#FEF3C7;border-left:3px solid var(--amber);padding:10px 14px;border-radius:3px;font-size:11px;letter-spacing:.3px;line-height:1.5;color:var(--ink);margin-bottom:14px">
+            <strong>IMPORTANTE:</strong> ESTA FOTO DEBE TOMARSE AHORA. NO SE PUEDE SUBIR UNA FOTO VIEJA. LAS DOS FOTOS DE LA ETAPA DEBEN SER DE <strong>ÁREAS DIFERENTES</strong> DEL APARTAMENTO.
+          </div>
+          <div id="cameraVideoBox" style="position:relative;background:#000;border-radius:6px;overflow:hidden;aspect-ratio:4/3;max-width:100%">
+            <video id="cameraVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;display:block"></video>
+            <canvas id="cameraCanvas" style="display:none"></canvas>
+            <img id="cameraPreview" style="display:none;width:100%;height:100%;object-fit:cover">
+          </div>
+          <div id="cameraActions" style="display:flex;gap:8px;justify-content:center;margin-top:14px">
+            <button id="cameraTakeBtn" class="btn" onclick="captureCameraPhoto()">TOMAR FOTO</button>
+            <button id="cameraRetakeBtn" class="btn ghost" onclick="retakeCameraPhoto()" style="display:none">REINTENTAR</button>
+            <button id="cameraConfirmBtn" class="btn" onclick="confirmCameraPhoto()" style="display:none;background:var(--green-dark)">CONFIRMAR Y SUBIR</button>
+          </div>
+        </div>
+        <div class="modal-ft">
+          <button class="btn ghost" onclick="closeCameraModal()">CANCELAR</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  modal.classList.add('show');
+
+  // Iniciar stream de cámara
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 960 } },
+      audio: false
+    });
+    _cameraModalState.stream = stream;
+    const video = document.getElementById('cameraVideo');
+    if (video) {
+      video.srcObject = stream;
+      await video.play().catch(()=>{});
+    }
+  } catch(err) {
+    console.error('No se pudo acceder a la cámara:', err);
+    closeCameraModal();
+    showToast('NO SE PUDO ABRIR LA CÁMARA: ' + (err.message || err.name), 'red');
+  }
+}
+
+window.captureCameraPhoto = function(){
+  const video = document.getElementById('cameraVideo');
+  const canvas = document.getElementById('cameraCanvas');
+  const preview = document.getElementById('cameraPreview');
+  if (!video || !canvas) return;
+  const w = video.videoWidth || 1280;
+  const h = video.videoHeight || 960;
+  canvas.width = w;
+  canvas.height = h;
+  canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+  canvas.toBlob(blob => {
+    if (!blob) return showToast('ERROR AL CAPTURAR', 'red');
+    _cameraModalState.capturedBlob = blob;
+    // Mostrar preview
+    const url = URL.createObjectURL(blob);
+    preview.src = url;
+    preview.style.display = 'block';
+    video.style.display = 'none';
+    document.getElementById('cameraTakeBtn').style.display = 'none';
+    document.getElementById('cameraRetakeBtn').style.display = 'inline-flex';
+    document.getElementById('cameraConfirmBtn').style.display = 'inline-flex';
+  }, 'image/jpeg', 0.85);
+};
+
+window.retakeCameraPhoto = function(){
+  const video = document.getElementById('cameraVideo');
+  const preview = document.getElementById('cameraPreview');
+  if (preview.src) URL.revokeObjectURL(preview.src);
+  preview.src = '';
+  preview.style.display = 'none';
+  video.style.display = 'block';
+  _cameraModalState.capturedBlob = null;
+  document.getElementById('cameraTakeBtn').style.display = 'inline-flex';
+  document.getElementById('cameraRetakeBtn').style.display = 'none';
+  document.getElementById('cameraConfirmBtn').style.display = 'none';
+};
+
+window.confirmCameraPhoto = async function(){
+  const blob = _cameraModalState.capturedBlob;
+  if (!blob) return showToast('TOMÁ LA FOTO PRIMERO', 'red');
+  const { etapaIdx, slotIdx } = _cameraModalState;
+  closeCameraModal();
+  // Subir usando el flujo existente (uploadPhoto adaptado)
+  await _uploadPhotoBlob(blob, etapaIdx, slotIdx);
+};
+
+window.closeCameraModal = function(){
+  const modal = document.getElementById('modalCamera');
+  if (modal) modal.classList.remove('show');
+  // Detener stream
+  if (_cameraModalState.stream) {
+    _cameraModalState.stream.getTracks().forEach(t => t.stop());
+  }
+  // Liberar preview
+  const preview = document.getElementById('cameraPreview');
+  if (preview && preview.src && preview.src.startsWith('blob:')) URL.revokeObjectURL(preview.src);
+  if (preview) { preview.src = ''; preview.style.display = 'none'; }
+  const video = document.getElementById('cameraVideo');
+  if (video) { video.style.display = 'block'; video.srcObject = null; }
+  document.getElementById('cameraTakeBtn').style.display = 'inline-flex';
+  document.getElementById('cameraRetakeBtn').style.display = 'none';
+  document.getElementById('cameraConfirmBtn').style.display = 'none';
+  _cameraModalState = { stream: null, etapaIdx: null, slotIdx: null, capturedBlob: null };
+};
+
+/* Subir blob (de la cámara o de un file) con validación de duplicado por hash. */
+async function _uploadPhotoBlob(blob, etapaIdx, slotIdx){
+  if (!can('avance.edit')) return showToast('SIN PERMISO', 'red');
+  if (typeof firebase === 'undefined' || !firebase.storage) {
+    return showToast('FIREBASE STORAGE NO DISPONIBLE — RECARGÁ', 'red');
+  }
+
+  // 1) Calcular hash de la foto nueva
+  const hash = await _hashBlobSHA256(blob);
+
+  // 2) Comparar con el otro slot de la misma etapa
+  const p = activeProj();
+  const t = p.towers.find(x => x.id === photoCtx.towerId);
+  const l = t.levels.find(x => x.id === photoCtx.levelId);
+  const a = (l.aptos || []).find(x => x.id === photoCtx.aptoId);
+  if (!a) return showToast('APTO NO ENCONTRADO', 'red');
+  if (!a.photoHashes) a.photoHashes = {};
+  if (!a.photoHashes[etapaIdx]) a.photoHashes[etapaIdx] = [null, null];
+
+  const otroSlotIdx = slotIdx === 0 ? 1 : 0;
+  const otroHash = a.photoHashes[etapaIdx][otroSlotIdx];
+  if (hash && otroHash && hash === otroHash) {
+    alert('LAS DOS FOTOS NO PUEDEN SER LA MISMA\n\nDeben ser de áreas DIFERENTES del apartamento.\nVolvé a tomar una foto distinta.');
+    return showToast('FOTO DUPLICADA — TOMÁ UNA DE OTRA ÁREA', 'red');
+  }
+
+  // 3) Comprimir y subir
+  showToast('SUBIENDO FOTO...', '');
+  try {
+    const cs = getCompressionSettings();
+    // Convertir blob a base64 → comprimir (usa el flujo existente)
+    const tempFile = new File([blob], 'camera.jpg', { type: 'image/jpeg' });
+    const base64 = await compressImage(tempFile, cs.maxWidth, cs.quality);
+    const blobComprimido = await (await fetch(base64)).blob();
+    const aptoId = photoCtx.aptoId;
+    const path = `photos/${aptoId}/${etapaIdx}/${slotIdx}`;
+    const ref = firebase.storage().ref(path);
+    await ref.put(blobComprimido, { contentType: 'image/jpeg' });
+    const url = await ref.getDownloadURL();
+
+    if (!a.photos[etapaIdx]) a.photos[etapaIdx] = [null, null];
+    a.photos[etapaIdx][slotIdx] = url;
+    a.photoHashes[etapaIdx][slotIdx] = hash;
+    saveState();
+
+    logActivity('update', `Foto agregada: ${l.name} · ${a.name}`, `${p.name} · ${ETAPAS[etapaIdx].name} (foto ${slotIdx+1})`);
+    renderPhotosModal();
+    renderAvance();
+    showToast('FOTO GUARDADA', 'green');
+  } catch(err) {
+    console.error('Error subiendo foto:', err);
+    showToast('ERROR AL SUBIR FOTO: ' + (err.code || err.message || 'desconocido'), 'red');
+  }
 }
 
 async function uploadPhoto(event, etapaIdx, slotIdx){
@@ -7391,6 +7613,12 @@ async function deletePhoto(etapaIdx, slotIdx){
   const l = t.levels.find(x => x.id === photoCtx.levelId);
   const a = (l.aptos||[]).find(x => x.id === photoCtx.aptoId);
   const oldRef = (a.photos && a.photos[etapaIdx]) ? a.photos[etapaIdx][slotIdx] : null;
+
+  // Limpiar hash correspondiente al slot eliminado
+  if (a.photoHashes && a.photoHashes[etapaIdx]) {
+    a.photoHashes[etapaIdx][slotIdx] = null;
+    if (!a.photoHashes[etapaIdx][0] && !a.photoHashes[etapaIdx][1]) delete a.photoHashes[etapaIdx];
+  }
 
   if (a.photos && a.photos[etapaIdx]) {
     a.photos[etapaIdx][slotIdx] = null;
