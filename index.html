@@ -5941,15 +5941,77 @@ async function uploadFacturaPDF(event, rowId) {
       r.facturaFechaEmision = `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
       if (!r.f) r.f = r.facturaFechaEmision;
     }
+
+    // ─── DETECCIÓN AUTOMÁTICA DEL NÚMERO DE FACTURA ───
+    // Si el usuario no puso número manualmente (o lo dejó vacío), leemos el PDF
+    // y buscamos patrones típicos: "Factura No. 1234567", "DTE 12345", "Serie X No. Y", etc.
+    if (!r.factura || String(r.factura).trim() === '') {
+      try {
+        const numFact = await _detectarNumeroFactura(file);
+        if (numFact) {
+          r.factura = numFact;
+          console.log('[Factura] Número detectado del PDF:', numFact);
+        } else {
+          console.log('[Factura] No se pudo detectar número automáticamente. Editalo manualmente si lo necesitás.');
+        }
+      } catch (errPdf) {
+        console.warn('[Factura] Error leyendo PDF para extraer número:', errPdf);
+      }
+    }
+
     saveState();
     renderCobro();
-    logActivity('update', `Factura PDF subida: ${r.d}`, `${p.name}`);
-    showToast('FACTURA SUBIDA · MARCADA COMO EMITIDA', 'green');
+    logActivity('update', `Factura PDF subida: ${r.d}`, `${p.name}${r.factura ? ' · # ' + r.factura : ''}`);
+    showToast('FACTURA SUBIDA · MARCADA COMO EMITIDA' + (r.factura ? ' · # ' + r.factura : ''), 'green');
   } catch (e) {
     console.error('Error subiendo factura:', e);
     showToast('ERROR: ' + (e.message || e), 'red');
   }
   event.target.value = '';
+}
+
+// Helper: lee un PDF de factura y extrae el número con patrones comunes en GT.
+// Usa PDF.js (ya cargado por la app). Devuelve el número o '' si no detectó.
+async function _detectarNumeroFactura(file) {
+  if (typeof pdfjsLib === 'undefined') return '';
+  try {
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    let textoCompleto = '';
+    const maxPages = Math.min(pdf.numPages, 3); // primeras 3 páginas son suficientes
+    for (let i = 1; i <= maxPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      textoCompleto += content.items.map(it => it.str).join(' ') + '\n';
+    }
+
+    // Patrones comunes para # de factura en GT (DTE / FEL):
+    //   "Número 1466844488"
+    //   "No. 1466844488"
+    //   "Factura No. 268520181"
+    //   "DTE 1234567890" (FEL)
+    //   "Serie XXX-Numero YYY"
+    const patrones = [
+      /(?:N[°ºo]?\.?|N[ÚU]MERO|FACTURA\s*N[°ºo]?\.?|DTE\s*N[°ºo]?\.?)\s*[:\-]?\s*(\d{6,15})/i,
+      /(?:DTE|FEL|FACTURA)[\s\S]{0,40}?(\d{8,15})/i,
+      /(?:AUTORIZACI[ÓO]N|SAT)[\s\S]{0,40}?(\d{10,40})/i
+    ];
+    for (const re of patrones) {
+      const m = textoCompleto.match(re);
+      if (m && m[1]) return String(m[1]).trim();
+    }
+    // Último recurso: cualquier número de 8-15 dígitos cerca de la palabra "factura"
+    const idx = textoCompleto.toLowerCase().indexOf('factura');
+    if (idx >= 0) {
+      const slice = textoCompleto.slice(idx, idx + 200);
+      const m = slice.match(/\b(\d{8,15})\b/);
+      if (m) return m[1];
+    }
+    return '';
+  } catch (e) {
+    console.warn('[_detectarNumeroFactura] error:', e);
+    return '';
+  }
 }
 
 // Eliminar PDF de factura — SOLO ADMIN. Borra el archivo de Storage y limpia
@@ -13326,22 +13388,65 @@ function deleteCurrentProveedor(){
       console.log('[Detección] Estimaciones con datos:', [...estNumsConDatos].sort((a,b)=>a-b));
       console.log('[Detección] Detalle por estNum (aptos con valor > 0):', detalleDetect);
 
-      // ─── EXTRACCIÓN INDEPENDIENTE de montos por estimación (no depende de matching).
-      // Recorre TODAS las filas del Excel y suma "A CANCELAR" (cancelCol) para cada estimación.
-      // Así el resumen de estimaciones se llena con montos reales aunque haya aptos sin match.
+      // ─── LECTURA DIRECTA DE LA FILA "TOTAL ESTIMACIÓN" del Excel (oficial)
+      // En el Excel oficial existe una fila tipo:
+      //   B="TOTAL ESTIMACIÓN" con el monto de cada estimación en E, G, I, K, M, O, Q, S...
+      // Esto es MUCHO más confiable que sumar manualmente (evita duplicar subtotales/totales).
+      // Si no existe esa fila, cae al fallback "TOTAL" o suma manual.
       if (interpret.tipo === 'oficial' && interpret.ejecutadoCols) {
-        for (let i = 0; i < interpret.dataRows.length; i++) {
-          const dr = interpret.dataRows[i];
-          if (!Array.isArray(dr)) continue;
+        const ROW_PATTERNS_TOTAL = [/TOTAL\s+ESTIMACI[ÓO]N/i, /^TOTAL$/i, /^TOTAL\s*$/i];
+        let filaTotalIdx = -1;
+        let filaTotalLabel = '';
+        // Buscar la fila más específica primero
+        for (const re of ROW_PATTERNS_TOTAL) {
+          for (let i = 0; i < interpret.dataRows.length; i++) {
+            const dr = interpret.dataRows[i];
+            if (!Array.isArray(dr)) continue;
+            // Buscar en las primeras 4 columnas (B suele ser la columna de label)
+            for (let c = 0; c < Math.min(dr.length, 5); c++) {
+              const v = String(dr[c] || '').trim();
+              if (!v) continue;
+              if (re.test(v) && !/(LIQUIDO|RECIBIR|RENGL|EJECUTADO|CANCEL|SALDO|ANTICIPO|RETENIDO)/i.test(v)) {
+                filaTotalIdx = i;
+                filaTotalLabel = v;
+                break;
+              }
+            }
+            if (filaTotalIdx >= 0) break;
+          }
+          if (filaTotalIdx >= 0) break;
+        }
+
+        if (filaTotalIdx >= 0) {
+          console.log(`[Detección] Fila "${filaTotalLabel}" encontrada en row ${filaTotalIdx}. Leyendo montos directamente.`);
+          const totalRow = interpret.dataRows[filaTotalIdx];
           interpret.ejecutadoCols.forEach(({ cancelCol, estNum }) => {
             if (cancelCol == null) return;
-            const cancelRaw = dr[cancelCol];
-            if (cancelRaw === '' || cancelRaw === null || cancelRaw === undefined) return;
-            const monto = Number(cancelRaw);
-            if (isNaN(monto) || monto <= 0) return;
-            if (!estTotalesExcel[estNum]) estTotalesExcel[estNum] = { monto: 0, fechaRaw: null };
-            estTotalesExcel[estNum].monto += monto;
+            const monto = Number(totalRow[cancelCol]);
+            if (!isNaN(monto) && monto > 0) {
+              if (!estTotalesExcel[estNum]) estTotalesExcel[estNum] = { monto: 0, fechaRaw: null };
+              estTotalesExcel[estNum].monto = monto;
+            }
           });
+        } else {
+          // Fallback: sumar manualmente, pero saltando filas que parezcan subtotales/totales.
+          console.warn('[Detección] No se encontró fila "TOTAL ESTIMACIÓN", usando suma manual con anti-duplicados.');
+          for (let i = 0; i < interpret.dataRows.length; i++) {
+            const dr = interpret.dataRows[i];
+            if (!Array.isArray(dr)) continue;
+            // Saltar filas que parecen subtotales/totales
+            const labelCell = String((dr[1] || dr[2] || '')).trim().toUpperCase();
+            if (/^(TOTAL|NIVEL\s*\d+|TORRE\s*\d+|GRAN\s*TOTAL|ANTICIPO|AMORTIZACI|ACUMULADO|SALDO|CHEQUEO)/i.test(labelCell)) continue;
+            interpret.ejecutadoCols.forEach(({ cancelCol, estNum }) => {
+              if (cancelCol == null) return;
+              const cancelRaw = dr[cancelCol];
+              if (cancelRaw === '' || cancelRaw === null || cancelRaw === undefined) return;
+              const monto = Number(cancelRaw);
+              if (isNaN(monto) || monto <= 0) return;
+              if (!estTotalesExcel[estNum]) estTotalesExcel[estNum] = { monto: 0, fechaRaw: null };
+              estTotalesExcel[estNum].monto += monto;
+            });
+          }
         }
       }
       console.log('[Detección] Totales extraídos del Excel:', estTotalesExcel);
@@ -13367,8 +13472,8 @@ function deleteCurrentProveedor(){
         return false;
       });
 
-      // PASO 2: RELLENAR datos de estimaciones existentes que tienen vp_ci=0 o sin fecha.
-      // Solo rellenamos campos vacíos: NO sobrescribimos info manual del usuario.
+      // PASO 2: RELLENAR datos de estimaciones existentes (monto, fecha y descripción).
+      // Solo rellenamos campos vacíos o que NO tengan info manual del usuario.
       let estimacionesActualizadas = 0;
       (p.cobro.rows || []).forEach(r => {
         if (r.isAnticipo) return;
@@ -13376,15 +13481,26 @@ function deleteCurrentProveedor(){
         if (!m) return;
         const n = parseInt(m[1]);
         const datos = estTotalesExcel[n];
-        if (!datos) return;
         let cambiado = false;
-        if ((!r.vp_ci || Number(r.vp_ci) === 0) && datos.monto > 0) {
-          r.vp_ci = +datos.monto.toFixed(2);
+        // Normalizar la descripción a "ESTIMACIÓN #N"
+        const descCorrecta = 'ESTIMACIÓN #' + n;
+        if (r.d !== descCorrecta && /ESTIMACI[ÓO]N/i.test(r.d || '')) {
+          r.d = descCorrecta;
           cambiado = true;
         }
-        if ((!r.f || String(r.f).trim() === '') && datos.fechaRaw != null) {
-          const fechaStr = _excelDateToString(datos.fechaRaw);
-          if (fechaStr) { r.f = fechaStr; cambiado = true; }
+        if (datos) {
+          // SIEMPRE actualizar el monto desde el Excel oficial (es la fuente autoritativa).
+          // Solo NO sobrescribir si el usuario tiene factura subida manualmente y la diferencia es grande.
+          const tieneFacturaManual = r.factura && String(r.factura).trim() && r.facturaPdfUrl;
+          if (datos.monto > 0 && (!tieneFacturaManual || Number(r.vp_ci) === 0)) {
+            r.vp_ci = +datos.monto.toFixed(2);
+            cambiado = true;
+          }
+          // Fecha: rellenar solo si está vacía
+          if ((!r.f || String(r.f).trim() === '') && datos.fechaRaw != null) {
+            const fechaStr = _excelDateToString(datos.fechaRaw);
+            if (fechaStr) { r.f = fechaStr; cambiado = true; }
+          }
         }
         if (cambiado) estimacionesActualizadas++;
       });
@@ -13404,10 +13520,10 @@ function deleteCurrentProveedor(){
         p.cobro.rows.push({
           id: 'e' + n + '_' + Date.now() + '_' + Math.floor(Math.random()*1000),
           f: fechaStr,
-          d: 'ESTIMACIÓN ' + n,
+          d: 'ESTIMACIÓN #' + n,
           vp_ci: monto,
-          sf: '',
-          sc: '',
+          sf: 'PENDIENTE',
+          sc: 'PENDIENTE',
           fp: '',
           factura: ''
         });
