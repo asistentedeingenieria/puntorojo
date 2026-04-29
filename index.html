@@ -12209,13 +12209,31 @@ function deleteCurrentProveedor(){
       console.log('[Diagnóstico Cobro] Estado por torre:\n  ' + diag.join('\n  '));
     } catch(e){}
 
+    // Migración inline: si un apto tiene `porEstimacion.pdf_cumulativo`, moverlo al campo
+    // dedicado `pdfCumulativo`. Esto separa los datos del PDF de los del Excel para que
+    // nunca se pisen entre uploads.
+    (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
+      const rec = p.cobro.avanceAptos[a.id];
+      if (!rec) return;
+      if (rec.porEstimacion && rec.porEstimacion.pdf_cumulativo != null) {
+        rec.pdfCumulativo = Number(rec.porEstimacion.pdf_cumulativo) || 0;
+        delete rec.porEstimacion.pdf_cumulativo;
+      }
+    })));
+
     // Recolectar todos los aptos con su % acumulado.
-    // IMPORTANTE: sumamos TODAS las claves de porEstimacion (incluso est_8, est_9, etc.)
-    // que corresponden a estimaciones del Excel que tal vez aún no están cargadas en cobro.rows.
+    // PRIORIDAD: si el apto tiene pdfCumulativo (subido por PDF), usar ese valor.
+    // Si no, sumar los % por estimación (subido por Excel).
     const allAptos = [];
     (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
-      const rec = p.cobro.avanceAptos[a.id]?.porEstimacion || {};
-      const cumul = Object.values(rec).reduce((s, v) => s + (Number(v) || 0), 0);
+      const rec = p.cobro.avanceAptos[a.id] || {};
+      let cumul;
+      if (rec.pdfCumulativo != null && rec.pdfCumulativo > 0) {
+        cumul = Number(rec.pdfCumulativo) || 0;
+      } else {
+        const por = rec.porEstimacion || {};
+        cumul = Object.values(por).reduce((s, v) => s + (Number(v) || 0), 0);
+      }
       allAptos.push({ torre: t, level: l, apto: a, cumul: Math.min(100, cumul) });
     })));
 
@@ -12617,12 +12635,18 @@ function deleteCurrentProveedor(){
       try {
         console.log('[Parser] Usando SheetJS para leer:', file.name);
         const buf = await file.arrayBuffer();
-        const wb = XLSX.read(buf, { type: 'array', cellDates: false });
+        const wb = XLSX.read(buf, { type: 'array', cellDates: false, cellNF: false, cellText: false });
         if (!wb.SheetNames || wb.SheetNames.length === 0) throw new Error('Excel sin hojas');
         const ws = wb.Sheets[wb.SheetNames[0]];
-        const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+        // raw:true → devuelve valores numéricos crudos (0.25 en vez de "25%").
+        // Crítico para que las celdas con porcentajes se lean como números, no strings.
+        const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true, blankrows: true });
         console.log('[Parser] SheetJS leyó', aoa.length, 'filas');
-        if (aoa.length > 0) console.log('[Parser] Primera fila:', aoa[0]);
+        if (aoa.length > 7) {
+          console.log('[Parser] Fila 8 (estHeader probable):', aoa[7]);
+          console.log('[Parser] Fila 9 (subHeader probable):', aoa[8]);
+          if (aoa[11]) console.log('[Parser] Fila 12 (primer apto):', aoa[11]);
+        }
         return aoa;
       } catch (sheetErr) {
         console.warn('[Parser] SheetJS falló, fallback al parser manual:', sheetErr);
@@ -12919,9 +12943,11 @@ function deleteCurrentProveedor(){
             return;
           }
           if (!p.cobro.avanceAptos[apto.id]) p.cobro.avanceAptos[apto.id] = { stages:[0,0,0,0,0,0], porEstimacion:{} };
-          // Reemplazo el porEstimacion completo (PDF solo da cumulative, no per-estimación).
-          // Solo afecta a los aptos que vienen en este PDF — los demás quedan intactos.
-          p.cobro.avanceAptos[apto.id].porEstimacion = { 'pdf_cumulativo': d.pct };
+          // El PDF guarda en pdfCumulativo (campo separado del Excel).
+          // Para este apto específico: PDF es la nueva verdad → vaciar porEstimacion del Excel.
+          // Los aptos NO incluidos en este PDF quedan intactos (su Excel se preserva).
+          p.cobro.avanceAptos[apto.id].pdfCumulativo = Number(d.pct) || 0;
+          p.cobro.avanceAptos[apto.id].porEstimacion = {};
           updatedPDF++;
           const tk = d.torreNum != null ? `T${d.torreNum}` : 'X';
           if (!debugTorres[tk]) debugTorres[tk] = 0;
@@ -13173,12 +13199,14 @@ function deleteCurrentProveedor(){
           if (!p.cobro.avanceAptos[apto.id].porEstimacion) p.cobro.avanceAptos[apto.id].porEstimacion = {};
 
           // Reset solo del apto la PRIMERA vez que aparece en este Excel (no de los demás).
+          // Excel es la nueva verdad para este apto → también vaciamos el pdfCumulativo viejo.
           if (!_firstTouchExcel.has(apto.id)) {
             p.cobro.avanceAptos[apto.id].porEstimacion = {};
+            p.cobro.avanceAptos[apto.id].pdfCumulativo = null;
             _firstTouchExcel.add(apto.id);
           }
 
-          interpret.ejecutadoCols.forEach(({ colIdx, cancelCol, estNum }) => {
+          interpret.ejecutadoCols.forEach(({ colIdx, estNum }) => {
             const raw = dr[colIdx];
             if (raw === '' || raw === null || raw === undefined) return;
             let pct = Number(raw);
@@ -13189,18 +13217,7 @@ function deleteCurrentProveedor(){
             const rid = idByEstNum[estNum] || ('est_' + estNum);
             p.cobro.avanceAptos[apto.id].porEstimacion[rid] = pct;
             updated++;
-
-            // Acumular monto "A CANCELAR" de este apto para esta estimación (col siguiente).
-            if (cancelCol != null) {
-              const cancelRaw = dr[cancelCol];
-              if (cancelRaw !== '' && cancelRaw !== null && cancelRaw !== undefined) {
-                const monto = Number(cancelRaw);
-                if (!isNaN(monto) && monto > 0) {
-                  if (!estTotalesExcel[estNum]) estTotalesExcel[estNum] = { monto: 0, fechaRaw: null };
-                  estTotalesExcel[estNum].monto += monto;
-                }
-              }
-            }
+            // (El monto "A CANCELAR" se extrae en el loop independiente posterior, no aquí.)
           });
         }
         try {
@@ -13264,19 +13281,22 @@ function deleteCurrentProveedor(){
       // estimaciones futuras vacías — solo las que algún apto ya cobró.
       let estimacionesAgregadas = 0;
       const estNumsConDatos = new Set();
+      const detalleDetect = {}; // { estNum: { aptos: 0, sumaPct: 0 } }
 
       if (interpret.tipo === 'oficial') {
-        // Recorrer las filas de datos y ver qué columnas de estimación tienen al menos un valor > 0.
-        for (let i = (interpret.subHeaderRow || 0) + 1; i < interpret.dataRows.length; i++) {
+        // Recorrer TODAS las filas (no solo desde subHeaderRow+1) por si hay aptos antes.
+        for (let i = 0; i < interpret.dataRows.length; i++) {
           const dr = interpret.dataRows[i];
           if (!Array.isArray(dr)) continue;
           interpret.ejecutadoCols.forEach(({ colIdx, estNum }) => {
-            if (estNumsConDatos.has(estNum)) return; // ya confirmado
             const raw = dr[colIdx];
             if (raw === '' || raw === null || raw === undefined) return;
             const pct = Number(raw);
             if (isNaN(pct) || pct <= 0) return;
             estNumsConDatos.add(estNum);
+            if (!detalleDetect[estNum]) detalleDetect[estNum] = { aptos: 0, sumaPct: 0 };
+            detalleDetect[estNum].aptos++;
+            detalleDetect[estNum].sumaPct += pct;
           });
         }
       } else if (interpret.estColumns && interpret.dataRows) {
@@ -13291,15 +13311,40 @@ function deleteCurrentProveedor(){
         interpret.dataRows.forEach(dr => {
           if (!Array.isArray(dr)) return;
           Object.entries(colNumByIdx).forEach(([colIdx, estNum]) => {
-            if (estNumsConDatos.has(estNum)) return;
             const raw = dr[colIdx];
             if (raw === '' || raw === null || raw === undefined) return;
             const pct = Number(raw);
             if (isNaN(pct) || pct <= 0) return;
             estNumsConDatos.add(estNum);
+            if (!detalleDetect[estNum]) detalleDetect[estNum] = { aptos: 0, sumaPct: 0 };
+            detalleDetect[estNum].aptos++;
+            detalleDetect[estNum].sumaPct += pct;
           });
         });
       }
+
+      console.log('[Detección] Estimaciones con datos:', [...estNumsConDatos].sort((a,b)=>a-b));
+      console.log('[Detección] Detalle por estNum (aptos con valor > 0):', detalleDetect);
+
+      // ─── EXTRACCIÓN INDEPENDIENTE de montos por estimación (no depende de matching).
+      // Recorre TODAS las filas del Excel y suma "A CANCELAR" (cancelCol) para cada estimación.
+      // Así el resumen de estimaciones se llena con montos reales aunque haya aptos sin match.
+      if (interpret.tipo === 'oficial' && interpret.ejecutadoCols) {
+        for (let i = 0; i < interpret.dataRows.length; i++) {
+          const dr = interpret.dataRows[i];
+          if (!Array.isArray(dr)) continue;
+          interpret.ejecutadoCols.forEach(({ cancelCol, estNum }) => {
+            if (cancelCol == null) return;
+            const cancelRaw = dr[cancelCol];
+            if (cancelRaw === '' || cancelRaw === null || cancelRaw === undefined) return;
+            const monto = Number(cancelRaw);
+            if (isNaN(monto) || monto <= 0) return;
+            if (!estTotalesExcel[estNum]) estTotalesExcel[estNum] = { monto: 0, fechaRaw: null };
+            estTotalesExcel[estNum].monto += monto;
+          });
+        }
+      }
+      console.log('[Detección] Totales extraídos del Excel:', estTotalesExcel);
 
       // PASO 1: Limpiar estimaciones FANTASMA (creadas por error en uploads anteriores).
       // Una fila se elimina solo si:
