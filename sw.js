@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v103-acuses-maestros-2-fotos-firma-proporcional';
+const CACHE_VERSION = 'v104-fix-firma-qr-detecta-2-fotos';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
