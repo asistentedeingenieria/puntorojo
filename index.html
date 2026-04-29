@@ -2651,7 +2651,8 @@ html,body,.main{background:#FFFFFF!important;}
     <p class="desc">Firma digital pre-validada vía QR rotativo.</p>
     <div id="acuseDigitalBody" style="font-size:12px;color:var(--ink);line-height:1.6"></div>
     <div class="modal-actions">
-      <button class="btn" onclick="closeModal('acuseDigital')">CERRAR</button>
+      <button class="btn ghost" onclick="closeModal('acuseDigital')">CERRAR</button>
+      <button class="btn" id="btnDescargarAcuseIndiv" onclick="descargarAcuseIndividualActual()">DESCARGAR PDF</button>
     </div>
   </div>
 </div>
@@ -8294,7 +8295,7 @@ function renderAcusesRecepcion(){
             if (canEdit && !hasSig && cuantas === 2) {
               firmarBtn = `<button class="btn sm" style="background:var(--green-dark);color:#fff" onclick="openQRScanForAcuse('${t.id}','${l.id}','${a.id}','${s.key}')" title="Firmar con QR del receptor">FIRMAR QR</button>`;
             } else if (hasSig) {
-              firmarBtn = `<button class="btn ghost sm" onclick='viewDigitalAcuse(${JSON.stringify(slot).replace(/'/g, "&apos;")})' title="Ver comprobante de firma">VER FIRMA</button>`;
+              firmarBtn = `<button class="btn ghost sm" onclick='viewDigitalAcuse(${JSON.stringify(slot).replace(/'/g, "&apos;")}, {towerId:"${t.id}",levelId:"${l.id}",aptoId:"${a.id}",slotKey:"${s.key}"})' title="Ver comprobante de firma">VER FIRMA</button>`;
             }
 
             // Eliminar — SOLO admin
@@ -18458,8 +18459,260 @@ async function processQRScan(decoded){
 }
 
 /* Vista del comprobante digital (cuando el usuario hace VER en un acuse digital) */
-function viewDigitalAcuse(slot){
+// Estado del comprobante actualmente abierto, para poder descargarlo como PDF.
+let _viewDigitalAcuseCtx = null;
+
+/* Descarga PDF de UN solo acuse — el que está abierto en el modal "COMPROBANTE DE ACUSE DIGITAL".
+   Reusa el mismo motor de _amCargarImagen (con sus 4 estrategias) y el mismo layout que
+   los Acuses Maestros, pero genera UNA sola página con el detalle del slot. */
+window.descargarAcuseIndividualActual = async function(){
+  const ctx = _viewDigitalAcuseCtx;
+  if (!ctx) return showToast('SIN DATOS DEL ACUSE — REABRÍ EL COMPROBANTE', 'red');
+  if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) {
+    return showToast('JSPDF NO CARGÓ — RECARGÁ LA APP', 'red');
+  }
+  const p = activeProj();
+  const t = (p.towers||[]).find(x => x.id === ctx.towerId);
+  const l = t && (t.levels||[]).find(x => x.id === ctx.levelId);
+  const a = l && (l.aptos||[]).find(x => x.id === ctx.aptoId);
+  const acuse = a && a.acuseRecepciones && a.acuseRecepciones[ctx.slotKey];
+  if (!acuse) return showToast('EL ACUSE YA NO EXISTE', 'red');
+
+  showToast('GENERANDO PDF DEL ACUSE...', '');
+
+  // Recolectar las 2 fotos del slot
+  const fotoUrls = [];
+  if (Array.isArray(acuse.urls)) {
+    for (const u of acuse.urls) if (u && typeof u === 'string') fotoUrls.push(u);
+  }
+  if (acuse.url && typeof acuse.url === 'string' && fotoUrls.indexOf(acuse.url) === -1) fotoUrls.push(acuse.url);
+  if (acuse.data && typeof acuse.data === 'string' && fotoUrls.length === 0) fotoUrls.push(acuse.data);
+
+  const sIdx = ACUSE_SLOTS.findIndex(s => s.key === String(ctx.slotKey));
+  const etapaLabel = (sIdx >= 0 ? ACUSE_SLOTS[sIdx].label : `ETAPA ${ctx.slotKey}`);
+
+  try {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
+    const ROJO = [200, 20, 28];
+    const CAFE = [110, 80, 50];
+    const GRIS = [80, 80, 80];
+    const CREMA = [250, 247, 242];
+    const NEGRO = [30, 30, 30];
+    const pageW = doc.internal.pageSize.width;
+    const pageH = doc.internal.pageSize.height;
+
+    // Header rojo compacto
+    doc.setFillColor(...ROJO);
+    doc.rect(0, 0, pageW, 70, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(18);
+    doc.setFont('helvetica', 'bold');
+    doc.text('ACUSE DE RECEPCIÓN', 50, 32);
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text(p.name, 50, 52);
+    doc.text((p.client || '—') + ' · ' + (p.location || '—'), pageW - 50, 52, { align: 'right' });
+
+    let yc = 100;
+    doc.setTextColor(...NEGRO);
+
+    // Datos
+    doc.autoTable({
+      startY: yc,
+      body: [
+        ['Torre', t.name],
+        ['Nivel', l.name],
+        ['Apartamento / Espacio', a.name],
+        ['Etapa entregada', etapaLabel]
+      ],
+      margin: { left: 50, right: 50 },
+      styles: { fontSize: 10, cellPadding: 6 },
+      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 160, fillColor: CREMA }, 1: { cellWidth: 'auto' } },
+      theme: 'grid'
+    });
+    yc = doc.lastAutoTable.finalY + 16;
+
+    // Fotos
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...ROJO);
+    doc.text('EVIDENCIA FOTOGRÁFICA · 2 FOTOS', 50, yc);
+    yc += 6;
+    if (fotoUrls.length > 0) {
+      const imgs = await Promise.all(fotoUrls.slice(0, 2).map(u => _amCargarImagen(u).catch(() => null)));
+      const validas = imgs.filter(Boolean);
+      if (validas.length > 0) {
+        const margen = 50, gap = 12;
+        const cellW = (pageW - margen * 2 - gap) / 2;
+        const cellH = 200;
+        const baseY = yc + 6;
+        validas.forEach((img, idx) => {
+          let w = cellW, h = (img.h / img.w) * cellW;
+          if (h > cellH) { h = cellH; w = (img.w / img.h) * cellH; }
+          const cellX = margen + idx * (cellW + gap);
+          const x = cellX + (cellW - w) / 2;
+          const y = baseY + (cellH - h) / 2;
+          doc.setDrawColor(220, 220, 220);
+          doc.rect(cellX, baseY, cellW, cellH);
+          doc.addImage(img.dataUrl, 'JPEG', x, y, w, h, undefined, 'FAST');
+          doc.setFontSize(8);
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(...GRIS);
+          doc.text(`FOTO ${idx + 1}`, cellX + cellW / 2, baseY + cellH + 12, { align: 'center' });
+        });
+        if (validas.length === 1 && fotoUrls.length < 2) {
+          const cellX = margen + cellW + gap;
+          doc.setFillColor(248, 248, 248);
+          doc.rect(cellX, baseY, cellW, cellH, 'F');
+          doc.setDrawColor(220, 220, 220);
+          doc.rect(cellX, baseY, cellW, cellH);
+          doc.setFontSize(9);
+          doc.setFont('helvetica', 'italic');
+          doc.setTextColor(...GRIS);
+          doc.text('SIN 2DA FOTO', cellX + cellW / 2, baseY + cellH / 2, { align: 'center' });
+        }
+        yc = baseY + cellH + 22;
+      } else {
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(...GRIS);
+        doc.text('No se pudieron cargar las fotos.', 50, yc + 18);
+        yc += 30;
+      }
+    } else {
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'italic');
+      doc.setTextColor(...GRIS);
+      doc.text('Sin fotos registradas.', 50, yc + 18);
+      yc += 30;
+    }
+
+    // Firma digital del receptor
+    if (yc > pageH - 200) { doc.addPage(); yc = 50; }
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...ROJO);
+    doc.text('FIRMA DIGITAL DEL RECEPTOR', 50, yc);
+    yc += 6;
+    if (acuse.receptorNombre || acuse.type) {
+      doc.autoTable({
+        startY: yc + 6,
+        body: [
+          ['Receptor (firmó)', acuse.receptorNombre || '—'],
+          ['Cargo', acuse.receptorCargo || '—'],
+          ['Tipo de firma', (acuse.type || 'digital').toUpperCase() + ' · QR ROTATIVO PRE-VALIDADO'],
+          ['Fecha y hora de firma', acuse.ts ? new Date(acuse.ts).toLocaleString('es-GT', { dateStyle: 'long', timeStyle: 'short' }) : '—'],
+          ['Supervisor Punto Rojo', acuse.userName || acuse.user || '—']
+        ],
+        margin: { left: 50, right: 50 },
+        styles: { fontSize: 10, cellPadding: 6 },
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 180, fillColor: CREMA }, 1: { cellWidth: 'auto' } },
+        theme: 'grid'
+      });
+      yc = doc.lastAutoTable.finalY + 14;
+
+      // Firma manuscrita
+      let firmaSrc = acuse.receptorSignatureUrl || '';
+      if (!firmaSrc && acuse.receptorId && Array.isArray(state.receptores)) {
+        const rRec = state.receptores.find(x => x.id === acuse.receptorId);
+        if (rRec) firmaSrc = rRec.signatureImageUrl || '';
+      }
+      if (yc > pageH - 200) { doc.addPage(); yc = 50; }
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...ROJO);
+      doc.text('FIRMA MANUSCRITA DEL RECEPTOR', 50, yc);
+      yc += 8;
+      if (firmaSrc) {
+        const fimg = await _amCargarImagen(firmaSrc).catch(() => null);
+        if (fimg && fimg.dataUrl) {
+          const maxW = 150, maxH = 55;
+          let w = maxW, h = (fimg.h / fimg.w) * maxW;
+          if (h > maxH) { h = maxH; w = (fimg.w / fimg.h) * maxH; }
+          const boxW = 280, boxH = h + 28;
+          const boxX = (pageW - boxW) / 2;
+          const boxY = yc + 4;
+          doc.setFillColor(255, 255, 255);
+          doc.setDrawColor(...GRIS);
+          doc.rect(boxX, boxY, boxW, boxH, 'FD');
+          const imgX = boxX + (boxW - w) / 2;
+          const imgY = boxY + 6;
+          doc.addImage(fimg.dataUrl, 'PNG', imgX, imgY, w, h, undefined, 'FAST');
+          doc.setDrawColor(...GRIS);
+          doc.line(boxX + 24, imgY + h + 4, boxX + boxW - 24, imgY + h + 4);
+          doc.setFontSize(8);
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(...GRIS);
+          doc.text((acuse.receptorNombre || '').toUpperCase(), pageW/2, imgY + h + 14, { align: 'center' });
+          yc = boxY + boxH + 8;
+        } else {
+          doc.setFontSize(9);
+          doc.setFont('helvetica', 'italic');
+          doc.setTextColor(...GRIS);
+          doc.text('No se pudo cargar la imagen de firma.', 50, yc + 12);
+          yc += 24;
+        }
+      } else {
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(...GRIS);
+        doc.text('Receptor sin firma manuscrita registrada.', 50, yc + 12);
+        yc += 24;
+      }
+    } else {
+      doc.setFillColor(255, 240, 200);
+      doc.rect(50, yc + 6, pageW - 100, 50, 'F');
+      doc.setDrawColor(...CAFE);
+      doc.rect(50, yc + 6, pageW - 100, 50);
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...CAFE);
+      doc.text('ETAPA SIN FIRMAR', pageW/2, yc + 28, { align: 'center' });
+    }
+
+    // Pie
+    doc.setFontSize(7);
+    doc.setTextColor(...GRIS);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Punto Rojo S.A.  ·  ${p.name}  ·  Acuse individual  ·  Generado: ${new Date().toLocaleString('es-GT')}`, pageW/2, pageH - 20, { align: 'center' });
+
+    const fechaISO = new Date().toISOString().slice(0, 10);
+    const safeName = (a.name || 'apto').replace(/[^a-zA-Z0-9]/g, '_');
+    const safeEtapa = etapaLabel.replace(/[^a-zA-Z0-9]/g, '_');
+    doc.save(`acuse_${safeName}_${safeEtapa}_${fechaISO}.pdf`);
+    showToast('PDF DESCARGADO', 'green');
+  } catch(err) {
+    console.error('Error generando PDF individual:', err);
+    showToast('ERROR: ' + (err.message || err), 'red');
+  }
+};
+
+function viewDigitalAcuse(slot, ctx){
   if (!slot) return;
+  // Guardar contexto del acuse para que el botón "DESCARGAR PDF" sepa cuál generar.
+  // Si el caller no pasó ctx, intentar resolver desde el state activo buscando este slot.
+  if (!ctx) {
+    try {
+      const p = activeProj();
+      (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
+        if (!a.acuseRecepciones) return;
+        Object.keys(a.acuseRecepciones).forEach(k => {
+          const s = a.acuseRecepciones[k];
+          if (s && s.ts && slot.ts && s.ts === slot.ts && (s.receptorNombre||'') === (slot.receptorNombre||'')) {
+            ctx = { towerId: t.id, levelId: l.id, aptoId: a.id, slotKey: k };
+          }
+        });
+      })));
+    } catch(e){}
+  }
+  _viewDigitalAcuseCtx = ctx || null;
+  // Mostrar/ocultar el botón PDF según si tenemos contexto
+  setTimeout(() => {
+    const btn = document.getElementById('btnDescargarAcuseIndiv');
+    if (btn) btn.style.display = _viewDigitalAcuseCtx ? '' : 'none';
+  }, 0);
+
   const fecha = slot.ts ? new Date(slot.ts).toLocaleString('es-GT') : '—';
   const nombre = slot.receptorNombre || '—';
   const cargo = slot.receptorCargo || '';
