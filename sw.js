@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v99-textos-y-quitar-agregar-torre-nivel';
+const CACHE_VERSION = 'v100-avance-fisico-cuadritos-paleta-rojo';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
