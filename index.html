@@ -11782,16 +11782,18 @@ async function generarAcusesMaestros(){
     for (let i = 0; i < 6; i++) {
       const key = String(i);
       const acuse = a.acuseRecepciones && a.acuseRecepciones[key];
-      const tieneAcuse = acuse && (acuse.type || acuse.url || acuse.data || acuse.receptorNombre);
+      const tieneAcuse = acuse && (acuse.type || acuse.url || acuse.data || acuse.receptorNombre || (Array.isArray(acuse.urls) && acuse.urls.some(Boolean)));
       if (filtro === 'firmados' && !tieneAcuse) continue;
       if (filtro === 'todas' || tieneAcuse) {
-        // Buscar foto principal de la etapa (slot 0 o 1)
-        const photos = a.photos && a.photos[i];
-        let fotoUrl = null;
-        if (Array.isArray(photos)) {
-          for (const ph of photos) {
-            if (typeof ph === 'string' && ph.startsWith('http')) { fotoUrl = ph; break; }
+        // Recolectar las DOS fotos del slot del acuse (no las del avance físico).
+        // Soporta legacy: si solo hay slot.url, lo trata como fotoUrls[0].
+        const fotoUrls = [];
+        if (acuse) {
+          if (Array.isArray(acuse.urls)) {
+            for (const u of acuse.urls) if (u && typeof u === 'string') fotoUrls.push(u);
           }
+          if (acuse.url && typeof acuse.url === 'string' && fotoUrls.indexOf(acuse.url) === -1) fotoUrls.push(acuse.url);
+          if (acuse.data && typeof acuse.data === 'string' && fotoUrls.length === 0) fotoUrls.push(acuse.data);
         }
         acuses.push({
           torre: t.name, torreId: t.id,
@@ -11800,7 +11802,7 @@ async function generarAcusesMaestros(){
           etapaIdx: i,
           etapaLabel: ACUSE_SLOTS[i] ? ACUSE_SLOTS[i].label : `ETAPA ${i+1}`,
           acuse: acuse || null,
-          fotoUrl
+          fotoUrls
         });
       }
     }
@@ -11949,44 +11951,76 @@ async function generarAcusesMaestros(){
       });
       yc = doc.lastAutoTable.finalY + 16;
 
-      // Foto del trabajo
+      // Fotos del trabajo (2 fotos lado a lado)
       doc.setFontSize(10);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(...ROJO);
-      doc.text('EVIDENCIA FOTOGRÁFICA', 50, yc);
+      doc.text('EVIDENCIA FOTOGRÁFICA · 2 FOTOS', 50, yc);
       yc += 6;
 
-      if (ac.fotoUrl) {
+      if (ac.fotoUrls && ac.fotoUrls.length > 0) {
         try {
-          const img = await _amCargarImagen(ac.fotoUrl);
-          if (img) {
-            // Calcular dimensiones manteniendo proporción
-            const maxW = pageW - 100;
-            const maxH = 280;
-            let w = maxW, h = (img.h / img.w) * maxW;
-            if (h > maxH) { h = maxH; w = (img.w / img.h) * maxH; }
-            const x = 50 + (maxW - w) / 2;
-            doc.addImage(img.dataUrl, 'JPEG', x, yc + 6, w, h, undefined, 'FAST');
-            yc += h + 14;
+          // Cargar ambas en paralelo
+          const imgs = await Promise.all(ac.fotoUrls.slice(0, 2).map(u => _amCargarImagen(u).catch(() => null)));
+          const validas = imgs.filter(Boolean);
+          if (validas.length > 0) {
+            const margen = 50;
+            const gap = 12;
+            const cellW = (pageW - margen * 2 - gap) / 2; // ancho de cada foto
+            const cellH = 200; // alto fijo más bajo (antes era 280)
+            const baseY = yc + 6;
+
+            validas.forEach((img, idx) => {
+              // Calcular dimensiones manteniendo proporción dentro de la celda
+              let w = cellW, h = (img.h / img.w) * cellW;
+              if (h > cellH) { h = cellH; w = (img.w / img.h) * cellH; }
+              const cellX = margen + idx * (cellW + gap);
+              const x = cellX + (cellW - w) / 2;
+              const y = baseY + (cellH - h) / 2;
+              // Marco gris claro
+              doc.setDrawColor(220, 220, 220);
+              doc.rect(cellX, baseY, cellW, cellH);
+              doc.addImage(img.dataUrl, 'JPEG', x, y, w, h, undefined, 'FAST');
+              // Etiqueta
+              doc.setFontSize(8);
+              doc.setFont('helvetica', 'bold');
+              doc.setTextColor(...GRIS);
+              doc.text(`FOTO ${idx + 1}`, cellX + cellW / 2, baseY + cellH + 12, { align: 'center' });
+            });
+
+            // Si solo hay 1 foto válida, mostrar mensaje en la celda 2
+            if (validas.length === 1 && ac.fotoUrls.length < 2) {
+              const cellX = margen + cellW + gap;
+              doc.setFillColor(248, 248, 248);
+              doc.rect(cellX, baseY, cellW, cellH, 'F');
+              doc.setDrawColor(220, 220, 220);
+              doc.rect(cellX, baseY, cellW, cellH);
+              doc.setFontSize(9);
+              doc.setFont('helvetica', 'italic');
+              doc.setTextColor(...GRIS);
+              doc.text('SIN 2DA FOTO', cellX + cellW / 2, baseY + cellH / 2, { align: 'center' });
+            }
+
+            yc = baseY + cellH + 22;
           } else {
             doc.setFontSize(9);
             doc.setFont('helvetica', 'italic');
             doc.setTextColor(...GRIS);
-            doc.text('No se pudo cargar la foto (puede haber sido eliminada o sin conexión).', 50, yc + 18);
+            doc.text('No se pudieron cargar las fotos (eliminadas o sin conexión).', 50, yc + 18);
             yc += 30;
           }
         } catch(e) {
           doc.setFontSize(9);
           doc.setFont('helvetica', 'italic');
           doc.setTextColor(...GRIS);
-          doc.text('Error al cargar la foto.', 50, yc + 18);
+          doc.text('Error al cargar las fotos.', 50, yc + 18);
           yc += 30;
         }
       } else {
         doc.setFontSize(9);
         doc.setFont('helvetica', 'italic');
         doc.setTextColor(...GRIS);
-        doc.text('Sin foto registrada para esta etapa.', 50, yc + 18);
+        doc.text('Sin fotos registradas para esta etapa.', 50, yc + 18);
         yc += 30;
       }
 
@@ -12035,21 +12069,26 @@ async function generarAcusesMaestros(){
           try {
             const fimg = await _amCargarImagen(firmaSrc);
             if (fimg && fimg.dataUrl) {
-              const maxW = 220;
-              const maxH = 90;
+              // Tamaños más pequeños/proporcionales para que la firma se vea elegante,
+              // no como un cartel gigante en la página.
+              const maxW = 150;
+              const maxH = 55;
               let w = maxW, h = (fimg.h / fimg.w) * maxW;
               if (h > maxH) { h = maxH; w = (fimg.w / fimg.h) * maxH; }
-              // Caja blanca con marco para la firma
-              const boxX = 50, boxY = yc + 4, boxW = pageW - 100, boxH = h + 22;
+              // Caja blanca con marco para la firma — ancho moderado, no toda la página.
+              const boxW = 280;
+              const boxH = h + 28;
+              const boxX = (pageW - boxW) / 2;
+              const boxY = yc + 4;
               doc.setFillColor(255, 255, 255);
               doc.setDrawColor(...GRIS);
               doc.rect(boxX, boxY, boxW, boxH, 'FD');
               const imgX = boxX + (boxW - w) / 2;
-              const imgY = boxY + 8;
+              const imgY = boxY + 6;
               doc.addImage(fimg.dataUrl, 'PNG', imgX, imgY, w, h, undefined, 'FAST');
               // Línea + nombre debajo
               doc.setDrawColor(...GRIS);
-              doc.line(boxX + 30, imgY + h + 4, boxX + boxW - 30, imgY + h + 4);
+              doc.line(boxX + 24, imgY + h + 4, boxX + boxW - 24, imgY + h + 4);
               doc.setFontSize(8);
               doc.setFont('helvetica', 'normal');
               doc.setTextColor(...GRIS);
