@@ -12847,31 +12847,25 @@ function deleteCurrentProveedor(){
         const subHeader = rows[subHeaderRow];
         const estHeader = rows[estHeaderRow];
 
-        // PASO 3: mapear cada columna "% EJECUTADO" a su número de estimación.
-        // En el Excel oficial cada estimación abarca 2 columnas (% EJECUTADO + A CANCELAR),
-        // el ESTIMACIÓN NO.X está en la MISMA columna que el "% EJECUTADO" sub-header,
-        // y la FECHA de la estimación va en la columna inmediata siguiente del estHeader.
+        // PASO 3: detectar columnas de cada estimación.
+        // Estrategia robusta: recorrer estHeader buscando "ESTIMACIÓN NO.X" directamente,
+        // sin depender del sub-header. Esto cubre Excels que tienen sub-headers parcialmente
+        // vacíos o donde "% EJECUTADO" no aparece en la columna esperada (ej. VEC Excel).
         const ejecutadoCols = [];
-        for (let col = 0; col < subHeader.length; col++) {
-          const s = String(subHeader[col] || '');
-          if (!/%\s*EJECUTADO/i.test(s)) continue;
-          if (/A\s*LA\s*FECHA/i.test(s)) continue;
-          let estNum = null;
-          let m = String(estHeader[col] || '').match(/ESTIMACI[ÓO]N\s*NO\s*\.?\s*(\d+)/i);
-          if (m) estNum = parseInt(m[1]);
-          else {
-            for (let c = col; c >= 0; c--) {
-              const mm = String(estHeader[c] || '').match(/ESTIMACI[ÓO]N\s*NO\s*\.?\s*(\d+)/i);
-              if (mm) { estNum = parseInt(mm[1]); break; }
-            }
-          }
-          if (estNum) {
-            // La columna "A CANCELAR" suele ser la siguiente (col+1).
-            // La FECHA de la estimación también está en col+1 del estHeader (Excel oficial).
-            const cancelCol = col + 1;
-            const fechaRaw = estHeader[col + 1];
-            ejecutadoCols.push({ colIdx: col, cancelCol, estNum, fechaRaw });
-          }
+        const seenEst = new Set();
+        for (let col = 0; col < estHeader.length; col++) {
+          const v = String(estHeader[col] || '');
+          const m = v.match(/ESTIMACI[ÓO]N\s*NO\s*\.?\s*(\d+)/i);
+          if (!m) continue;
+          const estNum = parseInt(m[1]);
+          if (seenEst.has(estNum)) continue;
+          seenEst.add(estNum);
+          // Convención: la fecha y/o "A CANCELAR" está en col+1 del estHeader.
+          // Algunos Excels tienen el monto en col (% EJECUTADO), otros en col+1 (A CANCELAR).
+          // Por eso al leer "TOTAL ESTIMACIÓN CON IVA" se prueba ambas y se usa la que tenga valor.
+          const cancelCol = col + 1;
+          const fechaRaw = estHeader[col + 1];
+          ejecutadoCols.push({ colIdx: col, cancelCol, estNum, fechaRaw });
         }
 
         try { console.log(`[Parser] estHeaderRow=${estHeaderRow}, subHeaderRow=${subHeaderRow}, ejecutadoCols=${ejecutadoCols.length}`, ejecutadoCols); } catch(e){}
@@ -13404,19 +13398,21 @@ function deleteCurrentProveedor(){
       //   3. Filas tipo "LÍQUIDO A RECIBIR" o variaciones → IGNORAR (es el monto NETO, no presentado).
       // Si no existe ninguna, cae al fallback de suma manual.
       if (interpret.tipo === 'oficial' && interpret.ejecutadoCols) {
+        // PRIORIDAD ALTA: filas explícitas con IVA. Más específicas primero.
         const ROW_PATTERNS_CON_IVA = [
-          /TOTAL[^a-z]*(?:CON|\+|MAS)\s*IVA/i,
-          /MONTO[^a-z]*(?:CON|\+|MAS)\s*IVA/i,
-          /(?:VALOR|PRESENTADO)[^a-z]*(?:CON|\+|MAS)\s*IVA/i,
-          /(?:CON|\+|MAS)\s*IVA/i
+          /TOTAL\s+(?:DE\s+)?ESTIMACI[ÓO]N\s+CON\s+IVA/i,   // "TOTAL DE ESTIMACIÓN CON IVA" / "TOTAL ESTIMACIÓN CON IVA"
+          /(?:MONTO|VALOR|PRESENTADO).*CON\s+IVA/i,
+          /CON\s+IVA/i,                                       // fallback general (cualquier celda con "CON IVA")
+          /\+\s*IVA\b/i,
+          /MAS\s+IVA\b/i
         ];
         const ROW_PATTERNS_TOTAL = [
-          /TOTAL\s+ESTIMACI[ÓO]N(?!\s*\(L)/i,  // excluir "TOTAL ESTIMACIÓN (LÍQUIDO A RECIBIR)"
+          /TOTAL\s+ESTIMACI[ÓO]N(?!\s*\(L)/i,                // "TOTAL ESTIMACIÓN" (excluye "TOTAL ESTIMACIÓN (LÍQUIDO ...)")
           /^TOTAL$/i,
           /^TOTAL\s*$/i
         ];
-        // Filas a IGNORAR (no son el valor presentado con IVA, son montos derivados)
-        const ROW_PATTERNS_IGNORAR = /(L[ÍI]QUIDO|RECIBIR|RENGL|EJECUTADO|CANCEL|SALDO|ANTICIPO|RETENI|AMORTI|ACUMULADO|CHEQUEO|SIN\s*IVA)/i;
+        // Filas a IGNORAR. Crítico: SIN IVA debe excluirse SIEMPRE.
+        const ROW_PATTERNS_IGNORAR = /(SIN\s*IVA|L[ÍI]QUIDO|RECIBIR|RENGL|EJECUTADO|CANCEL|SALDO|ANTICIPO|RETENI|AMORTI|ACUMULADO|CHEQUEO)/i;
 
         const buscarFila = (patterns) => {
           for (const re of patterns) {
@@ -13449,10 +13445,15 @@ function deleteCurrentProveedor(){
           const tipoFuente = usandoConIva ? 'CON IVA explícito' : 'TOTAL genérico (asumido CON IVA)';
           console.log(`[Detección] Fila "${resultado.label}" en row ${resultado.idx}. Fuente: ${tipoFuente}.`);
           const totalRow = interpret.dataRows[resultado.idx];
-          interpret.ejecutadoCols.forEach(({ cancelCol, estNum }) => {
-            if (cancelCol == null) return;
-            const monto = Number(totalRow[cancelCol]);
-            if (!isNaN(monto) && monto > 0) {
+          interpret.ejecutadoCols.forEach(({ colIdx, cancelCol, estNum }) => {
+            // Probar AMBAS columnas: la del % EJECUTADO (colIdx) y la "A CANCELAR" (cancelCol).
+            // Distintos Excel ponen el monto en distinta columna en la fila TOTAL.
+            const monto1 = Number(totalRow[colIdx]);
+            const monto2 = cancelCol != null ? Number(totalRow[cancelCol]) : NaN;
+            let monto = 0;
+            if (!isNaN(monto1) && monto1 > 0) monto = monto1;
+            else if (!isNaN(monto2) && monto2 > 0) monto = monto2;
+            if (monto > 0) {
               if (!estTotalesExcel[estNum]) estTotalesExcel[estNum] = { monto: 0, fechaRaw: null };
               estTotalesExcel[estNum].monto = monto;
             }
