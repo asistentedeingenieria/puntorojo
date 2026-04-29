@@ -15162,10 +15162,22 @@ async function _loadExcelJS(){
 const FMT_Q = '"Q "#,##0.00;[Red]"-Q "#,##0.00';
 
 window.exportarPlanillaExcel = async function(fechaInicio, fechaFin){
+  try {
   const p = activeProj();
   if (!p) return showToast('SELECCIONÁ UN PROYECTO PRIMERO', 'red');
   const tsInicio = fechaInicio ? new Date(fechaInicio).getTime() : 0;
   const tsFin = fechaFin ? (new Date(fechaFin).getTime() + 24*3600*1000 - 1) : Date.now();
+
+  // Helpers locales (independientes del IIFE de planilla, para que esta función pueda
+  // ejecutarse sola sin depender de scopes externos).
+  const _DESC_TIPOS_LBL = {
+    'ABONO_PREVIO': 'ABONO PREVIO',
+    'EQUIPO_PRESTADO': 'EQUIPO PRESTADO',
+    'POLIZA': 'PÓLIZA DE SEGURO',
+    'PRESTAMO': 'PRÉSTAMO',
+    'OTRO': 'OTRO DESCUENTO'
+  };
+  const descTipoLbl = (k) => _DESC_TIPOS_LBL[k] || k || 'Descuento';
 
   const pagosTodos = (p.planilla?.pagos || []).filter(pg => pg.tipo === 'ETAPA' && (pg.ts||0) >= tsInicio && (pg.ts||0) <= tsFin);
   const ajustesTodos = (p.planilla?.ajustes || []).filter(a => (a.ts||0) >= tsInicio && (a.ts||0) <= tsFin);
@@ -15178,7 +15190,11 @@ window.exportarPlanillaExcel = async function(fechaInicio, fechaFin){
 
   let ExcelJS;
   try { ExcelJS = await _loadExcelJS(); }
-  catch(e) { return showToast('NO SE PUDO CARGAR EXCELJS', 'red'); }
+  catch(e) { console.error('Error cargando ExcelJS:', e); return showToast('NO SE PUDO CARGAR EXCELJS — REVISÁ INTERNET', 'red'); }
+  if (!ExcelJS || !ExcelJS.Workbook) {
+    console.error('ExcelJS cargó pero no expone Workbook');
+    return showToast('EXCELJS NO DISPONIBLE — RECARGÁ LA APP', 'red');
+  }
 
   // Agrupar por colaborador
   const porColab = {};
@@ -15382,7 +15398,7 @@ window.exportarPlanillaExcel = async function(fechaInicio, fechaFin){
     let totalDescuentos = totalRetencion;
     colab.descuentos.forEach(d => {
       const cuotaTxt = (d.cuotasTotales && d.cuotasTotales > 1) ? `(${d.cuotaActual||1}/${d.cuotasTotales}) ` : '';
-      const lbl = `(-) ${cuotaTxt}${d.desc || _descTipoLabel(d.subtipo) || 'Descuento'}`;
+      const lbl = `(-) ${cuotaTxt}${d.desc || descTipoLbl(d.subtipo)}`;
       const monto = Number(d.monto || 0);
       r = ws1.addRow(['', '', '', '', '', '', lbl, monto]);
       r.getCell(7).fill = fillDescBg;
@@ -15588,6 +15604,11 @@ window.exportarPlanillaExcel = async function(fechaInicio, fechaFin){
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
 
   showToast(`EXCEL DESCARGADO · ${fileName}`, 'green');
+  } catch(err) {
+    console.error('exportarPlanillaExcel falló:', err);
+    showToast('ERROR GENERANDO EXCEL: ' + (err && err.message ? err.message : 'desconocido'), 'red');
+    alert('ERROR AL GENERAR EXCEL\n\n' + (err && err.message ? err.message : err) + '\n\nAbrí la consola (F12) para ver el detalle.');
+  }
 };
 
 /* ─── PDF individual por obrero ─── */
