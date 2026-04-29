@@ -1694,6 +1694,9 @@ html,body,.main{background:#FFFFFF!important;}
       <div id="avance-cuadritos-panel" style="display:none">
         <div id="avanceCuadritosCont"></div>
       </div>
+
+      <!-- Solicitudes pendientes de eliminar foto (visible solo para admin) -->
+      <div id="solicitudesEliminarFotoBox"></div>
     </section>
 
     <!-- ── MATERIALES ── -->
@@ -6552,6 +6555,8 @@ const avanceUIState = {
 let currentAvanceTab = 'etapas';
 
 function renderAvance(){
+  // Render del listado de solicitudes pendientes (solo admin lo ve)
+  try { if (typeof window.renderSolicitudesEliminarFoto === 'function') window.renderSolicitudesEliminarFoto(); } catch(e){}
   const p = activeProj();
   let totalAptos = 0, totalPct = 0, completos = 0, fotosCount = 0, acusesCount = 0;
   p.towers.forEach(t => t.levels.forEach(l => {
@@ -7371,9 +7376,68 @@ async function _hashBlobSHA256(blob){
     const hashBuf = await crypto.subtle.digest('SHA-256', buf);
     return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
   } catch(e) {
-    console.warn('Hash falló, no se podrá validar duplicado:', e);
+    console.warn('Hash SHA-256 falló:', e);
     return null;
   }
+}
+
+/* Hash perceptual (pHash simplificado).
+   Reduce la imagen a 8x8 grayscale y compara cada pixel contra el promedio.
+   Genera 64 bits → 16 caracteres hex.
+   Dos imágenes son "visualmente similares" si la distancia Hamming
+   entre sus hashes es < umbral (ej. 10 de 64 bits).
+   Funciona para detectar:
+     - misma foto re-comprimida (sería idéntica con SHA-256 también).
+     - misma escena con leves variaciones (luz, ángulo).
+     - mismo objeto fotografiado dos veces.
+*/
+async function _perceptualHashImage(blob){
+  return new Promise((resolve) => {
+    try {
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = 8;
+          canvas.height = 8;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, 8, 8);
+          const data = ctx.getImageData(0, 0, 8, 8).data;
+          const grays = [];
+          for (let i = 0; i < data.length; i += 4) {
+            // Luminancia ITU-R BT.601
+            grays.push(0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2]);
+          }
+          const avg = grays.reduce((s,v) => s+v, 0) / grays.length;
+          // 64 bits → 16 hex chars (4 bits por char)
+          let hash = '';
+          for (let i = 0; i < 64; i += 4) {
+            let nibble = 0;
+            for (let b = 0; b < 4; b++) {
+              if (grays[i+b] > avg) nibble |= (1 << (3 - b));
+            }
+            hash += nibble.toString(16);
+          }
+          URL.revokeObjectURL(url);
+          resolve(hash);
+        } catch(e) { URL.revokeObjectURL(url); console.warn('pHash falló:', e); resolve(null); }
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      img.src = url;
+    } catch(e) { console.warn('pHash error general:', e); resolve(null); }
+  });
+}
+
+// Distancia Hamming entre dos hashes hex (cuántos bits difieren).
+function _hammingHex(a, b){
+  if (!a || !b || a.length !== b.length) return 999;
+  let dist = 0;
+  for (let i = 0; i < a.length; i++) {
+    let xor = parseInt(a[i], 16) ^ parseInt(b[i], 16);
+    while (xor) { dist += xor & 1; xor >>>= 1; }
+  }
+  return dist;
 }
 
 // Estado del modal de cámara
@@ -7508,6 +7572,256 @@ window.closeCameraModal = function(){
   _cameraModalState = { stream: null, etapaIdx: null, slotIdx: null, capturedBlob: null };
 };
 
+/* ════════════════════════════════════════════════════════════════
+   SOLICITUDES DE ELIMINACIÓN DE FOTO
+   ───────────────────────────────────────────────────────────────
+   Una vez subida una foto, los supervisores NO pueden borrarla
+   directamente. Deben SOLICITAR la eliminación al admin con razón.
+   El admin aprueba/rechaza desde la pestaña EXCEPCIONES de planilla.
+
+   Estructura: p.solicitudesEliminarFoto = [
+     { id, towerId, levelId, aptoId, etapaIdx, slotIdx, fotoUrl,
+       aptoNombre, etapaNombre, razon,
+       supervisorEmail, supervisorNombre, solicitadoEn,
+       estado: 'pendiente' | 'aprobada' | 'rechazada',
+       decididoEn, decididoPor, notaDecision }
+   ]
+   ════════════════════════════════════════════════════════════════ */
+
+let _eliminarFotoCtx = null;
+
+window.abrirModalSolicitarEliminarFoto = function(etapaIdx, slotIdx){
+  if (!can('avance.edit')) return showToast('SIN PERMISO', 'red');
+  const p = activeProj();
+  const t = p.towers.find(x => x.id === photoCtx.towerId);
+  const l = t && t.levels.find(x => x.id === photoCtx.levelId);
+  const a = l && (l.aptos||[]).find(x => x.id === photoCtx.aptoId);
+  if (!a || !a.photos || !a.photos[etapaIdx] || !a.photos[etapaIdx][slotIdx]) {
+    return showToast('FOTO NO ENCONTRADA', 'red');
+  }
+
+  _eliminarFotoCtx = {
+    projectId: p.id,
+    towerId: photoCtx.towerId,
+    levelId: photoCtx.levelId,
+    aptoId: photoCtx.aptoId,
+    etapaIdx, slotIdx,
+    fotoUrl: a.photos[etapaIdx][slotIdx],
+    aptoNombre: a.name,
+    torreNombre: t.name,
+    nivelNombre: l.name,
+    etapaNombre: (typeof ETAPAS !== 'undefined' && ETAPAS[etapaIdx]) ? ETAPAS[etapaIdx].name : `ETAPA ${etapaIdx+1}`
+  };
+
+  // Crear/reutilizar modal
+  let modal = document.getElementById('modalSolicitarEliminarFoto');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'modal-bg';
+    modal.id = 'modalSolicitarEliminarFoto';
+    modal.innerHTML = `
+      <div class="modal" style="max-width:520px">
+        <div class="modal-hd">
+          <h3>SOLICITAR ELIMINACIÓN DE FOTO</h3>
+          <button class="modal-x" onclick="closeModal('solicitarEliminarFoto')">✕</button>
+        </div>
+        <div class="modal-bd" style="padding:18px">
+          <div style="background:#FEF3C7;border-left:3px solid var(--amber);padding:10px 14px;border-radius:3px;font-size:11px;letter-spacing:.3px;line-height:1.5;color:var(--ink);margin-bottom:14px">
+            <strong>IMPORTANTE:</strong> NO podés eliminar fotos directamente. Tu solicitud va al administrador, quien decidirá si aprobarla o rechazarla.
+          </div>
+          <div id="solElimFotoInfo" style="border:1px solid var(--line);background:var(--cream);padding:12px 14px;border-radius:4px;font-size:11px;line-height:1.7;margin-bottom:14px"></div>
+          <div class="field">
+            <label>RAZÓN PARA ELIMINAR · MÍNIMO 10 LETRAS</label>
+            <textarea id="solElimFotoRazon" rows="3" placeholder="EJ: LA FOTO SALIÓ MAL ENFOCADA / MUESTRA OTRA ÁREA / ES DE UN APTO INCORRECTO"></textarea>
+          </div>
+          <div id="solElimFotoError" style="font-size:11px;color:var(--red);min-height:16px;margin-top:6px"></div>
+        </div>
+        <div class="modal-ft">
+          <button class="btn ghost" onclick="closeModal('solicitarEliminarFoto')">CANCELAR</button>
+          <button class="btn" onclick="confirmarSolicitudEliminarFoto()">ENVIAR SOLICITUD</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+
+  document.getElementById('solElimFotoInfo').innerHTML = `
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px">
+      <strong>UBICACIÓN:</strong><span>${_eliminarFotoCtx.torreNombre} · ${_eliminarFotoCtx.nivelNombre} · ${_eliminarFotoCtx.aptoNombre}</span>
+      <strong>ETAPA:</strong><span>${_eliminarFotoCtx.etapaNombre}</span>
+      <strong>FOTO:</strong><span>FOTO ${slotIdx + 1}</span>
+    </div>
+    <img src="${_eliminarFotoCtx.fotoUrl}" style="width:100%;max-height:180px;object-fit:contain;border:1px solid var(--line);border-radius:3px;margin-top:10px;background:#000">
+  `;
+  document.getElementById('solElimFotoRazon').value = '';
+  document.getElementById('solElimFotoError').textContent = '';
+  modal.classList.add('show');
+};
+
+window.confirmarSolicitudEliminarFoto = async function(){
+  if (!_eliminarFotoCtx) return;
+  const ctx = _eliminarFotoCtx;
+  const razon = (document.getElementById('solElimFotoRazon').value || '').trim();
+  const err = document.getElementById('solElimFotoError');
+  err.textContent = '';
+  if (razon.length < 10) {
+    err.textContent = 'LA RAZÓN DEBE TENER AL MENOS 10 LETRAS';
+    return;
+  }
+
+  const p = (state.projects||[]).find(x => x.id === ctx.projectId);
+  if (!p) return showToast('PROYECTO NO ENCONTRADO', 'red');
+  if (!Array.isArray(p.solicitudesEliminarFoto)) p.solicitudesEliminarFoto = [];
+
+  const id = 'self-' + Date.now() + '-' + Math.floor(Math.random()*1000);
+  const supervisorEmail = (currentUser && currentUser.email) || '';
+  const supervisorNombre = (currentUser && (currentUser.displayName || currentUser.email)) || 'SUPERVISOR';
+
+  p.solicitudesEliminarFoto.push({
+    id,
+    projectId: ctx.projectId,
+    towerId: ctx.towerId, levelId: ctx.levelId, aptoId: ctx.aptoId,
+    etapaIdx: ctx.etapaIdx, slotIdx: ctx.slotIdx,
+    fotoUrl: ctx.fotoUrl,
+    aptoNombre: ctx.aptoNombre,
+    torreNombre: ctx.torreNombre,
+    nivelNombre: ctx.nivelNombre,
+    etapaNombre: ctx.etapaNombre,
+    razon,
+    supervisorEmail, supervisorNombre,
+    solicitadoEn: Date.now(),
+    estado: 'pendiente',
+    decididoEn: null,
+    decididoPor: null,
+    decididoPorNombre: null,
+    notaDecision: null
+  });
+  saveState();
+  closeModal('solicitarEliminarFoto');
+  showToast('SOLICITUD ENVIADA · EL ADMIN DECIDE', 'green');
+  logActivity('create', 'Solicitud eliminar foto', `${p.name} · ${ctx.aptoNombre} · ${ctx.etapaNombre} · foto ${ctx.slotIdx+1}`);
+
+  _eliminarFotoCtx = null;
+};
+
+// Aprobar solicitud → borrar foto + storage + hashes
+window.aprobarSolicitudEliminarFoto = async function(solicitudId){
+  if (!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR', 'red');
+  const p = activeProj();
+  const sol = (p.solicitudesEliminarFoto||[]).find(x => x.id === solicitudId);
+  if (!sol || sol.estado !== 'pendiente') return showToast('LA SOLICITUD YA FUE RESPONDIDA', 'red');
+
+  if (!confirm(`¿APROBAR ELIMINACIÓN?\n\n${sol.aptoNombre} · ${sol.etapaNombre} · FOTO ${sol.slotIdx+1}\n\nLa foto se borrará permanentemente.`)) return;
+
+  // Borrar foto del state + storage
+  const t = p.towers.find(x => x.id === sol.towerId);
+  const l = t && t.levels.find(x => x.id === sol.levelId);
+  const a = l && (l.aptos||[]).find(x => x.id === sol.aptoId);
+  const oldRef = (a && a.photos && a.photos[sol.etapaIdx]) ? a.photos[sol.etapaIdx][sol.slotIdx] : null;
+
+  if (a) {
+    if (a.photoHashes && a.photoHashes[sol.etapaIdx]) {
+      a.photoHashes[sol.etapaIdx][sol.slotIdx] = null;
+      if (!a.photoHashes[sol.etapaIdx][0] && !a.photoHashes[sol.etapaIdx][1]) delete a.photoHashes[sol.etapaIdx];
+    }
+    if (a.photoPHashes && a.photoPHashes[sol.etapaIdx]) {
+      a.photoPHashes[sol.etapaIdx][sol.slotIdx] = null;
+      if (!a.photoPHashes[sol.etapaIdx][0] && !a.photoPHashes[sol.etapaIdx][1]) delete a.photoPHashes[sol.etapaIdx];
+    }
+    if (a.photos && a.photos[sol.etapaIdx]) {
+      a.photos[sol.etapaIdx][sol.slotIdx] = null;
+      if (!a.photos[sol.etapaIdx][0] && !a.photos[sol.etapaIdx][1]) delete a.photos[sol.etapaIdx];
+    }
+    // Si el apto tenía la etapa marcada como completada, se desactiva (porque ya no tiene 2 fotos).
+    if (Array.isArray(a.stages) && !stageHasPhoto(a, sol.etapaIdx)) {
+      for (let i = sol.etapaIdx; i < 6; i++) a.stages[i] = false;
+    }
+  }
+
+  // Borrar de storage
+  if (oldRef && typeof firebase !== 'undefined' && firebase.storage && oldRef.includes('firebasestorage')) {
+    try { firebase.storage().refFromURL(oldRef).delete().catch(()=>{}); } catch(e){}
+  }
+
+  sol.estado = 'aprobada';
+  sol.decididoEn = Date.now();
+  sol.decididoPor = (currentUser && currentUser.email) || '';
+  sol.decididoPorNombre = (currentUser && (currentUser.displayName || currentUser.email)) || '';
+  saveState();
+  try { renderAvance(); } catch(e){}
+  try { renderSolicitudesEliminarFoto(); } catch(e){}
+  showToast('SOLICITUD APROBADA · FOTO ELIMINADA', 'green');
+  logActivity('approve', 'Eliminación de foto aprobada', `${p.name} · ${sol.aptoNombre} · ${sol.etapaNombre} · foto ${sol.slotIdx+1}`);
+};
+
+window.rechazarSolicitudEliminarFoto = async function(solicitudId){
+  if (!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR', 'red');
+  const p = activeProj();
+  const sol = (p.solicitudesEliminarFoto||[]).find(x => x.id === solicitudId);
+  if (!sol || sol.estado !== 'pendiente') return showToast('LA SOLICITUD YA FUE RESPONDIDA', 'red');
+
+  const nota = prompt('NOTA DE RECHAZO (opcional):') || '';
+  if (!confirm('¿RECHAZAR ELIMINACIÓN?\n\nLa foto NO se borra.')) return;
+
+  sol.estado = 'rechazada';
+  sol.decididoEn = Date.now();
+  sol.decididoPor = (currentUser && currentUser.email) || '';
+  sol.decididoPorNombre = (currentUser && (currentUser.displayName || currentUser.email)) || '';
+  sol.notaDecision = nota || null;
+  saveState();
+  try { renderSolicitudesEliminarFoto(); } catch(e){}
+  showToast('SOLICITUD RECHAZADA', '');
+  logActivity('reject', 'Eliminación de foto rechazada', `${p.name} · ${sol.aptoNombre} · ${sol.etapaNombre}${nota ? ' · ' + nota : ''}`);
+};
+
+// Render para que el admin vea las solicitudes pendientes
+window.renderSolicitudesEliminarFoto = function(){
+  const cont = document.getElementById('solicitudesEliminarFotoBox');
+  if (!cont) return;
+  if (!can('users.manage')) { cont.innerHTML = ''; return; }
+  const p = activeProj();
+  const lista = (p.solicitudesEliminarFoto || []).slice().sort((a,b) => {
+    const ord = { pendiente:0, aprobada:1, rechazada:2 };
+    const oa = ord[a.estado] ?? 9, ob = ord[b.estado] ?? 9;
+    if (oa !== ob) return oa - ob;
+    return (b.solicitadoEn||0) - (a.solicitadoEn||0);
+  });
+  if (lista.length === 0) { cont.innerHTML = ''; return; }
+  const pendientes = lista.filter(x => x.estado === 'pendiente').length;
+
+  cont.innerHTML = `
+    <div class="card" style="margin-top:14px">
+      <div class="card-hd">
+        <h3>SOLICITUDES DE ELIMINACIÓN DE FOTO</h3>
+        <span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">${pendientes} PENDIENTE${pendientes!==1?'S':''} · ${lista.length} TOTAL</span>
+      </div>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>ESTADO</th><th>UBICACIÓN</th><th>ETAPA · FOTO</th><th>SOLICITANTE</th><th>RAZÓN</th><th>FECHA</th><th></th></tr></thead>
+        <tbody>${lista.map(s => {
+          const badge = s.estado === 'pendiente'
+            ? `<span class="planilla-badge" style="background:#FEF3C7;color:#92400E;border:1px solid #F59E0B">PENDIENTE</span>`
+            : s.estado === 'aprobada'
+              ? `<span class="planilla-badge" style="background:#DCFCE7;color:var(--green-dark);border:1px solid var(--green-dark)">APROBADA</span>`
+              : `<span class="planilla-badge" style="background:#FEE2E2;color:var(--red);border:1px solid var(--red)">RECHAZADA</span>`;
+          const fecha = s.solicitadoEn ? new Date(s.solicitadoEn).toLocaleDateString('es-GT') : '—';
+          const acciones = s.estado === 'pendiente'
+            ? `<button class="btn sm" onclick="aprobarSolicitudEliminarFoto('${s.id}')">APROBAR</button> <button class="btn ghost sm" style="color:var(--red)" onclick="rechazarSolicitudEliminarFoto('${s.id}')">RECHAZAR</button>`
+            : '';
+          const razonShort = (s.razon||'').length > 50 ? s.razon.slice(0,50)+'…' : s.razon;
+          return `<tr>
+            <td>${badge}</td>
+            <td style="font-size:10px"><div style="font-weight:700">${s.aptoNombre}</div><div style="color:var(--mute);font-size:9px">${s.torreNombre} · ${s.nivelNombre}</div></td>
+            <td style="font-size:10px">${s.etapaNombre} · FOTO ${s.slotIdx+1}</td>
+            <td style="font-size:10px">${s.supervisorNombre || s.supervisorEmail || '—'}</td>
+            <td style="font-size:10px" title="${(s.razon||'').replace(/"/g,'&quot;')}">${razonShort}</td>
+            <td style="font-size:10px">${fecha}</td>
+            <td>${acciones}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>
+    </div>
+  `;
+};
+
 /* Subir blob (de la cámara o de un file) con validación de duplicado por hash. */
 async function _uploadPhotoBlob(blob, etapaIdx, slotIdx){
   if (!can('avance.edit')) return showToast('SIN PERMISO', 'red');
@@ -7515,8 +7829,11 @@ async function _uploadPhotoBlob(blob, etapaIdx, slotIdx){
     return showToast('FIREBASE STORAGE NO DISPONIBLE — RECARGÁ', 'red');
   }
 
-  // 1) Calcular hash de la foto nueva
-  const hash = await _hashBlobSHA256(blob);
+  // 1) Calcular hashes (SHA-256 byte-exact + pHash perceptual)
+  const [hash, pHash] = await Promise.all([
+    _hashBlobSHA256(blob),
+    _perceptualHashImage(blob)
+  ]);
 
   // 2) Comparar con el otro slot de la misma etapa
   const p = activeProj();
@@ -7526,12 +7843,28 @@ async function _uploadPhotoBlob(blob, etapaIdx, slotIdx){
   if (!a) return showToast('APTO NO ENCONTRADO', 'red');
   if (!a.photoHashes) a.photoHashes = {};
   if (!a.photoHashes[etapaIdx]) a.photoHashes[etapaIdx] = [null, null];
+  if (!a.photoPHashes) a.photoPHashes = {};
+  if (!a.photoPHashes[etapaIdx]) a.photoPHashes[etapaIdx] = [null, null];
 
   const otroSlotIdx = slotIdx === 0 ? 1 : 0;
   const otroHash = a.photoHashes[etapaIdx][otroSlotIdx];
+  const otroPHash = a.photoPHashes[etapaIdx][otroSlotIdx];
+
+  // Validación 1: Hash byte-exact (mismo archivo subido 2 veces).
   if (hash && otroHash && hash === otroHash) {
     alert('LAS DOS FOTOS NO PUEDEN SER LA MISMA\n\nDeben ser de áreas DIFERENTES del apartamento.\nVolvé a tomar una foto distinta.');
     return showToast('FOTO DUPLICADA — TOMÁ UNA DE OTRA ÁREA', 'red');
+  }
+
+  // Validación 2: Hash perceptual (misma escena con leves variaciones).
+  // Umbral 10 de 64 bits = ~85% de similitud. Más bajo = más estricto.
+  if (pHash && otroPHash) {
+    const dist = _hammingHex(pHash, otroPHash);
+    console.log(`[pHash] distancia entre slots: ${dist}/64`);
+    if (dist <= 10) {
+      alert('LAS DOS FOTOS SE VEN MUY SIMILARES\n\nLa app detectó que parecen ser de la misma área del apartamento.\nLas 2 fotos deben mostrar áreas DIFERENTES.\n\nVolvé a tomar la foto desde otro ángulo o de otra zona.');
+      return showToast('FOTOS MUY SIMILARES · TOMÁ OTRA ÁREA', 'red');
+    }
   }
 
   // 3) Comprimir y subir
@@ -7551,6 +7884,7 @@ async function _uploadPhotoBlob(blob, etapaIdx, slotIdx){
     if (!a.photos[etapaIdx]) a.photos[etapaIdx] = [null, null];
     a.photos[etapaIdx][slotIdx] = url;
     a.photoHashes[etapaIdx][slotIdx] = hash;
+    a.photoPHashes[etapaIdx][slotIdx] = pHash;
     saveState();
 
     logActivity('update', `Foto agregada: ${l.name} · ${a.name}`, `${p.name} · ${ETAPAS[etapaIdx].name} (foto ${slotIdx+1})`);
@@ -7607,7 +7941,12 @@ async function uploadPhoto(event, etapaIdx, slotIdx){
 
 async function deletePhoto(etapaIdx, slotIdx){
   if (!can('avance.edit')) return;
-  if (!confirm('¿ELIMINAR ESTA FOTO?')) return;
+  // Si NO es admin → debe SOLICITAR la eliminación al admin (no puede borrar directamente).
+  if (!can('users.manage')) {
+    return abrirModalSolicitarEliminarFoto(etapaIdx, slotIdx);
+  }
+  // Admin: confirmar y borrar directo.
+  if (!confirm('¿ELIMINAR ESTA FOTO?\n\nComo administrador podés borrarla directamente.')) return;
   const p = activeProj();
   const t = p.towers.find(x => x.id === photoCtx.towerId);
   const l = t.levels.find(x => x.id === photoCtx.levelId);
@@ -7618,6 +7957,10 @@ async function deletePhoto(etapaIdx, slotIdx){
   if (a.photoHashes && a.photoHashes[etapaIdx]) {
     a.photoHashes[etapaIdx][slotIdx] = null;
     if (!a.photoHashes[etapaIdx][0] && !a.photoHashes[etapaIdx][1]) delete a.photoHashes[etapaIdx];
+  }
+  if (a.photoPHashes && a.photoPHashes[etapaIdx]) {
+    a.photoPHashes[etapaIdx][slotIdx] = null;
+    if (!a.photoPHashes[etapaIdx][0] && !a.photoPHashes[etapaIdx][1]) delete a.photoPHashes[etapaIdx];
   }
 
   if (a.photos && a.photos[etapaIdx]) {
