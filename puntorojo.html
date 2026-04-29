@@ -1688,6 +1688,9 @@ html,body,.main{background:#FFFFFF!important;}
 
       <!-- Solicitudes pendientes de eliminar foto (visible solo para admin) -->
       <div id="solicitudesEliminarFotoBox"></div>
+
+      <!-- Solicitudes pendientes de adelantar etapa de acuse (visible solo para admin) -->
+      <div id="solicitudesSaltoAcuseBox"></div>
     </section>
 
     <!-- ── MATERIALES ── -->
@@ -6546,8 +6549,9 @@ const avanceUIState = {
 let currentAvanceTab = 'etapas';
 
 function renderAvance(){
-  // Render del listado de solicitudes pendientes (solo admin lo ve)
+  // Render de los listados de solicitudes pendientes (solo admin los ve)
   try { if (typeof window.renderSolicitudesEliminarFoto === 'function') window.renderSolicitudesEliminarFoto(); } catch(e){}
+  try { if (typeof window.renderSolicitudesSaltoAcuse === 'function') window.renderSolicitudesSaltoAcuse(); } catch(e){}
   const p = activeProj();
   let totalAptos = 0, totalPct = 0, completos = 0, fotosCount = 0, acusesCount = 0;
   p.towers.forEach(t => t.levels.forEach(l => {
@@ -7491,18 +7495,19 @@ function _hammingHex(a, b){
   return dist;
 }
 
-// Estado del modal de cámara
-let _cameraModalState = { stream: null, etapaIdx: null, slotIdx: null, capturedBlob: null };
+// Estado del modal de cámara — modo dual:
+//   mode: 'avance' → sube a a.photos[etapaIdx][slotIdx] (avance físico)
+//   mode: 'acuse'  → sube a a.acuseRecepciones[slotKey].urls[photoIdx] (acuses)
+let _cameraModalState = { mode:'avance', stream:null, etapaIdx:null, slotIdx:null, slotKey:null, photoIdx:null, towerId:null, levelId:null, aptoId:null, capturedBlob:null, contextoLabel:'' };
 
-// Abre el modal de cámara en vivo. Cuando el usuario captura y confirma,
-// llama a _cameraOnConfirm() que sube la foto.
+// Abre el modal de cámara en vivo (avance físico).
 async function openCameraModal(etapaIdx, slotIdx){
   if (!can('avance.edit')) return showToast('SIN PERMISO', 'red');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     return showToast('TU NAVEGADOR NO SOPORTA CÁMARA EN VIVO', 'red');
   }
 
-  _cameraModalState = { stream: null, etapaIdx, slotIdx, capturedBlob: null };
+  _cameraModalState = { mode:'avance', stream:null, etapaIdx, slotIdx, slotKey:null, photoIdx:null, towerId:null, levelId:null, aptoId:null, capturedBlob:null, contextoLabel:'' };
 
   // Crear/reutilizar modal
   let modal = document.getElementById('modalCamera');
@@ -7598,10 +7603,13 @@ window.retakeCameraPhoto = function(){
 window.confirmCameraPhoto = async function(){
   const blob = _cameraModalState.capturedBlob;
   if (!blob) return showToast('TOMÁ LA FOTO PRIMERO', 'red');
-  const { etapaIdx, slotIdx } = _cameraModalState;
+  const state = _cameraModalState;
   closeCameraModal();
-  // Subir usando el flujo existente (uploadPhoto adaptado)
-  await _uploadPhotoBlob(blob, etapaIdx, slotIdx);
+  if (state.mode === 'acuse') {
+    await _uploadAcuseBlob(blob, state.towerId, state.levelId, state.aptoId, state.slotKey, state.photoIdx);
+  } else {
+    await _uploadPhotoBlob(blob, state.etapaIdx, state.slotIdx);
+  }
 };
 
 window.closeCameraModal = function(){
@@ -8159,7 +8167,48 @@ function getAcuseSlot(a, slotKey){
 }
 function getAcuseSlotSrc(slot){
   if (!slot) return '';
+  if (Array.isArray(slot.urls) && slot.urls.length && slot.urls[0]) return slot.urls[0];
   return slot.url || slot.data || '';
+}
+
+// ─── Soporte 2 fotos por acuse (compat con slots legacy de 1 foto) ───
+// Los acuses ahora exigen DOS fotos de la entrega antes de poder firmar.
+// Estructura nueva: slot.urls = [url1, url2], slot.photoHashes = [...], slot.photoPHashes = [...]
+// Slots legacy con slot.url (singular) se tratan como urls[0].
+function getAcuseUrls(slot){
+  if (!slot) return [];
+  const out = [];
+  if (Array.isArray(slot.urls)) {
+    for (let i = 0; i < 2; i++) out[i] = slot.urls[i] || null;
+  } else {
+    out[0] = slot.url || slot.data || null;
+    out[1] = null;
+  }
+  return out;
+}
+function acuseSlotPhotoCount(slot){
+  return getAcuseUrls(slot).filter(Boolean).length;
+}
+function acuseSlotTieneAmbas(slot){
+  return acuseSlotPhotoCount(slot) >= 2;
+}
+function acuseSlotPuedeFirmar(slot){
+  // Solo se puede pedir firma si hay 2 fotos cargadas.
+  return acuseSlotTieneAmbas(slot);
+}
+// Slot N solo se puede iniciar si slot N-1 tiene sus 2 fotos cargadas.
+// Excepto el primer slot (sIdx=0).
+// Si admin autorizó una excepción para este slot, se permite saltar.
+function acuseSlotPuedeIniciar(a, sIdx){
+  if (sIdx === 0) return { ok: true };
+  // Verificar excepción de "salto de etapa" pre-aprobada por admin
+  if (a && a.acuseSaltosAprobados && a.acuseSaltosAprobados[String(sIdx)]) {
+    return { ok: true, viaExcepcion: true };
+  }
+  // Verificar que el slot anterior tenga sus 2 fotos
+  const slotAnt = (a && a.acuseRecepciones && a.acuseRecepciones[ACUSE_SLOTS[sIdx - 1].key]) || null;
+  if (acuseSlotTieneAmbas(slotAnt)) return { ok: true };
+  return { ok: false, etapaAnt: ACUSE_SLOTS[sIdx - 1].label };
 }
 
 function renderAcusesRecepcion(){
@@ -8172,101 +8221,519 @@ function renderAcusesRecepcion(){
     return;
   }
 
+  // Estado expand/collapse por torre (persistente)
+  const collapsedKey = 'acuses_torres_colapsadas_' + (p.id || 'def');
+  let collapsedSet;
+  try { collapsedSet = new Set(JSON.parse(localStorage.getItem(collapsedKey) || '[]')); }
+  catch(e) { collapsedSet = new Set(); }
+
   cont.innerHTML = (p.towers || []).map(t => {
-    const levelsHtml = (t.levels || []).map(l => {
-      const cards = (l.aptos || []).map(a => {
-        // 6 filas de slot (E1-E5 + E6 con entrega final)
-        const slotRows = ACUSE_SLOTS.map((s, sIdx) => {
-          const slot = getAcuseSlot(a, s.key);
-          // Tres estados:
-          //   EMPTY        = no hay foto ni firma
-          //   PHOTO_ONLY   = hay foto pero NO firma del receptor
-          //   COMPLETO     = hay foto + firma (firma puede ser legacy sin foto)
-          const src = getAcuseSlotSrc(slot);
-          const hasPhoto = !!src;
-          const hasSig = !!(slot && (slot.receptorId || slot.receptorNombre));
-          const isDigital = hasSig;            // legacy: signed = digital
-          const has = hasPhoto || hasSig;       // existe algo
-          const isLast = sIdx === ACUSE_SLOTS.length - 1;
-          const imgEsc = src ? String(src).replace(/'/g,"\\'") : '';
+    const isCollapsed = collapsedSet.has(t.id);
 
-          const fechaFirma = hasSig && (slot.signatureTs || slot.ts) ? new Date(slot.signatureTs || slot.ts).toLocaleDateString('es-GT', {day:'2-digit',month:'2-digit',year:'numeric'}) : '';
-          const fechaFoto  = hasPhoto && (slot.photoTs || slot.ts) ? new Date(slot.photoTs || slot.ts).toLocaleDateString('es-GT', {day:'2-digit',month:'2-digit',year:'numeric'}) : '';
+    // Calcular % de avance de acuses firmados en esta torre
+    let totalAcuses = 0, firmados = 0;
+    (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
+      ACUSE_SLOTS.forEach(s => {
+        totalAcuses++;
+        const slot = getAcuseSlot(a, s.key);
+        if (slot && (slot.receptorId || slot.receptorNombre)) firmados++;
+      });
+    }));
+    const pctT = totalAcuses > 0 ? Math.round(firmados / totalAcuses * 100) : 0;
 
-          // Status text por estado
-          let statusText = 'PENDIENTE';
-          if (hasSig && hasPhoto) {
-            statusText = `<strong style="color:var(--green-dark)">FIRMADO</strong> · ${slot.receptorNombre || ''} · ${fechaFirma}`;
-          } else if (hasSig) {
-            // Legacy: firma sin foto
-            statusText = `<strong style="color:var(--green-dark)">FIRMADO</strong> · ${slot.receptorNombre || ''} · ${fechaFirma}`;
-          } else if (hasPhoto) {
-            statusText = `<strong style="color:var(--cafe)">FOTO SUBIDA</strong> · ESPERANDO FIRMA DEL CLIENTE · ${fechaFoto}`;
-          }
+    let body = '';
+    if (!isCollapsed) {
+      body = (t.levels || []).map(l => {
+        const cards = (l.aptos || []).map(a => {
+          // Por cada slot (etapa) generar fila con 2 fotos + estado
+          const slotRows = ACUSE_SLOTS.map((s, sIdx) => {
+            const slot = getAcuseSlot(a, s.key);
+            const urls = getAcuseUrls(slot);
+            const cuantas = urls.filter(Boolean).length;
+            const hasSig = !!(slot && (slot.receptorId || slot.receptorNombre));
+            const isLast = sIdx === ACUSE_SLOTS.length - 1;
 
-          // Botones VER:
-          //   - VER FOTO (si hay foto)
-          //   - VER FIRMA (si hay firma) — el modal muestra foto + firma
-          let verBtn = '';
-          if (hasPhoto) {
-            verBtn += `<button class="btn ghost sm" onclick="viewPhoto('${imgEsc}')" title="Ver foto de la entrega">VER FOTO</button>`;
-          }
-          if (hasSig) {
-            verBtn += `<button class="btn ghost sm" onclick='viewDigitalAcuse(${JSON.stringify(slot).replace(/'/g, "&apos;")})' title="Ver comprobante de firma">VER FIRMA</button>`;
-          }
+            const fechaFirma = hasSig && slot && (slot.signatureTs || slot.ts) ? new Date(slot.signatureTs || slot.ts).toLocaleDateString('es-GT', {day:'2-digit',month:'2-digit',year:'numeric'}) : '';
 
-          // Botones de carga según estado:
-          //   EMPTY      → [ FOTO ] (solo permite foto, NO QR)
-          //   PHOTO_ONLY → [ QR ]   (foto ya está, falta firma)
-          //   COMPLETO   → ningún botón de carga
-          let cargarBtns = '';
-          if (canEdit) {
-            if (!hasPhoto && !hasSig) {
-              cargarBtns = `<label class="btn sm cafe" style="cursor:pointer;margin:0" title="Subir foto de la entrega">FOTO<input type="file" accept="image/*" capture="environment" style="display:none" onchange="uploadAcuseRecepcion(event,'${t.id}','${l.id}','${a.id}','${s.key}')"></label>`;
-            } else if (hasPhoto && !hasSig) {
-              cargarBtns = `<button class="btn sm cafe" onclick="openQRScanForAcuse('${t.id}','${l.id}','${a.id}','${s.key}')" title="Firmar con QR del receptor">FIRMAR QR</button>`;
+            // Estado del slot
+            let statusText = 'PENDIENTE';
+            if (hasSig) {
+              statusText = `<strong style="color:var(--green-dark)">FIRMADO</strong> · ${slot.receptorNombre || ''} · ${fechaFirma}`;
+            } else if (cuantas === 2) {
+              statusText = `<strong style="color:var(--cafe)">2 FOTOS LISTAS</strong> · ESPERANDO FIRMA DEL CLIENTE`;
+            } else if (cuantas === 1) {
+              statusText = `<strong style="color:var(--amber)">FALTA 1 FOTO</strong>`;
             }
-          }
 
-          // Eliminar — SOLO admin. Borra todo el slot (foto + firma).
-          const delBtn = has && can('users.manage')
-            ? `<button class="btn-icon danger" onclick="deleteAcuseRecepcion('${t.id}','${l.id}','${a.id}','${s.key}')" title="Eliminar este acuse (solo admin · requiere confirmación escrita)">✕</button>`
-            : '';
-          return `<div class="acuse-slot-row${has ? ' has' : ''}${isLast ? ' final' : ''}${isDigital ? ' digital' : ''}">
-            <div class="acuse-slot-label">${s.label}</div>
-            <div class="acuse-slot-status">${statusText}</div>
-            <div class="acuse-slot-actions">${verBtn}${cargarBtns}${delBtn}</div>
+            // Bloqueo secuencial: NO se puede iniciar este slot si el anterior no tiene 2 fotos
+            const checkSec = acuseSlotPuedeIniciar(a, sIdx);
+            const bloqueado = !checkSec.ok && !hasSig && cuantas === 0 && !can('users.manage');
+
+            // Slots de foto (2 mini-botones FOTO 1 / FOTO 2)
+            let foto1Btn = '', foto2Btn = '';
+            if (canEdit && !hasSig) {
+              if (bloqueado) {
+                const tip = `Primero subí las 2 fotos de "${checkSec.etapaAnt}". Tocá para solicitar excepción al admin.`;
+                foto1Btn = `<button class="btn ghost sm" disabled title="${tip}" style="opacity:.5">🔒 FOTO 1</button>`;
+                foto2Btn = `<button class="btn ghost sm" disabled title="${tip}" style="opacity:.5">🔒 FOTO 2</button>`;
+              } else {
+                foto1Btn = urls[0]
+                  ? `<button class="btn ghost sm" onclick="viewPhoto('${String(urls[0]).replace(/'/g,"\\'")}')" title="Ver foto 1">VER F1</button>`
+                  : `<button class="btn sm cafe" onclick="openCameraForAcuse('${t.id}','${l.id}','${a.id}','${s.key}',0)" title="Tomar foto 1 de la entrega">FOTO 1</button>`;
+                foto2Btn = urls[1]
+                  ? `<button class="btn ghost sm" onclick="viewPhoto('${String(urls[1]).replace(/'/g,"\\'")}')" title="Ver foto 2">VER F2</button>`
+                  : `<button class="btn sm cafe" onclick="openCameraForAcuse('${t.id}','${l.id}','${a.id}','${s.key}',1)" title="Tomar foto 2 de la entrega">FOTO 2</button>`;
+              }
+            } else if (hasSig) {
+              if (urls[0]) foto1Btn = `<button class="btn ghost sm" onclick="viewPhoto('${String(urls[0]).replace(/'/g,"\\'")}')" title="Ver foto 1">VER F1</button>`;
+              if (urls[1]) foto2Btn = `<button class="btn ghost sm" onclick="viewPhoto('${String(urls[1]).replace(/'/g,"\\'")}')" title="Ver foto 2">VER F2</button>`;
+            }
+
+            // Botón firmar QR (solo si las 2 fotos están y no firmado)
+            let firmarBtn = '';
+            if (canEdit && !hasSig && cuantas === 2) {
+              firmarBtn = `<button class="btn sm" style="background:var(--green-dark);color:#fff" onclick="openQRScanForAcuse('${t.id}','${l.id}','${a.id}','${s.key}')" title="Firmar con QR del receptor">FIRMAR QR</button>`;
+            } else if (hasSig) {
+              firmarBtn = `<button class="btn ghost sm" onclick='viewDigitalAcuse(${JSON.stringify(slot).replace(/'/g, "&apos;")})' title="Ver comprobante de firma">VER FIRMA</button>`;
+            }
+
+            // Eliminar — SOLO admin
+            const delBtn = (cuantas > 0 || hasSig) && can('users.manage')
+              ? `<button class="btn-icon danger" onclick="deleteAcuseRecepcion('${t.id}','${l.id}','${a.id}','${s.key}')" title="Eliminar este acuse (solo admin)">✕</button>`
+              : '';
+
+            return `<div class="acuse-slot-row${cuantas>0 || hasSig ? ' has' : ''}${isLast ? ' final' : ''}${hasSig ? ' digital' : ''}">
+              <div class="acuse-slot-label">${s.label}</div>
+              <div class="acuse-slot-status">${statusText}</div>
+              <div class="acuse-slot-actions" style="display:flex;gap:4px;flex-wrap:wrap">${foto1Btn}${foto2Btn}${firmarBtn}${delBtn}</div>
+            </div>`;
+          }).join('');
+
+          // Contador
+          const completed = ACUSE_SLOTS.filter(s => {
+            const slot = getAcuseSlot(a, s.key);
+            return slot && (slot.receptorId || slot.receptorNombre);
+          }).length;
+          const allDone = completed === ACUSE_SLOTS.length;
+
+          return `<div class="acuse-card-multi${allDone ? ' all-done' : ''}">
+            <div class="acuse-card-multi-head">
+              <div>
+                <div class="acuse-name">${a.name}</div>
+                <div class="acuse-meta">${completed} de ${ACUSE_SLOTS.length} ACUSES FIRMADOS</div>
+              </div>
+              <div class="acuse-progress-pill${allDone ? ' all-done' : ''}">${completed} / ${ACUSE_SLOTS.length}</div>
+            </div>
+            <div class="acuse-slots-list">${slotRows}</div>
           </div>`;
         }).join('');
-
-        // Contador de cuántos acuses tiene (foto o digital)
-        const completed = ACUSE_SLOTS.filter(s => {
-          const slot = getAcuseSlot(a, s.key);
-          return slot && (slot.type === 'digital' || getAcuseSlotSrc(slot));
-        }).length;
-        const allDone = completed === ACUSE_SLOTS.length;
-
-        return `<div class="acuse-card-multi${allDone ? ' all-done' : ''}">
-          <div class="acuse-card-multi-head">
-            <div>
-              <div class="acuse-name">${a.name}</div>
-              <div class="acuse-meta">${completed} de ${ACUSE_SLOTS.length} ACUSES FIRMADOS</div>
-            </div>
-            <div class="acuse-progress-pill${allDone ? ' all-done' : ''}">${completed} / ${ACUSE_SLOTS.length}</div>
-          </div>
-          <div class="acuse-slots-list">${slotRows}</div>
+        return `<div class="acuse-level">
+          <div class="acuse-level-title">${l.name}</div>
+          <div class="acuse-grid">${cards || '<div class="aptos-empty">SIN ELEMENTOS</div>'}</div>
         </div>`;
-      }).join('');
-      return `<div class="acuse-level">
-        <div class="acuse-level-title">${l.name}</div>
-        <div class="acuse-grid">${cards || '<div class="aptos-empty">SIN ELEMENTOS</div>'}</div>
-      </div>`;
-    }).join('');
-    return `<div class="acuse-tower">
-      <div class="acuse-tower-hd">${t.name}</div>
-      ${levelsHtml || '<div class="aptos-empty">SIN NIVELES</div>'}
+      }).join('') || '<div class="aptos-empty" style="padding:24px">SIN NIVELES</div>';
+    }
+
+    return `<div class="tower-summary">
+      <div class="tower-summary-head simple${isCollapsed ? '' : ' open'}" onclick="toggleAcuseTorre('${t.id}')" title="Click para ${isCollapsed ? 'expandir' : 'colapsar'}">
+        <span class="ts-chevron" aria-hidden="true"></span>
+        <div class="ts-name-wrap">
+          <div class="ts-name">${t.name}</div>
+        </div>
+        <div class="ts-prom">${pctT}%<small>FIRMADOS</small></div>
+      </div>
+      ${body}
     </div>`;
   }).join('');
+}
+
+// Toggle colapsar/expandir torre en la vista de Acuses de Recepción
+window.toggleAcuseTorre = function(torreId){
+  const p = activeProj();
+  const collapsedKey = 'acuses_torres_colapsadas_' + (p?.id || 'def');
+  let arr;
+  try { arr = JSON.parse(localStorage.getItem(collapsedKey) || '[]'); }
+  catch(e) { arr = []; }
+  const set = new Set(arr);
+  if (set.has(torreId)) set.delete(torreId);
+  else set.add(torreId);
+  try { localStorage.setItem(collapsedKey, JSON.stringify([...set])); } catch(e){}
+  renderAcusesRecepcion();
+};
+
+/* Solicitudes para SALTAR etapa de acuse (pedirle al admin liberar una etapa
+   sin haber completado la anterior). Estructura:
+     a.acuseSaltosSolicitudes = [{ id, slotKey, razon, supervisorEmail, supervisorNombre,
+                                    solicitadoEn, estado: 'pendiente'|'aprobada'|'rechazada',
+                                    decididoEn, decididoPor, decididoPorNombre, notaDecision }]
+   Cuando admin aprueba: a.acuseSaltosAprobados[slotKey] = { aprobadoPor, aprobadoEn }
+*/
+let _saltoAcuseCtx = null;
+
+window.abrirModalSolicitarSaltoAcuse = function(towerId, levelId, aptoId, slotKey){
+  if (!can('avance.edit')) return showToast('SIN PERMISO', 'red');
+  const p = activeProj();
+  const t = (p.towers||[]).find(x => x.id === towerId);
+  const l = t && (t.levels||[]).find(x => x.id === levelId);
+  const a = l && (l.aptos||[]).find(x => x.id === aptoId);
+  if (!a) return;
+  const slotInfo = ACUSE_SLOTS.find(s => s.key === String(slotKey));
+  _saltoAcuseCtx = {
+    projectId: p.id, towerId, levelId, aptoId, slotKey,
+    aptoNombre: a.name,
+    torreNombre: t.name,
+    nivelNombre: l.name,
+    etapaNombre: slotInfo ? slotInfo.label : `ETAPA ${slotKey}`
+  };
+
+  let modal = document.getElementById('modalSolicitarSaltoAcuse');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'modal-bg';
+    modal.id = 'modalSolicitarSaltoAcuse';
+    modal.innerHTML = `
+      <div class="modal" style="max-width:520px">
+        <div class="modal-hd">
+          <h3>SOLICITAR ADELANTO DE ETAPA</h3>
+          <button class="modal-x" onclick="closeModal('solicitarSaltoAcuse')">✕</button>
+        </div>
+        <div class="modal-bd" style="padding:18px">
+          <div style="background:#FEF3C7;border-left:3px solid var(--amber);padding:10px 14px;border-radius:3px;font-size:11px;letter-spacing:.3px;line-height:1.5;color:var(--ink);margin-bottom:14px">
+            Las etapas de acuse normalmente se cargan en orden. Si necesitás cargar ésta antes que la anterior, el administrador debe autorizarlo.
+          </div>
+          <div id="solSaltoInfo" style="border:1px solid var(--line);background:var(--cream);padding:12px 14px;border-radius:4px;font-size:11px;line-height:1.7;margin-bottom:14px"></div>
+          <div class="field">
+            <label>RAZÓN · MÍNIMO 10 LETRAS</label>
+            <textarea id="solSaltoRazon" rows="3" placeholder="EJ: EL CLIENTE QUIERE FIRMAR LA MASILLA HOY ANTES QUE TERMINEMOS CIELOS"></textarea>
+          </div>
+          <div id="solSaltoError" style="font-size:11px;color:var(--red);min-height:16px;margin-top:6px"></div>
+        </div>
+        <div class="modal-ft">
+          <button class="btn ghost" onclick="closeModal('solicitarSaltoAcuse')">CANCELAR</button>
+          <button class="btn" onclick="confirmarSolicitudSaltoAcuse()">ENVIAR SOLICITUD</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  document.getElementById('solSaltoInfo').innerHTML = `
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px">
+      <strong>UBICACIÓN:</strong><span>${_saltoAcuseCtx.torreNombre} · ${_saltoAcuseCtx.nivelNombre} · ${_saltoAcuseCtx.aptoNombre}</span>
+      <strong>ETAPA QUE QUERÉS ADELANTAR:</strong><span>${_saltoAcuseCtx.etapaNombre}</span>
+    </div>`;
+  document.getElementById('solSaltoRazon').value = '';
+  document.getElementById('solSaltoError').textContent = '';
+  modal.classList.add('show');
+};
+
+window.confirmarSolicitudSaltoAcuse = function(){
+  if (!_saltoAcuseCtx) return;
+  const ctx = _saltoAcuseCtx;
+  const razon = (document.getElementById('solSaltoRazon').value||'').trim();
+  const err = document.getElementById('solSaltoError');
+  err.textContent = '';
+  if (razon.length < 10) { err.textContent = 'LA RAZÓN DEBE TENER AL MENOS 10 LETRAS'; return; }
+
+  const p = (state.projects||[]).find(x => x.id === ctx.projectId);
+  if (!Array.isArray(p.acuseSaltosSolicitudes)) p.acuseSaltosSolicitudes = [];
+  const id = 'saltoacu-' + Date.now() + '-' + Math.floor(Math.random()*1000);
+  p.acuseSaltosSolicitudes.push({
+    id,
+    projectId: ctx.projectId,
+    towerId: ctx.towerId, levelId: ctx.levelId, aptoId: ctx.aptoId,
+    slotKey: ctx.slotKey,
+    aptoNombre: ctx.aptoNombre,
+    torreNombre: ctx.torreNombre,
+    nivelNombre: ctx.nivelNombre,
+    etapaNombre: ctx.etapaNombre,
+    razon,
+    supervisorEmail: (currentUser && currentUser.email) || '',
+    supervisorNombre: (currentUser && (currentUser.displayName || currentUser.email)) || 'SUPERVISOR',
+    solicitadoEn: Date.now(),
+    estado: 'pendiente',
+    decididoEn: null,
+    decididoPor: null,
+    decididoPorNombre: null,
+    notaDecision: null
+  });
+  saveState();
+  closeModal('solicitarSaltoAcuse');
+  showToast('SOLICITUD ENVIADA · EL ADMIN DECIDE', 'green');
+  logActivity('create', 'Solicitud salto de etapa de acuse', `${p.name} · ${ctx.aptoNombre} · ${ctx.etapaNombre}`);
+  _saltoAcuseCtx = null;
+};
+
+window.aprobarSaltoAcuse = function(solicitudId){
+  if (!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR', 'red');
+  const p = activeProj();
+  const sol = (p.acuseSaltosSolicitudes||[]).find(x => x.id === solicitudId);
+  if (!sol || sol.estado !== 'pendiente') return showToast('SOLICITUD YA RESUELTA', 'red');
+  if (!confirm(`¿APROBAR ADELANTO?\n\n${sol.aptoNombre} · ${sol.etapaNombre}\n\nEl supervisor podrá cargar esta etapa antes de la anterior.`)) return;
+
+  const t = p.towers.find(x => x.id === sol.towerId);
+  const l = t && t.levels.find(x => x.id === sol.levelId);
+  const a = l && (l.aptos||[]).find(x => x.id === sol.aptoId);
+  if (a) {
+    if (!a.acuseSaltosAprobados) a.acuseSaltosAprobados = {};
+    const sIdx = ACUSE_SLOTS.findIndex(s => s.key === String(sol.slotKey));
+    if (sIdx >= 0) a.acuseSaltosAprobados[String(sIdx)] = { aprobadoPor: (currentUser && currentUser.email)||'', aprobadoEn: Date.now() };
+  }
+  sol.estado = 'aprobada';
+  sol.decididoEn = Date.now();
+  sol.decididoPor = (currentUser && currentUser.email) || '';
+  sol.decididoPorNombre = (currentUser && (currentUser.displayName || currentUser.email)) || '';
+  saveState();
+  try { renderSolicitudesSaltoAcuse(); renderAcusesRecepcion(); } catch(e){}
+  showToast('ADELANTO APROBADO', 'green');
+  logActivity('approve', 'Salto de etapa acuse aprobado', `${p.name} · ${sol.aptoNombre} · ${sol.etapaNombre}`);
+};
+
+window.rechazarSaltoAcuse = function(solicitudId){
+  if (!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR', 'red');
+  const p = activeProj();
+  const sol = (p.acuseSaltosSolicitudes||[]).find(x => x.id === solicitudId);
+  if (!sol || sol.estado !== 'pendiente') return showToast('SOLICITUD YA RESUELTA', 'red');
+  const nota = prompt('NOTA DE RECHAZO (opcional):') || '';
+  if (!confirm('¿RECHAZAR ADELANTO?')) return;
+  sol.estado = 'rechazada';
+  sol.decididoEn = Date.now();
+  sol.decididoPor = (currentUser && currentUser.email) || '';
+  sol.decididoPorNombre = (currentUser && (currentUser.displayName || currentUser.email)) || '';
+  sol.notaDecision = nota || null;
+  saveState();
+  try { renderSolicitudesSaltoAcuse(); } catch(e){}
+  showToast('ADELANTO RECHAZADO', '');
+  logActivity('reject', 'Salto de etapa acuse rechazado', `${p.name} · ${sol.aptoNombre} · ${sol.etapaNombre}${nota?' · '+nota:''}`);
+};
+
+window.renderSolicitudesSaltoAcuse = function(){
+  const cont = document.getElementById('solicitudesSaltoAcuseBox');
+  if (!cont) return;
+  if (!can('users.manage')) { cont.innerHTML = ''; return; }
+  const p = activeProj();
+  const lista = (p.acuseSaltosSolicitudes||[]).slice().sort((a,b) => {
+    const ord = { pendiente:0, aprobada:1, rechazada:2 };
+    return (ord[a.estado]??9) - (ord[b.estado]??9) || (b.solicitadoEn||0) - (a.solicitadoEn||0);
+  });
+  if (lista.length === 0) { cont.innerHTML = ''; return; }
+  const pendientes = lista.filter(x => x.estado === 'pendiente').length;
+  cont.innerHTML = `
+    <div class="card" style="margin-top:14px">
+      <div class="card-hd">
+        <h3>SOLICITUDES DE ADELANTO DE ETAPA DE ACUSE</h3>
+        <span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">${pendientes} PENDIENTE${pendientes!==1?'S':''} · ${lista.length} TOTAL</span>
+      </div>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>ESTADO</th><th>UBICACIÓN</th><th>ETAPA</th><th>SOLICITANTE</th><th>RAZÓN</th><th>FECHA</th><th></th></tr></thead>
+        <tbody>${lista.map(s => {
+          const badge = s.estado === 'pendiente'
+            ? `<span class="planilla-badge" style="background:#FEF3C7;color:#92400E;border:1px solid #F59E0B">PENDIENTE</span>`
+            : s.estado === 'aprobada'
+              ? `<span class="planilla-badge" style="background:#DCFCE7;color:var(--green-dark);border:1px solid var(--green-dark)">APROBADA</span>`
+              : `<span class="planilla-badge" style="background:#FEE2E2;color:var(--red);border:1px solid var(--red)">RECHAZADA</span>`;
+          const fecha = s.solicitadoEn ? new Date(s.solicitadoEn).toLocaleDateString('es-GT') : '—';
+          const acciones = s.estado === 'pendiente'
+            ? `<button class="btn sm" onclick="aprobarSaltoAcuse('${s.id}')">APROBAR</button> <button class="btn ghost sm" style="color:var(--red)" onclick="rechazarSaltoAcuse('${s.id}')">RECHAZAR</button>`
+            : '';
+          const razonShort = (s.razon||'').length > 50 ? s.razon.slice(0,50)+'…' : s.razon;
+          return `<tr>
+            <td>${badge}</td>
+            <td style="font-size:10px"><div style="font-weight:700">${s.aptoNombre}</div><div style="color:var(--mute);font-size:9px">${s.torreNombre} · ${s.nivelNombre}</div></td>
+            <td style="font-size:10px">${s.etapaNombre}</td>
+            <td style="font-size:10px">${s.supervisorNombre || s.supervisorEmail || '—'}</td>
+            <td style="font-size:10px" title="${(s.razon||'').replace(/"/g,'&quot;')}">${razonShort}</td>
+            <td style="font-size:10px">${fecha}</td>
+            <td>${acciones}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>
+    </div>
+  `;
+};
+
+/* Abre la cámara EN VIVO para subir foto de un acuse.
+   - photoIdx: 0 o 1 (cuál de las 2 fotos del slot).
+   - Valida bloqueo secuencial (etapa anterior debe tener 2 fotos completas).
+*/
+async function openCameraForAcuse(towerId, levelId, aptoId, slotKey, photoIdx){
+  if (!can('avance.edit')) return showToast('SIN PERMISO', 'red');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return showToast('TU NAVEGADOR NO SOPORTA CÁMARA EN VIVO', 'red');
+  }
+  const p = activeProj();
+  const t = (p.towers||[]).find(x => x.id === towerId);
+  const l = t && (t.levels||[]).find(x => x.id === levelId);
+  const a = l && (l.aptos||[]).find(x => x.id === aptoId);
+  if (!a) return showToast('APTO NO ENCONTRADO', 'red');
+
+  // Bloqueo secuencial: etapa anterior debe tener sus 2 fotos.
+  const sIdx = ACUSE_SLOTS.findIndex(s => s.key === String(slotKey));
+  if (sIdx > 0) {
+    const check = acuseSlotPuedeIniciar(a, sIdx);
+    if (!check.ok && !can('users.manage')) {
+      // Pide solicitud al admin
+      const ok = confirm(
+        `BLOQUEO SECUENCIAL\n\n` +
+        `No podés cargar esta etapa porque la anterior (${check.etapaAnt}) todavía no tiene sus 2 fotos.\n\n` +
+        `¿Querés enviar una solicitud al administrador para que te libere el adelanto de esta etapa?`
+      );
+      if (ok) abrirModalSolicitarSaltoAcuse(towerId, levelId, aptoId, slotKey);
+      return;
+    }
+  }
+
+  // Verificar que no se reemplace una foto ya cargada
+  const slot = a.acuseRecepciones && a.acuseRecepciones[slotKey];
+  const urls = getAcuseUrls(slot);
+  if (urls[photoIdx]) {
+    return showToast('ESTA FOTO YA FUE SUBIDA — PEDÍ AL ADMIN ELIMINARLA SI HAY UN ERROR', 'red');
+  }
+
+  // Configurar estado del modal en modo "acuse"
+  const slotInfo = ACUSE_SLOTS.find(s => s.key === String(slotKey));
+  const slotLabel = slotInfo ? slotInfo.label : slotKey;
+  _cameraModalState = {
+    mode: 'acuse',
+    stream: null,
+    etapaIdx: null, slotIdx: null,
+    towerId, levelId, aptoId, slotKey, photoIdx,
+    capturedBlob: null,
+    contextoLabel: `${slotLabel} · FOTO ${photoIdx + 1}`
+  };
+
+  // Reusar el modal del avance físico (mismo HTML, mismo flow)
+  let modal = document.getElementById('modalCamera');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'modal-bg';
+    modal.id = 'modalCamera';
+    modal.innerHTML = `
+      <div class="modal" style="max-width:560px">
+        <div class="modal-hd">
+          <h3>TOMAR FOTO EN EL MOMENTO</h3>
+          <button class="modal-x" onclick="closeCameraModal()">✕</button>
+        </div>
+        <div class="modal-bd" style="padding:16px">
+          <div style="background:#FEF3C7;border-left:3px solid var(--amber);padding:10px 14px;border-radius:3px;font-size:11px;letter-spacing:.3px;line-height:1.5;color:var(--ink);margin-bottom:14px">
+            <strong>IMPORTANTE:</strong> LAS DOS FOTOS DEBEN SER DE <strong>ÁREAS DIFERENTES</strong> DE LA ENTREGA.
+          </div>
+          <div id="cameraVideoBox" style="position:relative;background:#000;border-radius:6px;overflow:hidden;aspect-ratio:4/3;max-width:100%">
+            <video id="cameraVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;display:block"></video>
+            <canvas id="cameraCanvas" style="display:none"></canvas>
+            <img id="cameraPreview" style="display:none;width:100%;height:100%;object-fit:cover">
+          </div>
+          <div id="cameraActions" style="display:flex;gap:8px;justify-content:center;margin-top:14px">
+            <button id="cameraTakeBtn" class="btn" onclick="captureCameraPhoto()">TOMAR FOTO</button>
+            <button id="cameraRetakeBtn" class="btn ghost" onclick="retakeCameraPhoto()" style="display:none">REINTENTAR</button>
+            <button id="cameraConfirmBtn" class="btn" onclick="confirmCameraPhoto()" style="display:none;background:var(--green-dark)">CONFIRMAR Y SUBIR</button>
+          </div>
+        </div>
+        <div class="modal-ft">
+          <button class="btn ghost" onclick="closeCameraModal()">CANCELAR</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  modal.classList.add('show');
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 960 } },
+      audio: false
+    });
+    _cameraModalState.stream = stream;
+    const video = document.getElementById('cameraVideo');
+    if (video) {
+      video.srcObject = stream;
+      await video.play().catch(()=>{});
+    }
+  } catch(err) {
+    console.error('No se pudo acceder a la cámara:', err);
+    closeCameraModal();
+    showToast('NO SE PUDO ABRIR LA CÁMARA: ' + (err.message || err.name), 'red');
+  }
+}
+
+/* Subir blob de acuse al slot indicado, con validación SHA-256 + pHash. */
+async function _uploadAcuseBlob(blob, towerId, levelId, aptoId, slotKey, photoIdx){
+  if (!can('avance.edit')) return showToast('SIN PERMISO', 'red');
+  if (typeof firebase === 'undefined' || !firebase.storage) {
+    return showToast('FIREBASE STORAGE NO DISPONIBLE', 'red');
+  }
+
+  const [hash, pHash] = await Promise.all([_hashBlobSHA256(blob), _perceptualHashImage(blob)]);
+
+  const p = activeProj();
+  const t = (p.towers||[]).find(x => x.id === towerId);
+  const l = t && (t.levels||[]).find(x => x.id === levelId);
+  const a = l && (l.aptos||[]).find(x => x.id === aptoId);
+  if (!a) return showToast('APTO NO ENCONTRADO', 'red');
+  if (!a.acuseRecepciones) a.acuseRecepciones = {};
+  let slot = a.acuseRecepciones[slotKey];
+  if (!slot) {
+    slot = {};
+    a.acuseRecepciones[slotKey] = slot;
+  }
+  if (!Array.isArray(slot.urls)) {
+    // Migrar legacy: si tenía url única, ponerla en urls[0]
+    slot.urls = [slot.url || null, null];
+    delete slot.url;
+  }
+  if (!Array.isArray(slot.photoHashes)) slot.photoHashes = [null, null];
+  if (!Array.isArray(slot.photoPHashes)) slot.photoPHashes = [null, null];
+
+  // Validación duplicado byte-exact
+  const otroIdx = photoIdx === 0 ? 1 : 0;
+  if (hash && slot.photoHashes[otroIdx] && hash === slot.photoHashes[otroIdx]) {
+    alert('LAS DOS FOTOS NO PUEDEN SER LA MISMA\n\nDeben ser de áreas DIFERENTES de la entrega.');
+    return showToast('FOTO DUPLICADA', 'red');
+  }
+  // Validación pHash (similitud visual)
+  if (pHash && slot.photoPHashes[otroIdx]) {
+    const dist = _hammingHex(pHash, slot.photoPHashes[otroIdx]);
+    if (dist <= 10) {
+      alert('LAS DOS FOTOS SE VEN MUY SIMILARES\n\nDeben ser de áreas DIFERENTES.\nVolvé a tomar la foto desde otro ángulo o de otra zona.');
+      return showToast('FOTOS MUY SIMILARES', 'red');
+    }
+  }
+
+  showToast('SUBIENDO ACUSE...', '');
+  try {
+    const cs = getCompressionSettings();
+    const acuseW = Math.max(cs.maxWidth, 900);
+    const acuseQ = Math.max(cs.quality, 0.78);
+    const tempFile = new File([blob], 'acuse.jpg', { type: 'image/jpeg' });
+    const base64 = await compressImage(tempFile, acuseW, acuseQ);
+    const blobComprimido = await (await fetch(base64)).blob();
+    const path = `acuses/${aptoId}/${slotKey}_${photoIdx}`;
+    const ref = firebase.storage().ref(path);
+    await ref.put(blobComprimido, { contentType: 'image/jpeg' });
+    const url = await ref.getDownloadURL();
+
+    slot.urls[photoIdx] = url;
+    slot.photoHashes[photoIdx] = hash;
+    slot.photoPHashes[photoIdx] = pHash;
+    const _now = Date.now();
+    if (!slot.ts) slot.ts = _now;
+    slot.photoTs = _now;
+    slot.photoUser = (getCurrentUser()?.username) || '';
+    slot.photoUserName = (getCurrentUser()?.displayName) || slot.photoUser || '';
+
+    saveState();
+    const slotInfo = ACUSE_SLOTS.find(s => s.key === String(slotKey));
+    const slotLabel = slotInfo ? slotInfo.label : slotKey;
+    logActivity('update', `Foto de acuse cargada (${photoIdx+1}/2)`, `${p.name} · ${l.name} · ${a.name} · ${slotLabel}`);
+    renderAcusesRecepcion();
+    renderAvance();
+    const cuantas = acuseSlotPhotoCount(slot);
+    if (cuantas >= 2) {
+      showToast(`AMBAS FOTOS GUARDADAS · YA PODÉS PEDIR LA FIRMA DEL CLIENTE`, 'green');
+    } else {
+      showToast(`FOTO ${photoIdx+1} GUARDADA · FALTA LA SEGUNDA FOTO`, 'green');
+    }
+  } catch(err) {
+    console.error(err);
+    showToast('ERROR AL SUBIR ACUSE: ' + (err.code || err.message || 'desconocido'), 'red');
+  }
 }
 
 async function uploadAcuseRecepcion(event, towerId, levelId, aptoId, slotKey){
@@ -17670,13 +18137,16 @@ function openQRScanForAcuse(towerId, levelId, aptoId, slotKey){
       showToast('ESTE ACUSE YA FUE FIRMADO', 'red');
       return;
     }
-    if (!_hasPhoto) {
+    // Nueva regla: requiere LAS 2 fotos antes de poder firmar.
+    if (!acuseSlotPuedeFirmar(_slot0)) {
       const _slotInfo0 = ACUSE_SLOTS.find(s => s.key === String(slotKey));
       const _slotLabel0 = _slotInfo0 ? _slotInfo0.label : ('ETAPA ' + slotKey);
+      const cuantas = acuseSlotPhotoCount(_slot0);
       alert(
         `NO SE PUEDE FIRMAR TODAVÍA\n\n` +
-        `Para firmar el acuse de "${_slotLabel0}" primero tenés que subir la FOTO de la entrega.\n\n` +
-        `Tocá el botón FOTO y subí la imagen. Después aparece el botón QR para firmar.`
+        `Para firmar el acuse de "${_slotLabel0}" tenés que tener LAS 2 FOTOS subidas. ` +
+        `Llevás ${cuantas} de 2.\n\n` +
+        `Tocá los botones FOTO 1 y FOTO 2 para tomar ambas con la cámara, y después aparece el botón QR para firmar.`
       );
       return;
     }
