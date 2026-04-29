@@ -12564,7 +12564,26 @@ function deleteCurrentProveedor(){
 
   // Helper: parsea un .xlsx a un array de filas (cada fila = array de strings/numbers)
   async function _parseXlsxToRows(file){
-    if (typeof JSZip === 'undefined') throw new Error('JSZip no disponible');
+    // PATH 1: usar SheetJS si está disponible (más robusto, soporta más formatos).
+    if (typeof XLSX !== 'undefined' && XLSX.read) {
+      try {
+        console.log('[Parser] Usando SheetJS para leer:', file.name);
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: 'array', cellDates: false });
+        if (!wb.SheetNames || wb.SheetNames.length === 0) throw new Error('Excel sin hojas');
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+        console.log('[Parser] SheetJS leyó', aoa.length, 'filas');
+        if (aoa.length > 0) console.log('[Parser] Primera fila:', aoa[0]);
+        return aoa;
+      } catch (sheetErr) {
+        console.warn('[Parser] SheetJS falló, fallback al parser manual:', sheetErr);
+      }
+    }
+
+    // PATH 2: Fallback al parser manual con JSZip + DOMParser.
+    if (typeof JSZip === 'undefined') throw new Error('JSZip no disponible y SheetJS tampoco');
+    console.log('[Parser] Usando parser manual (JSZip + DOMParser)');
     const zip = await JSZip.loadAsync(file);
     const sstFile = zip.file('xl/sharedStrings.xml');
     const sst = [];
@@ -13138,8 +13157,19 @@ function deleteCurrentProveedor(){
         ), 1000);
       }
     } catch (err) {
-      console.error('Upload error:', err);
-      showToast('ERROR: ' + (err.message || err), 'red');
+      console.error('[Estimación] Error al subir:', err);
+      const detalle = err && err.message ? err.message : String(err);
+      showToast('ERROR: ' + detalle, 'red');
+      // Alert visible con detalle para que el usuario pueda copiarlo si necesita ayuda.
+      alert(
+        'NO SE PUDO CARGAR EL ARCHIVO\n\n' +
+        'Detalle: ' + detalle + '\n\n' +
+        'POSIBLES CAUSAS:\n' +
+        '• El archivo no es un Excel válido (.xlsx o .xls)\n' +
+        '• El Excel no tiene los headers esperados ("ESTIMACIÓN NO.X" + "% EJECUTADO A LA FECHA"), o columna "APTO" + columnas por estimación.\n' +
+        '• El archivo está protegido o corrupto.\n\n' +
+        'Si necesitás ayuda, abrí la consola (F12) y mandame screenshot.'
+      );
     }
     event.target.value = '';
   };
