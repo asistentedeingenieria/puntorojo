@@ -16326,21 +16326,70 @@ window.addEventListener('load', () => {
     html += `<div class="planilla-toolbar"><div class="field"><label>INSTALADOR O MASILLERO A PAGAR</label><select id="planillaColaboradorActivo" ${canGen?'':'disabled'} onchange="planillaSelectedColaborador=this.value; renderPlanillaEtapas();">${(p.planilla.colaboradores||[]).map(c=>{ const r=normalizeRole(c.rol); return `<option value="${h(c.id)}" ${c.id===activeColabId5(p)?'selected':''}>${h(c.nombre)} · ${r==='SIN DEFINIR'?'TIPO PENDIENTE':h(r)}</option>`; }).join('')}</select></div><button class="btn ghost sm" onclick="setPlanillaTab('colaboradores')">EDITAR LISTADO</button><button class="btn ghost sm" onclick="setPlanillaTab('receta')">MODELOS / COSTOS</button></div>`;
     if(!colab) html += `<div class="receta-intro">PRIMERO AGREGÁ AL MENOS UN INSTALADOR O MASILLERO.</div>`;
     else if(colRole==='SIN DEFINIR') html += `<div class="receta-intro">ANTES DE PAGAR, CLASIFICÁ A ${h(colab.nombre)} COMO INSTALADOR O MASILLERO EN LA PESTAÑA COLABORADORES.</div>`;
+
+    // Estado expand/collapse por torre (persistente en localStorage)
+    const collapsedKey = 'planilla_etapas_torres_colapsadas_' + (p.id || 'def');
+    let collapsedSet;
+    try { collapsedSet = new Set(JSON.parse(localStorage.getItem(collapsedKey) || '[]')); }
+    catch(e) { collapsedSet = new Set(); }
+
     html += `<div class="planilla-stage-row adv planilla-stage-head"><div>APTO / MODELO</div>${PLANILLA_ETAPAS_5.map((e,i)=>`<div>ETAPA ${i+1}<br><span class="planilla-stage-title">${h(e.name)}</span></div>`).join('')}</div>`;
-    (p.towers||[]).forEach(t=>{ html += `<div class="receta-tower-head">${h(t.name)}</div>`; (t.levels||[]).forEach(l=>(l.aptos||[]).forEach(a=>{
-      const mk=p.planilla.aptoModelMap?.[a.id] || defaultKeyForPlanilla(t,l,a); const mo=modeloObj5(p,mk);
-      html += `<div class="planilla-stage-row adv"><div><div class="apt-name">${h(a.name)}</div><div class="apt-meta">${h(l.name)} · ${h(t.name)}</div><span class="planilla-model-chip">${h(mo?.nombre||'SIN MODELO')}</span></div>`;
-      for(let i=0;i<5;i++){
-        const total=stageTotal5(p,a,i); const paid=paidPct5(p,a.id,i); const opts=pctOptions5(paid); const next=nextPct5(paid);
-        const roleAllowed = colRole==='MASILLERO' ? i===4 : (colRole==='INSTALADOR' ? i<4 : false);
-        const roleMsg = colRole==='MASILLERO' ? 'MASILLERO SOLO PUEDE COBRAR MASILLA' : (colRole==='INSTALADOR' ? 'INSTALADOR NO COBRA MASILLA' : 'TIPO PENDIENTE');
-        const disabled=(!canGen || !colab || colRole==='SIN DEFINIR' || !roleAllowed || total<=0 || !opts.length);
-        html += `<div class="planilla-stage-cell ${paid>=100?'paid':''} ${total<=0?'empty':''}"><div><div class="stage-money">${total>0?fQ(total):'SIN MONTO'}</div><div class="stage-pct">PAGADO: <strong>${paid}%</strong></div>${(!roleAllowed && colRole!=='SIN DEFINIR')?`<div class="stage-pct" style="color:var(--mute);font-size:7.8px">${h(roleMsg)}</div>`:''}</div><div class="planilla-stage-actions"><select id="pct-${h(a.id)}-${i}" ${disabled?'disabled':''}>${opts.map(x=>`<option value="${x}" ${x===next?'selected':''}>${x}%</option>`).join('')}</select><button class="btn sm" ${disabled?'disabled':''} onclick="pagarEtapaPlanilla('${h(t.id)}','${h(l.id)}','${h(a.id)}',${i})">PAGAR</button></div></div>`;
+
+    (p.towers||[]).forEach(t=>{
+      const isCollapsed = collapsedSet.has(t.id);
+
+      // % autorizadas en la torre
+      let totalEtapas=0, autT=0;
+      (t.levels||[]).forEach(l=>(l.aptos||[]).forEach(a=>{
+        for(let i=0;i<5;i++){
+          totalEtapas++;
+          const st = window._estadoPagoEtapa(p, a, i);
+          if (st==='autorizado' || st==='sinAcuse') autT++;
+        }
+      }));
+      const pctT = totalEtapas>0 ? Math.round(autT/totalEtapas*100) : 0;
+
+      html += `<div class="tower-summary">
+        <div class="tower-summary-head simple${isCollapsed?'':' open'}" onclick="togglePlanillaEtapasTorre('${h(t.id)}')" title="Click para ${isCollapsed?'expandir':'colapsar'}">
+          <span class="ts-chevron" aria-hidden="true"></span>
+          <div class="ts-name-wrap"><div class="ts-name">${h(t.name)}</div></div>
+          <div class="ts-prom">${pctT}%<small>AUTORIZADOS</small></div>
+        </div>`;
+
+      if (!isCollapsed) {
+        (t.levels||[]).forEach(l=>(l.aptos||[]).forEach(a=>{
+          const mk=p.planilla.aptoModelMap?.[a.id] || defaultKeyForPlanilla(t,l,a); const mo=modeloObj5(p,mk);
+          html += `<div class="planilla-stage-row adv"><div><div class="apt-name">${h(a.name)}</div><div class="apt-meta">${h(l.name)} · ${h(t.name)}</div><span class="planilla-model-chip">${h(mo?.nombre||'SIN MODELO')}</span></div>`;
+          for(let i=0;i<5;i++){
+            const total=stageTotal5(p,a,i); const paid=paidPct5(p,a.id,i); const opts=pctOptions5(paid); const next=nextPct5(paid);
+            const roleAllowed = colRole==='MASILLERO' ? i===4 : (colRole==='INSTALADOR' ? i<4 : false);
+            const roleMsg = colRole==='MASILLERO' ? 'MASILLERO SOLO PUEDE COBRAR MASILLA' : (colRole==='INSTALADOR' ? 'INSTALADOR NO COBRA MASILLA' : 'TIPO PENDIENTE');
+            const disabled=(!canGen || !colab || colRole==='SIN DEFINIR' || !roleAllowed || total<=0 || !opts.length);
+            html += `<div class="planilla-stage-cell ${paid>=100?'paid':''} ${total<=0?'empty':''}"><div><div class="stage-money">${total>0?fQ(total):'SIN MONTO'}</div><div class="stage-pct">PAGADO: <strong>${paid}%</strong></div>${(!roleAllowed && colRole!=='SIN DEFINIR')?`<div class="stage-pct" style="color:var(--mute);font-size:7.8px">${h(roleMsg)}</div>`:''}</div><div class="planilla-stage-actions"><select id="pct-${h(a.id)}-${i}" ${disabled?'disabled':''}>${opts.map(x=>`<option value="${x}" ${x===next?'selected':''}>${x}%</option>`).join('')}</select><button class="btn sm" ${disabled?'disabled':''} onclick="pagarEtapaPlanilla('${h(t.id)}','${h(l.id)}','${h(a.id)}',${i})">PAGAR</button></div></div>`;
+          }
+          html += `</div>`;
+        }));
       }
+
       html += `</div>`;
-    })); });
+    });
+
     html += `</div>` + renderPlanillaPagosList(canAuth);
     const el=document.getElementById('planilla-etapas'); if(el) el.innerHTML=html;
+  };
+
+  // Toggle colapsar/expandir torre en la vista PAGOS POR ETAPA Y APTO
+  window.togglePlanillaEtapasTorre = function(torreId){
+    const p = activeProj();
+    const collapsedKey = 'planilla_etapas_torres_colapsadas_' + (p?.id || 'def');
+    let arr;
+    try { arr = JSON.parse(localStorage.getItem(collapsedKey) || '[]'); }
+    catch(e) { arr = []; }
+    const set = new Set(arr);
+    if (set.has(torreId)) set.delete(torreId);
+    else set.add(torreId);
+    try { localStorage.setItem(collapsedKey, JSON.stringify([...set])); } catch(e){}
+    renderPlanillaEtapas();
   };
 
   window.pagarEtapaPlanilla = function(tid,lid,aid,stageIdx){
@@ -16380,12 +16429,195 @@ window.addEventListener('load', () => {
     html += `</div>`; const el=document.getElementById('planilla-receta'); if(el) el.innerHTML=html;
   };
 
-  window.renderPlanillaReporte=function(){
+  // Render: cuadritos por apto en planilla — formato unificado con AVANCE DE COBRO POR APTO
+  function renderPlanillaAptoSquares5(p, apto){
+    let aut=0, pendientes=0, sinAcuses=0;
+    for (let i=0; i<5; i++){
+      const st = window._estadoPagoEtapa(p, apto, i);
+      if (st==='autorizado' || st==='sinAcuse') aut++;
+      if (st==='pendiente') pendientes++;
+      if (st==='sinAcuse') sinAcuses++;
+    }
+    const allOk = (aut === 5 && sinAcuses === 0);
+    const pct = Math.round(aut / 5 * 100);
+    const aptoNombre = apto.name.replace(/^APARTAMENTO\s+/i, '').replace(/^APTO\s+/i, '').toUpperCase();
+
+    if (allOk) {
+      const tooltip = `${apto.name} · 100% AUTORIZADO`;
+      return `<div title="${tooltip}" style="display:flex;flex-direction:column;align-items:center;width:74px;padding:6px 4px;border-radius:4px">
+        <div style="font-size:9px;font-weight:700;color:var(--mute);letter-spacing:.3px;margin-bottom:4px">${aptoNombre}</div>
+        <div style="width:30px;height:30px;background:#1e6b1e;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;font-weight:700">✓</div>
+      </div>`;
+    }
+
+    // Mismo layout que cobro avance: 4 cuadritos en grid 2x2
+    let filled = 0;
+    if (aut >= 4) filled = 4;
+    else if (aut >= 3) filled = 3;
+    else if (aut >= 2) filled = 2;
+    else if (aut >= 1) filled = 1;
+
+    // Color del cuadrito según el estado dominante (paleta consistente con leyenda planilla)
+    let mainColor;
+    if (pendientes > 0) mainColor = '#FCD34D';        // amarillo: hay pagos pendientes de autorizar
+    else if (sinAcuses > 0) mainColor = '#5a8bb8';    // azul: pagado sin acuse del cliente
+    else if (aut > 0) mainColor = '#16A34A';          // verde: todo autorizado y firmado
+    else mainColor = '#a8c6e8';
+
+    const squares = [0,1,2,3].map(i => {
+      const isFilled = i < filled;
+      const c = isFilled ? mainColor : '#e8e4dc';
+      return `<div style="width:13px;height:13px;background:${c};border-radius:1px"></div>`;
+    }).join('');
+
+    const tooltip = `${apto.name} · ${aut}/5 ETAPAS PAGADAS${sinAcuses>0?' · '+sinAcuses+' SIN ACUSE':''}${pendientes>0?' · '+pendientes+' PENDIENTES':''}`;
+
+    return `<div title="${tooltip}" style="display:flex;flex-direction:column;align-items:center;width:74px;padding:6px 4px;border-radius:4px">
+      <div style="font-size:9px;font-weight:700;color:var(--mute);letter-spacing:.3px;margin-bottom:4px">${aptoNombre}</div>
+      <div style="display:grid;grid-template-columns:13px 13px;gap:2px">${squares}</div>
+      <div style="font-size:8px;color:var(--mute);margin-top:3px;letter-spacing:.3px">${pct}%</div>
+    </div>`;
+  }
+
+  window.renderPlanillaReporte = function(){
     ensureEnhancedData();
     const p=activeProj(); normalizarPlanilla5(p,true);
-    let html=`<div class="card"><div class="card-hd"><h3>REPORTE PAGADO POR APTO</h3></div><div class="planilla-report-row head"><div>APTO / MODELO</div>${PLANILLA_ETAPAS_5.map((e,i)=>`<div>ET. ${i+1}</div>`).join('')}<div>% PROM.</div></div>`;
-    (p.towers||[]).forEach(t=>(t.levels||[]).forEach(l=>(l.aptos||[]).forEach(a=>{ let sum=0; const mo=modeloObj5(p,p.planilla.aptoModelMap?.[a.id]||'GENERAL'); html+=`<div class="planilla-report-row"><div><div class="apt-name">${h(a.name)}</div><div class="apt-meta">${h(t.name)} · ${h(l.name)} · ${h(mo?.nombre||'GENERAL')}</div></div>`; for(let i=0;i<5;i++){ const pct=paidPct5(p,a.id,i); sum+=pct; html+=`<div style="text-align:center;font-weight:700;color:${pct>=100?'#0F6E56':pct>0?'var(--amber)':'#bbb'}">${pct? pct+'%':'—'}</div>`;} html+=`<div style="text-align:center;font-weight:700;color:var(--red)">${Math.round(sum/5)}%</div></div>`;})));
-    const el=document.getElementById('planilla-reporte'); if(el) el.innerHTML=html+'</div>';
+    if (!p) return;
+
+    // KPIs (consistentes con AVANCE DE COBRO POR APTO)
+    let totalAptos=0, completos=0, sinIniciar=0, sinAcuseTotal=0;
+    (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
+      totalAptos++;
+      let aut=0, sa=0;
+      for (let i=0; i<5; i++){
+        const st = window._estadoPagoEtapa(p, a, i);
+        if (st==='autorizado' || st==='sinAcuse') aut++;
+        if (st==='sinAcuse') sa++;
+      }
+      if (aut===5 && sa===0) completos++;
+      if (aut===0) sinIniciar++;
+      sinAcuseTotal += sa;
+    })));
+    const enProceso = totalAptos - completos - sinIniciar;
+
+    let html = `
+      <div class="card">
+        <div class="card-hd"><h3>REPORTE DE PAGOS POR APARTAMENTO</h3></div>
+        <p class="receta-intro" style="margin-bottom:14px">CADA APARTAMENTO MUESTRA SUS 5 ETAPAS DE PLANILLA COMO CUADRITOS. EL COLOR INDICA EL ESTADO DEL PAGO AL OBRERO.</p>
+
+        <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:8px;margin-bottom:14px">
+          <div style="text-align:center;padding:8px 10px;background:var(--white);border:1px solid var(--line);border-left:3px solid var(--mute);border-radius:4px">
+            <div style="font-size:8.5px;letter-spacing:1.2px;color:var(--mute);font-weight:700">SIN PAGOS</div>
+            <div style="font-size:18px;font-weight:700;color:var(--mute);margin-top:2px">${sinIniciar}</div>
+          </div>
+          <div style="text-align:center;padding:8px 10px;background:var(--white);border:1px solid var(--line);border-left:3px solid var(--rojo);border-radius:4px">
+            <div style="font-size:8.5px;letter-spacing:1.2px;color:var(--rojo);font-weight:700">EN PROCESO</div>
+            <div style="font-size:18px;font-weight:700;color:var(--rojo);margin-top:2px">${enProceso}</div>
+          </div>
+          <div style="text-align:center;padding:8px 10px;background:#e8f5e0;border:1px solid #c5dfb3;border-left:3px solid #1e6b1e;border-radius:4px">
+            <div style="font-size:8.5px;letter-spacing:1.2px;color:#1e6b1e;font-weight:700">COMPLETOS</div>
+            <div style="font-size:18px;font-weight:700;color:#1e6b1e;margin-top:2px">${completos}</div>
+          </div>
+          <div style="text-align:center;padding:8px 10px;background:#EFF6FF;border:1px solid #BFDBFE;border-left:3px solid #2563EB;border-radius:4px">
+            <div style="font-size:8.5px;letter-spacing:1.2px;color:#1E3A8A;font-weight:700">PAGADAS SIN ACUSE</div>
+            <div style="font-size:18px;font-weight:700;color:#1E3A8A;margin-top:2px">${sinAcuseTotal}</div>
+          </div>
+        </div>
+    `;
+
+    // Estado expand/collapse por torre
+    const collapsedKey = 'planilla_torres_colapsadas_' + (p.id || 'def');
+    let collapsedSet;
+    try { collapsedSet = new Set(JSON.parse(localStorage.getItem(collapsedKey) || '[]')); }
+    catch(e) { collapsedSet = new Set(); }
+
+    // Grilla por torre/nivel — mismo layout que renderCobroAvanceApto
+    (p.towers||[]).forEach(t => {
+      const totalT = (t.levels||[]).reduce((s, l) => s + (l.aptos||[]).length, 0);
+      if (totalT === 0) return;
+      let autT = 0;
+      (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
+        for (let i=0; i<5; i++){
+          const st = window._estadoPagoEtapa(p, a, i);
+          if (st==='autorizado' || st==='sinAcuse') autT++;
+        }
+      }));
+      const pctT = totalT>0 ? Math.round(autT / (totalT*5) * 100) : 0;
+      const isCollapsed = collapsedSet.has(t.id);
+
+      html += `<div class="tower-summary">
+        <div class="tower-summary-head simple${isCollapsed ? '' : ' open'}" onclick="togglePlanillaTorre('${t.id}')" title="Click para ${isCollapsed ? 'expandir' : 'colapsar'}">
+          <span class="ts-chevron" aria-hidden="true"></span>
+          <div class="ts-name-wrap">
+            <div class="ts-name">${t.name}</div>
+          </div>
+          <div class="ts-prom">${pctT}%<small>AUTORIZADOS</small></div>
+        </div>`;
+
+      if (!isCollapsed) {
+        (t.levels||[]).forEach(l => {
+          const aptos = l.aptos || [];
+          if (aptos.length === 0) return;
+          let autL = 0;
+          aptos.forEach(a => {
+            for (let i=0; i<5; i++){
+              const st = window._estadoPagoEtapa(p, a, i);
+              if (st==='autorizado' || st==='sinAcuse') autL++;
+            }
+          });
+          const pctL = aptos.length>0 ? Math.round(autL / (aptos.length*5) * 100) : 0;
+
+          html += `<div style="display:grid;grid-template-columns:90px 1fr;gap:0;align-items:center;border-bottom:1px solid var(--line-soft)">
+            <div style="text-align:right;padding:8px 12px;background:var(--cream);border-right:1px solid var(--line)">
+              <div style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase">${l.name}</div>
+              <div style="font-size:11px;color:var(--rojo);font-weight:700;margin-top:2px">${pctL}%</div>
+            </div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;padding:6px 8px">`;
+
+          aptos.forEach(a => {
+            html += renderPlanillaAptoSquares5(p, a);
+          });
+
+          html += `</div></div>`;
+        });
+      }
+
+      html += `</div>`;
+    });
+
+    // Leyenda — paleta de planilla consistente con la de cobro avance (4 cuadritos)
+    html += `
+      <div style="margin-top:12px;padding:14px 16px;background:var(--cream);border:1px solid var(--line);border-radius:4px;font-size:10px;letter-spacing:.3px;color:var(--text)">
+        <div style="font-weight:700;margin-bottom:10px;letter-spacing:1.2px">CÓMO LEER · ESTADO DE PAGO POR APARTAMENTO:</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px 16px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="display:grid;grid-template-columns:13px 13px;gap:2px;flex-shrink:0"><div style="width:13px;height:13px;background:#e8e4dc"></div><div style="width:13px;height:13px;background:#e8e4dc"></div><div style="width:13px;height:13px;background:#e8e4dc"></div><div style="width:13px;height:13px;background:#e8e4dc"></div></div>
+            <div><strong style="color:var(--ink);font-weight:700">SIN PAGOS</strong> · NINGUNA ETAPA INICIADA</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="display:grid;grid-template-columns:13px 13px;gap:2px;flex-shrink:0"><div style="width:13px;height:13px;background:#FCD34D"></div><div style="width:13px;height:13px;background:#e8e4dc"></div><div style="width:13px;height:13px;background:#e8e4dc"></div><div style="width:13px;height:13px;background:#e8e4dc"></div></div>
+            <div><strong style="color:var(--ink);font-weight:700">PENDIENTE</strong> · HAY PAGOS GENERADOS SIN AUTORIZAR (AMARILLO)</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="display:grid;grid-template-columns:13px 13px;gap:2px;flex-shrink:0"><div style="width:13px;height:13px;background:#5a8bb8"></div><div style="width:13px;height:13px;background:#5a8bb8"></div><div style="width:13px;height:13px;background:#e8e4dc"></div><div style="width:13px;height:13px;background:#e8e4dc"></div></div>
+            <div><strong style="color:var(--ink);font-weight:700">PAGADO SIN ACUSE</strong> · FALTA FIRMA DEL CLIENTE (AZUL)</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="display:grid;grid-template-columns:13px 13px;gap:2px;flex-shrink:0"><div style="width:13px;height:13px;background:#16A34A"></div><div style="width:13px;height:13px;background:#16A34A"></div><div style="width:13px;height:13px;background:#16A34A"></div><div style="width:13px;height:13px;background:#16A34A"></div></div>
+            <div><strong style="color:var(--ink);font-weight:700">AUTORIZADO</strong> · PAGADO + ACUSE FIRMADO (VERDE)</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="width:30px;height:30px;background:#1e6b1e;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;flex-shrink:0">✓</div>
+            <div><strong style="color:var(--ink);font-weight:700">100%</strong> · APTO COMPLETAMENTE PAGADO Y FIRMADO</div>
+          </div>
+        </div>
+        <div style="margin-top:10px;padding:8px 10px;background:#FFF7ED;border-left:3px solid #F97316;border-radius:2px;font-size:9.5px;letter-spacing:.3px;line-height:1.5;color:var(--ink)">
+          MISMA LECTURA QUE <strong>AVANCE DE COBRO POR APTO</strong>: 4 CUADRITOS = AVANCE DE LAS 5 ETAPAS, CHECK VERDE = 100%.
+        </div>
+      </div>
+    </div>`;
+
+    const el=document.getElementById('planilla-reporte'); if(el) el.innerHTML=html;
   };
 
   window.addEventListener('load',()=>{ try{ ensureEnhancedData(); saveState(); if(document.getElementById('view-planilla')?.classList.contains('active')) renderPlanilla(); }catch(e){ console.warn('PATCH PLANILLA 5 ETAPAS', e); } });
