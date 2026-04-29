@@ -13200,28 +13200,78 @@ function deleteCurrentProveedor(){
       }
 
       // ─── DETECTAR ESTIMACIONES NUEVAS Y AGREGARLAS A LA TABLA ───
-      // Si el Excel tiene "ESTIMACIÓN NO.8" pero solo había hasta NO.7,
-      // creamos automáticamente la fila vacía para que aparezca en la tabla.
+      // IMPORTANTE: solo agregamos estimaciones que TIENEN DATOS REALES.
+      // El Excel oficial trae columnas pre-definidas para las 13 estimaciones aunque
+      // solo las primeras N tengan datos llenados. NO debemos crear filas para
+      // estimaciones futuras vacías — solo las que algún apto ya cobró.
       let estimacionesAgregadas = 0;
-      const estNumsEnExcel = new Set();
+      const estNumsConDatos = new Set();
+
       if (interpret.tipo === 'oficial') {
-        interpret.ejecutadoCols.forEach(({ estNum }) => estNumsEnExcel.add(estNum));
-      } else if (interpret.estColumns) {
+        // Recorrer las filas de datos y ver qué columnas de estimación tienen al menos un valor > 0.
+        for (let i = (interpret.subHeaderRow || 0) + 1; i < interpret.dataRows.length; i++) {
+          const dr = interpret.dataRows[i];
+          if (!Array.isArray(dr)) continue;
+          interpret.ejecutadoCols.forEach(({ colIdx, estNum }) => {
+            if (estNumsConDatos.has(estNum)) return; // ya confirmado
+            const raw = dr[colIdx];
+            if (raw === '' || raw === null || raw === undefined) return;
+            const pct = Number(raw);
+            if (isNaN(pct) || pct <= 0) return;
+            estNumsConDatos.add(estNum);
+          });
+        }
+      } else if (interpret.estColumns && interpret.dataRows) {
+        // Formato matriz: una fila por apto. Detectar columnas con al menos un valor > 0.
+        const colNumByIdx = {};
         interpret.estColumns.forEach(col => {
           const labelUp = String(col.label || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
           if (labelUp.includes('ANTICIPO')) return;
           const m = labelUp.match(/(\d+)/);
-          if (m) estNumsEnExcel.add(parseInt(m[1]));
+          if (m) colNumByIdx[col.idx] = parseInt(m[1]);
+        });
+        interpret.dataRows.forEach(dr => {
+          if (!Array.isArray(dr)) return;
+          Object.entries(colNumByIdx).forEach(([colIdx, estNum]) => {
+            if (estNumsConDatos.has(estNum)) return;
+            const raw = dr[colIdx];
+            if (raw === '' || raw === null || raw === undefined) return;
+            const pct = Number(raw);
+            if (isNaN(pct) || pct <= 0) return;
+            estNumsConDatos.add(estNum);
+          });
         });
       }
+
+      // PASO 1: Limpiar estimaciones FANTASMA (creadas por error en uploads anteriores).
+      // Una fila se elimina solo si:
+      //   - NO es anticipo.
+      //   - NO tiene datos en el Excel actual (no está en estNumsConDatos).
+      //   - NO tiene info manualmente puesta (sin vp_ci, sin factura, sin fechas).
+      let estimacionesEliminadas = 0;
+      const rowsAntes = (p.cobro.rows || []).length;
+      p.cobro.rows = (p.cobro.rows || []).filter(r => {
+        if (r.isAnticipo) return true;
+        const m = String(r.d || '').match(/(\d+)/);
+        if (!m) return true; // sin número → la dejamos
+        const n = parseInt(m[1]);
+        if (estNumsConDatos.has(n)) return true; // tiene datos en Excel → válida
+        // No tiene datos en Excel — verificar si tiene info manual
+        const tieneInfo = (Number(r.vp_ci) > 0) || (r.factura && String(r.factura).trim()) || (r.fp && String(r.fp).trim()) || (r.f && String(r.f).trim());
+        if (tieneInfo) return true;
+        // Vacía y sin datos — eliminar
+        estimacionesEliminadas++;
+        return false;
+      });
+
+      // PASO 2: Agregar estimaciones nuevas con datos reales (que no estaban antes).
       const numsExistentes = new Set();
       (p.cobro.rows || []).forEach(r => {
         if (r.isAnticipo) { numsExistentes.add(0); return; }
         const m = String(r.d || '').match(/(\d+)/);
         if (m) numsExistentes.add(parseInt(m[1]));
       });
-      // Ordenar números nuevos para agregar en orden ascendente
-      const nuevasNums = [...estNumsEnExcel].filter(n => n > 0 && !numsExistentes.has(n)).sort((a,b) => a - b);
+      const nuevasNums = [...estNumsConDatos].filter(n => n > 0 && !numsExistentes.has(n)).sort((a,b) => a - b);
       nuevasNums.forEach(n => {
         p.cobro.rows.push({
           id: 'e' + n + '_' + Date.now() + '_' + Math.floor(Math.random()*1000),
@@ -13235,6 +13285,7 @@ function deleteCurrentProveedor(){
         });
         estimacionesAgregadas++;
       });
+      console.log(`[Estimaciones] Con datos en Excel: [${[...estNumsConDatos].sort((a,b)=>a-b).join(',')}]. Agregadas nuevas: ${estimacionesAgregadas}. Fantasma eliminadas: ${estimacionesEliminadas}.`);
 
       saveState();
       // Refrescar TODAS las vistas: tabla de estimaciones, donut, cuadritos por apto
@@ -13242,7 +13293,8 @@ function deleteCurrentProveedor(){
       try { renderCobroAvanceApto(); } catch(e){}
 
       let msg = `ESTIMACIÓN CARGADA · ${updated} REGISTROS`;
-      if (estimacionesAgregadas > 0) msg += ` · ${estimacionesAgregadas} ESTIMACIÓN${estimacionesAgregadas>1?'ES':''} NUEVA${estimacionesAgregadas>1?'S':''}`;
+      if (estimacionesAgregadas > 0) msg += ` · +${estimacionesAgregadas} NUEVA${estimacionesAgregadas>1?'S':''}`;
+      if (estimacionesEliminadas > 0) msg += ` · -${estimacionesEliminadas} VACÍA${estimacionesEliminadas>1?'S':''}`;
       if (sinMatch.length > 0) msg += ` · ${sinMatch.length} sin match`;
       showToast(msg, 'green');
 
