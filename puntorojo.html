@@ -3308,6 +3308,12 @@ async function _fcmTokenHash(token){
    Idempotente: se puede llamar varias veces sin duplicar.
    Devuelve el token o null. */
 async function ensureFCMRegistered(){
+  // ⚠️ FCM PUSH NOTIFICATIONS DESACTIVADAS — la función queda como no-op.
+  // No registramos tokens, no pedimos permisos, no hay push al celular.
+  // El sistema de notificaciones internas (badge dentro de la app) sigue funcionando.
+  return null;
+}
+async function _ensureFCMRegistered_DISABLED(){
   if (!fcmSupported()) {
     console.warn('FCM no soportado en este navegador/dispositivo.');
     return null;
@@ -3911,11 +3917,9 @@ function logActivity(type, title, desc){
   if (state.activity.length > 200) state.activity = state.activity.slice(0, 200);
   saveState();
   updateActivityBadge();
-
-  // ── NOTIFICAR A ADMINS DE TODA ACCIÓN DE NO-ADMINS ──
-  // El admin recibe push de cualquier movimiento. Se ejecuta async para no bloquear.
-  // No se notifica al admin de SUS propias acciones (sería ruido).
-  try { _notifyAdminsOfActivity(type, title, desc).catch(()=>{}); } catch(e){}
+  // ⚠️ AUTO-NOTIFICACIÓN A ADMINS DESACTIVADA — los admins ya no reciben notif
+  // por cada acción de cada usuario. La actividad sigue registrada en el log
+  // (visible en la pestaña ACTIVIDAD) pero NO genera push ni notif por usuario.
 }
 
 /* Manda push notification a todos los administradores cuando un usuario NO-admin
@@ -7965,46 +7969,7 @@ function advancePedido(id){
   const actType = pd.status === 'RECIBIDO' ? 'paid' : pd.status === 'APROBADO' ? 'auth' : 'update';
   logActivity(actType, `Pedido ${pd.numero}: ${pd.status}`, `${p.name} · ${getCurrentUser()?.displayName || 'SISTEMA'}`);
 
-  // ── Notificaciones según el nuevo estado ──
-  try {
-    const numeroP = pd.numero;
-    const projectName = p.name;
-    if (pd.status === 'EN COMPRA') {
-      // El equipo de compras está procesando — avisar al solicitante.
-      _notifyByUsername(pd.solicitanteUsername, {
-        type: 'pedido_en_compras',
-        title: 'TU PEDIDO ENTRÓ A COMPRAS',
-        body: `${numeroP} está en proceso de aprobación · ${projectName}`,
-        projectId: p.id,
-        refPedidoId: pd.id
-      }).catch(()=>{});
-    } else if (pd.status === 'APROBADO') {
-      // OC ya generada — avisar a Finanzas para autorizar + al solicitante.
-      _notifyByPerm('compras.autorizar', {
-        type: 'oc_pendiente_autorizacion',
-        title: 'OC PENDIENTE DE AUTORIZAR',
-        body: `${numeroP} aprobado por compras — falta autorización de Finanzas · ${projectName}`,
-        projectId: p.id,
-        refPedidoId: pd.id
-      }).catch(()=>{});
-      _notifyByUsername(pd.solicitanteUsername, {
-        type: 'pedido_aprobado',
-        title: 'TU PEDIDO FUE APROBADO',
-        body: `${numeroP} aprobado por compras · esperando OC autorizada`,
-        projectId: p.id,
-        refPedidoId: pd.id
-      }).catch(()=>{});
-    } else if (pd.status === 'RECIBIDO') {
-      // Solicitante recibió el material — avisar a compras y finanzas.
-      _notifyByPerm('pedidos.advance', {
-        type: 'pedido_recibido',
-        title: 'PEDIDO MARCADO COMO RECIBIDO',
-        body: `${numeroP} confirmado como recibido por ${pd.solicitante || 'el solicitante'} · ${projectName}`,
-        projectId: p.id,
-        refPedidoId: pd.id
-      }).catch(()=>{});
-    }
-  } catch(e){}
+  // (notifs de cambio de estado desactivadas)
 
   saveState();
   renderPedidosList();
@@ -8508,16 +8473,7 @@ function submitPedido(){
   const metalLabel = validMetal.length > 0 ? ` · ${validMetal.length} fabricación${validMetal.length!==1?'es':''} metal` : '';
   logActivity('create', `Pedido ${numero} creado`, `${p.name} · ${totalCount} materiales${extraLabel}${metalLabel} · ${solicitante}`);
 
-  // ── Notificar al equipo de COMPRAS (los que pueden avanzar pedidos) ──
-  try {
-    _notifyByPerm('pedidos.advance', {
-      type: 'pedido_nuevo',
-      title: 'NUEVO PEDIDO PARA REVISAR',
-      body: `${solicitante} solicitó ${numero} · ${p.name}${aptoLabel ? ' · ' + aptoLabel : ''} · ${totalCount} material${totalCount === 1 ? '' : 'es'}`,
-      projectId: p.id,
-      refPedidoId: pedido.id
-    }).catch(()=>{});
-  } catch(e){}
+  // (notif a compras desactivada)
 
   saveState();
 
@@ -9202,24 +9158,7 @@ function generarOrdenCompra(){
   const proveedoresTxt = created.map(oc => oc.proveedorNombre).join(' · ');
   logActivity('create', `${created.length} OC generadas por proveedor para pedido ${pd.numero}`, `${p.name} · ${proveedoresTxt}`);
 
-  // ── Notificar a Finanzas (compras.autorizar) — tienen OC pendiente de autorizar ──
-  try {
-    _notifyByPerm('compras.autorizar', {
-      type: 'oc_pendiente_autorizacion',
-      title: 'OC PARA AUTORIZAR',
-      body: `${created.length} orden${created.length !== 1 ? 'es' : ''} de compra del pedido ${pd.numero} esperando autorización · ${proveedoresTxt}`,
-      projectId: p.id,
-      refPedidoId: pd.id
-    }).catch(()=>{});
-    // Y avisar al solicitante que su pedido ya tiene OC generada.
-    _notifyByUsername(pd.solicitanteUsername, {
-      type: 'pedido_oc_generada',
-      title: 'TU PEDIDO YA TIENE ORDEN DE COMPRA',
-      body: `${pd.numero} · ${created.length} OC generada${created.length !== 1 ? 's' : ''} · esperando autorización de Finanzas`,
-      projectId: p.id,
-      refPedidoId: pd.id
-    }).catch(()=>{});
-  } catch(e){}
+  // (notifs de OC desactivadas)
 
   saveState();
 
@@ -13438,15 +13377,7 @@ function deleteCurrentProveedor(){
     saveState(); renderPlanilla();
     showToast(pagoSinAcuse ? 'PAGO GENERADO · ¡FALTA ACUSE!' : 'PAGO GENERADO · PENDIENTE AUTORIZACIÓN', pagoSinAcuse ? '' : 'green');
 
-    // ── Notif a Finanzas (planilla.authorize) — hay pago pendiente de autorizar ──
-    try {
-      _notifyByPerm('planilla.authorize', {
-        type: 'pago_pendiente_autorizacion',
-        title: 'PAGO DE PLANILLA PARA AUTORIZAR',
-        body: `${a.name} · ETAPA ${stageIdx+1} · ${colaborador.toUpperCase()} · ${fQ(neto)} · ${p.name}${pagoSinAcuse ? ' · SIN ACUSE' : ''}`,
-        projectId: p.id
-      }).catch(()=>{});
-    } catch(e){}
+    // (notif de pago pendiente desactivada)
   };
 
   window.autorizarPagoPlanilla = function(id){
@@ -13456,18 +13387,7 @@ function deleteCurrentProveedor(){
     logActivity('auth', `Pago planilla autorizado`, `${p.name} · ${pg.aptoName||pg.tipo} · ${pg.colaborador||''}`);
     saveState(); renderPlanilla(); showToast('PAGO AUTORIZADO','green');
 
-    // ── Notif al supervisor que generó el pago — para que sepa que se autorizó ──
-    try {
-      // Buscar al supervisor que originó el pago. Si el pago tiene `colaborador` username, usamos eso.
-      // Si no, intentamos por displayName/email del actor original (no siempre se guarda — best-effort).
-      // Para robustez, notificamos a todos los que tengan permiso planilla.generate (los que crean pagos).
-      _notifyByPerm('planilla.generate', {
-        type: 'pago_autorizado',
-        title: 'PAGO AUTORIZADO',
-        body: `${pg.aptoName || pg.tipo} · ${pg.colaborador || ''} · ${fQ(pg.neto || pg.monto || 0)} · ${p.name}`,
-        projectId: p.id
-      }).catch(()=>{});
-    } catch(e){}
+    // (notif de pago autorizado desactivada)
 
     // Tras autorizar, vemos si ya hay volumen para presentar estimación.
     try { window.chequearYNotificarEstimacion(p); } catch(e) { console.warn(e); }
