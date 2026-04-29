@@ -12739,15 +12739,14 @@ function deleteCurrentProveedor(){
         const estHeader = rows[estHeaderRow];
 
         // PASO 3: mapear cada columna "% EJECUTADO" a su número de estimación.
-        // En el Excel oficial cada estimación abarca 2 columnas (% + A CANCELAR), y el
-        // ESTIMACIÓN NO.X está en la MISMA columna que el "% EJECUTADO" sub-header.
+        // En el Excel oficial cada estimación abarca 2 columnas (% EJECUTADO + A CANCELAR),
+        // el ESTIMACIÓN NO.X está en la MISMA columna que el "% EJECUTADO" sub-header,
+        // y la FECHA de la estimación va en la columna inmediata siguiente del estHeader.
         const ejecutadoCols = [];
         for (let col = 0; col < subHeader.length; col++) {
           const s = String(subHeader[col] || '');
           if (!/%\s*EJECUTADO/i.test(s)) continue;
-          if (/A\s*LA\s*FECHA/i.test(s)) continue; // saltear la cumulative
-          // El ESTIMACIÓN NO.X está en la misma columna del estHeader.
-          // Si no, fallback: buscar a la izquierda (por si está merged).
+          if (/A\s*LA\s*FECHA/i.test(s)) continue;
           let estNum = null;
           let m = String(estHeader[col] || '').match(/ESTIMACI[ÓO]N\s*NO\s*\.?\s*(\d+)/i);
           if (m) estNum = parseInt(m[1]);
@@ -12757,13 +12756,19 @@ function deleteCurrentProveedor(){
               if (mm) { estNum = parseInt(mm[1]); break; }
             }
           }
-          if (estNum) ejecutadoCols.push({ colIdx: col, estNum });
+          if (estNum) {
+            // La columna "A CANCELAR" suele ser la siguiente (col+1).
+            // La FECHA de la estimación también está en col+1 del estHeader (Excel oficial).
+            const cancelCol = col + 1;
+            const fechaRaw = estHeader[col + 1];
+            ejecutadoCols.push({ colIdx: col, cancelCol, estNum, fechaRaw });
+          }
         }
 
         try { console.log(`[Parser] estHeaderRow=${estHeaderRow}, subHeaderRow=${subHeaderRow}, ejecutadoCols=${ejecutadoCols.length}`, ejecutadoCols); } catch(e){}
 
         if (ejecutadoCols.length > 0) {
-          return { tipo: 'oficial', subHeaderRow, ejecutadoCols, dataRows: rows };
+          return { tipo: 'oficial', subHeaderRow, estHeaderRow, ejecutadoCols, dataRows: rows };
         }
       }
     }
@@ -13055,7 +13060,33 @@ function deleteCurrentProveedor(){
       // Los aptos de otras torres que NO están en este Excel quedan intactos.
       const _firstTouchExcel = new Set();
 
+      // Acumulador de monto total por estimación (suma de "A CANCELAR" de cada apto).
+      // Se usa para llenar el campo vp_ci de las filas de estimación al final del upload.
+      const estTotalesExcel = {};
+
+      // Helper: convertir fecha de Excel (número serial o string) a "dd/mm/yyyy".
+      const _excelDateToString = (raw) => {
+        if (raw == null || raw === '') return '';
+        // Si ya es string con formato de fecha
+        if (typeof raw === 'string' && /\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}/.test(raw)) return raw;
+        const n = Number(raw);
+        if (!isNaN(n) && n > 30000 && n < 100000) {
+          // Excel epoch trick: 25569 = días entre 1900-01-01 y 1970-01-01.
+          const date = new Date((n - 25569) * 86400 * 1000);
+          const dd = String(date.getUTCDate()).padStart(2, '0');
+          const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+          const yyyy = date.getUTCFullYear();
+          return `${dd}/${mm}/${yyyy}`;
+        }
+        return String(raw);
+      };
+
       if (interpret.tipo === 'oficial') {
+        // Pre-cargar las fechas del estHeader en estTotalesExcel (una por estimación).
+        interpret.ejecutadoCols.forEach(({ estNum, fechaRaw }) => {
+          if (!estTotalesExcel[estNum]) estTotalesExcel[estNum] = { monto: 0, fechaRaw: null };
+          if (fechaRaw != null && fechaRaw !== '') estTotalesExcel[estNum].fechaRaw = fechaRaw;
+        });
         // FORMATO OFICIAL: el Excel tiene "ESTIMACIÓN NO.X" + "% EJECUTADO" (per-estimación).
         // Recorremos TODAS las filas, identificamos las que contienen un nombre de apto válido,
         // y leemos las columnas correspondientes al "% EJECUTADO" de cada estimación.
@@ -13133,7 +13164,7 @@ function deleteCurrentProveedor(){
             _firstTouchExcel.add(apto.id);
           }
 
-          interpret.ejecutadoCols.forEach(({ colIdx, estNum }) => {
+          interpret.ejecutadoCols.forEach(({ colIdx, cancelCol, estNum }) => {
             const raw = dr[colIdx];
             if (raw === '' || raw === null || raw === undefined) return;
             let pct = Number(raw);
@@ -13144,6 +13175,18 @@ function deleteCurrentProveedor(){
             const rid = idByEstNum[estNum] || ('est_' + estNum);
             p.cobro.avanceAptos[apto.id].porEstimacion[rid] = pct;
             updated++;
+
+            // Acumular monto "A CANCELAR" de este apto para esta estimación (col siguiente).
+            if (cancelCol != null) {
+              const cancelRaw = dr[cancelCol];
+              if (cancelRaw !== '' && cancelRaw !== null && cancelRaw !== undefined) {
+                const monto = Number(cancelRaw);
+                if (!isNaN(monto) && monto > 0) {
+                  if (!estTotalesExcel[estNum]) estTotalesExcel[estNum] = { monto: 0, fechaRaw: null };
+                  estTotalesExcel[estNum].monto += monto;
+                }
+              }
+            }
           });
         }
         try {
@@ -13265,7 +13308,29 @@ function deleteCurrentProveedor(){
         return false;
       });
 
-      // PASO 2: Agregar estimaciones nuevas con datos reales (que no estaban antes).
+      // PASO 2: RELLENAR datos de estimaciones existentes que tienen vp_ci=0 o sin fecha.
+      // Solo rellenamos campos vacíos: NO sobrescribimos info manual del usuario.
+      let estimacionesActualizadas = 0;
+      (p.cobro.rows || []).forEach(r => {
+        if (r.isAnticipo) return;
+        const m = String(r.d || '').match(/(\d+)/);
+        if (!m) return;
+        const n = parseInt(m[1]);
+        const datos = estTotalesExcel[n];
+        if (!datos) return;
+        let cambiado = false;
+        if ((!r.vp_ci || Number(r.vp_ci) === 0) && datos.monto > 0) {
+          r.vp_ci = +datos.monto.toFixed(2);
+          cambiado = true;
+        }
+        if ((!r.f || String(r.f).trim() === '') && datos.fechaRaw != null) {
+          const fechaStr = _excelDateToString(datos.fechaRaw);
+          if (fechaStr) { r.f = fechaStr; cambiado = true; }
+        }
+        if (cambiado) estimacionesActualizadas++;
+      });
+
+      // PASO 3: Agregar estimaciones nuevas con datos reales (que no estaban antes).
       const numsExistentes = new Set();
       (p.cobro.rows || []).forEach(r => {
         if (r.isAnticipo) { numsExistentes.add(0); return; }
@@ -13274,11 +13339,14 @@ function deleteCurrentProveedor(){
       });
       const nuevasNums = [...estNumsConDatos].filter(n => n > 0 && !numsExistentes.has(n)).sort((a,b) => a - b);
       nuevasNums.forEach(n => {
+        const datos = estTotalesExcel[n] || {};
+        const fechaStr = datos.fechaRaw != null ? _excelDateToString(datos.fechaRaw) : '';
+        const monto = datos.monto > 0 ? +datos.monto.toFixed(2) : 0;
         p.cobro.rows.push({
           id: 'e' + n + '_' + Date.now() + '_' + Math.floor(Math.random()*1000),
-          f: '',
+          f: fechaStr,
           d: 'ESTIMACIÓN ' + n,
-          vp_ci: 0,
+          vp_ci: monto,
           sf: '',
           sc: '',
           fp: '',
@@ -13286,7 +13354,8 @@ function deleteCurrentProveedor(){
         });
         estimacionesAgregadas++;
       });
-      console.log(`[Estimaciones] Con datos en Excel: [${[...estNumsConDatos].sort((a,b)=>a-b).join(',')}]. Agregadas nuevas: ${estimacionesAgregadas}. Fantasma eliminadas: ${estimacionesEliminadas}.`);
+      console.log(`[Estimaciones] Con datos en Excel: [${[...estNumsConDatos].sort((a,b)=>a-b).join(',')}]. Nuevas: ${estimacionesAgregadas}. Actualizadas: ${estimacionesActualizadas}. Fantasma eliminadas: ${estimacionesEliminadas}.`);
+      console.log(`[Estimaciones] Totales por estNum:`, estTotalesExcel);
 
       saveState();
       // Refrescar TODAS las vistas: tabla de estimaciones, donut, cuadritos por apto
