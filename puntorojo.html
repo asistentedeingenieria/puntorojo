@@ -28,6 +28,9 @@
 <!-- ════════ JSZip · BACKUP MANUAL EN ZIP ════════ -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
+<!-- ════════ SheetJS · EXPORTAR PLANILLAS A EXCEL ════════ -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
 <!-- ════════ jsPDF + AUTOTABLE · REPORTE MENSUAL EN PDF ════════ -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
@@ -1885,6 +1888,10 @@ html,body,.main{background:#FFFFFF!important;}
       <h1 class="view-title">Pago de <em>planillas.</em></h1>
       <p class="view-sub">PAGOS POR APTO, RETENCIONES Y AJUSTES.</p>
 
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+        <button class="btn cafe sm" onclick="abrirModalExportarPlanilla()" data-perm="planilla.generate" title="Exportar planilla a Excel formato quincena (con OC en hoja aparte)">📊 EXPORTAR PLANILLA QUINCENA</button>
+      </div>
+
       <div class="kpi-grid" id="planillaKpis"></div>
 
       <div class="mat-tabs" style="margin-bottom:18px">
@@ -1892,6 +1899,7 @@ html,body,.main{background:#FFFFFF!important;}
         <button class="mat-tab" data-plantab="receta" onclick="setPlanillaTab('receta')" data-perm="planilla.generate">RECETA DE COSTOS</button>
         <button class="mat-tab" data-plantab="retenciones" onclick="setPlanillaTab('retenciones')">RETENCIONES</button>
         <button class="mat-tab" data-plantab="ajustes" onclick="setPlanillaTab('ajustes')" data-perm="planilla.generate">EXTRAS / DESCUENTOS / OC</button>
+        <button class="mat-tab" data-plantab="excepciones" onclick="setPlanillaTab('excepciones')" data-perm="users.manage">EXCEPCIONES <span id="planillaExcBadge" style="display:none;background:var(--red);color:#fff;font-size:8px;padding:2px 6px;border-radius:10px;margin-left:4px"></span></button>
         <button class="mat-tab" data-plantab="reporte" onclick="setPlanillaTab('reporte')">REPORTE POR APTO</button>
       </div>
 
@@ -1899,6 +1907,7 @@ html,body,.main{background:#FFFFFF!important;}
       <div id="planilla-receta" style="display:none"></div>
       <div id="planilla-retenciones" style="display:none"></div>
       <div id="planilla-ajustes" style="display:none"></div>
+      <div id="planilla-excepciones" style="display:none"></div>
       <div id="planilla-reporte" style="display:none"></div>
     </section>
 
@@ -13206,7 +13215,7 @@ function deleteCurrentProveedor(){
   window.setPlanillaTab = function(tab){
     window.currentPlanillaTab = tab;
     document.querySelectorAll('[data-plantab]').forEach(b => b.classList.toggle('active', b.dataset.plantab === tab));
-    ['etapas','receta','retenciones','ajustes','reporte'].forEach(k => {
+    ['etapas','receta','retenciones','ajustes','excepciones','reporte'].forEach(k => {
       const el = document.getElementById('planilla-'+k); if (el) el.style.display = tab === k ? '' : 'none';
     });
     renderPlanilla();
@@ -13226,7 +13235,10 @@ function deleteCurrentProveedor(){
     if (currentPlanillaTab === 'receta') renderPlanillaReceta();
     if (currentPlanillaTab === 'retenciones') renderPlanillaRetenciones();
     if (currentPlanillaTab === 'ajustes') renderPlanillaAjustes();
+    if (currentPlanillaTab === 'excepciones') renderPlanillaExcepciones();
     if (currentPlanillaTab === 'reporte') renderPlanillaReporte();
+    // Badge de excepciones pendientes en la pestaña
+    try { window.actualizarBadgeExcepciones(); } catch(e){}
     applyPermissions();
   };
 
@@ -13655,12 +13667,436 @@ function deleteCurrentProveedor(){
   };
   window.pagarRetencion = function(name){ if(!can('planilla.generate')&&!can('users.manage')) return showToast('SIN PERMISO','red'); const p=activeProj(); const pagos=(p.planilla.pagos||[]).filter(x=>x.colaborador===name && x.retencion>0 && !x.retencionPagada); const total=pagos.reduce((s,x)=>s+Number(x.retencion||0),0); if(!confirm(`PAGAR RETENCIÓN A ${name}\nTOTAL: ${fQ(total)}`)) return; pagos.forEach(x=>x.retencionPagada=true); p.planilla.retencionesPagadas.push({id:'ret-'+uid(),name,total,ts:Date.now()}); logActivity('paid',`Retención pagada a ${name}`,`${p.name} · ${fQ(total)}`); saveState(); renderPlanilla(); showToast('RETENCIÓN PAGADA','green'); };
 
+  /* ════════════════════════════════════════════════════════════════
+     EXTRAS / DESCUENTOS / OC — versión 2 (líneas con unidad, cuotas, retención toggle)
+     ════════════════════════════════════════════════════════════════ */
+
+  // Tipos de descuento disponibles
+  const DESCUENTO_TIPOS = [
+    { key: 'ABONO_PREVIO',    label: 'ABONO PREVIO' },
+    { key: 'EQUIPO_PRESTADO', label: 'EQUIPO PRESTADO' },
+    { key: 'POLIZA',          label: 'PÓLIZA DE SEGURO' },
+    { key: 'PRESTAMO',        label: 'PRÉSTAMO' },
+    { key: 'OTRO',            label: 'OTRO DESCUENTO' }
+  ];
+
+  // Unidades disponibles para líneas de OC
+  const OC_UNIDADES = ['global', 'm²', 'ml', 'unidad'];
+
+  // Estado de los formularios inline
+  window._ocDraft = window._ocDraft || null;       // { desc, colaboradorId, retencion, lineas: [...] }
+  window._descDraft = window._descDraft || null;   // { subtipo, desc, colaboradorId, monto, cuotaActual, cuotasTotales }
+
+  function _planillaColabs(p){
+    return (p && p.planilla && p.planilla.colaboradores) || [];
+  }
+
+  function _colabName(p, id){
+    const c = _planillaColabs(p).find(x => x.id === id);
+    return c ? c.nombre : '—';
+  }
+
+  // Nombre amigable del subtipo de descuento
+  function _descTipoLabel(key){
+    const t = DESCUENTO_TIPOS.find(x => x.key === key);
+    return t ? t.label : key;
+  }
+
+  // Render principal
   window.renderPlanillaAjustes = function(){
-    const p=activeProj(); const list=p.planilla.ajustes||[];
-    document.getElementById('planilla-ajustes').innerHTML = `<div class="card"><div class="card-hd"><h3>EXTRAS, DESCUENTOS Y ÓRDENES DE CAMBIO</h3></div><div class="planilla-form-row"><div class="field"><label>DESCRIPCIÓN</label><input id="ajDesc" placeholder="EJ: SEGURO, PRÉSTAMO, ORDEN DE CAMBIO"></div><div class="field"><label>TIPO</label><select id="ajTipo"><option>EXTRAORDINARIO</option><option>DESCUENTO</option><option>ORDEN DE CAMBIO</option></select></div><div class="field"><label>MONTO</label><input id="ajMonto" type="number" step="0.01"></div><button class="btn sm" onclick="addPlanillaAjuste()">AGREGAR</button></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>TIPO</th><th>DESCRIPCIÓN</th><th>MONTO</th><th>ESTADO</th><th></th></tr></thead><tbody>${list.map(a=>`<tr><td>${a.tipo}</td><td>${a.desc}</td><td class="num">${fQ(a.monto)}</td><td>${a.autorizado?'AUTORIZADO':'PENDIENTE'}</td><td>${(!a.autorizado&&(can('planilla.authorize')||can('users.manage')))?`<button class="btn sm" onclick="autorizarAjuste('${a.id}')">AUTORIZAR</button>`:''}</td></tr>`).join('')||'<tr><td colspan="5">SIN AJUSTES</td></tr>'}</tbody></table></div></div>`;
+    const p = activeProj();
+    if (!p) return;
+    const cont = document.getElementById('planilla-ajustes');
+    if (!cont) return;
+    const list = p.planilla.ajustes || [];
+
+    // Separar OC de descuentos
+    const ocs = list.filter(a => a.tipo === 'ORDEN_CAMBIO' || a.tipo === 'ORDEN DE CAMBIO');
+    const descuentos = list.filter(a => a.tipo === 'DESCUENTO');
+    const extras = list.filter(a => a.tipo === 'EXTRAORDINARIO' || a.tipo === 'EXTRA'); // legacy
+    const canEdit = can('planilla.generate') || can('users.manage');
+    const canAuth = can('planilla.authorize') || can('users.manage');
+
+    const colabsOpts = _planillaColabs(p).map(c => `<option value="${h(c.id)}">${h(c.nombre)}${c.rol?' · '+h(normalizeRole(c.rol)):''}</option>`).join('');
+
+    let html = '';
+
+    /* ─── Sección 1: ÓRDENES DE CAMBIO ─────────────────────────── */
+    html += `<div class="card">
+      <div class="card-hd">
+        <h3>ÓRDENES DE CAMBIO</h3>
+        <span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Pagos extra fuera de las etapas regulares</span>
+        <button class="btn sm" ${canEdit?'':'disabled'} onclick="toggleNuevaOC()">+ NUEVA OC</button>
+      </div>
+
+      <div id="ocFormBox" style="display:${window._ocDraft ? 'block' : 'none'};padding:14px 16px;background:var(--cream);border-bottom:1px solid var(--line)">
+        ${_ocFormHTML(p, colabsOpts)}
+      </div>
+
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr>
+            <th>OBRERO</th>
+            <th>DESCRIPCIÓN</th>
+            <th>LÍNEAS</th>
+            <th class="num">SUBTOTAL</th>
+            <th class="num">RET. 10%</th>
+            <th class="num">NETO</th>
+            <th>ESTADO</th>
+            <th></th>
+          </tr></thead>
+          <tbody>
+            ${ocs.length === 0 ? '<tr><td colspan="8" style="text-align:center;padding:14px;color:var(--mute);font-size:10px;letter-spacing:1px">SIN ÓRDENES DE CAMBIO</td></tr>' :
+              ocs.map(o => {
+                const lineasTxt = (o.lineas || []).length;
+                return `<tr>
+                  <td style="font-size:10px;font-weight:700">${h(o.colaboradorNombre || _colabName(p, o.colaboradorId))}</td>
+                  <td style="font-size:10px">${h(o.desc || '—')}</td>
+                  <td style="font-size:10px"><button class="btn ghost sm" onclick="verLineasOC('${h(o.id)}')">${lineasTxt} línea${lineasTxt!==1?'s':''}</button></td>
+                  <td class="num">${fQ(o.subtotal || 0)}</td>
+                  <td class="num">${o.retencion ? fQ(o.retencionMonto || 0) : '—'}</td>
+                  <td class="num"><strong>${fQ(o.neto || o.monto || 0)}</strong></td>
+                  <td>${o.autorizado ? '<span class="planilla-badge ok">AUTORIZADA</span>' : '<span class="planilla-badge pending">PENDIENTE</span>'}</td>
+                  <td>${(!o.autorizado && canAuth)?`<button class="btn sm" onclick="autorizarAjuste('${h(o.id)}')">AUTORIZAR</button>`:''} ${canEdit?`<button class="btn ghost sm" style="color:var(--red)" onclick="eliminarAjuste('${h(o.id)}')" title="Eliminar">✕</button>`:''}</td>
+                </tr>`;
+              }).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+
+    /* ─── Sección 2: DESCUENTOS Y EXTRAS ────────────────────────── */
+    html += `<div class="card" style="margin-top:14px">
+      <div class="card-hd">
+        <h3>DESCUENTOS Y EXTRAS</h3>
+        <span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Pólizas, equipos prestados, préstamos, abonos previos</span>
+        <button class="btn sm" ${canEdit?'':'disabled'} onclick="toggleNuevoDescuento()">+ NUEVO DESCUENTO</button>
+      </div>
+
+      <div id="descFormBox" style="display:${window._descDraft ? 'block' : 'none'};padding:14px 16px;background:var(--cream);border-bottom:1px solid var(--line)">
+        ${_descFormHTML(p, colabsOpts)}
+      </div>
+
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr>
+            <th>TIPO</th>
+            <th>OBRERO</th>
+            <th>DESCRIPCIÓN</th>
+            <th>CUOTA</th>
+            <th class="num">MONTO</th>
+            <th>ESTADO</th>
+            <th></th>
+          </tr></thead>
+          <tbody>
+            ${descuentos.length === 0 ? '<tr><td colspan="7" style="text-align:center;padding:14px;color:var(--mute);font-size:10px;letter-spacing:1px">SIN DESCUENTOS</td></tr>' :
+              descuentos.map(d => {
+                const cuotaTxt = (d.cuotasTotales && d.cuotasTotales > 1) ? `${d.cuotaActual||1}/${d.cuotasTotales}` : '—';
+                return `<tr>
+                  <td><span class="planilla-badge" style="background:#FEE2E2;color:var(--red);border:1px solid var(--red)">${h(_descTipoLabel(d.subtipo || 'OTRO'))}</span></td>
+                  <td style="font-size:10px;font-weight:700">${h(d.colaboradorNombre || _colabName(p, d.colaboradorId))}</td>
+                  <td style="font-size:10px">${h(d.desc || '—')}</td>
+                  <td style="font-size:10px">${cuotaTxt}</td>
+                  <td class="num"><strong style="color:var(--red)">- ${fQ(d.monto || 0)}</strong></td>
+                  <td>${d.autorizado ? '<span class="planilla-badge ok">AUTORIZADO</span>' : '<span class="planilla-badge pending">PENDIENTE</span>'}</td>
+                  <td>${(!d.autorizado && canAuth)?`<button class="btn sm" onclick="autorizarAjuste('${h(d.id)}')">AUTORIZAR</button>`:''} ${canEdit?`<button class="btn ghost sm" style="color:var(--red)" onclick="eliminarAjuste('${h(d.id)}')" title="Eliminar">✕</button>`:''}</td>
+                </tr>`;
+              }).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+
+    /* ─── Sección 3: EXTRAORDINARIOS LEGACY (si existen) ─── */
+    if (extras.length > 0) {
+      html += `<div class="card" style="margin-top:14px">
+        <div class="card-hd"><h3>EXTRAORDINARIOS (LEGACY)</h3>
+          <span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Registros antiguos sin desglose — migrá a OC cuando puedas</span>
+        </div>
+        <div class="tbl-wrap"><table class="tbl">
+          <thead><tr><th>DESCRIPCIÓN</th><th class="num">MONTO</th><th>ESTADO</th><th></th></tr></thead>
+          <tbody>${extras.map(e => `<tr><td style="font-size:10px">${h(e.desc||'—')}</td><td class="num">${fQ(e.monto||0)}</td><td>${e.autorizado?'<span class="planilla-badge ok">AUTORIZADO</span>':'<span class="planilla-badge pending">PENDIENTE</span>'}</td><td>${(!e.autorizado&&canAuth)?`<button class="btn sm" onclick="autorizarAjuste('${h(e.id)}')">AUTORIZAR</button>`:''} ${canEdit?`<button class="btn ghost sm" style="color:var(--red)" onclick="eliminarAjuste('${h(e.id)}')">✕</button>`:''}</td></tr>`).join('')}</tbody>
+        </table></div>
+      </div>`;
+    }
+
+    cont.innerHTML = html;
   };
-  window.addPlanillaAjuste = function(){ if(!can('planilla.generate')&&!can('users.manage')) return showToast('SIN PERMISO','red'); const desc=(document.getElementById('ajDesc').value||'').trim().toUpperCase(); const tipo=document.getElementById('ajTipo').value; const monto=Number(document.getElementById('ajMonto').value)||0; if(!desc||monto<=0) return showToast('DESCRIPCIÓN Y MONTO REQUERIDOS','red'); const p=activeProj(); p.planilla.ajustes.push({id:'aju-'+uid(),tipo,desc,monto,ts:Date.now(),autorizado:false}); logActivity('create',`Ajuste de planilla generado`,`${tipo} · ${desc} · ${fQ(monto)}`); saveState(); renderPlanilla(); };
-  window.autorizarAjuste = function(id){ if(!can('planilla.authorize')&&!can('users.manage')) return showToast('SIN PERMISO','red'); const p=activeProj(); const a=(p.planilla.ajustes||[]).find(x=>x.id===id); if(!a) return; a.autorizado=true; a.autorizadoPor=(getCurrentUser()?.displayName||getCurrentUser()?.username||'').toUpperCase(); a.autorizadoTs=Date.now(); saveState(); renderPlanilla(); showToast('AJUSTE AUTORIZADO','green'); };
+
+  /* ─── Form inline: NUEVA OC ─── */
+  function _ocFormHTML(p, colabsOpts){
+    const draft = window._ocDraft;
+    if (!draft) return '';
+    return `
+      <div style="display:grid;grid-template-columns:1.5fr 1.5fr auto;gap:10px;align-items:end;margin-bottom:12px">
+        <div class="field">
+          <label>OBRERO QUE COBRA</label>
+          <select id="ocColab" onchange="_ocDraft.colaboradorId=this.value">
+            <option value="">— SELECCIONAR —</option>${colabsOpts.replace(`value="${h(draft.colaboradorId||'')}"`, `value="${h(draft.colaboradorId||'')}" selected`)}
+          </select>
+        </div>
+        <div class="field">
+          <label>DESCRIPCIÓN GENERAL</label>
+          <input id="ocDesc" placeholder="EJ: TRABAJOS EXTRAS POR ORDEN DE CAMBIO #5" value="${h(draft.desc || '')}" oninput="_ocDraft.desc=this.value">
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--ink);font-weight:700;cursor:pointer;padding:10px 0">
+          <input type="checkbox" id="ocRet" ${draft.retencion?'checked':''} onchange="_ocDraft.retencion=this.checked; renderPlanillaAjustes()">
+          APLICA RETENCIÓN 10%
+        </label>
+      </div>
+
+      <div style="margin-bottom:8px">
+        <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:700;margin-bottom:6px">LÍNEAS DE LA OC</div>
+        <div style="display:grid;grid-template-columns:2fr 90px 80px 110px 110px auto;gap:8px;font-size:8.5px;letter-spacing:1px;text-transform:uppercase;font-weight:700;color:var(--mute);padding-bottom:4px;border-bottom:1px solid var(--line)">
+          <div>DESCRIPCIÓN</div><div>UNIDAD</div><div>CANTIDAD</div><div>PRECIO UNIT.</div><div style="text-align:right">TOTAL</div><div></div>
+        </div>
+        ${(draft.lineas || []).map((ln, i) => `
+          <div style="display:grid;grid-template-columns:2fr 90px 80px 110px 110px auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line-soft)">
+            <input value="${h(ln.descripcion||'')}" placeholder="EJ: REFUERZO ESTRUCTURAL ZONA A" oninput="_ocLineaUpdate(${i},'descripcion',this.value)">
+            <select onchange="_ocLineaUpdate(${i},'unidad',this.value)">
+              ${OC_UNIDADES.map(u => `<option value="${u}" ${u===ln.unidad?'selected':''}>${u}</option>`).join('')}
+            </select>
+            <input type="number" step="0.01" value="${ln.cantidad||0}" oninput="_ocLineaUpdate(${i},'cantidad',this.value)">
+            <input type="number" step="0.01" value="${ln.precioUnit||0}" oninput="_ocLineaUpdate(${i},'precioUnit',this.value)">
+            <div style="text-align:right;font-weight:700;color:var(--ink)">${fQ(ln.total || 0)}</div>
+            <button class="btn ghost sm" style="color:var(--red)" onclick="_ocLineaQuitar(${i})" title="Quitar línea">✕</button>
+          </div>
+        `).join('')}
+        <button class="btn ghost sm" onclick="_ocLineaAgregar()" style="margin-top:8px">+ AGREGAR LÍNEA</button>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr auto auto auto auto;gap:14px;align-items:center;margin-top:14px;padding-top:10px;border-top:2px solid var(--line)">
+        <div></div>
+        <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:700">SUBTOTAL: <strong style="color:var(--ink);font-size:13px">${fQ(_ocSubtotal())}</strong></div>
+        ${draft.retencion ? `<div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--amber);font-weight:700">RET. 10%: <strong style="color:var(--amber);font-size:13px">- ${fQ(_ocSubtotal()*0.1)}</strong></div>` : ''}
+        <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--green-dark);font-weight:700">NETO: <strong style="color:var(--green-dark);font-size:14px">${fQ(_ocNeto())}</strong></div>
+        <div style="display:flex;gap:6px">
+          <button class="btn ghost sm" onclick="_ocCancelar()">CANCELAR</button>
+          <button class="btn sm" onclick="_ocGuardar()">GUARDAR OC</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function _ocSubtotal(){
+    const d = window._ocDraft; if (!d) return 0;
+    return (d.lineas || []).reduce((s, ln) => s + (Number(ln.total) || 0), 0);
+  }
+  function _ocNeto(){
+    const d = window._ocDraft; if (!d) return 0;
+    const sub = _ocSubtotal();
+    return d.retencion ? sub * 0.9 : sub;
+  }
+  window._ocLineaAgregar = function(){
+    if (!window._ocDraft) return;
+    if (!window._ocDraft.lineas) window._ocDraft.lineas = [];
+    window._ocDraft.lineas.push({ id: 'lin-'+uid(), descripcion:'', unidad:'global', cantidad:1, precioUnit:0, total:0 });
+    renderPlanillaAjustes();
+  };
+  window._ocLineaQuitar = function(i){
+    if (!window._ocDraft || !window._ocDraft.lineas) return;
+    window._ocDraft.lineas.splice(i, 1);
+    renderPlanillaAjustes();
+  };
+  window._ocLineaUpdate = function(i, campo, valor){
+    if (!window._ocDraft || !window._ocDraft.lineas || !window._ocDraft.lineas[i]) return;
+    const ln = window._ocDraft.lineas[i];
+    if (campo === 'cantidad' || campo === 'precioUnit') {
+      ln[campo] = Number(valor) || 0;
+      ln.total = +(Number(ln.cantidad||0) * Number(ln.precioUnit||0)).toFixed(2);
+    } else {
+      ln[campo] = valor;
+    }
+    renderPlanillaAjustes();
+  };
+  window.toggleNuevaOC = function(){
+    if (!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
+    if (window._ocDraft) {
+      window._ocDraft = null;
+    } else {
+      window._ocDraft = { desc:'', colaboradorId:'', retencion:false, lineas:[{ id:'lin-'+uid(), descripcion:'', unidad:'global', cantidad:1, precioUnit:0, total:0 }] };
+    }
+    renderPlanillaAjustes();
+  };
+  window._ocCancelar = function(){
+    window._ocDraft = null;
+    renderPlanillaAjustes();
+  };
+  window._ocGuardar = function(){
+    const d = window._ocDraft; if (!d) return;
+    if (!d.colaboradorId) return showToast('SELECCIONÁ EL OBRERO','red');
+    if (!d.desc || d.desc.trim() === '') return showToast('PONÉ UNA DESCRIPCIÓN GENERAL','red');
+    if (!d.lineas || d.lineas.length === 0) return showToast('AGREGÁ AL MENOS UNA LÍNEA','red');
+    if (d.lineas.some(ln => !ln.descripcion || !ln.descripcion.trim() || (Number(ln.cantidad||0) <= 0) || (Number(ln.precioUnit||0) <= 0))) {
+      return showToast('CADA LÍNEA NECESITA DESCRIPCIÓN, CANTIDAD Y PRECIO','red');
+    }
+    const p = activeProj();
+    const colab = _planillaColabs(p).find(c => c.id === d.colaboradorId);
+    const subtotal = _ocSubtotal();
+    const retencionMonto = d.retencion ? +(subtotal * 0.10).toFixed(2) : 0;
+    const neto = +(subtotal - retencionMonto).toFixed(2);
+
+    p.planilla.ajustes = p.planilla.ajustes || [];
+    p.planilla.ajustes.push({
+      id: 'aju-'+uid(),
+      tipo: 'ORDEN_CAMBIO',
+      desc: d.desc.trim().toUpperCase(),
+      colaboradorId: d.colaboradorId,
+      colaboradorNombre: colab ? upper(colab.nombre) : '',
+      retencion: !!d.retencion,
+      lineas: d.lineas.map(ln => ({
+        id: ln.id || ('lin-'+uid()),
+        descripcion: (ln.descripcion||'').trim().toUpperCase(),
+        unidad: ln.unidad || 'global',
+        cantidad: Number(ln.cantidad) || 0,
+        precioUnit: Number(ln.precioUnit) || 0,
+        total: +(Number(ln.cantidad||0) * Number(ln.precioUnit||0)).toFixed(2)
+      })),
+      subtotal,
+      retencionMonto,
+      neto,
+      monto: neto, // compat con código viejo
+      ts: Date.now(),
+      autorizado: false,
+      retencionPagada: false
+    });
+    logActivity('create', 'OC de planilla creada', `${p.name} · ${colab ? colab.nombre : ''} · ${d.desc} · ${fQ(neto)}`);
+    saveState();
+    window._ocDraft = null;
+    renderPlanilla();
+    showToast('OC CREADA · PENDIENTE AUTORIZACIÓN', 'green');
+  };
+
+  /* ─── Form inline: NUEVO DESCUENTO ─── */
+  function _descFormHTML(p, colabsOpts){
+    const draft = window._descDraft;
+    if (!draft) return '';
+    const esEquipo = draft.subtipo === 'EQUIPO_PRESTADO';
+    return `
+      <div style="display:grid;grid-template-columns:1.2fr 1.5fr 1fr auto;gap:10px;align-items:end">
+        <div class="field">
+          <label>TIPO DE DESCUENTO</label>
+          <select id="descTipo" onchange="_descDraft.subtipo=this.value; renderPlanillaAjustes()">
+            ${DESCUENTO_TIPOS.map(t => `<option value="${t.key}" ${t.key===draft.subtipo?'selected':''}>${t.label}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>OBRERO</label>
+          <select onchange="_descDraft.colaboradorId=this.value">
+            <option value="">— SELECCIONAR —</option>${colabsOpts.replace(`value="${h(draft.colaboradorId||'')}"`, `value="${h(draft.colaboradorId||'')}" selected`)}
+          </select>
+        </div>
+        <div class="field">
+          <label>MONTO</label>
+          <input type="number" step="0.01" value="${draft.monto||0}" oninput="_descDraft.monto=Number(this.value)||0">
+        </div>
+        <div style="display:flex;gap:6px;padding-bottom:6px">
+          <button class="btn ghost sm" onclick="_descCancelar()">CANCELAR</button>
+          <button class="btn sm" onclick="_descGuardar()">GUARDAR</button>
+        </div>
+      </div>
+      <div style="margin-top:10px;display:grid;grid-template-columns:${esEquipo?'2fr 100px 100px':'1fr'};gap:10px">
+        <div class="field">
+          <label>DESCRIPCIÓN${esEquipo?' DEL EQUIPO':''}</label>
+          <input value="${h(draft.desc||'')}" placeholder="${esEquipo ? 'EJ: ESCALERA METÁLICA DE 4 PIES' : 'DETALLE DEL DESCUENTO'}" oninput="_descDraft.desc=this.value">
+        </div>
+        ${esEquipo ? `
+          <div class="field">
+            <label>CUOTA ACTUAL</label>
+            <input type="number" min="1" value="${draft.cuotaActual||1}" oninput="_descDraft.cuotaActual=Math.max(1,Number(this.value)||1)">
+          </div>
+          <div class="field">
+            <label>CUOTAS TOTALES</label>
+            <input type="number" min="1" value="${draft.cuotasTotales||1}" oninput="_descDraft.cuotasTotales=Math.max(1,Number(this.value)||1)">
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+  window.toggleNuevoDescuento = function(){
+    if (!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
+    if (window._descDraft) {
+      window._descDraft = null;
+    } else {
+      window._descDraft = { subtipo:'POLIZA', desc:'', colaboradorId:'', monto:0, cuotaActual:1, cuotasTotales:1 };
+    }
+    renderPlanillaAjustes();
+  };
+  window._descCancelar = function(){
+    window._descDraft = null;
+    renderPlanillaAjustes();
+  };
+  window._descGuardar = function(){
+    const d = window._descDraft; if (!d) return;
+    if (!d.colaboradorId) return showToast('SELECCIONÁ EL OBRERO','red');
+    if (!d.desc || !d.desc.trim()) return showToast('PONÉ UNA DESCRIPCIÓN','red');
+    if (!d.monto || d.monto <= 0) return showToast('EL MONTO DEBE SER MAYOR A 0','red');
+    const p = activeProj();
+    const colab = _planillaColabs(p).find(c => c.id === d.colaboradorId);
+
+    p.planilla.ajustes = p.planilla.ajustes || [];
+    p.planilla.ajustes.push({
+      id: 'aju-'+uid(),
+      tipo: 'DESCUENTO',
+      subtipo: d.subtipo,
+      desc: d.desc.trim().toUpperCase(),
+      colaboradorId: d.colaboradorId,
+      colaboradorNombre: colab ? upper(colab.nombre) : '',
+      monto: Number(d.monto) || 0,
+      cuotaActual: d.subtipo === 'EQUIPO_PRESTADO' ? Math.max(1, Number(d.cuotaActual)||1) : 1,
+      cuotasTotales: d.subtipo === 'EQUIPO_PRESTADO' ? Math.max(1, Number(d.cuotasTotales)||1) : 1,
+      ts: Date.now(),
+      autorizado: false
+    });
+    logActivity('create', 'Descuento de planilla creado', `${p.name} · ${colab ? colab.nombre : ''} · ${_descTipoLabel(d.subtipo)} · ${fQ(d.monto)}`);
+    saveState();
+    window._descDraft = null;
+    renderPlanilla();
+    showToast('DESCUENTO REGISTRADO · PENDIENTE AUTORIZACIÓN', 'green');
+  };
+
+  /* ─── Acciones comunes ─── */
+  window.verLineasOC = function(id){
+    const p = activeProj();
+    const oc = (p.planilla.ajustes || []).find(x => x.id === id);
+    if (!oc) return;
+    let txt = `OC: ${oc.desc}\nObrero: ${oc.colaboradorNombre || _colabName(p, oc.colaboradorId)}\n\nLÍNEAS:\n`;
+    (oc.lineas || []).forEach((ln, i) => {
+      txt += `${i+1}. ${ln.descripcion}\n   ${ln.cantidad} ${ln.unidad} × ${fQ(ln.precioUnit)} = ${fQ(ln.total)}\n`;
+    });
+    txt += `\nSUBTOTAL: ${fQ(oc.subtotal||0)}`;
+    if (oc.retencion) txt += `\nRETENCIÓN 10%: -${fQ(oc.retencionMonto||0)}`;
+    txt += `\nNETO: ${fQ(oc.neto||oc.monto||0)}`;
+    alert(txt);
+  };
+
+  window.eliminarAjuste = function(id){
+    if (!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
+    if (!confirm('¿ELIMINAR ESTE REGISTRO?')) return;
+    const p = activeProj();
+    p.planilla.ajustes = (p.planilla.ajustes || []).filter(x => x.id !== id);
+    saveState(); renderPlanilla();
+    showToast('REGISTRO ELIMINADO', 'red');
+  };
+
+  window.autorizarAjuste = function(id){
+    if (!can('planilla.authorize') && !can('users.manage')) return showToast('SIN PERMISO','red');
+    const p = activeProj();
+    const a = (p.planilla.ajustes || []).find(x => x.id === id);
+    if (!a) return;
+    a.autorizado = true;
+    a.autorizadoPor = (getCurrentUser()?.displayName || getCurrentUser()?.username || '').toUpperCase();
+    a.autorizadoTs = Date.now();
+    saveState(); renderPlanilla();
+    showToast('AUTORIZADO', 'green');
+  };
+
+  // Compat: el alias viejo todavía funciona si alguien lo llama desde otro lado.
+  window.addPlanillaAjuste = function(){
+    return showToast('USÁ + NUEVA OC O + NUEVO DESCUENTO', '');
+  };
 
   /* ─── Estado de pago de UNA etapa de UN apto ─── */
   /* Devuelve uno de: 'sin', 'pendiente', 'autorizado', 'sinAcuse'.
@@ -14214,7 +14650,7 @@ async function confirmBioEmergencyReset(){
 let _excepcionPendingCtx = null;        // { projectId, towerId, levelId, aptoId, stageIdx, monto }
 let _excepcionAdminCtx = null;          // { projectId, towerId, levelId, aptoId, stageIdx } — para aprobar/rechazar
 
-window.abrirModalSolicitarExcepcion = function(projectId, towerId, levelId, aptoId, stageIdx, monto){
+window.abrirModalSolicitarExcepcion = function(projectId, towerId, levelId, aptoId, stageIdx, monto, ctx){
   if (!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
   const p = (state.projects||[]).find(x=>x.id===projectId);
   const t = p && (p.towers||[]).find(x=>x.id===towerId);
@@ -14222,10 +14658,11 @@ window.abrirModalSolicitarExcepcion = function(projectId, towerId, levelId, apto
   const a = l && (l.aptos||[]).find(x=>x.id===aptoId);
   if (!a) return;
 
-  _excepcionPendingCtx = { projectId, towerId, levelId, aptoId, stageIdx, monto };
+  _excepcionPendingCtx = { projectId, towerId, levelId, aptoId, stageIdx, monto, ctx: ctx || null };
 
+  // Si viene contexto de planilla, mostramos el nombre de planilla. Si no, el de avance físico.
   const etapaInfo = (typeof ETAPAS_INFO !== 'undefined' && ETAPAS_INFO[stageIdx]) ? ETAPAS_INFO[stageIdx] : null;
-  const etapaNombre = etapaInfo ? etapaInfo.name : ('ETAPA ' + (stageIdx+1));
+  const etapaNombre = (ctx && ctx.etapaNombre) ? ctx.etapaNombre : (etapaInfo ? etapaInfo.name : ('ETAPA ' + (stageIdx+1)));
 
   document.getElementById('solExcInfoBox').innerHTML = `
     <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px">
@@ -14236,7 +14673,7 @@ window.abrirModalSolicitarExcepcion = function(projectId, towerId, levelId, apto
       <strong>MONTO BRUTO:</strong><span>${typeof fQ==='function'?fQ(monto):('Q'+monto)}</span>
     </div>
   `;
-  document.getElementById('solExcObrero').value = '';
+  document.getElementById('solExcObrero').value = (ctx && ctx.obreroSugerido) || '';
   document.getElementById('solExcRazon').value = '';
   document.getElementById('solExcError').textContent = '';
   document.getElementById('modalSolicitarExcepcion').classList.add('show');
@@ -14261,7 +14698,9 @@ window.confirmarSolicitudExcepcion = async function(){
 
   if (!a.pagoExcepciones) a.pagoExcepciones = {};
   const etapaInfo = (typeof ETAPAS_INFO !== 'undefined' && ETAPAS_INFO[ctx.stageIdx]) ? ETAPAS_INFO[ctx.stageIdx] : null;
-  const etapaNombre = etapaInfo ? etapaInfo.name : ('ETAPA ' + (ctx.stageIdx+1));
+  const etapaNombreFisico = etapaInfo ? etapaInfo.name : ('ETAPA ' + (ctx.stageIdx+1));
+  // Si viene desde planilla, el ctx tiene el nombre "ETAPA X · TABIQUES UNA CARA". Lo guardamos como referencia visible.
+  const etapaNombre = (ctx.ctx && ctx.ctx.etapaNombre) ? ctx.ctx.etapaNombre : etapaNombreFisico;
 
   a.pagoExcepciones[String(ctx.stageIdx)] = {
     estado: 'pendiente',
@@ -14273,6 +14712,8 @@ window.confirmarSolicitudExcepcion = async function(){
     torreNombre: t.name,
     proyectoNombre: p.name,
     etapaNombre,
+    etapaNombreFisico,
+    origen: (ctx.ctx && ctx.ctx.etapaNombre) ? 'planilla' : 'avance',
     stageIdx: ctx.stageIdx,
     solicitadoPor: (currentUser && currentUser.email) || '',
     solicitadoPorNombre: (currentUser && (currentUser.displayName || currentUser.email)) || '',
@@ -14309,6 +14750,9 @@ window.confirmarSolicitudExcepcion = async function(){
     const title = 'EXCEPCIÓN DE PAGO SOLICITADA';
     const fmtMonto = (typeof fQ === 'function') ? fQ(ctx.monto) : ('Q' + ctx.monto);
     const body = `${supervisorNombre} pide pagar ${fmtMonto} a ${obrero} por ${a.name} · ${etapaNombre} sin acuse firmado. Motivo: "${razon}"`;
+    const adminEmails = admins.map(a => a.email).filter(Boolean);
+
+    // 1) Notificación in-app (campanita)
     for (const adm of admins) {
       try {
         await addNotification({
@@ -14320,6 +14764,36 @@ window.confirmarSolicitudExcepcion = async function(){
         });
       } catch(e) { console.warn('Notif a', adm.email, 'falló:', e); }
     }
+
+    // 2) Escribir a colección Firestore `excepcionesPago` → dispara Cloud Function que manda email
+    try {
+      if (typeof firebase !== 'undefined' && firebase.firestore && adminEmails.length > 0) {
+        const docRef = await firebase.firestore().collection('excepcionesPago').add({
+          projectId: p.id,
+          projectName: p.name,
+          aptoId: ctx.aptoId, towerId: ctx.towerId, levelId: ctx.levelId,
+          aptoNombre: a.name,
+          torreNombre: t.name,
+          nivelNombre: l.name,
+          etapaNombre,
+          stageIdx: ctx.stageIdx,
+          obrero,
+          monto: ctx.monto,
+          razon,
+          supervisorEmail: (currentUser && currentUser.email) || '',
+          supervisorNombre,
+          adminEmails,
+          estado: 'pendiente',
+          solicitadoEn: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        // Guardar el doc id en la excepción local para referencia futura
+        a.pagoExcepciones[String(ctx.stageIdx)].firestoreId = docRef.id;
+        saveState();
+      }
+    } catch(e) {
+      console.warn('No se pudo escribir excepción a Firestore (email no enviado):', e);
+    }
+
     if (admins.length === 0) {
       showToast('SOLICITUD GUARDADA · NO HAY ADMINS PARA NOTIFICAR', '');
     }
@@ -14411,7 +14885,7 @@ window.aprobarExcepcionUI = async function(){
   showToast('EXCEPCIÓN APROBADA — SE NOTIFICÓ AL SUPERVISOR', 'green');
   logActivity('approve', 'Excepción de pago aprobada', `${p.name} · ${a.name} · ${exc.etapaNombre || ('ETAPA ' + (stageIdx+1))} · ${exc.obrero || '—'}`);
 
-  // Notificar al supervisor
+  // Notificar al supervisor (in-app)
   try {
     if (exc.solicitadoPor) {
       await addNotification({
@@ -14424,6 +14898,18 @@ window.aprobarExcepcionUI = async function(){
       });
     }
   } catch(e) { console.warn('No se pudo avisar al supervisor:', e); }
+
+  // Actualizar doc Firestore → dispara email al supervisor
+  try {
+    if (exc.firestoreId && typeof firebase !== 'undefined' && firebase.firestore) {
+      await firebase.firestore().collection('excepcionesPago').doc(exc.firestoreId).update({
+        estado: 'aprobada',
+        decididoPor: exc.decididoPor,
+        decididoPorNombre: exc.decididoPorNombre,
+        decididoEn: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+  } catch(e) { console.warn('No se pudo actualizar Firestore (email no enviado):', e); }
 };
 
 window.rechazarExcepcionUI = async function(){
@@ -14449,6 +14935,19 @@ window.rechazarExcepcionUI = async function(){
   saveState();
   closeModal('aprobarExcepcion');
   showToast('EXCEPCIÓN RECHAZADA — SE NOTIFICÓ AL SUPERVISOR', '');
+
+  // Actualizar doc Firestore → dispara email al supervisor
+  try {
+    if (exc.firestoreId && typeof firebase !== 'undefined' && firebase.firestore) {
+      await firebase.firestore().collection('excepcionesPago').doc(exc.firestoreId).update({
+        estado: 'rechazada',
+        decididoPor: exc.decididoPor,
+        decididoPorNombre: exc.decididoPorNombre,
+        decididoEn: firebase.firestore.FieldValue.serverTimestamp(),
+        notaDecision: nota || ''
+      });
+    }
+  } catch(e) { console.warn('No se pudo actualizar Firestore (email no enviado):', e); }
   logActivity('reject', 'Excepción de pago rechazada', `${p.name} · ${a.name} · ${exc.etapaNombre || ('ETAPA ' + (stageIdx+1))}${nota ? ' · NOTA: ' + nota : ''}`);
 
   // Notificar al supervisor
@@ -14464,6 +14963,554 @@ window.rechazarExcepcionUI = async function(){
       });
     }
   } catch(e) { console.warn('No se pudo avisar al supervisor:', e); }
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   EXCEPCIONES DE PAGO — VISTA DE ADMIN
+   ───────────────────────────────────────────────────────────────
+   Recorre todos los aptos del proyecto activo y junta las
+   excepciones (pendientes / aprobadas / rechazadas / usadas).
+   Solo aparece en la pestaña EXCEPCIONES (visible para admin).
+   ═══════════════════════════════════════════════════════════════ */
+window.recolectarExcepcionesProyecto = function(p){
+  if (!p) return [];
+  const out = [];
+  (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
+    if (!a.pagoExcepciones) return;
+    Object.keys(a.pagoExcepciones).forEach(stageKey => {
+      const exc = a.pagoExcepciones[stageKey];
+      if (!exc) return;
+      out.push({
+        projectId: p.id,
+        towerId: t.id,
+        levelId: l.id,
+        aptoId: a.id,
+        stageIdx: Number(stageKey),
+        towerName: t.name,
+        levelName: l.name,
+        aptoName: a.name,
+        exc
+      });
+    });
+  })));
+  // Ordenar: pendientes primero, luego por fecha descendente
+  const orden = { pendiente: 0, aprobada: 1, rechazada: 2, usada: 3 };
+  out.sort((x, y) => {
+    const ox = orden[x.exc.estado] ?? 9;
+    const oy = orden[y.exc.estado] ?? 9;
+    if (ox !== oy) return ox - oy;
+    return (y.exc.solicitadoEn || 0) - (x.exc.solicitadoEn || 0);
+  });
+  return out;
+};
+
+window.actualizarBadgeExcepciones = function(){
+  const p = (typeof activeProj === 'function') ? activeProj() : null;
+  const badge = document.getElementById('planillaExcBadge');
+  if (!badge) return;
+  if (!p) { badge.style.display = 'none'; return; }
+  const lista = window.recolectarExcepcionesProyecto(p);
+  const pendientes = lista.filter(x => x.exc.estado === 'pendiente').length;
+  if (pendientes > 0) {
+    badge.textContent = pendientes;
+    badge.style.display = 'inline-block';
+  } else {
+    badge.style.display = 'none';
+  }
+};
+
+window.renderPlanillaExcepciones = function(){
+  const cont = document.getElementById('planilla-excepciones');
+  if (!cont) return;
+  if (!can('users.manage')) {
+    cont.innerHTML = `<div class="card"><div class="empty" style="padding:30px">SOLO EL ADMINISTRADOR PUEDE VER LAS EXCEPCIONES</div></div>`;
+    return;
+  }
+  const p = activeProj();
+  if (!p) { cont.innerHTML = ''; return; }
+
+  const lista = window.recolectarExcepcionesProyecto(p);
+
+  // Conteos por estado
+  const cnt = { pendiente: 0, aprobada: 0, rechazada: 0, usada: 0 };
+  lista.forEach(x => { cnt[x.exc.estado] = (cnt[x.exc.estado]||0) + 1; });
+
+  let html = `<div class="card">
+    <div class="card-hd"><h3>SOLICITUDES DE EXCEPCIÓN DE PAGO SIN ACUSE</h3>
+      <span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">${lista.length} TOTAL · ${cnt.pendiente} PENDIENTE${cnt.pendiente!==1?'S':''}</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0 16px">
+      <div style="text-align:center;padding:10px;background:#FEF3C7;border:1px solid #F59E0B;border-left:3px solid #F59E0B;border-radius:4px">
+        <div style="font-size:8.5px;letter-spacing:1.2px;color:#92400E;font-weight:700">PENDIENTES</div>
+        <div style="font-size:20px;font-weight:700;color:#92400E;margin-top:2px">${cnt.pendiente}</div>
+      </div>
+      <div style="text-align:center;padding:10px;background:#DCFCE7;border:1px solid var(--green-dark);border-left:3px solid var(--green-dark);border-radius:4px">
+        <div style="font-size:8.5px;letter-spacing:1.2px;color:var(--green-dark);font-weight:700">APROBADAS</div>
+        <div style="font-size:20px;font-weight:700;color:var(--green-dark);margin-top:2px">${cnt.aprobada}</div>
+      </div>
+      <div style="text-align:center;padding:10px;background:#FEE2E2;border:1px solid var(--red);border-left:3px solid var(--red);border-radius:4px">
+        <div style="font-size:8.5px;letter-spacing:1.2px;color:var(--red);font-weight:700">RECHAZADAS</div>
+        <div style="font-size:20px;font-weight:700;color:var(--red);margin-top:2px">${cnt.rechazada}</div>
+      </div>
+      <div style="text-align:center;padding:10px;background:var(--cream);border:1px solid var(--line);border-left:3px solid var(--mute);border-radius:4px">
+        <div style="font-size:8.5px;letter-spacing:1.2px;color:var(--mute);font-weight:700">YA USADAS</div>
+        <div style="font-size:20px;font-weight:700;color:var(--mute);margin-top:2px">${cnt.usada}</div>
+      </div>
+    </div>`;
+
+  if (lista.length === 0) {
+    html += `<div class="empty" style="padding:30px;text-align:center">SIN SOLICITUDES DE EXCEPCIÓN EN ESTE PROYECTO</div></div>`;
+    cont.innerHTML = html;
+    return;
+  }
+
+  html += `<div class="tbl-wrap"><table class="tbl">
+    <thead><tr>
+      <th>ESTADO</th>
+      <th>UBICACIÓN</th>
+      <th>ETAPA</th>
+      <th>OBRERO</th>
+      <th>MONTO</th>
+      <th>SUPERVISOR</th>
+      <th>RAZÓN</th>
+      <th>FECHA SOLIC.</th>
+      <th></th>
+    </tr></thead>
+    <tbody>`;
+
+  lista.forEach(item => {
+    const exc = item.exc;
+    const estadoBadge = (() => {
+      if (exc.estado === 'pendiente') return `<span class="planilla-badge" style="background:#FEF3C7;color:#92400E;border:1px solid #F59E0B">PENDIENTE</span>`;
+      if (exc.estado === 'aprobada')  return `<span class="planilla-badge" style="background:#DCFCE7;color:var(--green-dark);border:1px solid var(--green-dark)">APROBADA</span>`;
+      if (exc.estado === 'rechazada') return `<span class="planilla-badge" style="background:#FEE2E2;color:var(--red);border:1px solid var(--red)">RECHAZADA</span>`;
+      if (exc.estado === 'usada')     return `<span class="planilla-badge" style="background:var(--cream);color:var(--mute);border:1px solid var(--line)">USADA</span>`;
+      return exc.estado;
+    })();
+    const fecha = exc.solicitadoEn ? new Date(exc.solicitadoEn).toLocaleDateString('es-GT') : '—';
+    const razonShort = (exc.razon || '').length > 40 ? (exc.razon.slice(0, 40) + '…') : (exc.razon || '—');
+
+    html += `<tr>
+      <td>${estadoBadge}</td>
+      <td><div style="font-size:10px;font-weight:700">${item.aptoName}</div><div style="font-size:8.5px;color:var(--mute);letter-spacing:1px">${item.towerName} · ${item.levelName}</div></td>
+      <td style="font-size:10px">${exc.etapaNombre || ('ETAPA ' + (item.stageIdx+1))}</td>
+      <td style="font-size:10px;font-weight:700">${exc.obrero || '—'}</td>
+      <td class="num">${typeof fQ==='function' ? fQ(exc.monto || 0) : ('Q' + (exc.monto||0))}</td>
+      <td style="font-size:10px">${exc.solicitadoPorNombre || exc.solicitadoPor || '—'}</td>
+      <td style="font-size:10px;color:var(--text)" title="${(exc.razon||'').replace(/"/g,'&quot;')}">${razonShort}</td>
+      <td style="font-size:10px">${fecha}</td>
+      <td><button class="btn sm" onclick="abrirModalAprobarExcepcion({projectId:'${item.projectId}',towerId:'${item.towerId}',levelId:'${item.levelId}',aptoId:'${item.aptoId}',stageIdx:${item.stageIdx}})">${exc.estado === 'pendiente' ? 'RESPONDER' : 'VER'}</button></td>
+    </tr>`;
+  });
+
+  html += `</tbody></table></div></div>`;
+  cont.innerHTML = html;
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   EXPORTADOR PLANILLA → EXCEL (formato Vicinia)
+   ───────────────────────────────────────────────────────────────
+   - Hoja 1 PLANILLA: por cada colaborador en quincena, listado de
+     pagos por apto con descripción + unidad + cantidad + precio + total,
+     descuentos (retenciones, abonos previos, equipos, etc.) y GRAN TOTAL.
+   - Hoja 2 ÓRDENES DE CAMBIO: cada OC con sus líneas y total.
+   ═══════════════════════════════════════════════════════════════ */
+
+window.formatearFechaCorta = function(ts){
+  if (!ts) return '';
+  const d = new Date(ts);
+  const dd = String(d.getDate()).padStart(2,'0');
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  const yy = String(d.getFullYear()).slice(-2);
+  return `${dd}/${mm}/${yy}`;
+};
+
+window.formatearFechaLarga = function(ts){
+  if (!ts) return '';
+  const d = new Date(ts);
+  return d.toLocaleDateString('es-GT', { day:'numeric', month:'long', year:'numeric' });
+};
+
+// Decide cómo se muestra el pago en el Excel: "Cierre de apartamento" / "Abono 1 - primera cara" / etc.
+function _descripcionPagoExcel(pago, allPagosApto){
+  const target = Number(pago.targetPct || 100);
+  const stageIdx = Number(pago.stageIdx || 0);
+  const stageName = pago.stageName || (typeof PLANILLA_ETAPAS_5 !== 'undefined' && PLANILLA_ETAPAS_5[stageIdx] ? PLANILLA_ETAPAS_5[stageIdx].name : `ETAPA ${stageIdx+1}`);
+  if (target >= 100) {
+    return `Cierre de ${stageName.toLowerCase()}`;
+  }
+  // Buscar qué número de abono es: cuántos pagos PREVIOS de la misma etapa del mismo apto
+  const previos = (allPagosApto || []).filter(x => x.stageIdx === stageIdx && (x.ts || 0) < (pago.ts || 0)).length;
+  return `Abono ${previos + 1} - ${stageName.toLowerCase()}`;
+}
+
+window.exportarPlanillaExcel = function(fechaInicio, fechaFin){
+  if (typeof XLSX === 'undefined') {
+    return showToast('LIBRERÍA EXCEL NO CARGADA · RECARGÁ LA APP', 'red');
+  }
+  const p = activeProj();
+  if (!p) return showToast('SELECCIONÁ UN PROYECTO PRIMERO', 'red');
+  const tsInicio = fechaInicio ? new Date(fechaInicio).getTime() : 0;
+  // Para incluir todo el día de fin, sumamos 24h - 1ms.
+  const tsFin = fechaFin ? (new Date(fechaFin).getTime() + 24*3600*1000 - 1) : Date.now();
+
+  const pagosTodos = (p.planilla?.pagos || []).filter(pg => pg.tipo === 'ETAPA' && (pg.ts||0) >= tsInicio && (pg.ts||0) <= tsFin);
+  const ajustesTodos = (p.planilla?.ajustes || []).filter(a => (a.ts||0) >= tsInicio && (a.ts||0) <= tsFin);
+
+  if (pagosTodos.length === 0 && ajustesTodos.length === 0) {
+    return showToast('NO HAY PAGOS NI AJUSTES EN ESE RANGO', 'red');
+  }
+
+  // Agrupar por colaborador
+  const porColab = {};
+  pagosTodos.forEach(pg => {
+    const k = pg.colaborador || 'SIN NOMBRE';
+    if (!porColab[k]) porColab[k] = { nombre: k, pagos: [], descuentos: [], ocs: [] };
+    porColab[k].pagos.push(pg);
+  });
+  ajustesTodos.forEach(a => {
+    const k = (a.colaboradorNombre || 'GENERAL').toUpperCase();
+    if (!porColab[k]) porColab[k] = { nombre: k, pagos: [], descuentos: [], ocs: [] };
+    if (a.tipo === 'ORDEN_CAMBIO' || a.tipo === 'ORDEN DE CAMBIO') {
+      porColab[k].ocs.push(a);
+    } else {
+      porColab[k].descuentos.push(a);
+    }
+  });
+
+  const torresTxt = (p.towers||[]).map(t => t.name).join(' Y ');
+  const headerProyecto = `PLANILLA TABLAYESO - ${(p.name||'').toUpperCase()}${torresTxt?' - '+torresTxt:''}`;
+  const fechaInicioTxt = window.formatearFechaCorta(tsInicio);
+  const fechaFinTxt = window.formatearFechaCorta(tsFin);
+  const liquidacionTxt = `Liquidación de trabajos del ${fechaInicioTxt} al ${fechaFinTxt}`;
+
+  /* ─── HOJA 1: PLANILLA ─── */
+  const aoa = [];
+  aoa.push([headerProyecto]);
+  aoa.push([liquidacionTxt]);
+  aoa.push([]);
+
+  let granTotalProyecto = 0;
+  const colabKeys = Object.keys(porColab).sort();
+
+  colabKeys.forEach(colKey => {
+    const colab = porColab[colKey];
+    // Header del colaborador
+    aoa.push([colab.nombre, '', '', '', '', fechaFinTxt]);
+
+    // Agrupar pagos por apto
+    const pagosPorApto = {};
+    colab.pagos.forEach(pg => {
+      const k = `${pg.towerName || ''} - ${pg.aptoName || ''}`.trim();
+      if (!pagosPorApto[k]) pagosPorApto[k] = [];
+      pagosPorApto[k].push(pg);
+    });
+
+    let subtotalBruto = 0;
+    let totalRetencion = 0;
+    const lineasRetencion = [];
+
+    Object.keys(pagosPorApto).forEach(aptoTitulo => {
+      const lista = pagosPorApto[aptoTitulo];
+      // Header del apto
+      aoa.push([aptoTitulo]);
+      // Por cada pago de ese apto
+      lista.forEach(pg => {
+        const desc = _descripcionPagoExcel(pg, lista);
+        // Excel: descripción · unidad · cantidad · factor · precio unit · total
+        const cantidad = 1;
+        const factor = 1;
+        const precioUnit = Number(pg.bruto || 0);
+        const total = +(cantidad * precioUnit).toFixed(2);
+        aoa.push([desc, 'global', cantidad, factor, precioUnit, total]);
+        subtotalBruto += total;
+        // Tracking de retención por apto
+        const retencion = Number(pg.retencion || (total * 0.10));
+        if (retencion > 0) {
+          totalRetencion += retencion;
+          lineasRetencion.push([`(-) Retención 10% - ${aptoTitulo}`, retencion]);
+        }
+      });
+    });
+
+    // Subtotal
+    aoa.push(['', '', '', 'TOTAL', '', subtotalBruto]);
+
+    // Descuentos: retenciones (auto) + manuales
+    lineasRetencion.forEach(([desc, monto]) => {
+      aoa.push(['', '', '', '', desc, monto]);
+    });
+    let totalDescuentos = totalRetencion;
+    colab.descuentos.forEach(d => {
+      const cuotaTxt = (d.cuotasTotales && d.cuotasTotales > 1) ? `(${d.cuotaActual||1}/${d.cuotasTotales}) ` : '';
+      const lbl = `(-) ${cuotaTxt}${d.desc || _descTipoLabel(d.subtipo) || 'Descuento'}`;
+      const monto = Number(d.monto || 0);
+      aoa.push(['', '', '', '', lbl, monto]);
+      totalDescuentos += monto;
+    });
+
+    // Las OC se incluyen en el GRAN TOTAL del colab (suman, no descuentan)
+    let totalOcsNeto = 0;
+    colab.ocs.forEach(oc => {
+      totalOcsNeto += Number(oc.neto || oc.monto || 0);
+    });
+
+    const granTotalColab = +(subtotalBruto - totalDescuentos + totalOcsNeto).toFixed(2);
+    granTotalProyecto += granTotalColab;
+
+    // Spacer + GRAN TOTAL
+    aoa.push([]);
+    aoa.push(['', '', '', '', `GRAN TOTAL ${colab.nombre}`, granTotalColab]);
+    aoa.push([]);
+    aoa.push([]);
+  });
+
+  // GRAN TOTAL DEL PROYECTO
+  aoa.push([]);
+  aoa.push(['GRAN TOTAL PLANILLA DE TABLAYESO', '', '', '', fechaFinTxt, +granTotalProyecto.toFixed(2)]);
+
+  const ws1 = XLSX.utils.aoa_to_sheet(aoa);
+  // Ancho de columnas (aproximado al Excel original)
+  ws1['!cols'] = [
+    { wch: 60 }, // C - descripción
+    { wch: 12 }, // D - unidad
+    { wch: 12 }, // E - cantidad
+    { wch: 10 }, // F - factor
+    { wch: 16 }, // G - precio unit
+    { wch: 18 }  // H - total
+  ];
+
+  /* ─── HOJA 2: ÓRDENES DE CAMBIO ─── */
+  const aoaOC = [];
+  aoaOC.push([`ÓRDENES DE CAMBIO - ${(p.name||'').toUpperCase()}`]);
+  aoaOC.push([liquidacionTxt]);
+  aoaOC.push([]);
+
+  let totalOCs = 0;
+  let hayOCs = false;
+  colabKeys.forEach(colKey => {
+    const colab = porColab[colKey];
+    if (colab.ocs.length === 0) return;
+    hayOCs = true;
+    aoaOC.push([colab.nombre]);
+    colab.ocs.forEach(oc => {
+      aoaOC.push([oc.desc || '—']);
+      // Header de columnas para las líneas
+      aoaOC.push(['DESCRIPCIÓN', 'UNIDAD', 'CANTIDAD', 'FACTOR', 'PRECIO UNIT.', 'TOTAL']);
+      (oc.lineas || []).forEach(ln => {
+        aoaOC.push([ln.descripcion || '—', ln.unidad || 'global', Number(ln.cantidad)||0, 1, Number(ln.precioUnit)||0, Number(ln.total)||0]);
+      });
+      aoaOC.push(['', '', '', '', 'SUBTOTAL', Number(oc.subtotal)||0]);
+      if (oc.retencion) {
+        aoaOC.push(['', '', '', '', '(-) Retención 10%', Number(oc.retencionMonto)||0]);
+      }
+      aoaOC.push(['', '', '', '', 'NETO OC', Number(oc.neto)||Number(oc.monto)||0]);
+      totalOCs += Number(oc.neto || oc.monto || 0);
+      aoaOC.push([]);
+    });
+    aoaOC.push([]);
+  });
+
+  if (hayOCs) {
+    aoaOC.push(['GRAN TOTAL ÓRDENES DE CAMBIO', '', '', '', '', +totalOCs.toFixed(2)]);
+  } else {
+    aoaOC.push(['SIN ÓRDENES DE CAMBIO EN ESTE PERIODO']);
+  }
+
+  const ws2 = XLSX.utils.aoa_to_sheet(aoaOC);
+  ws2['!cols'] = ws1['!cols'].slice();
+
+  /* ─── ARMAR LIBRO Y DESCARGAR ─── */
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws1, 'PLANILLA');
+  XLSX.utils.book_append_sheet(wb, ws2, 'ORDENES DE CAMBIO');
+
+  const fechaArchivo = (fechaFin || '').replace(/-/g,'') || (new Date()).toISOString().slice(0,10).replace(/-/g,'');
+  const proyectoLimpio = (p.name||'PROYECTO').toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/_+$/,'');
+  const fileName = `Planilla_${proyectoLimpio}_${fechaArchivo}.xlsx`;
+  XLSX.writeFile(wb, fileName);
+  showToast(`EXCEL DESCARGADO · ${fileName}`, 'green');
+};
+
+/* ─── PDF individual por obrero ─── */
+window.exportarPlanillaPDFObrero = function(colaboradorNombre, fechaInicio, fechaFin){
+  if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) {
+    return showToast('LIBRERÍA PDF NO CARGADA', 'red');
+  }
+  const p = activeProj();
+  if (!p) return showToast('SELECCIONÁ UN PROYECTO', 'red');
+  const tsInicio = fechaInicio ? new Date(fechaInicio).getTime() : 0;
+  const tsFin = fechaFin ? (new Date(fechaFin).getTime() + 24*3600*1000 - 1) : Date.now();
+  const colKey = (colaboradorNombre || '').toUpperCase();
+
+  const pagos = (p.planilla?.pagos || []).filter(pg => pg.tipo === 'ETAPA' && (pg.ts||0) >= tsInicio && (pg.ts||0) <= tsFin && (pg.colaborador||'').toUpperCase() === colKey);
+  const ajustes = (p.planilla?.ajustes || []).filter(a => (a.ts||0) >= tsInicio && (a.ts||0) <= tsFin && (a.colaboradorNombre||'').toUpperCase() === colKey);
+
+  if (pagos.length === 0 && ajustes.length === 0) {
+    return showToast('SIN PAGOS NI AJUSTES PARA ESE OBRERO EN EL RANGO', 'red');
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  let y = 40;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.text(`PLANILLA TABLAYESO - ${(p.name||'').toUpperCase()}`, 297, y, { align: 'center' });
+  y += 18;
+  doc.setFontSize(10);
+  doc.text(`Liquidación del ${window.formatearFechaCorta(tsInicio)} al ${window.formatearFechaCorta(tsFin)}`, 297, y, { align: 'center' });
+  y += 22;
+  doc.setFontSize(13);
+  doc.text(colaboradorNombre, 40, y);
+  y += 24;
+
+  // Agrupar pagos por apto
+  const pagosPorApto = {};
+  pagos.forEach(pg => {
+    const k = `${pg.towerName||''} - ${pg.aptoName||''}`.trim();
+    if (!pagosPorApto[k]) pagosPorApto[k] = [];
+    pagosPorApto[k].push(pg);
+  });
+
+  // Construir filas para autoTable
+  const rows = [];
+  let subtotal = 0;
+  let totalRetencion = 0;
+  Object.keys(pagosPorApto).forEach(aptoTitulo => {
+    const lista = pagosPorApto[aptoTitulo];
+    rows.push([{ content: aptoTitulo, colSpan: 5, styles: { fillColor:[40,40,40], textColor:[255,255,255], fontStyle:'bold' } }]);
+    lista.forEach(pg => {
+      const desc = _descripcionPagoExcel(pg, lista);
+      const total = Number(pg.bruto || 0);
+      rows.push([desc, 'global', '1', `Q ${total.toFixed(2)}`, `Q ${total.toFixed(2)}`]);
+      subtotal += total;
+      totalRetencion += Number(pg.retencion || (total*0.10));
+    });
+  });
+  rows.push([{ content: 'TOTAL', colSpan: 4, styles: { fontStyle:'bold' } }, { content: `Q ${subtotal.toFixed(2)}`, styles: { fontStyle:'bold' } }]);
+
+  // Descuentos
+  let totalDescuentos = totalRetencion;
+  if (totalRetencion > 0) {
+    rows.push([{ content: `(-) Retenciones 10%`, colSpan: 4, styles: { textColor:[200,30,30] } }, { content: `Q ${totalRetencion.toFixed(2)}`, styles: { textColor:[200,30,30] } }]);
+  }
+  const ocs = ajustes.filter(a => a.tipo === 'ORDEN_CAMBIO' || a.tipo === 'ORDEN DE CAMBIO');
+  const descs = ajustes.filter(a => a.tipo === 'DESCUENTO');
+  descs.forEach(d => {
+    const cuotaTxt = (d.cuotasTotales && d.cuotasTotales > 1) ? `(${d.cuotaActual||1}/${d.cuotasTotales}) ` : '';
+    rows.push([{ content: `(-) ${cuotaTxt}${d.desc}`, colSpan: 4, styles: { textColor:[200,30,30] } }, { content: `Q ${Number(d.monto||0).toFixed(2)}`, styles: { textColor:[200,30,30] } }]);
+    totalDescuentos += Number(d.monto || 0);
+  });
+
+  // OCs
+  let totalOC = 0;
+  ocs.forEach(oc => {
+    rows.push([{ content: `OC: ${oc.desc}`, colSpan: 5, styles: { fillColor:[230,220,200], fontStyle:'bold' } }]);
+    (oc.lineas||[]).forEach(ln => {
+      rows.push([ln.descripcion, ln.unidad, String(ln.cantidad), `Q ${Number(ln.precioUnit||0).toFixed(2)}`, `Q ${Number(ln.total||0).toFixed(2)}`]);
+    });
+    rows.push([{ content: 'NETO OC', colSpan: 4, styles: { fontStyle:'bold' } }, { content: `Q ${Number(oc.neto||oc.monto||0).toFixed(2)}`, styles: { fontStyle:'bold' } }]);
+    totalOC += Number(oc.neto || oc.monto || 0);
+  });
+
+  const granTotal = +(subtotal - totalDescuentos + totalOC).toFixed(2);
+  rows.push([{ content: `GRAN TOTAL ${colaboradorNombre}`, colSpan: 4, styles: { fillColor:[15,110,86], textColor:[255,255,255], fontStyle:'bold', fontSize: 12 } }, { content: `Q ${granTotal.toFixed(2)}`, styles: { fillColor:[15,110,86], textColor:[255,255,255], fontStyle:'bold', fontSize: 12 } }]);
+
+  doc.autoTable({
+    startY: y,
+    head: [['Descripción', 'Unidad', 'Cantidad', 'P. Unit.', 'Total']],
+    body: rows,
+    theme: 'grid',
+    headStyles: { fillColor: [200,30,30], textColor:[255,255,255] },
+    styles: { fontSize: 9, cellPadding: 4 },
+    columnStyles: {
+      0: { cellWidth: 230 },
+      1: { cellWidth: 60, halign: 'center' },
+      2: { cellWidth: 60, halign: 'center' },
+      3: { cellWidth: 80, halign: 'right' },
+      4: { cellWidth: 80, halign: 'right' }
+    }
+  });
+
+  const fileName = `Planilla_${(colaboradorNombre||'OBRERO').replace(/\s+/g,'_')}_${(fechaFin||'').replace(/-/g,'')}.pdf`;
+  doc.save(fileName);
+  showToast(`PDF DESCARGADO · ${fileName}`, 'green');
+};
+
+/* ─── Modal exportar planilla (rango quincena) ─── */
+window.abrirModalExportarPlanilla = function(){
+  if (!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
+  const p = activeProj();
+  if (!p) return showToast('SELECCIONÁ UN PROYECTO', 'red');
+
+  // Por default: quincena en curso (1-15 o 16-fin de mes)
+  const hoy = new Date();
+  const dia = hoy.getDate();
+  let inicio, fin;
+  if (dia <= 15) {
+    inicio = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    fin = new Date(hoy.getFullYear(), hoy.getMonth(), 15);
+  } else {
+    inicio = new Date(hoy.getFullYear(), hoy.getMonth(), 16);
+    fin = new Date(hoy.getFullYear(), hoy.getMonth()+1, 0);
+  }
+  const fmtIso = d => d.toISOString().slice(0,10);
+
+  const colabs = (p.planilla?.colaboradores||[]).map(c => `<option value="${h(c.nombre)}">${h(c.nombre)}</option>`).join('');
+
+  const body = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+      <div class="field">
+        <label>FECHA INICIO QUINCENA</label>
+        <input id="expFecInicio" type="date" value="${fmtIso(inicio)}">
+      </div>
+      <div class="field">
+        <label>FECHA FIN QUINCENA</label>
+        <input id="expFecFin" type="date" value="${fmtIso(fin)}">
+      </div>
+    </div>
+
+    <div style="background:var(--cream);border:1px solid var(--line);padding:14px 16px;border-radius:4px;margin-bottom:14px">
+      <div style="font-size:9px;letter-spacing:1.5px;font-weight:700;color:var(--mute);margin-bottom:8px">EXPORTAR PLANILLA COMPLETA (TODOS LOS OBREROS)</div>
+      <button class="btn" style="width:100%" onclick="(function(){const ini=document.getElementById('expFecInicio').value;const fin=document.getElementById('expFecFin').value;closeModal('exportarPlanilla');exportarPlanillaExcel(ini,fin);})()">📊 DESCARGAR EXCEL DE TODA LA PLANILLA</button>
+    </div>
+
+    <div style="background:var(--cream);border:1px solid var(--line);padding:14px 16px;border-radius:4px">
+      <div style="font-size:9px;letter-spacing:1.5px;font-weight:700;color:var(--mute);margin-bottom:8px">EXPORTAR PDF INDIVIDUAL DE UN OBRERO</div>
+      <div style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end">
+        <div class="field" style="margin:0">
+          <label>OBRERO</label>
+          <select id="expColab"><option value="">— SELECCIONAR —</option>${colabs}</select>
+        </div>
+        <button class="btn ghost" onclick="(function(){const c=document.getElementById('expColab').value;if(!c)return showToast('SELECCIONÁ UN OBRERO','red');const ini=document.getElementById('expFecInicio').value;const fin=document.getElementById('expFecFin').value;closeModal('exportarPlanilla');exportarPlanillaPDFObrero(c,ini,fin);})()">📄 PDF INDIVIDUAL</button>
+      </div>
+    </div>
+  `;
+
+  // Crear/reutilizar modal genérico simple
+  let modal = document.getElementById('modalExportarPlanilla');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'modal-bg';
+    modal.id = 'modalExportarPlanilla';
+    modal.onclick = (ev) => { if (ev.target === modal) closeModal('exportarPlanilla'); };
+    modal.innerHTML = `
+      <div class="modal" style="max-width:560px">
+        <div class="modal-hd">
+          <h3>EXPORTAR PLANILLA · QUINCENA</h3>
+          <button class="modal-x" onclick="closeModal('exportarPlanilla')">✕</button>
+        </div>
+        <div class="modal-bd" id="expModalBody"></div>
+        <div class="modal-ft">
+          <button class="btn ghost" onclick="closeModal('exportarPlanilla')">CERRAR</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  document.getElementById('expModalBody').innerHTML = body;
+  modal.classList.add('show');
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -16392,6 +17439,13 @@ window.addEventListener('load', () => {
     renderPlanillaEtapas();
   };
 
+  // Mapeo: planilla 5 etapas (0-4) → físico 6 etapas (1-5).
+  // El acuse se firma sobre la ENTREGA FÍSICA. La planilla 0 (TABIQUES UNA CARA) corresponde
+  // a la entrega física 1 (PRIMERA CARA), y así sucesivamente.
+  function _planillaIdxToFisicoIdx(planillaStageIdx){
+    return Number(planillaStageIdx) + 1;
+  }
+
   window.pagarEtapaPlanilla = function(tid,lid,aid,stageIdx){
     if(!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
     if(stageIdx<0 || stageIdx>4) return showToast('ETAPA NO VÁLIDA PARA PLANILLA','red');
@@ -16404,10 +17458,86 @@ window.addEventListener('load', () => {
     const current=paidPct5(p,aid,stageIdx); const sel=document.getElementById(`pct-${aid}-${stageIdx}`); const target=Number(sel?.value || nextPct5(current) || 0);
     if(!PLANILLA_PCTS_5.includes(target) || target<=current) return showToast('ELEGÍ UN PORCENTAJE MAYOR AL PAGADO','red');
     const pctDelta=target-current; const bruto=+(total*pctDelta/100).toFixed(2); const retencion=+(bruto*0.10).toFixed(2); const neto=+(bruto-retencion).toFixed(2); const mo=modeloObj5(p,p.planilla.aptoModelMap?.[aid]||'GENERAL'); const etapa=PLANILLA_ETAPAS_5[stageIdx];
-    if(!confirm(`GENERAR PAGO\n${colab.nombre} · ${rol}\n${a.name} · ETAPA ${stageIdx+1} · ${etapa.name}\nABONO: ${current}% → ${target}%\nBRUTO: ${fQ(bruto)}\nRETENCIÓN 10%: ${fQ(retencion)}\nNETO: ${fQ(neto)}`)) return;
-    p.planilla.pagos.push({id:'plp-'+uid(),tipo:'ETAPA',ts:Date.now(),towerId:tid,levelId:lid,aptoId:aid,aptoName:a.name,towerName:t.name,levelName:l.name,stageIdx,stageName:etapa.name,detalle:`${t.name} · ${a.name} · ETAPA ${stageIdx+1} · ${etapa.name}`,bruto,retencion,neto,colaborador:upper(colab.nombre),colaboradorId:colab.id,colaboradorRol:rol,autorizado:false,retencionPagada:false,targetPct:target,pctDelta,stageTotal:total,modelKey:mo?.key||'GENERAL',modelName:mo?.nombre||'GENERAL'});
-    logActivity('create','Pago planilla generado',`${p.name} · ${a.name} · ETAPA ${stageIdx+1} · ${target}% · ${upper(colab.nombre)} · ${fQ(neto)}`);
-    saveState(); renderPlanilla(); showToast('PAGO GENERADO · PENDIENTE AUTORIZACIÓN','green');
+
+    // ─── BLOQUEO POR FALTA DE ACUSE FIRMADO (solo supervisor; admin pasa con doble confirmación) ───
+    const fisicoIdx = _planillaIdxToFisicoIdx(stageIdx);
+    const tieneAcuse = (typeof window.tieneAcuseFirmado === 'function') ? window.tieneAcuseFirmado(a, fisicoIdx) : true;
+    const excAprobada = (typeof window.tieneExcepcionAprobada === 'function') ? window.tieneExcepcionAprobada(a, fisicoIdx) : false;
+    const esAdmin = can('users.manage');
+
+    if (!tieneAcuse && !excAprobada) {
+      if (esAdmin) {
+        const ok = confirm(
+          `ATENCIÓN — SIN ACUSE FIRMADO\n\n` +
+          `${a.name} · ETAPA ${stageIdx+1} · ${etapa.name}\n\n` +
+          `Esta etapa NO tiene acuse de recepción firmado por el cliente. ` +
+          `Como administrador podés pagar igual, pero el pago va a quedar marcado como "PAGADO SIN ACUSE" hasta que el receptor firme.\n\n` +
+          `¿CONFIRMÁS PAGAR SIN ACUSE?`
+        );
+        if (!ok) return;
+      } else {
+        const estadoActual = (typeof window.estadoExcepcionPago === 'function') ? window.estadoExcepcionPago(a, fisicoIdx) : null;
+        if (estadoActual === 'pendiente') {
+          alert(
+            `ESPERANDO RESPUESTA DEL ADMINISTRADOR\n\n` +
+            `${a.name} · ETAPA ${stageIdx+1} · ${etapa.name}\n\n` +
+            `Ya hay una solicitud de excepción pendiente para esta etapa. ` +
+            `El administrador todavía no la respondió.`
+          );
+          return;
+        }
+        if (estadoActual === 'rechazada') {
+          const exc = a.pagoExcepciones[String(fisicoIdx)];
+          const nota = (exc && exc.notaDecision) ? ('\n\nNOTA DEL ADMIN: ' + exc.notaDecision) : '';
+          alert(
+            `EXCEPCIÓN RECHAZADA\n\n` +
+            `${a.name} · ETAPA ${stageIdx+1} · ${etapa.name}\n\n` +
+            `El administrador rechazó tu pedido de pagar sin acuse.${nota}\n\n` +
+            `Para pagar esta etapa: entregá la etapa al cliente y que firme su acuse.`
+          );
+          return;
+        }
+        // Sin pedido previo: abrir modal de solicitud (pasamos contexto de planilla)
+        window.abrirModalSolicitarExcepcion(p.id, tid, lid, aid, fisicoIdx, bruto, {
+          etapaNombre: `ETAPA ${stageIdx+1} · ${etapa.name}`,
+          obreroSugerido: upper(colab.nombre)
+        });
+        return;
+      }
+    }
+
+    if(!confirm(`GENERAR PAGO\n${colab.nombre} · ${rol}\n${a.name} · ETAPA ${stageIdx+1} · ${etapa.name}\nABONO: ${current}% → ${target}%\nBRUTO: ${fQ(bruto)}\nRETENCIÓN 10%: ${fQ(retencion)}\nNETO: ${fQ(neto)}${(!tieneAcuse) ? '\n\n⚠ ESTE PAGO SE VA A REGISTRAR SIN ACUSE FIRMADO.' : ''}`)) return;
+
+    const pagoId='plp-'+uid();
+    const pagoSinAcuse = !tieneAcuse;
+    let excepcionAplicadaPor = null;
+    if (pagoSinAcuse && excAprobada) {
+      const exc = a.pagoExcepciones[String(fisicoIdx)];
+      excepcionAplicadaPor = (exc && exc.decididoPor) || null;
+    }
+
+    p.planilla.pagos.push({
+      id:pagoId,tipo:'ETAPA',ts:Date.now(),towerId:tid,levelId:lid,aptoId:aid,
+      aptoName:a.name,towerName:t.name,levelName:l.name,
+      stageIdx,stageName:etapa.name,
+      detalle:`${t.name} · ${a.name} · ETAPA ${stageIdx+1} · ${etapa.name}`,
+      bruto,retencion,neto,
+      colaborador:upper(colab.nombre),colaboradorId:colab.id,colaboradorRol:rol,
+      autorizado:false,retencionPagada:false,
+      targetPct:target,pctDelta,stageTotal:total,
+      modelKey:mo?.key||'GENERAL',modelName:mo?.nombre||'GENERAL',
+      pagoSinAcuse,
+      excepcionAplicadaPor,
+      excepcionRazon: (pagoSinAcuse && a.pagoExcepciones && a.pagoExcepciones[String(fisicoIdx)]) ? (a.pagoExcepciones[String(fisicoIdx)].razon || '') : ''
+    });
+
+    if (pagoSinAcuse && excAprobada && typeof window._consumirExcepcionPago === 'function') {
+      window._consumirExcepcionPago(a, fisicoIdx, pagoId);
+    }
+
+    logActivity('create',`Pago planilla generado${pagoSinAcuse ? ' (SIN ACUSE)' : ''}`,`${p.name} · ${a.name} · ETAPA ${stageIdx+1} · ${target}% · ${upper(colab.nombre)} · ${fQ(neto)}${pagoSinAcuse ? ' · FALTA ACUSE' : ''}`);
+    saveState(); renderPlanilla();
+    showToast(pagoSinAcuse ? 'PAGO GENERADO · ¡FALTA ACUSE!' : 'PAGO GENERADO · PENDIENTE AUTORIZACIÓN', pagoSinAcuse ? '' : 'green');
   };
 
   window.renderPlanillaPagosList = function(canAuth){
