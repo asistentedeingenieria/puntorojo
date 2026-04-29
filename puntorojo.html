@@ -31,6 +31,10 @@
 <!-- ════════ SheetJS · EXPORTAR PLANILLAS A EXCEL ════════ -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
+<!-- ════════ ExcelJS · EXCEL CON ESTILOS (formato Vicinia) ════════ -->
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"
+        onerror="console.error('ExcelJS no cargó del CDN principal, probando fallback'); var s=document.createElement('script'); s.src='https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js'; document.head.appendChild(s);"></script>
+
 <!-- ════════ jsPDF + AUTOTABLE · REPORTE MENSUAL EN PDF ════════ -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
@@ -15145,16 +15149,32 @@ function _descripcionPagoExcel(pago, allPagosApto){
   return `Abono ${previos + 1} - ${stageName.toLowerCase()}`;
 }
 
-// Lazy-load de ExcelJS solo cuando se necesita (~750KB).
+// ExcelJS ya está cargado vía <script> al inicio del HTML. Esta función
+// solo verifica disponibilidad. Si por alguna razón no cargó (red bloqueada),
+// intenta cargarlo on-demand antes de fallar.
 async function _loadExcelJS(){
-  if (window.ExcelJS) return window.ExcelJS;
+  console.log('[Excel] Verificando ExcelJS... window.ExcelJS =', !!window.ExcelJS);
+  if (window.ExcelJS && window.ExcelJS.Workbook) {
+    console.log('[Excel] ExcelJS YA disponible.');
+    return window.ExcelJS;
+  }
+  // Intento de fallback: cargar dinámicamente
+  console.warn('[Excel] ExcelJS no estaba precargado, intentando cargar dinámicamente...');
   await new Promise((resolve, reject) => {
     const s = document.createElement('script');
     s.src = 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
-    s.onload = resolve;
-    s.onerror = () => reject(new Error('No se pudo cargar ExcelJS'));
+    s.onload = () => { console.log('[Excel] CDN principal OK'); resolve(); };
+    s.onerror = () => {
+      console.warn('[Excel] CDN principal falló, probando fallback');
+      const s2 = document.createElement('script');
+      s2.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+      s2.onload = () => { console.log('[Excel] CDN fallback OK'); resolve(); };
+      s2.onerror = () => reject(new Error('No se pudo cargar ExcelJS desde ningún CDN'));
+      document.head.appendChild(s2);
+    };
     document.head.appendChild(s);
   });
+  if (!window.ExcelJS) throw new Error('ExcelJS cargó pero no expone la variable global');
   return window.ExcelJS;
 }
 
@@ -15718,7 +15738,51 @@ window.exportarPlanillaPDFObrero = function(colaboradorNombre, fechaInicio, fech
 };
 
 /* ─── Modal exportar planilla (rango quincena) ─── */
+// Helpers nombradas que llaman los botones del modal — más confiables que IIFE inline
+window._doExportExcel = function(){
+  console.log('[Excel] Click DESCARGAR EXCEL DE TODA LA PLANILLA');
+  try {
+    const iniEl = document.getElementById('expFecInicio');
+    const finEl = document.getElementById('expFecFin');
+    const ini = iniEl ? iniEl.value : '';
+    const fin = finEl ? finEl.value : '';
+    console.log('[Excel] Fechas:', { ini, fin });
+    closeModal('exportarPlanilla');
+    if (typeof window.exportarPlanillaExcel !== 'function') {
+      alert('ERROR: exportarPlanillaExcel no está definida. Recargá la app.');
+      return;
+    }
+    window.exportarPlanillaExcel(ini, fin);
+  } catch(err) {
+    console.error('[Excel] Error en _doExportExcel:', err);
+    alert('Error: ' + (err.message || err));
+  }
+};
+
+window._doExportPDF = function(){
+  console.log('[PDF] Click PDF INDIVIDUAL');
+  try {
+    const colEl = document.getElementById('expColab');
+    const c = colEl ? colEl.value : '';
+    if (!c) return showToast('SELECCIONÁ UN OBRERO', 'red');
+    const iniEl = document.getElementById('expFecInicio');
+    const finEl = document.getElementById('expFecFin');
+    const ini = iniEl ? iniEl.value : '';
+    const fin = finEl ? finEl.value : '';
+    closeModal('exportarPlanilla');
+    if (typeof window.exportarPlanillaPDFObrero !== 'function') {
+      alert('ERROR: exportarPlanillaPDFObrero no está definida.');
+      return;
+    }
+    window.exportarPlanillaPDFObrero(c, ini, fin);
+  } catch(err) {
+    console.error('[PDF] Error en _doExportPDF:', err);
+    alert('Error: ' + (err.message || err));
+  }
+};
+
 window.abrirModalExportarPlanilla = function(){
+  console.log('[Excel] abrirModalExportarPlanilla() llamada');
   if (!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
   const p = activeProj();
   if (!p) return showToast('SELECCIONÁ UN PROYECTO', 'red');
@@ -15752,7 +15816,7 @@ window.abrirModalExportarPlanilla = function(){
 
     <div style="background:var(--cream);border:1px solid var(--line);padding:14px 16px;border-radius:4px;margin-bottom:14px">
       <div style="font-size:9px;letter-spacing:1.5px;font-weight:700;color:var(--mute);margin-bottom:8px">EXPORTAR PLANILLA COMPLETA (TODOS LOS OBREROS)</div>
-      <button class="btn" style="width:100%" onclick="(function(){const ini=document.getElementById('expFecInicio').value;const fin=document.getElementById('expFecFin').value;closeModal('exportarPlanilla');exportarPlanillaExcel(ini,fin);})()">📊 DESCARGAR EXCEL DE TODA LA PLANILLA</button>
+      <button class="btn" style="width:100%" onclick="_doExportExcel()">📊 DESCARGAR EXCEL DE TODA LA PLANILLA</button>
     </div>
 
     <div style="background:var(--cream);border:1px solid var(--line);padding:14px 16px;border-radius:4px">
@@ -15762,7 +15826,7 @@ window.abrirModalExportarPlanilla = function(){
           <label>OBRERO</label>
           <select id="expColab"><option value="">— SELECCIONAR —</option>${colabs}</select>
         </div>
-        <button class="btn ghost" onclick="(function(){const c=document.getElementById('expColab').value;if(!c)return showToast('SELECCIONÁ UN OBRERO','red');const ini=document.getElementById('expFecInicio').value;const fin=document.getElementById('expFecFin').value;closeModal('exportarPlanilla');exportarPlanillaPDFObrero(c,ini,fin);})()">📄 PDF INDIVIDUAL</button>
+        <button class="btn ghost" onclick="_doExportPDF()">📄 PDF INDIVIDUAL</button>
       </div>
     </div>
   `;
