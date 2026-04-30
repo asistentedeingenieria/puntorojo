@@ -13216,6 +13216,94 @@ function calcularPlanchas(cantidad, unidad){
   return 0; // 'u' (unidades) no derivan plancha por sí mismas
 }
 
+/* ════════════════ DISTRIBUCIÓN DE MATERIAL POR ETAPA ════════════════
+   Tabla maestra que define, por cada tipo de elemento de la cotización,
+   en qué etapa(s) E1..E5 se manda el material. Reglas confirmadas por
+   el equipo de obra de Punto Rojo:
+
+   E1 = PRIMERA CARA + ENCHAPES
+   E2 = SEGUNDA CARA + REFUERZOS DE MADERA + PLANCHA DE CIERRE
+   E3 = CIELOS, CENEFAS, FALDONES, DETALLES DE CIELO
+   E4 = MASILLA COMPLETA
+   E5 = NIVEL 5 (opcional)
+
+   Cada regla es:
+     • { porcentajes: { Eₓ: 0.0..1.0 } }  →  reparte por porcentajes
+     • { especial: 'mixto_verde_blanca' }  →  caso especial 2 caras mixto:
+        cara verde RH al 100% en E1, cara blanca ULTRALIGHT al 100% en E2 */
+const RECETA_DISTRIBUCION = {
+  // ── TABIQUES ──
+  TABIQUE_1CARA:          { porcentajes: { E1: 1.0 } },
+  TABIQUE_2CARAS_MISMO:   { porcentajes: { E1: 0.5, E2: 0.5 } },
+  TABIQUE_2CARAS_MIXTO:   { especial: 'mixto_verde_blanca' },
+  TABIQUE_DUROCK_FIBRA:   { porcentajes: { E1: 1.0 } },  // 1 cara durock con fibra
+
+  // ── DINTELES (misma lógica que tabiques) ──
+  DINTEL_1CARA:           { porcentajes: { E1: 1.0 } },
+  DINTEL_2CARAS_MISMO:    { porcentajes: { E1: 0.5, E2: 0.5 } },
+  DINTEL_2CARAS_MIXTO:    { especial: 'mixto_verde_blanca' },
+
+  // ── ENCHAPES ──
+  ENCHAPE:                { porcentajes: { E1: 1.0 } },
+
+  // ── CIELOS Y SUS DETALLES ──
+  CIELO:                  { porcentajes: { E3: 1.0 } },
+  CENEFA:                 { porcentajes: { E3: 1.0 } },
+  FALDON:                 { porcentajes: { E3: 1.0 } },
+  CAJILLO_LUMINARIA:      { porcentajes: { E3: 1.0 } },
+  REGISTRO_CIELO:         { porcentajes: { E3: 1.0 } },
+
+  // ── REFUERZOS DE MADERA (todos en E2 junto con plancha 2da cara) ──
+  REFUERZO_MADERA:        { porcentajes: { E2: 1.0 } }
+};
+
+/* distribuirElementoPlancha({...}) — calcula y reparte la PLANCHA de
+   un elemento de la cotización entre etapas según RECETA_DISTRIBUCION.
+
+   @param tipoElemento     — clave de RECETA_DISTRIBUCION (TABIQUE_1CARA, CIELO, etc.)
+   @param cantidad         — cantidad cotizada (m² o ml)
+   @param unidad           — 'm2' | 'ml'
+   @param planchaPrincipal — código de plancha para casos NO mixtos
+                              (ULTRALIGHT, RH, DUROCK, SECUROCK, FIBEROCK, etc.)
+
+   Devuelve: { E1: {planchaCodigo, cantidadPiezas} | null,
+               E2: ..., E3: ..., E4: null, E5: null } */
+function distribuirElementoPlancha({ tipoElemento, cantidad, unidad, planchaPrincipal }){
+  const out = { E1: null, E2: null, E3: null, E4: null, E5: null };
+  const regla = RECETA_DISTRIBUCION[tipoElemento];
+  if (!regla) return out;
+
+  const planchasUnaCara = calcularPlanchas(cantidad, unidad);
+  if (planchasUnaCara <= 0) return out;
+
+  if (regla.especial === 'mixto_verde_blanca') {
+    // Convención Punto Rojo: cara verde RH primero (E1), blanca ULTRALIGHT después (E2).
+    // Cada cara consume "planchasUnaCara" piezas (NO se divide entre 2,
+    // porque la cantidad cotizada cubre la superficie del muro y necesitamos
+    // 1 set completo por cada cara).
+    out.E1 = { planchaCodigo: 'RH',         cantidadPiezas: planchasUnaCara };
+    out.E2 = { planchaCodigo: 'ULTRALIGHT', cantidadPiezas: planchasUnaCara };
+    return out;
+  }
+
+  // Caso porcentajes: la cantidad TOTAL de planchas (las dos caras si aplica)
+  // se reparte según los porcentajes definidos.
+  const codigo = planchaPrincipal || 'ULTRALIGHT';
+
+  // Para 2 caras del mismo material, la cantidad total = planchasUnaCara × 2,
+  // y los porcentajes 0.5/0.5 dejan exactamente planchasUnaCara en cada etapa.
+  const pcts = regla.porcentajes || {};
+  const factorTotal = (tipoElemento === 'TABIQUE_2CARAS_MISMO' || tipoElemento === 'DINTEL_2CARAS_MISMO') ? 2 : 1;
+  const cantidadTotal = planchasUnaCara * factorTotal;
+
+  Object.entries(pcts).forEach(([etapa, pct]) => {
+    if (pct > 0) {
+      out[etapa] = { planchaCodigo: codigo, cantidadPiezas: cantidadTotal * pct };
+    }
+  });
+  return out;
+}
+
 /* distribuirPlanchaTabique({...}) — calcula y reparte la plancha de un
    tabique/dintel entre etapas E1 y E2 según las reglas de Punto Rojo:
 
