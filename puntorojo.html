@@ -13182,6 +13182,104 @@ function calcularAngularCielo({ perimetroMl, config }){
   };
 }
 
+/* ════════════════ RENDIMIENTOS DE MATERIAL ════════════════
+   Reglas establecidas por el equipo de obra de Punto Rojo.
+   ============================================================ */
+
+/* Cada plancha cubre 2.8 m² aprovechables (no los 2.97 m² teóricos
+   de la 4'×8', porque hay desperdicio en cortes). */
+const PLANCHA_M2_POR_PIEZA = 2.8;
+
+/* Cuando un elemento se mide en metros LINEALES (cajillos, faldones,
+   tabiques cotizados en ml, cenefas, etc.), 1 ml = 0.7 m² de plancha.
+   Esto convierte ml → m² y luego se divide entre 2.8 para sacar piezas. */
+const PLANCHA_FACTOR_ML_A_M2 = 0.7;
+
+/* Cada regla de madera para refuerzos mide 2.4 ml. Aplica a TODOS los
+   refuerzos: TV, papelero, accesorios baño/toallero, pila, mampara,
+   puerta de madera, lavamanos. */
+const REFUERZO_REGLA_LONGITUD_M = 2.4;
+
+/* ════════════════ CALCULADORAS DE PLANCHA ════════════════ */
+
+/* calcularPlanchas(cantidad, unidad) — devuelve la cantidad de planchas
+   (con decimales, sin redondear) para un metraje dado.
+   - unidad='m2': cantidad / 2.8
+   - unidad='ml': (cantidad × 0.7) / 2.8
+   El redondeo final lo decide la capa de pedido (típicamente Math.ceil). */
+function calcularPlanchas(cantidad, unidad){
+  const c = Number(cantidad) || 0;
+  if (c <= 0) return 0;
+  const u = String(unidad || '').toLowerCase();
+  if (u === 'm2' || u === 'm²') return c / PLANCHA_M2_POR_PIEZA;
+  if (u === 'ml' || u === 'm')  return (c * PLANCHA_FACTOR_ML_A_M2) / PLANCHA_M2_POR_PIEZA;
+  return 0; // 'u' (unidades) no derivan plancha por sí mismas
+}
+
+/* distribuirPlanchaTabique({...}) — calcula y reparte la plancha de un
+   tabique/dintel entre etapas E1 y E2 según las reglas de Punto Rojo:
+
+   • 1 cara → 100% de la plancha (1× la cara) en E1
+   • 2 caras mismo material → 50% en E1 y 50% en E2
+   • 2 caras MIXTO → cara verde (RH) en E1, cara blanca (ULTRALIGHT) en E2
+                      (siempre el material RH va primero al cerrado interior
+                       que recibe humedad de instalaciones)
+
+   @param cantidad   — número (m² o ml según la cotización)
+   @param unidad     — 'm2' | 'ml'
+   @param caras      — '1cara' | '2caras'
+   @param esMixto    — boolean: ¿son 2 caras de DIFERENTE material?
+   @param planchaPrincipal — código de plancha cuando NO es mixto
+                              (ej. 'ULTRALIGHT', 'RH', 'DUROCK', 'SECUROCK', etc.)
+
+   Devuelve un objeto:
+   {
+     E1: { planchaCodigo, cantidadPiezas } | null,
+     E2: { planchaCodigo, cantidadPiezas } | null
+   }
+   donde cantidadPiezas son piezas (con decimales). */
+function distribuirPlanchaTabique({ cantidad, unidad, caras, esMixto, planchaPrincipal }){
+  const planchasUnaCara = calcularPlanchas(cantidad, unidad);
+  if (planchasUnaCara <= 0) return { E1: null, E2: null };
+
+  if (caras === '1cara') {
+    return {
+      E1: { planchaCodigo: planchaPrincipal || 'ULTRALIGHT', cantidadPiezas: planchasUnaCara },
+      E2: null
+    };
+  }
+
+  if (caras === '2caras') {
+    if (esMixto) {
+      // Convención Punto Rojo: la cara verde RH se instala primero (E1)
+      // y la cara blanca ULTRALIGHT se instala después (E2).
+      return {
+        E1: { planchaCodigo: 'RH',         cantidadPiezas: planchasUnaCara },
+        E2: { planchaCodigo: 'ULTRALIGHT', cantidadPiezas: planchasUnaCara }
+      };
+    }
+    // 2 caras mismo material → mitad y mitad
+    const codigo = planchaPrincipal || 'ULTRALIGHT';
+    return {
+      E1: { planchaCodigo: codigo, cantidadPiezas: planchasUnaCara },
+      E2: { planchaCodigo: codigo, cantidadPiezas: planchasUnaCara }
+    };
+  }
+
+  return { E1: null, E2: null };
+}
+
+/* ════════════════ CALCULADORA DE REFUERZOS DE MADERA ════════════════ */
+
+/* calcularReglasMadera(mlTotal) — devuelve cantidad de reglas (decimales)
+   necesarias para cubrir un total de metros lineales de refuerzo.
+   Aplica a TODOS los refuerzos: TV, papelero, baño, pila, mampara, puertas. */
+function calcularReglasMadera(mlTotal){
+  const ml = Number(mlTotal) || 0;
+  if (ml <= 0) return 0;
+  return ml / REFUERZO_REGLA_LONGITUD_M;
+}
+
 let currentRecetaStage = 0;
 let recetaEditMode = false;
 
