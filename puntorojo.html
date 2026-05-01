@@ -8232,19 +8232,39 @@ function acuseSlotPuedeFirmar(slot){
   // Solo se puede pedir firma si hay 2 fotos cargadas.
   return acuseSlotTieneAmbas(slot);
 }
-// Slot N solo se puede iniciar si slot N-1 tiene sus 2 fotos cargadas.
-// Excepto el primer slot (sIdx=0).
-// Si admin autorizó una excepción para este slot, se permite saltar.
+// Slot N solo se puede iniciar si slot N-1 está FIRMADO (entregado por el receptor).
+// Antes solo requería 2 fotos, pero ahora exige firma completa para forzar el flujo
+// estricto por etapa: tomar foto 1 → foto 2 → firma del receptor → siguiente etapa.
+// Excepto el primer slot (sIdx=0). Si admin autorizó excepción, se permite saltar.
 function acuseSlotPuedeIniciar(a, sIdx){
   if (sIdx === 0) return { ok: true };
   // Verificar excepción de "salto de etapa" pre-aprobada por admin
   if (a && a.acuseSaltosAprobados && a.acuseSaltosAprobados[String(sIdx)]) {
     return { ok: true, viaExcepcion: true };
   }
-  // Verificar que el slot anterior tenga sus 2 fotos
+  // Verificar que el slot anterior esté FIRMADO (no solo con fotos)
   const slotAnt = (a && a.acuseRecepciones && a.acuseRecepciones[ACUSE_SLOTS[sIdx - 1].key]) || null;
-  if (acuseSlotTieneAmbas(slotAnt)) return { ok: true };
-  return { ok: false, etapaAnt: ACUSE_SLOTS[sIdx - 1].label };
+  const firmada = !!(slotAnt && (slotAnt.receptorId || slotAnt.receptorNombre));
+  if (firmada) return { ok: true };
+  // Mensaje según el estado del slot anterior
+  const cuantasAnt = acuseSlotPhotoCount(slotAnt);
+  let motivo = 'pendiente';
+  if (cuantasAnt === 0) motivo = 'sin fotos';
+  else if (cuantasAnt === 1) motivo = 'falta una foto';
+  else if (cuantasAnt === 2) motivo = 'esperando firma del receptor';
+  return { ok: false, etapaAnt: ACUSE_SLOTS[sIdx - 1].label, motivoAnt: motivo };
+}
+
+// Dentro del slot actual: solo se puede subir foto 2 si foto 1 ya está cargada.
+// Devuelve { ok: bool, motivo?: string }.
+function acuseSlotPuedeSubirFoto(slot, photoIdx){
+  if (photoIdx === 0) return { ok: true };
+  if (photoIdx === 1) {
+    const urls = getAcuseUrls(slot);
+    if (urls[0]) return { ok: true };
+    return { ok: false, motivo: 'PRIMERO SUBÍ LA FOTO 1' };
+  }
+  return { ok: false, motivo: 'ÍNDICE DE FOTO INVÁLIDO' };
 }
 
 function renderAcusesRecepcion(){
@@ -8307,24 +8327,35 @@ function renderAcusesRecepcion(){
               statusText = `<strong style="color:var(--amber)">FALTA 1 FOTO</strong>`;
             }
 
-            // Bloqueo secuencial: NO se puede iniciar este slot si el anterior no tiene 2 fotos
+            // Bloqueo secuencial: NO se puede INICIAR este slot si la etapa anterior
+            // NO está firmada (entregada). Si ya hay foto 1, dejamos terminar foto 2
+            // (cuantas === 0 evita atrapar al usuario en un estado a medias).
             const checkSec = acuseSlotPuedeIniciar(a, sIdx);
             const bloqueado = !checkSec.ok && !hasSig && cuantas === 0 && !can('users.manage');
+            // Tooltip rico: explica qué falta de la etapa anterior
+            const motivoAnt = checkSec.motivoAnt || 'pendiente';
+            const tipBloqueo = `Primero entregá (firmá) la etapa "${checkSec.etapaAnt}" — actualmente: ${motivoAnt}. Tocá un botón para solicitar excepción al admin.`;
 
             // Slots de foto (2 mini-botones FOTO 1 / FOTO 2)
             let foto1Btn = '', foto2Btn = '';
             if (canEdit && !hasSig) {
               if (bloqueado) {
-                const tip = `Primero subí las 2 fotos de "${checkSec.etapaAnt}". Tocá para solicitar excepción al admin.`;
-                foto1Btn = `<button class="btn ghost sm" disabled title="${tip}" style="opacity:.5">🔒 FOTO 1</button>`;
-                foto2Btn = `<button class="btn ghost sm" disabled title="${tip}" style="opacity:.5">🔒 FOTO 2</button>`;
+                // Bloqueo de etapa: ambos botones cerrados
+                foto1Btn = `<button class="btn ghost sm" title="${tipBloqueo}" style="opacity:.5" onclick="abrirModalSolicitarSaltoAcuse('${t.id}','${l.id}','${a.id}','${s.key}')">🔒 FOTO 1</button>`;
+                foto2Btn = `<button class="btn ghost sm" title="${tipBloqueo}" style="opacity:.5" onclick="abrirModalSolicitarSaltoAcuse('${t.id}','${l.id}','${a.id}','${s.key}')">🔒 FOTO 2</button>`;
               } else {
+                // FOTO 1
                 foto1Btn = urls[0]
                   ? `<button class="btn ghost sm" onclick="viewPhoto('${String(urls[0]).replace(/'/g,"\\'")}')" title="Ver foto 1">VER F1</button>`
                   : `<button class="btn sm cafe" onclick="openCameraForAcuse('${t.id}','${l.id}','${a.id}','${s.key}',0)" title="Tomar foto 1 de la entrega">FOTO 1</button>`;
-                foto2Btn = urls[1]
-                  ? `<button class="btn ghost sm" onclick="viewPhoto('${String(urls[1]).replace(/'/g,"\\'")}')" title="Ver foto 2">VER F2</button>`
-                  : `<button class="btn sm cafe" onclick="openCameraForAcuse('${t.id}','${l.id}','${a.id}','${s.key}',1)" title="Tomar foto 2 de la entrega">FOTO 2</button>`;
+                // FOTO 2: solo se puede tocar si FOTO 1 ya está subida
+                if (urls[1]) {
+                  foto2Btn = `<button class="btn ghost sm" onclick="viewPhoto('${String(urls[1]).replace(/'/g,"\\'")}')" title="Ver foto 2">VER F2</button>`;
+                } else if (urls[0]) {
+                  foto2Btn = `<button class="btn sm cafe" onclick="openCameraForAcuse('${t.id}','${l.id}','${a.id}','${s.key}',1)" title="Tomar foto 2 de la entrega">FOTO 2</button>`;
+                } else {
+                  foto2Btn = `<button class="btn ghost sm" disabled title="Primero subí la FOTO 1" style="opacity:.45">🔒 FOTO 2</button>`;
+                }
               }
             } else if (hasSig) {
               if (urls[0]) foto1Btn = `<button class="btn ghost sm" onclick="viewPhoto('${String(urls[0]).replace(/'/g,"\\'")}')" title="Ver foto 1">VER F1</button>`;
@@ -8471,7 +8502,7 @@ window.abrirModalSolicitarSaltoAcuse = function(towerId, levelId, aptoId, slotKe
         </div>
         <div class="modal-bd" style="padding:18px">
           <div style="background:#FEF3C7;border-left:3px solid var(--amber);padding:10px 14px;border-radius:3px;font-size:11px;letter-spacing:.3px;line-height:1.5;color:var(--ink);margin-bottom:14px">
-            Las etapas de acuse normalmente se cargan en orden. Si necesitás cargar ésta antes que la anterior, el administrador debe autorizarlo.
+            Las etapas de acuse se cargan en orden estricto: cada etapa debe quedar FIRMADA por el receptor antes de poder cargar la siguiente. Si necesitás cargar ésta antes que la anterior esté firmada, el administrador debe autorizarlo.
           </div>
           <div id="solSaltoInfo" style="border:1px solid var(--line);background:var(--cream);padding:12px 14px;border-radius:4px;font-size:11px;line-height:1.7;margin-bottom:14px"></div>
           <div class="field">
@@ -8637,15 +8668,17 @@ async function openCameraForAcuse(towerId, levelId, aptoId, slotKey, photoIdx){
   const a = l && (l.aptos||[]).find(x => x.id === aptoId);
   if (!a) return showToast('APTO NO ENCONTRADO', 'red');
 
-  // Bloqueo secuencial: etapa anterior debe tener sus 2 fotos.
+  // Bloqueo secuencial: etapa anterior debe estar FIRMADA (entregada).
   const sIdx = ACUSE_SLOTS.findIndex(s => s.key === String(slotKey));
   if (sIdx > 0) {
     const check = acuseSlotPuedeIniciar(a, sIdx);
     if (!check.ok && !can('users.manage')) {
       // Pide solicitud al admin
+      const motivo = check.motivoAnt || 'pendiente';
       const ok = confirm(
         `BLOQUEO SECUENCIAL\n\n` +
-        `No podés cargar esta etapa porque la anterior (${check.etapaAnt}) todavía no tiene sus 2 fotos.\n\n` +
+        `No podés cargar esta etapa porque la anterior (${check.etapaAnt}) todavía no está firmada por el receptor.\n` +
+        `Estado actual de la etapa anterior: ${motivo}.\n\n` +
         `¿Querés enviar una solicitud al administrador para que te libere el adelanto de esta etapa?`
       );
       if (ok) abrirModalSolicitarSaltoAcuse(towerId, levelId, aptoId, slotKey);
@@ -8658,6 +8691,12 @@ async function openCameraForAcuse(towerId, levelId, aptoId, slotKey, photoIdx){
   const urls = getAcuseUrls(slot);
   if (urls[photoIdx]) {
     return showToast('ESTA FOTO YA FUE SUBIDA — PEDÍ AL ADMIN ELIMINARLA SI HAY UN ERROR', 'red');
+  }
+
+  // Foto 1 antes de Foto 2 (orden estricto dentro del mismo slot)
+  const checkOrden = acuseSlotPuedeSubirFoto(slot, photoIdx);
+  if (!checkOrden.ok) {
+    return showToast(checkOrden.motivo || 'ORDEN DE FOTO INVÁLIDO', 'red');
   }
 
   // Configurar estado del modal en modo "acuse"

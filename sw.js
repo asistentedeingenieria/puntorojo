@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v110-receta-v2-tipologias-altura-cad';
+const CACHE_VERSION = 'v111-acuses-bloqueo-firma-foto1-antes-foto2';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
