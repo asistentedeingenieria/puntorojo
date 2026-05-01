@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v113-avance-auto-cerrar-todas-subtabs';
+const CACHE_VERSION = 'v114-fix-html-cache-bypass';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
@@ -70,9 +70,12 @@ self.addEventListener('fetch', (event) => {
 
   // Para navegación (HTML), intentar red primero (para tener última versión),
   // pero si no hay internet, usar lo cacheado.
+  // ⚠️ CRÍTICO: usar { cache: 'reload' } para BYPASEAR el HTTP cache del browser.
+  // Sin esto, el browser puede devolver HTML viejo cacheado (Cache-Control max-age)
+  // aunque el SW haga "fetch", causando que el SW sea v114 pero el HTML sea v110.
   if (req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html')) {
     event.respondWith(
-      fetch(req)
+      fetch(req, { cache: 'reload' })
         .then((res) => {
           const copy = res.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(() => {});
