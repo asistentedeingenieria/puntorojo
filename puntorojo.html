@@ -5572,6 +5572,10 @@ function etapasFromPct(pct){
 }
 
 /* ─────────────── TABS / VIEWS ─────────────── */
+// Última vista mostrada — se usa para detectar cambios de top-level view y
+// resetear estado en memoria de la pestaña Acuses (torres/niveles abiertos).
+let _ultimoTopView = null;
+
 function setView(v){
   // Bloquear si no tiene permiso; redirigir a la primera vista permitida
   if (!can('view.' + v)) {
@@ -5586,6 +5590,16 @@ function setView(v){
       v = fallback;
     }
   }
+
+  // Si venimos de otra top-view a Avance, y el sub-tab actual es Acuses,
+  // resetear el estado en memoria para que las torres y niveles aparezcan
+  // todos cerrados al re-entrar.
+  if (v === 'avance' && _ultimoTopView !== 'avance'
+      && typeof currentAvanceTab !== 'undefined' && currentAvanceTab === 'acuses'
+      && typeof _resetAcusesUI === 'function') {
+    _resetAcusesUI();
+  }
+
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === v));
   document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === 'view-'+v));
   if (v === 'dashboard') renderDashboard();
@@ -5595,6 +5609,7 @@ function setView(v){
   if (v === 'personal') renderPersonal();
   if (v === 'actividad') renderActividad();
   applyPermissions();
+  _ultimoTopView = v;
 }
 
 function setMatTab(t){
@@ -6685,6 +6700,8 @@ function aptoMatchesFilter(t, l, a){
 }
 
 function setAvanceSubTab(tab){
+  // Detectar si vamos a CAMBIAR de sub-tab (no es solo refresh del mismo)
+  const cambioDeTab = (currentAvanceTab !== tab);
   currentAvanceTab = tab || 'etapas';
   document.querySelectorAll('[data-avancetab]').forEach(el => {
     const active = el.dataset.avancetab === currentAvanceTab;
@@ -6698,7 +6715,13 @@ function setAvanceSubTab(tab){
   if (etapas) etapas.style.display = currentAvanceTab === 'etapas' ? 'block' : 'none';
   if (acuses) acuses.style.display = currentAvanceTab === 'acuses' ? 'block' : 'none';
   if (cuadritos) cuadritos.style.display = currentAvanceTab === 'cuadritos' ? 'block' : 'none';
-  if (currentAvanceTab === 'acuses') renderAcusesRecepcion();
+  if (currentAvanceTab === 'acuses') {
+    // Al entrar al tab de Acuses, cerrar todas las torres/niveles para que el
+    // usuario vea siempre la lista compacta. El estado abierto solo dura mientras
+    // esté en este tab; al salir y volver, todo arranca cerrado.
+    if (cambioDeTab && typeof _resetAcusesUI === 'function') _resetAcusesUI();
+    renderAcusesRecepcion();
+  }
   if (currentAvanceTab === 'cuadritos' && typeof window.renderAvanceFisicoCuadritos === 'function') window.renderAvanceFisicoCuadritos();
 }
 
@@ -8267,6 +8290,20 @@ function acuseSlotPuedeSubirFoto(slot, photoIdx){
   return { ok: false, motivo: 'ÍNDICE DE FOTO INVÁLIDO' };
 }
 
+/* Estado expand/collapse de torres y niveles en la pestaña Acuses.
+   IMPORTANTE: vive solo en memoria (NO en localStorage) y se resetea cada vez
+   que el usuario entra al sub-tab "Acuses de Recepción", para que SIEMPRE
+   inicie con todo cerrado. Lo abierto se mantiene mientras esté en la pestaña;
+   al salir y volver, todo vuelve a estar cerrado.
+   Semántica: el Set guarda los IDs ABIERTOS (default vacío = todo cerrado). */
+let _acuseTorresAbiertas  = new Set();
+let _acuseNivelesAbiertos = new Set();
+
+function _resetAcusesUI(){
+  _acuseTorresAbiertas.clear();
+  _acuseNivelesAbiertos.clear();
+}
+
 function renderAcusesRecepcion(){
   const p = activeProj();
   const cont = document.getElementById('acuseRecepcionList');
@@ -8277,20 +8314,13 @@ function renderAcusesRecepcion(){
     return;
   }
 
-  // Estado expand/collapse por torre (persistente)
-  const collapsedKey = 'acuses_torres_colapsadas_' + (p.id || 'def');
-  let collapsedSet;
-  try { collapsedSet = new Set(JSON.parse(localStorage.getItem(collapsedKey) || '[]')); }
-  catch(e) { collapsedSet = new Set(); }
-
-  // Estado expand/collapse por nivel (independiente de la torre)
-  const collapsedLvlKey = 'acuses_niveles_colapsados_' + (p.id || 'def');
-  let collapsedLvlSet;
-  try { collapsedLvlSet = new Set(JSON.parse(localStorage.getItem(collapsedLvlKey) || '[]')); }
-  catch(e) { collapsedLvlSet = new Set(); }
+  // Lecturas en memoria (no localStorage) — todo cerrado por defecto al entrar.
+  const abiertasTorres  = _acuseTorresAbiertas;
+  const abiertosNiveles = _acuseNivelesAbiertos;
 
   cont.innerHTML = (p.towers || []).map(t => {
-    const isCollapsed = collapsedSet.has(t.id);
+    // Por defecto colapsado, salvo que el usuario lo haya abierto en esta sesión.
+    const isCollapsed = !abiertasTorres.has(t.id);
 
     // Calcular % de avance de acuses firmados en esta torre
     let totalAcuses = 0, firmados = 0;
@@ -8410,7 +8440,8 @@ function renderAcusesRecepcion(){
           });
         });
         const pctLvl = totalLvl > 0 ? Math.round(firmLvl / totalLvl * 100) : 0;
-        const isLvlCollapsed = collapsedLvlSet.has(l.id);
+        // Por defecto colapsado, salvo que el usuario lo haya abierto en esta sesión.
+        const isLvlCollapsed = !abiertosNiveles.has(l.id);
 
         return `<div class="acuse-level">
           <div class="acuse-level-collapsable${isLvlCollapsed ? '' : ' open'}" onclick="toggleAcuseNivel('${l.id}')" style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--cream);border:1px solid var(--line);border-radius:4px;cursor:pointer;user-select:none;margin-bottom:${isLvlCollapsed ? '4px' : '10px'}">
@@ -8436,31 +8467,19 @@ function renderAcusesRecepcion(){
   }).join('');
 }
 
-// Toggle colapsar/expandir torre en la vista de Acuses de Recepción
+// Toggle colapsar/expandir torre en la vista de Acuses de Recepción.
+// Estado en memoria: el Set guarda IDs ABIERTOS (default todo cerrado).
 window.toggleAcuseTorre = function(torreId){
-  const p = activeProj();
-  const collapsedKey = 'acuses_torres_colapsadas_' + (p?.id || 'def');
-  let arr;
-  try { arr = JSON.parse(localStorage.getItem(collapsedKey) || '[]'); }
-  catch(e) { arr = []; }
-  const set = new Set(arr);
-  if (set.has(torreId)) set.delete(torreId);
-  else set.add(torreId);
-  try { localStorage.setItem(collapsedKey, JSON.stringify([...set])); } catch(e){}
+  if (_acuseTorresAbiertas.has(torreId)) _acuseTorresAbiertas.delete(torreId);
+  else _acuseTorresAbiertas.add(torreId);
   renderAcusesRecepcion();
 };
 
-// Toggle colapsar/expandir nivel dentro de Acuses
+// Toggle colapsar/expandir nivel dentro de Acuses.
+// Estado en memoria: el Set guarda IDs ABIERTOS (default todo cerrado).
 window.toggleAcuseNivel = function(nivelId){
-  const p = activeProj();
-  const key = 'acuses_niveles_colapsados_' + (p?.id || 'def');
-  let arr;
-  try { arr = JSON.parse(localStorage.getItem(key) || '[]'); }
-  catch(e) { arr = []; }
-  const set = new Set(arr);
-  if (set.has(nivelId)) set.delete(nivelId);
-  else set.add(nivelId);
-  try { localStorage.setItem(key, JSON.stringify([...set])); } catch(e){}
+  if (_acuseNivelesAbiertos.has(nivelId)) _acuseNivelesAbiertos.delete(nivelId);
+  else _acuseNivelesAbiertos.add(nivelId);
   renderAcusesRecepcion();
 };
 
