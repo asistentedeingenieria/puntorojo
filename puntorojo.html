@@ -5591,14 +5591,12 @@ function setView(v){
     }
   }
 
-  // Si venimos de otra top-view a Avance, y el sub-tab actual es Acuses,
-  // resetear el estado en memoria para que las torres y niveles aparezcan
-  // todos cerrados al re-entrar.
-  console.log('[ACUSES] setView: v=' + v + ' _ultimoTopView=' + _ultimoTopView + ' currentAvanceTab=' + (typeof currentAvanceTab !== 'undefined' ? currentAvanceTab : '?'));
-  if (v === 'avance' && _ultimoTopView !== 'avance'
-      && typeof currentAvanceTab !== 'undefined' && currentAvanceTab === 'acuses'
-      && typeof _resetAcusesUI === 'function') {
-    _resetAcusesUI();
+  // Si venimos de otra top-view a Avance, resetear el estado abierto/cerrado de
+  // torres y niveles en TODAS las sub-tabs (Etapas, Vista por Apto, Acuses) para
+  // que el usuario siempre vea la lista compacta al entrar.
+  console.log('[AVANCE] setView: v=' + v + ' _ultimoTopView=' + _ultimoTopView + ' currentAvanceTab=' + (typeof currentAvanceTab !== 'undefined' ? currentAvanceTab : '?'));
+  if (v === 'avance' && _ultimoTopView !== 'avance' && typeof _resetAvanceUI === 'function') {
+    _resetAvanceUI();
   }
 
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === v));
@@ -6700,10 +6698,41 @@ function aptoMatchesFilter(t, l, a){
   return false;
 }
 
+/* Resetea TODOS los estados de "torres/niveles abiertos" en las 3 sub-tabs
+   de Avance Físico:
+     - Acuses          → _acuseTorresAbiertas / _acuseNivelesAbiertos (en memoria)
+     - Avance Etapas   → avanceUIState.openTowers / openLevels (en memoria)
+     - Vista por Apto  → localStorage 'avance_fisico_torres_colapsadas_*'
+   Se llama cada vez que el usuario cambia de sub-tab o vuelve a Avance desde
+   otra top-view, para que cada re-entrada arranque con todo cerrado. */
+function _resetAvanceUI(){
+  // Acuses
+  if (typeof _acuseTorresAbiertas !== 'undefined') _acuseTorresAbiertas.clear();
+  if (typeof _acuseNivelesAbiertos !== 'undefined') _acuseNivelesAbiertos.clear();
+  // Avance Etapas
+  if (typeof avanceUIState !== 'undefined') {
+    avanceUIState.openTowers.clear();
+    avanceUIState.openLevels.clear();
+  }
+  // Vista por Apto (cuadritos): borrar el set de torres colapsadas en localStorage
+  // para que el render arranque "limpio" (las torres están abiertas por default
+  // en cuadritos, así que basta borrar el override).
+  try {
+    const _p = (typeof activeProj === 'function') ? activeProj() : null;
+    const _pid = _p && _p.id ? _p.id : 'def';
+    localStorage.removeItem('avance_fisico_torres_colapsadas_' + _pid);
+  } catch(e) {}
+  console.log('[AVANCE] Reset UI: torres y niveles cerrados en TODAS las sub-tabs');
+}
+
 function setAvanceSubTab(tab){
   // Detectar si vamos a CAMBIAR de sub-tab (no es solo refresh del mismo)
   const cambioDeTab = (currentAvanceTab !== tab);
-  console.log('[ACUSES] setAvanceSubTab: de=' + currentAvanceTab + ' a=' + tab + ' cambio=' + cambioDeTab);
+  console.log('[AVANCE] setAvanceSubTab: de=' + currentAvanceTab + ' a=' + tab + ' cambio=' + cambioDeTab);
+  // Si el usuario cambia de sub-tab, resetear el estado abierto/cerrado de torres
+  // y niveles en TODAS las sub-tabs (acuses, etapas, cuadritos), para que cuando
+  // re-entre a cualquier sub-tab vea todo cerrado.
+  if (cambioDeTab) _resetAvanceUI();
   currentAvanceTab = tab || 'etapas';
   document.querySelectorAll('[data-avancetab]').forEach(el => {
     const active = el.dataset.avancetab === currentAvanceTab;
@@ -6717,13 +6746,11 @@ function setAvanceSubTab(tab){
   if (etapas) etapas.style.display = currentAvanceTab === 'etapas' ? 'block' : 'none';
   if (acuses) acuses.style.display = currentAvanceTab === 'acuses' ? 'block' : 'none';
   if (cuadritos) cuadritos.style.display = currentAvanceTab === 'cuadritos' ? 'block' : 'none';
-  if (currentAvanceTab === 'acuses') {
-    // Al entrar al tab de Acuses, cerrar todas las torres/niveles para que el
-    // usuario vea siempre la lista compacta. El estado abierto solo dura mientras
-    // esté en este tab; al salir y volver, todo arranca cerrado.
-    if (cambioDeTab && typeof _resetAcusesUI === 'function') _resetAcusesUI();
-    renderAcusesRecepcion();
+  if (currentAvanceTab === 'etapas' && cambioDeTab && typeof renderAvance === 'function') {
+    // Re-renderizar Etapas para que el reset visual aplique inmediato
+    renderAvance();
   }
+  if (currentAvanceTab === 'acuses') renderAcusesRecepcion();
   if (currentAvanceTab === 'cuadritos' && typeof window.renderAvanceFisicoCuadritos === 'function') window.renderAvanceFisicoCuadritos();
 }
 
@@ -8381,13 +8408,14 @@ function renderAcusesRecepcion(){
                 foto1Btn = urls[0]
                   ? `<button class="btn ghost sm" onclick="viewPhoto('${String(urls[0]).replace(/'/g,"\\'")}')" title="Ver foto 1">VER F1</button>`
                   : `<button class="btn sm cafe" onclick="openCameraForAcuse('${t.id}','${l.id}','${a.id}','${s.key}',0)" title="Tomar foto 1 de la entrega">FOTO 1</button>`;
-                // FOTO 2: solo se puede tocar si FOTO 1 ya está subida
+                // FOTO 2: solo se puede tocar si FOTO 1 ya está subida.
+                // Triple defensa: disabled + pointer-events:none + onclick que intercepta y avisa.
                 if (urls[1]) {
                   foto2Btn = `<button class="btn ghost sm" onclick="viewPhoto('${String(urls[1]).replace(/'/g,"\\'")}')" title="Ver foto 2">VER F2</button>`;
                 } else if (urls[0]) {
                   foto2Btn = `<button class="btn sm cafe" onclick="openCameraForAcuse('${t.id}','${l.id}','${a.id}','${s.key}',1)" title="Tomar foto 2 de la entrega">FOTO 2</button>`;
                 } else {
-                  foto2Btn = `<button class="btn ghost sm" disabled title="Primero subí la FOTO 1" style="opacity:.45">🔒 FOTO 2</button>`;
+                  foto2Btn = `<button class="btn ghost sm" disabled aria-disabled="true" title="Primero subí la FOTO 1" style="opacity:.45;pointer-events:none;cursor:not-allowed" onclick="event.preventDefault(); event.stopPropagation(); showToast('PRIMERO SUBÍ LA FOTO 1','red'); return false;">🔒 FOTO 2</button>`;
                 }
               }
             } else if (hasSig) {
