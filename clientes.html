@@ -818,6 +818,12 @@ async function doLogin(){
 }
 
 // ── REGISTRO CON CÓDIGO ──
+// Flujo seguro:
+//   1. Crear usuario en Firebase Auth (login automático)
+//   2. (Ya autenticado) Leer appState para validar el código
+//   3. Si código inválido → ROLLBACK (borrar el usuario auth) y mostrar error
+//   4. Si código válido → escribir clientRegistrations/{uid}
+//   5. Listo — onAuthStateChanged carga el portal
 async function doRegister(){
   clearError('registerError');
   document.getElementById('registerSuccess').classList.remove('show');
@@ -832,62 +838,74 @@ async function doRegister(){
   if (password.length < 6) return setError('registerError', 'La contraseña debe tener al menos 6 caracteres');
   if (password !== password2) return setError('registerError', 'Las contraseñas no coinciden');
 
-  showToast('Validando código...', '');
-
   let cred = null;
+
+  // 1. Crear cuenta en Firebase Auth PRIMERO (login automático).
+  showToast('Creando cuenta...', '');
   try {
-    // 1. Validar el código leyendo el state (lectura pública/auth)
-    const snap = await _clientesDb.collection('appState').doc('main').get();
-    if (!snap.exists) return setError('registerError', 'No se pudo cargar la base de datos. Intentá de nuevo.');
-    const remoteState = snap.data();
-    const receptores = remoteState.receptores || [];
-    const r = receptores.find(x => !x.deleted && x.inviteCode && x.inviteCode.toUpperCase() === code);
-    if (!r) return setError('registerError', 'Código inválido. Pedile a Punto Rojo que te genere uno nuevo.');
-    if (r.inviteCodeUsed) return setError('registerError', 'Este código ya fue usado. Pedile a Punto Rojo que te genere uno nuevo.');
-
-    // 2. Crear cuenta en Firebase Auth (en el app aislado)
-    showToast('Creando cuenta...', '');
-    try {
-      cred = await _clientesAuth.createUserWithEmailAndPassword(email, password);
-    } catch(e) {
-      console.error('Register error:', e);
-      let msg = 'Error al crear la cuenta';
-      if (e.code === 'auth/email-already-in-use') msg = 'Ese email ya está en uso. Intentá iniciar sesión normal.';
-      else if (e.code === 'auth/invalid-email') msg = 'Email inválido';
-      else if (e.code === 'auth/weak-password') msg = 'La contraseña es demasiado débil';
-      return setError('registerError', msg);
-    }
-
-    // 3. Escribir registro a clientRegistrations/{uid}.
-    //    Esta colección tiene reglas que permiten al usuario escribir SOLO
-    //    su propio doc (request.auth.uid == uid). El admin la sincroniza
-    //    a state.receptores cuando entra a la app interna.
-    showToast('Vinculando cuenta...', '');
-    try {
-      await _clientesDb.collection('clientRegistrations').doc(cred.user.uid).set({
-        receptorId: r.id,
-        inviteCode: code,
-        email: email,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-        applied: false  // el admin lo marca true cuando lo sincroniza al state
-      });
-    } catch(eRules) {
-      console.error('clientRegistrations write failed:', eRules);
-      // Rollback: borrar el usuario de auth para que pueda reintentar
-      try { await cred.user.delete(); } catch(e2){}
-      return setError('registerError', 'Error de permisos al registrar. Avisale al admin para que actualice las reglas de Firestore. (' + (eRules.message || eRules.code) + ')');
-    }
-
-    // 4. Mostrar éxito. El onAuthStateChanged ya está activo y va a cargar el portal.
-    const success = document.getElementById('registerSuccess');
-    success.textContent = '✓ Cuenta creada con éxito. Cargando portal...';
-    success.classList.add('show');
+    cred = await _clientesAuth.createUserWithEmailAndPassword(email, password);
   } catch(e) {
-    console.error(e);
-    // Rollback si creamos el usuario antes del error
-    if (cred && cred.user) { try { await cred.user.delete(); } catch(e2){} }
-    setError('registerError', 'Error inesperado: ' + (e.message || e.code || 'desconocido'));
+    console.error('Register error:', e);
+    let msg = 'Error al crear la cuenta';
+    if (e.code === 'auth/email-already-in-use') msg = 'Ese email ya está en uso. Intentá iniciar sesión.';
+    else if (e.code === 'auth/invalid-email') msg = 'Email inválido';
+    else if (e.code === 'auth/weak-password') msg = 'La contraseña es demasiado débil';
+    return setError('registerError', msg);
   }
+
+  // Helper para rollback: borra el usuario auth si algo falla más adelante
+  async function _rollback(){
+    try { if (cred && cred.user) await cred.user.delete(); } catch(e){ console.warn('rollback:', e); }
+  }
+
+  // 2. Leer appState (ahora autenticado) y validar el código.
+  showToast('Validando código...', '');
+  let remoteState;
+  try {
+    const snap = await _clientesDb.collection('appState').doc('main').get();
+    if (!snap.exists) {
+      await _rollback();
+      return setError('registerError', 'No se pudo cargar la base de datos. Intentá más tarde.');
+    }
+    remoteState = snap.data();
+  } catch(eRead) {
+    console.error('appState read failed:', eRead);
+    await _rollback();
+    return setError('registerError', 'Error al leer datos: ' + (eRead.message || eRead.code) + '. Avisale al admin que revise las reglas de Firestore.');
+  }
+
+  const receptores = remoteState.receptores || [];
+  const r = receptores.find(x => !x.deleted && x.inviteCode && x.inviteCode.toUpperCase() === code);
+  if (!r) {
+    await _rollback();
+    return setError('registerError', 'Código inválido. Pedile a Punto Rojo que te genere uno nuevo.');
+  }
+  if (r.inviteCodeUsed) {
+    await _rollback();
+    return setError('registerError', 'Este código ya fue usado. Pedile a Punto Rojo que te genere uno nuevo.');
+  }
+
+  // 3. Escribir registro en clientRegistrations/{uid}. La regla permite que
+  //    cada usuario escriba SOLO su propio doc (request.auth.uid == uid).
+  showToast('Vinculando cuenta...', '');
+  try {
+    await _clientesDb.collection('clientRegistrations').doc(cred.user.uid).set({
+      receptorId: r.id,
+      inviteCode: code,
+      email: email,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      applied: false  // el admin lo marca true cuando sincroniza
+    });
+  } catch(eWrite) {
+    console.error('clientRegistrations write failed:', eWrite);
+    await _rollback();
+    return setError('registerError', 'Error de permisos al registrar: ' + (eWrite.message || eWrite.code) + '. Avisale al admin que revise las reglas de Firestore.');
+  }
+
+  // 4. Listo. El onAuthStateChanged ya disparó loadStateAndStart() para cargar el portal.
+  const success = document.getElementById('registerSuccess');
+  success.textContent = '✓ Cuenta creada con éxito. Cargando portal...';
+  success.classList.add('show');
 }
 
 // ── LOGOUT ──
