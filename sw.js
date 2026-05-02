@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v143-portal-mas-compacto-buscador-material-picker-inventario';
+const CACHE_VERSION = 'v144-rojo-institucional-permisos-kpis-vista-apto-cerrada';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
