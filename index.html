@@ -20874,6 +20874,100 @@ async function syncClientRegistrations(){
   }
 }
 
+/* ════════════════════════════════════════════════════════════════
+   PROCESAR FIRMAS PENDIENTES DEL PORTAL DEL RECEPTOR
+   ────────────────────────────────────────────────────────────────
+   Los receptores firman acuses desde clientes.html y eso queda en
+   `pendingAcuseSignatures/{auto}` con status='pending'. Cuando un
+   admin abre la app interna, procesamos esos pendientes y los
+   aplicamos al state.projects[].acuseRecepciones correspondiente.
+   Marcamos cada uno como status='applied' para no procesarlo dos veces.
+   ═══════════════════════════════════════════════════════════════ */
+async function processPendingAcuseSignatures(){
+  if (!can('users.manage') && !can('receptores.manage')) return;
+  if (typeof firebase === 'undefined' || !firebase.firestore) return;
+  try {
+    const snap = await firebase.firestore()
+      .collection('pendingAcuseSignatures')
+      .where('status', '==', 'pending')
+      .limit(50).get();
+    if (snap.empty) return;
+    let aplicados = 0, errores = 0;
+    for (const doc of snap.docs) {
+      const r = doc.data();
+      try {
+        // Validar que el receptor exista y esté autorizado
+        const receptor = (state.receptores || []).find(x => x.id === r.receptorId && !x.deleted);
+        if (!receptor) {
+          await doc.ref.update({ status: 'error', errorReason: 'receptor_not_found', processedAt: firebase.firestore.FieldValue.serverTimestamp() });
+          errores++;
+          continue;
+        }
+        // Buscar el slot
+        const p = (state.projects || []).find(x => x.id === r.projectId);
+        if (!p) { await doc.ref.update({ status: 'error', errorReason: 'project_not_found' }); errores++; continue; }
+        const t = (p.towers || []).find(x => x.id === r.towerId);
+        if (!t) { await doc.ref.update({ status: 'error', errorReason: 'tower_not_found' }); errores++; continue; }
+        const l = (t.levels || []).find(x => x.id === r.levelId);
+        if (!l) { await doc.ref.update({ status: 'error', errorReason: 'level_not_found' }); errores++; continue; }
+        const a = (l.aptos || []).find(x => x.id === r.aptoId);
+        if (!a) { await doc.ref.update({ status: 'error', errorReason: 'apto_not_found' }); errores++; continue; }
+        if (!a.acuseRecepciones) a.acuseRecepciones = {};
+        const slot = a.acuseRecepciones[r.slotKey];
+        if (!slot || !Array.isArray(slot.urls) || slot.urls.length === 0) {
+          await doc.ref.update({ status: 'error', errorReason: 'slot_no_photos' });
+          errores++;
+          continue;
+        }
+        if (slot.receptorId || slot.receptorNombre) {
+          // Ya estaba firmado (alguien escaneó el QR antes) → marcar como aplicado igualmente
+          await doc.ref.update({ status: 'applied', processedAt: firebase.firestore.FieldValue.serverTimestamp(), note: 'already_signed' });
+          aplicados++;
+          continue;
+        }
+        // Aplicar la firma al slot
+        slot.receptorId = r.receptorId;
+        slot.receptorNombre = r.receptorNombre || receptor.nombre || '';
+        slot.receptorCargo = r.receptorCargo || receptor.cargo || '';
+        slot.receptorSignatureUrl = r.receptorSignatureUrl || receptor.signatureImageUrl || '';
+        slot.ts = (r.tsClient || Date.now());
+        slot.user = r.email || '';
+        slot.userName = r.email || '';
+        slot.type = 'portal-cliente';
+
+        // Auto-marcar etapas como completadas (mismo flow que firmar via QR)
+        const sIdx = parseInt(r.slotKey);
+        if (!isNaN(sIdx) && sIdx >= 0 && sIdx < 6) {
+          if (!Array.isArray(a.stages)) a.stages = [false,false,false,false,false,false];
+          if (!a.stagesTs) a.stagesTs = [];
+          const ts = Date.now();
+          for (let i = 0; i <= sIdx; i++) {
+            if (!a.stages[i]) a.stagesTs[i] = ts;
+            a.stages[i] = true;
+          }
+        }
+        await doc.ref.update({ status: 'applied', processedAt: firebase.firestore.FieldValue.serverTimestamp(), processedBy: getCurrentUser()?.email || '' });
+        logActivity('update', `Acuse firmado desde portal: ${a.name}`, `${p.name} · ${t.name}/${l.name} · etapa ${r.slotKey} · ${r.receptorNombre}`);
+        aplicados++;
+      } catch(e) {
+        console.error('Error aplicando pending signature:', e);
+        try { await doc.ref.update({ status: 'error', errorReason: e.message || String(e) }); } catch(ee){}
+        errores++;
+      }
+    }
+    if (aplicados > 0) {
+      saveState();
+      try { renderAvance(); } catch(e){}
+      showToast(`${aplicados} firma${aplicados !== 1 ? 's' : ''} desde portal aplicada${aplicados !== 1 ? 's' : ''}`, 'green');
+    }
+    if (errores > 0) {
+      console.warn(`processPendingAcuseSignatures: ${errores} con error`);
+    }
+  } catch(e) {
+    console.warn('processPendingAcuseSignatures:', e && e.message);
+  }
+}
+
 /* Genera un código de invitación CORTO y FÁCIL DE LEER para que el receptor se
    registre en el portal cliente (clientes.puntorojo.app). Ejemplo: "PR-X7K9-MQ4P".
    - 8 caracteres, agrupados en bloques de 4
@@ -22800,6 +22894,10 @@ function applyAuthSession(fbUser, profileData){
       try { _maybeStartTour(); } catch(e) { console.warn('Tour:', e); }
       // Polling del inbox de mensajes (solo admin) — actualiza badge
       try { _startInboxPolling(); } catch(e) { console.warn('Inbox poll:', e); }
+      // Procesar firmas pendientes que receptores enviaron desde el portal
+      try { setTimeout(() => processPendingAcuseSignatures().catch(()=>{}), 2500); } catch(e) {}
+      // Y polling cada 2 minutos para procesarlas en cuanto lleguen
+      try { if (!window._pendingSigsTimer) window._pendingSigsTimer = setInterval(() => { processPendingAcuseSignatures().catch(()=>{}); }, 120 * 1000); } catch(e) {}
     }).catch((e) => {
       console.warn('CloudSync init falló:', e);
       hideSplash('LISTO');

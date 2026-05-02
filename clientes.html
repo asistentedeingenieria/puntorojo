@@ -950,6 +950,11 @@ table{max-width:100%}
     <div class="auth-toggle">
       <a onclick="showRegister()">CÓDIGO DE INVITACIÓN</a>
     </div>
+    <div style="text-align:center;margin-top:20px;padding-top:20px;border-top:1px solid var(--line)">
+      <a href="bienvenida.html" style="font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--mute);text-decoration:none;font-weight:600">
+        ¿Primera vez? · <strong style="color:var(--red)">VER INTRODUCCIÓN ›</strong>
+      </a>
+    </div>
   </div>
 </div>
 
@@ -1023,6 +1028,7 @@ table{max-width:100%}
     <nav id="clientTabs" class="client-tabs" style="display:none">
       <button class="client-tab active" data-ctab="acuses" onclick="setClientTab('acuses')">ACUSES DE RECEPCIÓN</button>
       <button class="client-tab" data-ctab="reportes" onclick="setClientTab('reportes')">REPORTES SEMANALES <span id="reportesBadge" class="ctab-badge" style="display:none">0</span></button>
+      <button class="client-tab" data-ctab="firmar" onclick="setClientTab('firmar')" style="display:none" id="ctabFirmarBtn">FIRMAR <span id="firmarBadge" class="ctab-badge" style="display:none">0</span></button>
       <button class="client-tab" data-ctab="miqr" onclick="setClientTab('miqr')" style="display:none" id="ctabMiQrBtn">MI QR</button>
     </nav>
     <div id="ctabAcuses">
@@ -1035,6 +1041,14 @@ table{max-width:100%}
         <div style="font-size:11.5px;color:var(--mute);letter-spacing:.3px;line-height:1.5">Cada viernes generamos un PDF con el avance fotográfico de la semana. Tocá un reporte para verlo o descargarlo.</div>
       </div>
       <div id="reportesList"></div>
+    </div>
+    <!-- Pestaña FIRMAR PENDIENTES — solo visible para receptores -->
+    <div id="ctabFirmar" style="display:none">
+      <div style="background:var(--white);border:1px solid var(--line);border-left:3px solid var(--red);border-radius:8px;padding:14px 18px;margin-bottom:14px">
+        <div style="font-size:10px;letter-spacing:1.6px;text-transform:uppercase;font-weight:700;color:var(--red);margin-bottom:4px">FIRMAR PENDIENTES</div>
+        <div style="font-size:11.5px;color:var(--mute);letter-spacing:.3px;line-height:1.5">Apartamentos donde el supervisor de Punto Rojo ya cargó las 2 fotos de la entrega y están esperando tu firma. Tocá <strong>VER Y FIRMAR</strong> para revisar y aprobar.</div>
+      </div>
+      <div id="firmarList"></div>
     </div>
     <!-- Pestaña MI QR — solo visible para receptores -->
     <div id="ctabMiQr" style="display:none">
@@ -1059,6 +1073,33 @@ table{max-width:100%}
 </div>
 
 <!-- ════════ MODAL: CAMBIAR CONTRASEÑA ════════ -->
+<!-- ════════ MODAL: FIRMAR ACUSE PENDIENTE ════════ -->
+<div id="modalFirmarAcuse" class="modal-bg" onclick="if(event.target===this)closeModal('FirmarAcuse')">
+  <div class="modal" style="max-width:680px">
+    <h3>Firmar acuse de recepción</h3>
+    <p class="desc" id="faDesc">—</p>
+
+    <div id="faPhotos" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px"></div>
+
+    <div style="background:var(--cream);border-left:3px solid var(--red);padding:12px 14px;border-radius:6px;margin-bottom:14px">
+      <div style="font-size:10px;letter-spacing:1.4px;text-transform:uppercase;font-weight:700;color:var(--red);margin-bottom:4px">CONFIRMACIÓN DE FIRMA</div>
+      <div style="font-size:11.5px;color:var(--text);letter-spacing:.3px;line-height:1.5">Al firmar, certificás que <strong>recibiste la entrega correctamente</strong> y que las fotos arriba muestran el estado actual del apartamento. Tu firma digital se aplicará automáticamente y este acuse quedará marcado como entregado y firmado.</div>
+    </div>
+
+    <div id="faMyFirma" style="display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin-bottom:14px;background:#fff">
+      <div style="font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--mute);font-weight:700">TU FIRMA:</div>
+      <img id="faFirmaPreview" src="" alt="Tu firma" style="height:50px;width:auto;max-width:200px;background:#fff;border-radius:4px">
+    </div>
+
+    <div id="faError" style="color:var(--red);font-size:11px;margin-bottom:8px;display:none;letter-spacing:.3px"></div>
+
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeModal('FirmarAcuse')" id="faCancelBtn">CANCELAR</button>
+      <button class="btn" onclick="confirmarFirmaAcuse()" id="faConfirmBtn" style="background:var(--green-dark);border-color:var(--green-dark);color:#fff">FIRMAR Y CONFIRMAR ENTREGA</button>
+    </div>
+  </div>
+</div>
+
 <!-- ════════ TOUR DE BIENVENIDA DEL PORTAL CLIENTE ════════ -->
 <div id="prTourOverlay" class="pr-tour-overlay">
   <div class="pr-tour-card">
@@ -1700,6 +1741,14 @@ function onStateLoaded(){
     }
   }
 
+  // Pestaña FIRMAR PENDIENTES — visible para todos los receptores
+  const firmarBtn = document.getElementById('ctabFirmarBtn');
+  if (firmarBtn) firmarBtn.style.display = '';
+  // Cargar pending signatures que ya envié para no duplicar en la lista
+  loadMyPendingSignatures().then(() => {
+    try { renderFirmarPendientes(); } catch(e){}
+  });
+
   // Si no tiene firma digital → mostrar modal obligatorio
   try { checkFirmaDigital(); } catch(e) { console.warn('checkFirmaDigital:', e); }
 
@@ -1783,13 +1832,221 @@ window.setClientTab = function(tab){
   });
   const acuses = document.getElementById('ctabAcuses');
   const reportes = document.getElementById('ctabReportes');
+  const firmar = document.getElementById('ctabFirmar');
   const miqr = document.getElementById('ctabMiQr');
   if (acuses) acuses.style.display = (tab === 'acuses') ? '' : 'none';
   if (reportes) reportes.style.display = (tab === 'reportes') ? '' : 'none';
+  if (firmar) firmar.style.display = (tab === 'firmar') ? '' : 'none';
   if (miqr) miqr.style.display = (tab === 'miqr') ? '' : 'none';
   if (tab === 'reportes') renderReportesSemanales();
+  if (tab === 'firmar') renderFirmarPendientes();
   if (tab === 'miqr') startMiQrRotating();
   else stopMiQrRotating();
+};
+
+/* ════════════════════════════════════════════════════════════════
+   FIRMAR PENDIENTES — el receptor firma desde el portal cliente
+   ────────────────────────────────────────────────────────────────
+   Un slot está "pendiente por firmar" cuando:
+   - Tiene fotos cargadas (slot.urls.length > 0)
+   - No está firmado (no receptorId)
+   - El receptor está autorizado (master, o el proyecto está en sus
+     assignedProjectIds)
+   - La etapa anterior ya está firmada (sequential lock)
+
+   Al firmar, escribimos a `pendingAcuseSignatures/{auto}` con la
+   info necesaria para que el admin la procese al abrir su app y la
+   aplique al state.projects[*].acuseRecepciones.
+   ═══════════════════════════════════════════════════════════════ */
+
+function _canSignThisProject(p){
+  if (!currentReceptor) return false;
+  if (currentReceptor.isMaster) return true;
+  const ids = (currentReceptor.assignedProjectIds || []).map(String);
+  return ids.includes(String(p.id));
+}
+
+function _firmarPendientesList(){
+  const out = [];
+  if (!state || !currentReceptor) return out;
+  (state.projects || []).forEach(p => {
+    if (p.archived) return;
+    if (!_canSignThisProject(p)) return;
+    (p.towers || []).forEach(t => (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
+      if (!a.acuseRecepciones) return;
+      // Iteramos en orden de etapas y aplicamos sequential lock
+      for (let i = 0; i < ACUSE_SLOTS.length; i++) {
+        const sk = ACUSE_SLOTS[i].key;
+        const slot = a.acuseRecepciones[sk];
+        if (!slot) break;                             // no hay foto → no se puede firmar
+        const urls = (slot.urls || []).filter(Boolean);
+        if (urls.length === 0) break;                 // foto incompleta → no se puede firmar
+        if (slot.receptorId || slot.receptorNombre) continue; // ya firmado, sigo al siguiente
+        // Es pendiente. Verificar que la etapa anterior esté firmada (sequential)
+        if (i > 0) {
+          const prevKey = ACUSE_SLOTS[i-1].key;
+          const prevSlot = a.acuseRecepciones[prevKey];
+          if (!prevSlot || (!prevSlot.receptorId && !prevSlot.receptorNombre)) break;
+        }
+        // Verificar que no haya un pending para este slot ya enviado
+        const yaPending = (window._pendingFirmasMap && window._pendingFirmasMap.has(p.id+'|'+t.id+'|'+l.id+'|'+a.id+'|'+sk));
+        if (yaPending) break;
+        out.push({ p, t, l, a, slotKey: sk, label: ACUSE_SLOTS[i].label, urls });
+        break; // solo el PRIMER pendiente del apto (siguientes aún no se pueden firmar)
+      }
+    })));
+  });
+  return out;
+}
+
+window.renderFirmarPendientes = function(){
+  const cont = document.getElementById('firmarList');
+  if (!cont) return;
+  const items = _firmarPendientesList();
+  // Actualizar badge
+  const badge = document.getElementById('firmarBadge');
+  if (badge) {
+    if (items.length > 0) { badge.textContent = String(items.length); badge.style.display = 'inline-flex'; }
+    else badge.style.display = 'none';
+  }
+  if (!items.length) {
+    cont.innerHTML = `<div class="empty"><div class="big">SIN PENDIENTES</div><p>No hay acuses esperando tu firma. Cuando el supervisor cargue fotos de una entrega, aparecerán acá automáticamente.</p></div>`;
+    return;
+  }
+  // Agrupar por proyecto
+  const byProj = {};
+  items.forEach(it => {
+    const k = it.p.id;
+    if (!byProj[k]) byProj[k] = { p: it.p, items: [] };
+    byProj[k].items.push(it);
+  });
+  cont.innerHTML = Object.values(byProj).map(g => `
+    <div style="margin-bottom:18px">
+      <div style="font-size:11px;letter-spacing:1.6px;text-transform:uppercase;font-weight:700;color:var(--red);margin-bottom:8px">${escapeHtml(g.p.name)}</div>
+      ${g.items.map(it => `
+        <div class="report-card" style="border-left-color:var(--amber)">
+          <div class="rc-icon" style="background:var(--amber-soft);color:var(--amber)">⚐</div>
+          <div class="rc-info">
+            <div class="rc-title">${escapeHtml(it.t.name)} · ${escapeHtml(it.l.name)} · ${escapeHtml(it.a.name)}</div>
+            <div class="rc-meta">${escapeHtml(it.label)} — ${it.urls.length}/2 fotos</div>
+          </div>
+          <div class="rc-actions">
+            <button class="btn sm" onclick="abrirFirmarAcuse('${it.p.id}','${it.t.id}','${it.l.id}','${it.a.id}','${it.slotKey}')" style="background:var(--green-dark);border-color:var(--green-dark);color:#fff;white-space:nowrap">VER Y FIRMAR</button>
+          </div>
+        </div>`).join('')}
+    </div>
+  `).join('');
+};
+
+let _faCtx = null;
+
+/* Carga las firmas pendientes que YO envié pero el admin todavía no aplicó.
+   Se usan para no mostrar el mismo slot dos veces en la lista. */
+async function loadMyPendingSignatures(){
+  if (!_clientesAuth || !_clientesAuth.currentUser) return;
+  if (!window._pendingFirmasMap) window._pendingFirmasMap = new Set();
+  try {
+    const snap = await _clientesDb.collection('pendingAcuseSignatures')
+      .where('uid', '==', _clientesAuth.currentUser.uid)
+      .where('status', '==', 'pending')
+      .get();
+    snap.forEach(d => {
+      const r = d.data();
+      window._pendingFirmasMap.add(`${r.projectId}|${r.towerId}|${r.levelId}|${r.aptoId}|${r.slotKey}`);
+    });
+  } catch(e) { console.warn('loadMyPendingSignatures:', e && e.message); }
+}
+
+window.abrirFirmarAcuse = function(projectId, towerId, levelId, aptoId, slotKey){
+  if (!currentReceptor) return showToast('Sin sesión', 'red');
+  // Verificar que el receptor tenga firma digital cargada
+  const firmaUrl = currentReceptor.signatureImageUrl
+    || (_clientRegistration && _clientRegistration.signatureImageUrl) || '';
+  if (!firmaUrl) {
+    showToast('Primero cargá tu firma digital en el modal de bienvenida.', 'red');
+    return;
+  }
+  const p = (state.projects||[]).find(x => x.id === projectId); if (!p) return;
+  const t = (p.towers||[]).find(x => x.id === towerId); if (!t) return;
+  const l = (t.levels||[]).find(x => x.id === levelId); if (!l) return;
+  const a = (l.aptos||[]).find(x => x.id === aptoId); if (!a) return;
+  const slot = a.acuseRecepciones && a.acuseRecepciones[slotKey];
+  if (!slot) return showToast('Acuse no encontrado', 'red');
+  const urls = (slot.urls || []).filter(Boolean);
+  if (urls.length === 0) return showToast('No hay fotos cargadas todavía', 'red');
+
+  _faCtx = { projectId, towerId, levelId, aptoId, slotKey, firmaUrl };
+
+  const sIdx = ACUSE_SLOTS.findIndex(s => s.key === String(slotKey));
+  const etapaLabel = sIdx >= 0 ? ACUSE_SLOTS[sIdx].label : 'ETAPA ' + slotKey;
+
+  document.getElementById('faDesc').innerHTML = `
+    <strong>${escapeHtml(p.name)}</strong> · ${escapeHtml(t.name)} · ${escapeHtml(l.name)} · ${escapeHtml(a.name)}<br>
+    <span style="font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--mute);font-weight:700">${escapeHtml(etapaLabel)}</span>`;
+
+  document.getElementById('faPhotos').innerHTML = [0,1].map(i => {
+    const u = urls[i];
+    if (u) {
+      return `<div style="background:var(--cream);border:1px solid var(--line);border-radius:6px;overflow:hidden;aspect-ratio:3/4">
+        <img src="${escapeHtml(u)}" alt="Foto ${i+1}" style="width:100%;height:100%;object-fit:cover;display:block;cursor:pointer" onclick="window.open('${escapeHtml(u)}','_blank')">
+      </div>`;
+    } else {
+      return `<div style="background:var(--cream);border:2px dashed var(--line);border-radius:6px;aspect-ratio:3/4;display:flex;align-items:center;justify-content:center;color:var(--mute);font-size:11px;letter-spacing:1px;text-transform:uppercase;font-weight:700">SIN FOTO ${i+1}</div>`;
+    }
+  }).join('');
+
+  document.getElementById('faFirmaPreview').src = firmaUrl;
+  const err = document.getElementById('faError');
+  if (err) err.style.display = 'none';
+
+  document.getElementById('modalFirmarAcuse').classList.add('show');
+};
+
+window.confirmarFirmaAcuse = async function(){
+  if (!_faCtx) return;
+  if (!_clientesAuth.currentUser) return showToast('Sin sesión', 'red');
+  const cancelBtn = document.getElementById('faCancelBtn');
+  const confirmBtn = document.getElementById('faConfirmBtn');
+  const err = document.getElementById('faError');
+  if (cancelBtn) cancelBtn.disabled = true;
+  if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = 'FIRMANDO…'; }
+
+  try {
+    const u = _clientesAuth.currentUser;
+    const payload = {
+      uid: u.uid,
+      email: u.email || '',
+      receptorId: currentReceptor.id,
+      receptorNombre: currentReceptor.nombre || '',
+      receptorCargo: currentReceptor.cargo || '',
+      receptorSignatureUrl: _faCtx.firmaUrl,
+      projectId: _faCtx.projectId,
+      towerId: _faCtx.towerId,
+      levelId: _faCtx.levelId,
+      aptoId: _faCtx.aptoId,
+      slotKey: String(_faCtx.slotKey),
+      ts: firebase.firestore.FieldValue.serverTimestamp(),
+      tsClient: Date.now(),
+      status: 'pending',
+      type: 'portal-cliente'
+    };
+    await _clientesDb.collection('pendingAcuseSignatures').add(payload);
+
+    // Marcar localmente como pending para no mostrarlo otra vez en la lista hasta sync
+    if (!window._pendingFirmasMap) window._pendingFirmasMap = new Set();
+    window._pendingFirmasMap.add(_faCtx.projectId+'|'+_faCtx.towerId+'|'+_faCtx.levelId+'|'+_faCtx.aptoId+'|'+_faCtx.slotKey);
+
+    closeModal('FirmarAcuse');
+    showToast('Firma enviada · El admin la aplicará en breve', 'green');
+    _faCtx = null;
+    renderFirmarPendientes();
+  } catch(e) {
+    console.error('Error firmando:', e);
+    if (err) { err.style.display = 'block'; err.textContent = 'No se pudo enviar: ' + (e.message || 'error'); }
+  } finally {
+    if (cancelBtn) cancelBtn.disabled = false;
+    if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = 'FIRMAR Y CONFIRMAR ENTREGA'; }
+  }
 };
 
 /* ════════════════════════════════════════════════════════════════

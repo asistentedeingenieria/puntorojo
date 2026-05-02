@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v154-tour-bienvenida-inbox-admin-contacto';
+const CACHE_VERSION = 'v155-firmar-desde-portal-video-bienvenida';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
@@ -16,6 +16,7 @@ const CORE_ASSETS = [
   './index.html',
   './puntorojo.html',
   './clientes.html',
+  './bienvenida.html',
   './manifest.json',
   './logo.png',
   './icon.svg'
