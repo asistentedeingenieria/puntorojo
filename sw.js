@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v151-camara-zoom-checks-completado-verdes';
+const CACHE_VERSION = 'v152-dark-mode-arreglado-cliente-contacto-dominio-fuera';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
