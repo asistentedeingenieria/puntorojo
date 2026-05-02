@@ -2579,7 +2579,7 @@ html,body,.main{background:#FFFFFF!important;}
 
 <!-- Modal para crear/editar un receptor -->
 <div class="modal-bg" id="modalEditReceptor" onclick="closeModalBg(event,'editReceptor')">
-  <div class="modal" style="max-width:480px">
+  <div class="modal" style="max-width:560px;max-height:90vh;overflow-y:auto">
     <h3 id="erTitle">NUEVO RECEPTOR</h3>
     <p class="desc">Datos del receptor. Después le generamos su link único para que vea su QR rotativo y firme acuses.</p>
     <div class="field"><label>NOMBRE COMPLETO</label><input id="erNombre" placeholder="EJ: JUAN PÉREZ"></div>
@@ -2600,6 +2600,42 @@ html,body,.main{background:#FFFFFF!important;}
         </div>
       </div>
       <p style="font-size:9px;color:var(--mute);letter-spacing:.5px;margin-top:6px;line-height:1.4">CONSEJO: PEDILE AL RECEPTOR QUE FIRME EN UNA HOJA BLANCA, TOMÁ FOTO Y SUBÍ ESA IMAGEN. SE INCLUIRÁ AUTOMÁTICAMENTE EN CADA ACUSE QUE FIRME CON SU QR.</p>
+    </div>
+
+    <!-- ════════ PORTAL CLIENTE (clientes.puntorojo.app) ════════ -->
+    <div style="border-top:2px solid var(--line);margin-top:18px;padding-top:14px">
+      <h4 style="font-size:13px;letter-spacing:1.5px;text-transform:uppercase;color:var(--red);margin:0 0 4px 0">PORTAL CLIENTE</h4>
+      <p style="font-size:10px;color:var(--mute);letter-spacing:.3px;line-height:1.5;margin:0 0 14px 0">
+        Configurá si este receptor podrá entrar al portal cliente (clientes.puntorojo.app) para ver y descargar sus acuses firmados. Si no le das código de invitación, sigue funcionando solo con QR rotativo (como antes).
+      </p>
+
+      <div class="field" style="margin-bottom:10px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:11px;cursor:pointer;font-weight:600">
+          <input type="checkbox" id="erEsMaster" style="width:16px;height:16px;cursor:pointer">
+          ES MASTER DEL PROYECTO (PROJECT MANAGER)
+        </label>
+        <p style="font-size:9.5px;color:var(--mute);margin:4px 0 0 24px;line-height:1.4">
+          Master = ve <strong>TODOS</strong> los acuses del proyecto, incluso los firmados por otros receptores.<br>
+          Regular = ve solo los acuses que firmó él mismo.
+        </p>
+      </div>
+
+      <div class="field" style="margin-bottom:10px">
+        <label>PROYECTOS ASIGNADOS (PUEDE VER ACUSES DE ESTOS)</label>
+        <div id="erProyectosCheckList" style="border:1px solid var(--line);border-radius:4px;padding:8px 10px;max-height:140px;overflow-y:auto;background:var(--cream)">
+          <!-- se llena dinámicamente -->
+        </div>
+      </div>
+
+      <div class="field" style="margin-bottom:10px">
+        <label>CÓDIGO DE INVITACIÓN AL PORTAL</label>
+        <div id="erInviteCodeBox" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px dashed var(--line);border-radius:4px;background:var(--cream);min-height:48px">
+          <code id="erInviteCodeText" style="font-size:14px;font-weight:700;color:var(--red);letter-spacing:1.5px;flex:1;font-family:'Courier New',monospace">— SIN CÓDIGO —</code>
+          <button type="button" class="btn ghost sm" id="erInviteCodeCopyBtn" onclick="copyInviteCode()" style="display:none">COPIAR</button>
+          <button type="button" class="btn sm cafe" id="erInviteCodeGenBtn" onclick="generarInviteCode()">GENERAR</button>
+        </div>
+        <p id="erInviteCodeStatus" style="font-size:9.5px;color:var(--mute);margin:4px 0 0 0;line-height:1.4"></p>
+      </div>
     </div>
 
     <div id="erError" class="auth-error"></div>
@@ -4555,6 +4591,19 @@ function ensureDataV9(data){
   data.receptores.forEach(r => {
     if (!r.secret) r.secret = makeReceptorSecret();
     if (r.signatureImageUrl === undefined) r.signatureImageUrl = '';
+    // v10 → v11: portal cliente
+    // - clientLoginEmail: email para que el receptor inicie sesión en clientes.puntorojo.app
+    // - inviteCode: código que el admin genera y le pasa al receptor para registrarse
+    // - inviteCodeUsed: true cuando el receptor ya canjeó el código y se registró
+    // - inviteCodeCreatedAt: cuándo se generó el código (para expiración futura)
+    // - assignedProjectIds: IDs de proyectos a los que tiene acceso (vacío = ninguno)
+    // - isMaster: si es true, ve TODOS los acuses del proyecto (no solo los suyos)
+    if (r.clientLoginEmail === undefined) r.clientLoginEmail = '';
+    if (r.inviteCode === undefined) r.inviteCode = '';
+    if (r.inviteCodeUsed === undefined) r.inviteCodeUsed = false;
+    if (r.inviteCodeCreatedAt === undefined) r.inviteCodeCreatedAt = null;
+    if (!Array.isArray(r.assignedProjectIds)) r.assignedProjectIds = [];
+    if (r.isMaster === undefined) r.isMaster = false;
   });
   (data.projects || []).forEach(p => {
     if (p.descuentoAutorizado === undefined) p.descuentoAutorizado = 0;
@@ -18133,6 +18182,30 @@ function makeReceptorSecret(){
   return Array.from(arr).map(b => b.toString(36)).join('').toUpperCase().slice(0,24);
 }
 
+/* Genera un código de invitación CORTO y FÁCIL DE LEER para que el receptor se
+   registre en el portal cliente (clientes.puntorojo.app). Ejemplo: "PR-X7K9-MQ4P".
+   - 8 caracteres, agrupados en bloques de 4
+   - Solo letras y números (sin caracteres ambiguos: 0/O, 1/I/L)
+   - Prefijo "PR-" para identificar visualmente que es código Punto Rojo */
+function makeReceptorInviteCode(){
+  const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // sin O, I, L, 0, 1
+  const arr = new Uint8Array(8);
+  (window.crypto || window.msCrypto).getRandomValues(arr);
+  let code = '';
+  for (let i = 0; i < 8; i++) {
+    code += ALPHABET[arr[i] % ALPHABET.length];
+    if (i === 3) code += '-';
+  }
+  return 'PR-' + code;
+}
+
+/* Busca un receptor por su código de invitación (no caso-sensible). */
+function findReceptorByInviteCode(code){
+  if (!code) return null;
+  const c = String(code).trim().toUpperCase();
+  return (state.receptores || []).find(r => !r.deleted && r.inviteCode && r.inviteCode.toUpperCase() === c) || null;
+}
+
 /* SHA-256 hex (subtle crypto). Devuelve los primeros 8 chars en mayúsculas — suficiente
    para validar QR de 1 minuto (probabilidad de colisión despreciable a esa ventana). */
 async function _sha256Hex8(text){
@@ -18227,13 +18300,31 @@ function renderReceptoresList(){
     const firmaTag = tieneFirma
       ? `<span style="display:inline-block;font-size:8.5px;letter-spacing:.8px;color:var(--green-dark);background:#DCFCE7;padding:2px 6px;border-radius:3px;margin-top:4px;font-weight:700">FIRMA OK</span>`
       : `<span style="display:inline-block;font-size:8.5px;letter-spacing:.8px;color:var(--cafe);background:#FEF3C7;padding:2px 6px;border-radius:3px;margin-top:4px;font-weight:700">SIN FIRMA — EDITÁ Y SUBÍ UNA</span>`;
+
+    // Tag de portal cliente
+    let portalTag = '';
+    if (r.isMaster) {
+      portalTag += `<span style="display:inline-block;font-size:8.5px;letter-spacing:.8px;color:#fff;background:var(--red);padding:2px 6px;border-radius:3px;margin-top:4px;margin-left:4px;font-weight:700">★ MASTER</span>`;
+    }
+    if (r.inviteCode && !r.inviteCodeUsed) {
+      portalTag += `<span style="display:inline-block;font-size:8.5px;letter-spacing:.8px;color:var(--cafe);background:#FEF3C7;padding:2px 6px;border-radius:3px;margin-top:4px;margin-left:4px;font-weight:700">INVITACIÓN PENDIENTE</span>`;
+    } else if (r.inviteCodeUsed) {
+      portalTag += `<span style="display:inline-block;font-size:8.5px;letter-spacing:.8px;color:var(--green-dark);background:#DCFCE7;padding:2px 6px;border-radius:3px;margin-top:4px;margin-left:4px;font-weight:700">PORTAL ACTIVO</span>`;
+    }
+
+    // Cantidad de proyectos asignados
+    const numProyectos = (r.assignedProjectIds || []).length;
+    const proyectosTag = numProyectos > 0
+      ? `<span style="display:inline-block;font-size:8.5px;letter-spacing:.8px;color:var(--ink);background:var(--cream);border:1px solid var(--line);padding:2px 6px;border-radius:3px;margin-top:4px;margin-left:4px;font-weight:700">${numProyectos} PROYECTO${numProyectos !== 1 ? 'S' : ''}</span>`
+      : '';
+
     return `
     <div style="border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;background:var(--white)">
       <div>
         <div style="font-weight:700;color:var(--ink);font-size:13px;text-transform:uppercase;letter-spacing:.3px">${r.nombre || ''}</div>
         <div style="font-size:10px;color:var(--mute);letter-spacing:.5px;text-transform:uppercase;margin-top:3px;font-weight:500">${r.cargo || 'SIN CARGO'}</div>
         ${r.contacto ? `<div style="font-size:10px;color:var(--mute);margin-top:2px">${r.contacto}</div>` : ''}
-        <div>${firmaTag}</div>
+        <div>${firmaTag}${portalTag}${proyectosTag}</div>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
         <button class="btn ghost sm" onclick="showReceptorQR('${r.id}')">LINK ROTATIVO</button>
@@ -18306,6 +18397,10 @@ function openNewReceptor(){
   ['erNombre','erCargo','erContacto'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('erError').textContent = '';
   _resetReceptorFirmaUI('');
+  // Reset campos del portal cliente para receptor nuevo
+  document.getElementById('erEsMaster').checked = false;
+  _renderProyectosCheckList([]);
+  _renderInviteCode('', false, null);
   document.getElementById('modalEditReceptor').classList.add('show');
 }
 
@@ -18319,8 +18414,106 @@ function openEditReceptor(id){
   document.getElementById('erContacto').value = r.contacto || '';
   document.getElementById('erError').textContent = '';
   _resetReceptorFirmaUI(r.signatureImageUrl || '');
+  // Cargar campos del portal cliente
+  document.getElementById('erEsMaster').checked = !!r.isMaster;
+  _renderProyectosCheckList(r.assignedProjectIds || []);
+  _renderInviteCode(r.inviteCode || '', !!r.inviteCodeUsed, r.inviteCodeCreatedAt);
   document.getElementById('modalEditReceptor').classList.add('show');
 }
+
+/* Renderiza el checklist de proyectos asignables al receptor en el modal. */
+function _renderProyectosCheckList(asignados){
+  const cont = document.getElementById('erProyectosCheckList');
+  if (!cont) return;
+  const proyectos = (state.projects || []).filter(p => !p.archived);
+  if (proyectos.length === 0) {
+    cont.innerHTML = '<div style="font-size:10px;color:var(--mute);text-align:center;padding:8px">SIN PROYECTOS — CREÁ UN PROYECTO PRIMERO</div>';
+    return;
+  }
+  const set = new Set((asignados || []).map(String));
+  cont.innerHTML = proyectos.map(p => `
+    <label style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;font-size:11px">
+      <input type="checkbox" class="er-proyecto-check" value="${p.id}" ${set.has(p.id) ? 'checked' : ''} style="width:14px;height:14px;cursor:pointer">
+      <span style="font-weight:600">${p.name || '(sin nombre)'}</span>
+    </label>
+  `).join('');
+}
+
+/* Lee qué proyectos están tildados en el modal. */
+function _readProyectosCheckList(){
+  return Array.from(document.querySelectorAll('.er-proyecto-check:checked')).map(el => el.value);
+}
+
+/* Renderiza el estado del código de invitación en el modal. */
+function _renderInviteCode(code, used, createdAt){
+  const txt = document.getElementById('erInviteCodeText');
+  const copyBtn = document.getElementById('erInviteCodeCopyBtn');
+  const genBtn = document.getElementById('erInviteCodeGenBtn');
+  const status = document.getElementById('erInviteCodeStatus');
+  if (!txt) return;
+  if (code) {
+    txt.textContent = code;
+    if (copyBtn) copyBtn.style.display = '';
+    if (genBtn) genBtn.textContent = 'REGENERAR';
+    if (status) {
+      const fecha = createdAt ? new Date(createdAt).toLocaleDateString('es-GT') : '';
+      status.innerHTML = used
+        ? `<span style="color:var(--green-dark);font-weight:700">✓ YA CANJEADO</span> — el receptor ya se registró con este código.${fecha ? ' Generado el ' + fecha + '.' : ''}`
+        : `<span style="color:var(--cafe);font-weight:700">PENDIENTE DE CANJE</span> — pasale este código al receptor para que se registre en clientes.puntorojo.app.${fecha ? ' Generado el ' + fecha + '.' : ''}`;
+    }
+  } else {
+    txt.textContent = '— SIN CÓDIGO —';
+    if (copyBtn) copyBtn.style.display = 'none';
+    if (genBtn) genBtn.textContent = 'GENERAR';
+    if (status) status.textContent = 'SIN CÓDIGO TODAVÍA. Generá uno para que el receptor pueda registrarse en el portal cliente.';
+  }
+}
+
+/* Acción del botón GENERAR/REGENERAR código de invitación. */
+window.generarInviteCode = function(){
+  const r = editingReceptorId ? (state.receptores || []).find(x => x.id === editingReceptorId) : null;
+  if (!r && !editingReceptorId) {
+    // Receptor nuevo todavía no guardado: generamos local solo en el UI; al guardar se persiste.
+    const newCode = makeReceptorInviteCode();
+    _renderInviteCode(newCode, false, Date.now());
+    document.getElementById('erInviteCodeText').dataset.pendingNew = newCode;
+    return;
+  }
+  if (r && r.inviteCode && !r.inviteCodeUsed) {
+    if (!confirm('YA EXISTE UN CÓDIGO PENDIENTE.\n\n¿REGENERARLO INVALIDA EL ANTERIOR.\n\n¿CONTINUAR?')) return;
+  }
+  if (r && r.inviteCodeUsed) {
+    if (!confirm('EL RECEPTOR YA CANJEÓ UN CÓDIGO ANTES.\n\nGENERAR UNO NUEVO PERMITIRÁ QUE SE REGISTRE OTRA VEZ (ÚTIL SI PERDIÓ EL ACCESO).\n\n¿CONTINUAR?')) return;
+  }
+  const newCode = makeReceptorInviteCode();
+  if (r) {
+    r.inviteCode = newCode;
+    r.inviteCodeUsed = false;
+    r.inviteCodeCreatedAt = Date.now();
+    saveState();
+    logActivity('update', 'Código de invitación generado: ' + r.nombre, newCode);
+  }
+  _renderInviteCode(newCode, false, Date.now());
+  showToast('CÓDIGO GENERADO · TOCÁ COPIAR PARA COMPARTIR', 'green');
+};
+
+/* Acción del botón COPIAR del código de invitación. */
+window.copyInviteCode = function(){
+  const code = document.getElementById('erInviteCodeText').textContent.trim();
+  if (!code || code === '— SIN CÓDIGO —') return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(code).then(() => showToast('CÓDIGO COPIADO AL PORTAPAPELES', 'green'));
+  } else {
+    // Fallback antiguo
+    const ta = document.createElement('textarea');
+    ta.value = code;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); showToast('CÓDIGO COPIADO', 'green'); }
+    catch(e) { showToast('NO SE PUDO COPIAR — SELECCIONÁ A MANO', 'red'); }
+    document.body.removeChild(ta);
+  }
+};
 
 async function saveReceptor(){
   if (!can('receptores.manage') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
@@ -18334,6 +18527,12 @@ async function saveReceptor(){
 
   if (!Array.isArray(state.receptores)) state.receptores = [];
 
+  // Leer campos del portal cliente desde el modal
+  const isMaster = !!document.getElementById('erEsMaster').checked;
+  const assignedProjectIds = _readProyectosCheckList();
+  const inviteCodeText = (document.getElementById('erInviteCodeText').textContent || '').trim();
+  const pendingNewCode = document.getElementById('erInviteCodeText').dataset.pendingNew || '';
+
   let target;
   let isNew = false;
   if (editingReceptorId) {
@@ -18344,6 +18543,10 @@ async function saveReceptor(){
     target.contacto = contacto;
     target.updatedAt = Date.now();
     if (!target.secret) target.secret = makeReceptorSecret();
+    // Portal cliente: persistir campos
+    target.isMaster = isMaster;
+    target.assignedProjectIds = assignedProjectIds;
+    // El inviteCode ya se guardó en generarInviteCode si fue regenerado.
   } else {
     isNew = true;
     target = {
@@ -18355,9 +18558,18 @@ async function saveReceptor(){
       active: true,
       deleted: false,
       createdAt: Date.now(),
-      createdBy: currentUser ? currentUser.email : null
+      createdBy: currentUser ? currentUser.email : null,
+      // Portal cliente
+      isMaster: isMaster,
+      assignedProjectIds: assignedProjectIds,
+      clientLoginEmail: '',
+      inviteCode: pendingNewCode || '',
+      inviteCodeUsed: false,
+      inviteCodeCreatedAt: pendingNewCode ? Date.now() : null
     };
     state.receptores.push(target);
+    // Limpiar el dataset del code pendiente
+    delete document.getElementById('erInviteCodeText').dataset.pendingNew;
   }
 
   // ── Subir firma a Storage si el usuario seleccionó una nueva ──
