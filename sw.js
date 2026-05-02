@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v117-portal-cliente-fase1-receptor-fields';
+const CACHE_VERSION = 'v118-portal-cliente-fase2-clientes-html';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
@@ -15,6 +15,7 @@ const CORE_ASSETS = [
   './',
   './index.html',
   './puntorojo.html',
+  './clientes.html',
   './manifest.json',
   './logo.png',
   './icon.svg'
