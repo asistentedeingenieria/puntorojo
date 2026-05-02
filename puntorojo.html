@@ -2435,6 +2435,48 @@ html,body,.main{background:#FFFFFF!important;}
   </div>
 </div>
 
+<!-- ═════════════ CAMBIO DE CLAVE OBLIGATORIO (PRIMER LOGIN) ═════════════
+     Pantalla bloqueante full-screen. No se puede cerrar ni saltar.
+     Aparece cuando el usuario tiene mustChangePassword=true en su perfil
+     (admin lo creó con una clave temporal). -->
+<div class="modal-bg" id="modalForcePassword" style="z-index:10000">
+  <div class="modal" style="max-width:520px">
+    <div style="text-align:center;margin-bottom:18px">
+      <div style="display:inline-flex;align-items:center;justify-content:center;width:60px;height:60px;background:#FEF3C7;border:2px solid var(--amber);border-radius:50%;margin-bottom:10px">
+        <svg viewBox="0 0 24 24" style="width:28px;height:28px;fill:var(--amber)"><path d="M12 1l3.09 6.26L22 8.27l-5 4.87 1.18 6.88L12 16.77l-6.18 3.25L7 13.14 2 8.27l6.91-1.01L12 1z"/></svg>
+      </div>
+      <h3 style="color:var(--amber);margin:0">CAMBIO DE CLAVE OBLIGATORIO</h3>
+    </div>
+    <p class="desc" style="text-align:center;line-height:1.6">
+      <strong>¡Bienvenido!</strong> Por seguridad, antes de usar la app necesitás
+      reemplazar la clave temporal que te dio el administrador por una clave
+      personal y fuerte que solo vos sepas.
+    </p>
+
+    <div class="field">
+      <label>CLAVE TEMPORAL (LA QUE TE DIO EL ADMIN)</label>
+      <input id="fpCurrent" type="password" autocomplete="current-password">
+    </div>
+    <div class="field">
+      <label>TU NUEVA CLAVE FUERTE</label>
+      <input id="fpNew" type="password" autocomplete="new-password">
+    </div>
+    <div class="field">
+      <label>CONFIRMAR TU NUEVA CLAVE</label>
+      <input id="fpNew2" type="password" autocomplete="new-password" onkeydown="if(event.key==='Enter')doForcedPasswordChange()">
+    </div>
+    <div id="fpError" class="auth-error"></div>
+    <div class="modal-actions" style="justify-content:space-between">
+      <button class="btn ghost" onclick="cancelForcedPasswordChange()">SALIR DE LA APP</button>
+      <button class="btn" onclick="doForcedPasswordChange()">ACTUALIZAR Y ENTRAR</button>
+    </div>
+    <p style="font-size:9.5px;color:var(--mute);text-align:center;margin-top:14px;letter-spacing:.3px;line-height:1.5">
+      Esta pantalla solo aparece la primera vez. Después podés cambiar tu clave
+      cuando quieras desde Mis preferencias.
+    </p>
+  </div>
+</div>
+
 <!-- ═════════════ CAMBIAR MI CONTRASEÑA ═════════════ -->
 <div class="modal-bg" id="modalChangePassword" onclick="closeModalBg(event,'changePassword')">
   <div class="modal" style="max-width:480px">
@@ -3819,6 +3861,81 @@ window.openChangePasswordModal = function(){
   setTimeout(() => attachPasswordStrength('cpNew', () => (firebase.auth().currentUser?.email || '')), 50);
 };
 
+/* ════════ CAMBIO DE CLAVE OBLIGATORIO (PRIMER LOGIN) ════════
+   Se dispara desde applyAuthSession cuando el perfil tiene
+   mustChangePassword=true. Bloquea el uso de la app hasta que el usuario
+   elija una clave personal. */
+function showForcedPasswordChange(){
+  document.getElementById('fpCurrent').value = '';
+  document.getElementById('fpNew').value = '';
+  document.getElementById('fpNew2').value = '';
+  document.getElementById('fpError').textContent = '';
+  document.getElementById('modalForcePassword').classList.add('show');
+  setTimeout(() => attachPasswordStrength('fpNew', () => (firebase.auth().currentUser?.email || '')), 50);
+  // Bloquear el resto de la UI
+  document.body.classList.add('auth-locked');
+}
+
+window.cancelForcedPasswordChange = async function(){
+  if (!confirm('SI SALÍS AHORA, NO VAS A PODER USAR LA APP HASTA QUE CAMBIES TU CLAVE.\n\n¿SALIR DE LA APP?')) return;
+  try { await firebase.auth().signOut(); } catch(e){}
+  document.getElementById('modalForcePassword').classList.remove('show');
+  document.body.classList.remove('auth-locked');
+};
+
+window.doForcedPasswordChange = async function(){
+  const u = firebase.auth().currentUser;
+  const err = document.getElementById('fpError');
+  err.textContent = '';
+  if (!u) { err.textContent = 'SESIÓN PERDIDA — VOLVÉ A INGRESAR'; return; }
+
+  const current = document.getElementById('fpCurrent').value;
+  const next = document.getElementById('fpNew').value;
+  const next2 = document.getElementById('fpNew2').value;
+
+  if (!current) { err.textContent = 'INGRESÁ LA CLAVE TEMPORAL'; return; }
+  if (!next) { err.textContent = 'INGRESÁ LA CLAVE NUEVA'; return; }
+  if (next !== next2) { err.textContent = 'LAS CLAVES NUEVAS NO COINCIDEN'; return; }
+  if (current === next) { err.textContent = 'LA CLAVE NUEVA DEBE SER DISTINTA A LA TEMPORAL'; return; }
+
+  const result = validatePasswordStrength(next, u.email || '');
+  if (!result.ok) { err.textContent = getPasswordWeakReason(result); return; }
+
+  err.textContent = 'VERIFICANDO CLAVE TEMPORAL...';
+  try {
+    // 1. Re-auth con la clave temporal
+    const cred = firebase.auth.EmailAuthProvider.credential(u.email, current);
+    await u.reauthenticateWithCredential(cred);
+
+    // 2. Cambiar la clave a la nueva fuerte
+    err.textContent = 'ACTUALIZANDO CLAVE...';
+    await u.updatePassword(next);
+
+    // 3. Marcar el perfil como "ya cambió la clave inicial"
+    err.textContent = 'GUARDANDO CAMBIO...';
+    await saveUserDoc(u.uid, { mustChangePassword: false, passwordChangedAt: Date.now() });
+
+    // 4. Cerrar modal y desbloquear UI
+    document.getElementById('modalForcePassword').classList.remove('show');
+    document.body.classList.remove('auth-locked');
+    showToast('CLAVE ACTUALIZADA · BIENVENIDO', 'green');
+    logActivity('update', 'Cambió su clave en el primer login', u.email || '');
+  } catch(e) {
+    console.error('Forced password change error:', e);
+    let msg = 'ERROR AL CAMBIAR LA CLAVE';
+    if (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential') {
+      msg = 'CLAVE TEMPORAL INCORRECTA — PEDISELA AL ADMIN OTRA VEZ';
+    } else if (e.code === 'auth/weak-password') {
+      msg = 'LA CLAVE NUEVA ES MUY DÉBIL';
+    } else if (e.code === 'auth/too-many-requests') {
+      msg = 'DEMASIADOS INTENTOS — ESPERÁ UNOS MINUTOS';
+    } else if (e.message) {
+      msg += ': ' + e.message;
+    }
+    err.textContent = msg;
+  }
+};
+
 window.doChangePassword = async function(){
   const u = firebase.auth().currentUser;
   const err = document.getElementById('cpError');
@@ -4157,11 +4274,14 @@ async function saveUser(){
           perms,
           isFounder: false,
           createdAt: Date.now(),
-          createdBy: currentUser ? currentUser.email : null
+          createdBy: currentUser ? currentUser.email : null,
+          // Forzar cambio de clave en el primer login. El admin crea con una clave
+          // temporal y el usuario debe elegir la suya propia al entrar la primera vez.
+          mustChangePassword: true
         };
         await saveUserDoc(uid, profile);
         await secondaryApp.auth().signOut();
-        showToast('USUARIO CREADO: ' + name.toUpperCase(), 'green');
+        showToast('USUARIO CREADO · CAMBIARÁ SU CLAVE EN EL PRIMER LOGIN', 'green');
       } finally {
         await secondaryApp.delete();
       }
@@ -19917,6 +20037,14 @@ function applyAuthSession(fbUser, profileData){
     createdAt: profileData.createdAt
   };
   hideAuthScreen();
+
+  // ── CAMBIO DE CLAVE OBLIGATORIO EN PRIMER LOGIN ──
+  // Si el admin marcó al usuario con mustChangePassword=true al crearlo,
+  // forzamos el cambio de clave ANTES de que pueda usar la app.
+  if (profileData.mustChangePassword === true) {
+    setTimeout(() => showForcedPasswordChange(), 100);
+  }
+
   // Registrar último login (solo si pasó al menos 1 minuto desde el último, para no escribir en cada hot-reload)
   try {
     const lastLoginPrev = profileData.lastLogin || 0;
