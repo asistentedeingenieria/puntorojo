@@ -1514,7 +1514,7 @@ async function doRegister(){
   let cred = null;
 
   // 1. Crear cuenta en Firebase Auth PRIMERO (login automático).
-  showToast('Creando cuenta...', '');
+  // (Sin toasts intermedios — el usuario ve el mensaje de éxito al final)
   try {
     cred = await _clientesAuth.createUserWithEmailAndPassword(email, password);
   } catch(e) {
@@ -1532,7 +1532,6 @@ async function doRegister(){
   }
 
   // 2. Leer appState (ahora autenticado) y validar el código.
-  showToast('Validando código...', '');
   let remoteState;
   try {
     const snap = await _clientesDb.collection('appState').doc('main').get();
@@ -1560,7 +1559,6 @@ async function doRegister(){
 
   // 3. Escribir registro en clientRegistrations/{uid}. La regla permite que
   //    cada usuario escriba SOLO su propio doc (request.auth.uid == uid).
-  showToast('Vinculando cuenta...', '');
   try {
     await _clientesDb.collection('clientRegistrations').doc(cred.user.uid).set({
       receptorId: r.id,
@@ -1575,7 +1573,21 @@ async function doRegister(){
     return setError('registerError', 'Error de permisos al registrar: ' + (eWrite.message || eWrite.code) + '. Avisale al admin que revise las reglas de Firestore.');
   }
 
-  // 4. Listo. El onAuthStateChanged ya disparó loadStateAndStart() para cargar el portal.
+  // 4. CRÍTICO: actualizar la cache local _clientRegistration inmediatamente
+  //    para evitar la race condition con el listener del state que ya disparó
+  //    onStateLoaded() antes de que terminemos de escribir el doc.
+  _clientRegistration = {
+    receptorId: r.id,
+    inviteCode: code,
+    email: email,
+    applied: false
+  };
+  // Si el state ya está cargado, re-correr onStateLoaded para que enganche el receptor
+  if (state && typeof onStateLoaded === 'function') {
+    try { onStateLoaded(); } catch(e){ console.warn('onStateLoaded post-register:', e); }
+  }
+
+  // 5. Listo. El portal se va a cargar — la auth-screen desaparece sola.
   const success = document.getElementById('registerSuccess');
   success.textContent = '✓ Cuenta creada con éxito. Cargando portal...';
   success.classList.add('show');
@@ -1784,14 +1796,27 @@ async function loadStateAndStart(){
   );
 }
 
-function onStateLoaded(){
+// Contador de retries para evitar mostrar el error de "no vinculado"
+// inmediatamente cuando hay race condition con el doRegister.
+let _onStateLoadedRetries = 0;
+async function onStateLoaded(){
   if (!currentUser || !state) return;
   const receptores = state.receptores || [];
   const email = (currentUser.email || '').toLowerCase();
 
-  // Buscar receptor por DOS rutas, en orden:
+  // Si _clientRegistration no se cargó por race condition, re-intentar leer
+  // el doc antes de buscar el receptor.
+  if (!_clientRegistration) {
+    try {
+      const regSnap = await _clientesDb.collection('clientRegistrations').doc(currentUser.uid).get();
+      if (regSnap.exists) _clientRegistration = regSnap.data();
+    } catch(e) { console.warn('Retry clientRegistrations:', e && e.message); }
+  }
+
+  // Buscar receptor por TRES rutas, en orden:
   //   1. clientRegistrations/{uid} → receptorId (más confiable, recién registrado)
   //   2. state.receptores[].clientLoginEmail === email (después que admin sincronice)
+  //   3. Match por inviteCode si tenemos uno en _clientRegistration (fallback final)
   currentReceptor = null;
   if (_clientRegistration && _clientRegistration.receptorId) {
     currentReceptor = receptores.find(r => !r.deleted && r.id === _clientRegistration.receptorId) || null;
@@ -1799,13 +1824,25 @@ function onStateLoaded(){
   if (!currentReceptor) {
     currentReceptor = receptores.find(r => !r.deleted && r.clientLoginEmail && r.clientLoginEmail.toLowerCase() === email) || null;
   }
+  if (!currentReceptor && _clientRegistration && _clientRegistration.inviteCode) {
+    const code = String(_clientRegistration.inviteCode).toUpperCase();
+    currentReceptor = receptores.find(r => !r.deleted && r.inviteCode && r.inviteCode.toUpperCase() === code) || null;
+  }
 
   if (!currentReceptor) {
-    // Caso: usuario logueado en Firebase pero sin receptor vinculado
+    // Race condition con doRegister o con propagación del state. Reintentar
+    // hasta 3 veces con 1s de espera antes de mostrar el error real.
+    if (_onStateLoadedRetries < 3) {
+      _onStateLoadedRetries++;
+      setTimeout(() => onStateLoaded(), 1000);
+      return;
+    }
     showToast('Tu cuenta no está vinculada a ningún receptor. Contactá a Punto Rojo.', 'red');
     setTimeout(() => doLogout(), 4000);
     return;
   }
+  // Reset retries on success
+  _onStateLoadedRetries = 0;
 
   // Mostrar nombre
   document.getElementById('userName').textContent = currentReceptor.nombre || currentReceptor.cargo || email;
