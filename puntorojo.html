@@ -1392,8 +1392,9 @@ html,body,.main{background:#FFFFFF!important;}
 .planilla-pay-item{display:grid;grid-template-columns:1.2fr .9fr .7fr .8fr auto;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line-soft);font-size:11px;}
 .planilla-pay-item:last-child{border-bottom:none;}
 .planilla-badge{display:inline-block;padding:3px 8px;border-radius:10px;font-size:8.5px;letter-spacing:1.2px;text-transform:uppercase;font-weight:700;border:1px solid var(--line);}
-.planilla-badge.pending{background:var(--red-soft);color:var(--amber);border-color:var(--amber);}
-.planilla-badge.ok{background:var(--red-soft);color:var(--red-dark);border-color:var(--red-dark);}
+.planilla-badge.pending{background:var(--amber-soft);color:var(--amber);border-color:var(--amber);}
+/* AUTORIZADO/AUTORIZADA = estado final ok → VERDE (no rojo) */
+.planilla-badge.ok{background:var(--green-soft);color:var(--green-dark);border-color:var(--green-dark);}
 .dpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}
 .dpi-slot{aspect-ratio:1.58/1;border:2px dashed var(--line);border-radius:3px;background:var(--paper);display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;}
 .dpi-slot img{width:100%;height:100%;object-fit:cover;}
@@ -7706,12 +7707,12 @@ window.renderAvanceFisicoCuadritos = function(){
     const aptoNombre = a.name.replace(/^APARTAMENTO\s+/i, '').replace(/^APTO\s+/i, '').toUpperCase();
     const allFirm = (firm === 6);
 
-    // 6 etapas + acuse firmado → check verde
+    // 6 etapas + acuse firmado → check VERDE (estado final / entregado)
     if (allFirm) {
       const tooltip = `${a.name} · 100% · ENTREGADO Y FIRMADO`;
       return `<div title="${tooltip}" style="display:flex;flex-direction:column;align-items:center;width:74px;padding:6px 4px;border-radius:4px">
         <div style="font-size:9px;font-weight:700;color:var(--mute);letter-spacing:.3px;margin-bottom:4px">${aptoNombre}</div>
-        <div style="width:30px;height:30px;background:var(--red-dark);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;font-weight:700;box-shadow:0 1px 2px rgba(0,0,0,.08)">✓</div>
+        <div style="width:30px;height:30px;background:var(--green-dark);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;font-weight:700;box-shadow:0 1px 2px rgba(0,0,0,.08)">✓</div>
       </div>`;
     }
 
@@ -7797,7 +7798,7 @@ window.renderAvanceFisicoCuadritos = function(){
           <div><strong style="color:var(--ink);font-weight:700">MASILLA COMPLETA</strong></div>
         </div>
         <div style="display:flex;align-items:center;gap:12px">
-          <div style="width:30px;height:30px;background:var(--red-dark);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;flex-shrink:0;box-shadow:0 1px 2px rgba(0,0,0,.08);font-weight:700">✓</div>
+          <div style="width:30px;height:30px;background:var(--green-dark);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;flex-shrink:0;box-shadow:0 1px 2px rgba(0,0,0,.08);font-weight:700">✓</div>
           <div><strong style="color:var(--ink);font-weight:700">ACUSE ENTREGADO Y FIRMADO</strong></div>
         </div>
       </div>
@@ -8563,9 +8564,11 @@ async function openCameraModal(etapaIdx, slotIdx){
             <strong>IMPORTANTE:</strong> LAS DOS FOTOS DE LA ETAPA DEBEN SER DE <strong>ÁREAS DIFERENTES</strong> DEL APARTAMENTO.
           </div>
           <div id="cameraVideoBox" style="position:relative;background:#000;border-radius:6px;overflow:hidden;aspect-ratio:4/3;max-width:100%">
-            <video id="cameraVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;display:block"></video>
+            <video id="cameraVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;display:block;transition:transform .15s"></video>
             <canvas id="cameraCanvas" style="display:none"></canvas>
             <img id="cameraPreview" style="display:none;width:100%;height:100%;object-fit:cover">
+            <!-- Botones de zoom flotantes sobre el video -->
+            <div id="cameraZoomBar" style="position:absolute;left:50%;bottom:10px;transform:translateX(-50%);display:none;gap:6px;background:rgba(0,0,0,.55);padding:5px 8px;border-radius:24px;backdrop-filter:blur(6px);z-index:2"></div>
           </div>
           <div id="cameraActions" style="display:flex;gap:8px;justify-content:center;margin-top:14px">
             <button id="cameraTakeBtn" class="btn" onclick="captureCameraPhoto()">TOMAR FOTO</button>
@@ -8593,11 +8596,124 @@ async function openCameraModal(etapaIdx, slotIdx){
       video.srcObject = stream;
       await video.play().catch(()=>{});
     }
+    // Una vez arrancada la cámara, configurar la barra de zoom (hardware o digital)
+    try { _setupCameraZoom(); } catch(e) { console.warn('Zoom setup falló:', e); }
   } catch(err) {
     console.error('No se pudo acceder a la cámara:', err);
     closeCameraModal();
     showToast('NO SE PUDO ABRIR LA CÁMARA: ' + (err.message || err.name), 'red');
   }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   ZOOM DE LA CÁMARA — HARDWARE (mediaTrack) + DIGITAL (CSS fallback)
+   ────────────────────────────────────────────────────────────────
+   - Si el video track expone capability "zoom" (Chrome Android,
+     Samsung Internet) usamos applyConstraints() con el valor real.
+     Esto activa la lente ultra-wide del teléfono cuando el zoom
+     baja a < 1.
+   - Si el track NO expone zoom (iOS Safari, navegadores desktop),
+     hacemos zoom DIGITAL aplicando transform: scale() al <video>
+     y rebajando al canvas en captura, así el resultado capturado
+     refleja el zoom visual.
+   - Niveles: 0.5x, 1x, 2x, 3x, 5x. Deshabilitamos los que estén
+     fuera del rango soportado por el dispositivo.
+   ═══════════════════════════════════════════════════════════════ */
+const _CAM_ZOOM_LEVELS = [0.5, 1, 2, 3, 5];
+let _camZoom = { value: 1, hardware: false, min: 1, max: 1, step: 0.1, digital: 1 };
+
+function _setupCameraZoom(){
+  const bar = document.getElementById('cameraZoomBar');
+  const video = document.getElementById('cameraVideo');
+  if (!bar || !video) return;
+
+  // Resetear estado
+  _camZoom = { value: 1, hardware: false, min: 1, max: 1, step: 0.1, digital: 1 };
+  if (video) video.style.transform = 'scale(1)';
+
+  // Detectar capacidades del track
+  const stream = _cameraModalState.stream;
+  const track = stream && stream.getVideoTracks ? stream.getVideoTracks()[0] : null;
+  if (track && typeof track.getCapabilities === 'function') {
+    const caps = track.getCapabilities();
+    if (caps && caps.zoom) {
+      _camZoom.hardware = true;
+      _camZoom.min = caps.zoom.min || 1;
+      _camZoom.max = caps.zoom.max || 1;
+      _camZoom.step = caps.zoom.step || 0.1;
+      const settings = (typeof track.getSettings === 'function') ? track.getSettings() : {};
+      _camZoom.value = settings.zoom || 1;
+    }
+  }
+  if (!_camZoom.hardware) {
+    // Sin hardware zoom: usamos zoom digital con CSS transform.
+    // Min razonable: 1 (no podemos "des-zoomear" digitalmente porque
+    // el feed no captura más píxeles allá del frame). Max: 5x.
+    _camZoom.min = 1;
+    _camZoom.max = 5;
+  }
+
+  // Render de los botones disponibles
+  bar.innerHTML = '';
+  _CAM_ZOOM_LEVELS.forEach(lv => {
+    if (lv < _camZoom.min - 0.05 || lv > _camZoom.max + 0.05) return; // fuera de rango
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.zoom = String(lv);
+    b.textContent = (lv === Math.floor(lv) ? `${lv}x` : `${lv.toFixed(2).replace(/0$/,'')}x`);
+    b.style.cssText = `
+      background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);
+      color:#fff;font-family:'Inter',sans-serif;font-size:11px;font-weight:700;
+      letter-spacing:.5px;padding:6px 10px;border-radius:14px;cursor:pointer;
+      transition:all .15s;min-width:42px
+    `;
+    b.onclick = () => _applyCameraZoom(lv);
+    bar.appendChild(b);
+  });
+  if (bar.children.length > 1) bar.style.display = 'flex';
+  _highlightZoomButton(1);
+}
+
+async function _applyCameraZoom(target){
+  const video = document.getElementById('cameraVideo');
+  if (!video) return;
+  if (_camZoom.hardware) {
+    // Zoom de hardware vía track
+    const stream = _cameraModalState.stream;
+    const track = stream && stream.getVideoTracks ? stream.getVideoTracks()[0] : null;
+    if (track) {
+      const clamped = Math.max(_camZoom.min, Math.min(_camZoom.max, target));
+      try {
+        await track.applyConstraints({ advanced: [{ zoom: clamped }] });
+        _camZoom.value = clamped;
+        // Si hay zoom hardware, NO aplicamos transform CSS al video.
+        video.style.transform = 'scale(1)';
+        _camZoom.digital = 1;
+      } catch(e) {
+        console.warn('No se pudo aplicar zoom hardware', e);
+      }
+    }
+  } else {
+    // Zoom digital: aplicamos scale() al video. Origen central.
+    const clamped = Math.max(_camZoom.min, Math.min(_camZoom.max, target));
+    video.style.transformOrigin = 'center center';
+    video.style.transform = `scale(${clamped})`;
+    _camZoom.value = clamped;
+    _camZoom.digital = clamped;
+  }
+  _highlightZoomButton(target);
+}
+
+function _highlightZoomButton(active){
+  const bar = document.getElementById('cameraZoomBar');
+  if (!bar) return;
+  Array.from(bar.children).forEach(b => {
+    const v = parseFloat(b.dataset.zoom || '1');
+    const isActive = Math.abs(v - active) < 0.01;
+    b.style.background = isActive ? '#fff' : 'rgba(255,255,255,.15)';
+    b.style.color = isActive ? '#000' : '#fff';
+    b.style.borderColor = isActive ? '#fff' : 'rgba(255,255,255,.25)';
+  });
 }
 
 /* POLÍTICA DEL PROYECTO: TODA foto subida debe ser VERTICAL (portrait).
@@ -8647,22 +8763,38 @@ window.captureCameraPhoto = function(){
   if (!video || !canvas) return;
   let w = video.videoWidth || 1280;
   let h = video.videoHeight || 960;
+
+  // ZOOM DIGITAL: si el track no soporta zoom hardware, recortamos el
+  // canvas según el factor digital actual para que la foto guardada
+  // refleje el "zoom in" que el usuario ve en pantalla.
+  const dz = (_camZoom && !_camZoom.hardware) ? Math.max(1, _camZoom.digital || 1) : 1;
+  // Si el zoom es 1 → captura completa. Si es >1 → recortamos centrado.
+  let srcX = 0, srcY = 0, srcW = w, srcH = h;
+  if (dz > 1) {
+    srcW = Math.round(w / dz);
+    srcH = Math.round(h / dz);
+    srcX = Math.round((w - srcW) / 2);
+    srcY = Math.round((h - srcH) / 2);
+  }
+
   // FORZAR VERTICAL: si el video viene horizontal (cámara web/desktop),
   // rotamos al capturar para que la foto guardada sea portrait.
   const isLandscape = w > h;
   if (isLandscape) {
-    // Canvas con dimensiones giradas
-    canvas.width = h;
-    canvas.height = w;
+    // Canvas con dimensiones giradas (usamos el alto/ancho ya recortado)
+    canvas.width = srcH;
+    canvas.height = srcW;
     const ctx = canvas.getContext('2d');
     ctx.imageSmoothingQuality = 'high';
     ctx.translate(canvas.width, 0);
     ctx.rotate(Math.PI / 2);
-    ctx.drawImage(video, 0, 0, w, h);
+    ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
   } else {
-    canvas.width = w;
-    canvas.height = h;
-    canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+    canvas.width = srcW;
+    canvas.height = srcH;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
   }
   canvas.toBlob(blob => {
     if (!blob) return showToast('ERROR AL CAPTURAR', 'red');
@@ -9807,9 +9939,11 @@ async function openCameraForAcuse(towerId, levelId, aptoId, slotKey, photoIdx){
             <strong>IMPORTANTE:</strong> LAS DOS FOTOS DEBEN SER DE <strong>ÁREAS DIFERENTES</strong> DE LA ENTREGA.
           </div>
           <div id="cameraVideoBox" style="position:relative;background:#000;border-radius:6px;overflow:hidden;aspect-ratio:4/3;max-width:100%">
-            <video id="cameraVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;display:block"></video>
+            <video id="cameraVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;display:block;transition:transform .15s"></video>
             <canvas id="cameraCanvas" style="display:none"></canvas>
             <img id="cameraPreview" style="display:none;width:100%;height:100%;object-fit:cover">
+            <!-- Botones de zoom flotantes sobre el video -->
+            <div id="cameraZoomBar" style="position:absolute;left:50%;bottom:10px;transform:translateX(-50%);display:none;gap:6px;background:rgba(0,0,0,.55);padding:5px 8px;border-radius:24px;backdrop-filter:blur(6px);z-index:2"></div>
           </div>
           <div id="cameraActions" style="display:flex;gap:8px;justify-content:center;margin-top:14px">
             <button id="cameraTakeBtn" class="btn" onclick="captureCameraPhoto()">TOMAR FOTO</button>
@@ -9836,6 +9970,7 @@ async function openCameraForAcuse(towerId, levelId, aptoId, slotKey, photoIdx){
       video.srcObject = stream;
       await video.play().catch(()=>{});
     }
+    try { _setupCameraZoom(); } catch(e) { console.warn('Zoom setup falló:', e); }
   } catch(err) {
     console.error('No se pudo acceder a la cámara:', err);
     closeCameraModal();
@@ -16182,7 +16317,7 @@ function deleteCurrentProveedor(){
             <div><strong style="color:var(--ink);font-weight:700">75%</strong> · COBRADO</div>
           </div>
           <div style="display:flex;align-items:center;gap:12px">
-            <div style="width:30px;height:30px;background:var(--red-dark);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;flex-shrink:0;box-shadow:0 1px 2px rgba(0,0,0,.08);font-weight:700">✓</div>
+            <div style="width:30px;height:30px;background:var(--green-dark);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;flex-shrink:0;box-shadow:0 1px 2px rgba(0,0,0,.08);font-weight:700">✓</div>
             <div><strong style="color:var(--ink);font-weight:700">100%</strong> · COBRADO</div>
           </div>
         </div>
@@ -16314,11 +16449,11 @@ function deleteCurrentProveedor(){
     const etapa = _etapaObraDeApto(cumul);
     const aptoNombre = apto.name.replace(/^APARTAMENTO\s+/i, '').replace(/^APTO\s+/i, '').toUpperCase();
 
-    // 100% → círculo verde con check (solo lectura, no clickable)
+    // 100% → círculo VERDE con check (estado final / cobrado)
     if (isComplete) {
       return `<div title="${apto.name} · 100% COBRADO · ${etapa}" style="display:flex;flex-direction:column;align-items:center;width:74px;padding:6px 4px;border-radius:4px">
         <div style="font-size:9px;font-weight:700;color:var(--mute);letter-spacing:.3px;margin-bottom:4px">${aptoNombre}</div>
-        <div style="width:30px;height:30px;background:var(--red-dark);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;font-weight:700;box-shadow:0 1px 2px rgba(0,0,0,.08)">✓</div>
+        <div style="width:30px;height:30px;background:var(--green-dark);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;font-weight:700;box-shadow:0 1px 2px rgba(0,0,0,.08)">✓</div>
       </div>`;
     }
 
@@ -18604,7 +18739,7 @@ function deleteCurrentProveedor(){
           <div style="display:flex;align-items:center;gap:10px"><div style="width:14px;height:14px;background:#e8e4dc;border-radius:1px;flex-shrink:0"></div><div><strong style="color:var(--ink)">SIN PAGO</strong> · ETAPA NO INICIADA</div></div>
           <div style="display:flex;align-items:center;gap:10px"><div style="width:14px;height:14px;background:#FCD34D;border-radius:1px;flex-shrink:0"></div><div><strong style="color:var(--ink)">PENDIENTE</strong> · PAGO GENERADO, FALTA AUTORIZAR</div></div>
           <div style="display:flex;align-items:center;gap:10px"><div style="width:14px;height:14px;background:#5a8bb8;border-radius:1px;flex-shrink:0"></div><div><strong style="color:var(--ink)">SIN ACUSE</strong> · PAGADO PERO FALTA FIRMA DEL CLIENTE</div></div>
-          <div style="display:flex;align-items:center;gap:10px"><div style="width:14px;height:14px;background:var(--red-dark);border-radius:1px;flex-shrink:0"></div><div><strong style="color:var(--ink)">AUTORIZADO</strong> · PAGADO + ACUSE FIRMADO</div></div>
+          <div style="display:flex;align-items:center;gap:10px"><div style="width:14px;height:14px;background:var(--green-dark);border-radius:1px;flex-shrink:0"></div><div><strong style="color:var(--ink)">AUTORIZADO</strong> · PAGADO + ACUSE FIRMADO</div></div>
           <div style="display:flex;align-items:center;gap:10px"><div style="width:30px;height:30px;background:#1e6b1e;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;flex-shrink:0">✓</div><div><strong style="color:var(--ink)">100%</strong> · APTO COMPLETAMENTE PAGADO Y FIRMADO</div></div>
         </div>
       </div>
