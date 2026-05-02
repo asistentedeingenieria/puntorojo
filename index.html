@@ -18182,6 +18182,51 @@ function makeReceptorSecret(){
   return Array.from(arr).map(b => b.toString(36)).join('').toUpperCase().slice(0,24);
 }
 
+/* ════════ SINCRONIZACIÓN PORTAL CLIENTE ════════
+   Lee la colección Firestore 'clientRegistrations' donde los clientes registran
+   sus credenciales cuando canjean un código de invitación. Aplica los registros
+   pendientes al state.receptores marcando inviteCodeUsed=true y guardando el
+   email + uid del cliente que se registró.
+
+   La colección 'clientRegistrations' tiene un doc por uid de Firebase Auth:
+     clientRegistrations/{uid}: { receptorId, inviteCode, email, createdAt, applied }
+
+   Esta función se llama automáticamente:
+     - Después de login (en finalizeLoginAfterAuth)
+     - Al abrir el modal de Receptores
+   No bloquea la UI — corre en background. */
+async function syncClientRegistrations(){
+  if (!can('receptores.manage') && !can('users.manage')) return;
+  if (typeof firebase === 'undefined' || !firebase.firestore) return;
+  try {
+    const snap = await firebase.firestore().collection('clientRegistrations').where('applied','==',false).get();
+    if (snap.empty) return;
+    let aplicados = 0;
+    snap.forEach(doc => {
+      const reg = doc.data();
+      if (!reg || !reg.receptorId) return;
+      const r = (state.receptores || []).find(x => x.id === reg.receptorId);
+      if (!r) return;
+      // Aplicar al state
+      r.inviteCodeUsed = true;
+      r.clientLoginEmail = reg.email || '';
+      r.clientLoginUid = doc.id;
+      r.clientRegisteredAt = reg.createdAt && reg.createdAt.toMillis ? reg.createdAt.toMillis() : Date.now();
+      // Marcar el registro como aplicado en Firestore
+      doc.ref.update({ applied: true, appliedAt: firebase.firestore.FieldValue.serverTimestamp() }).catch(()=>{});
+      aplicados++;
+      logActivity('update', 'Cliente activado en portal: ' + (r.nombre || ''), reg.email);
+    });
+    if (aplicados > 0) {
+      saveState();
+      try { renderReceptoresList(); } catch(e){}
+      showToast(`${aplicados} cliente${aplicados !== 1 ? 's' : ''} activado${aplicados !== 1 ? 's' : ''} en portal`, 'green');
+    }
+  } catch(e) {
+    console.warn('syncClientRegistrations:', e && e.message);
+  }
+}
+
 /* Genera un código de invitación CORTO y FÁCIL DE LEER para que el receptor se
    registre en el portal cliente (clientes.puntorojo.app). Ejemplo: "PR-X7K9-MQ4P".
    - 8 caracteres, agrupados en bloques de 4
@@ -18286,6 +18331,8 @@ function openReceptoresModal(){
   if (!can('receptores.manage') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
   renderReceptoresList();
   document.getElementById('modalReceptores').classList.add('show');
+  // Sincronizar registros pendientes del portal cliente (corre en background)
+  setTimeout(() => syncClientRegistrations().catch(()=>{}), 100);
 }
 
 function renderReceptoresList(){
@@ -19633,6 +19680,8 @@ function applyAuthSession(fbUser, profileData){
     }
   } catch(e){}
   refreshUsersCache().catch(()=>{});
+  // Sincronizar registros del portal cliente (background, no bloquea login)
+  setTimeout(() => { try { syncClientRegistrations().catch(()=>{}); } catch(e){} }, 2000);
   renderAll();
   applyPermissions();
   updateActivityBadge();

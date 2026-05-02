@@ -32,9 +32,20 @@ const FIREBASE_CONFIG = {
   messagingSenderId: "1030321339912",
   appId: "1:1030321339912:web:38259c3135c9a2700a5bbd"
 };
+
+/* IMPORTANTE: usamos un app NOMBRADO ('clientesPortal') aparte del default.
+   Esto AISLA la sesión de Firebase Auth del portal cliente respecto a la
+   app interna (puntorojo.html). Sin esto, hacer login en el portal cliente
+   pisaba la sesión de admin/supervisor en la app interna. */
+const CLIENTES_APP_NAME = 'clientesPortal';
+let _clientesApp, _clientesAuth, _clientesDb;
 try {
-  firebase.initializeApp(FIREBASE_CONFIG);
-  firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
+  // Si ya existe (recarga rápida), reutilizamos. Si no, inicializamos.
+  try { _clientesApp = firebase.app(CLIENTES_APP_NAME); }
+  catch(e) { _clientesApp = firebase.initializeApp(FIREBASE_CONFIG, CLIENTES_APP_NAME); }
+  _clientesAuth = _clientesApp.auth();
+  _clientesDb = _clientesApp.firestore();
+  _clientesAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
 } catch(e) { console.error('Firebase init error:', e); }
 </script>
 
@@ -793,7 +804,7 @@ async function doLogin(){
   if (!email || !password) { setError('loginError', 'Completá email y contraseña'); return; }
   try {
     showToast('Iniciando sesión...', '');
-    await firebase.auth().signInWithEmailAndPassword(email, password);
+    await _clientesAuth.signInWithEmailAndPassword(email, password);
     // El onAuthStateChanged se encarga del resto
   } catch(e) {
     console.error('Login error:', e);
@@ -823,21 +834,21 @@ async function doRegister(){
 
   showToast('Validando código...', '');
 
-  // 1. Cargar state desde Firestore (modo lectura)
+  let cred = null;
   try {
-    const snap = await firebase.firestore().collection('appState').doc('main').get();
+    // 1. Validar el código leyendo el state (lectura pública/auth)
+    const snap = await _clientesDb.collection('appState').doc('main').get();
     if (!snap.exists) return setError('registerError', 'No se pudo cargar la base de datos. Intentá de nuevo.');
     const remoteState = snap.data();
     const receptores = remoteState.receptores || [];
     const r = receptores.find(x => !x.deleted && x.inviteCode && x.inviteCode.toUpperCase() === code);
-    if (!r) return setError('registerError', 'Código inválido o ya canjeado. Pedile a Punto Rojo que te genere uno nuevo.');
+    if (!r) return setError('registerError', 'Código inválido. Pedile a Punto Rojo que te genere uno nuevo.');
     if (r.inviteCodeUsed) return setError('registerError', 'Este código ya fue usado. Pedile a Punto Rojo que te genere uno nuevo.');
 
-    // 2. Crear cuenta en Firebase Auth
+    // 2. Crear cuenta en Firebase Auth (en el app aislado)
     showToast('Creando cuenta...', '');
-    let cred;
     try {
-      cred = await firebase.auth().createUserWithEmailAndPassword(email, password);
+      cred = await _clientesAuth.createUserWithEmailAndPassword(email, password);
     } catch(e) {
       console.error('Register error:', e);
       let msg = 'Error al crear la cuenta';
@@ -847,27 +858,34 @@ async function doRegister(){
       return setError('registerError', msg);
     }
 
-    // 3. Marcar el receptor como canjeado en el state
+    // 3. Escribir registro a clientRegistrations/{uid}.
+    //    Esta colección tiene reglas que permiten al usuario escribir SOLO
+    //    su propio doc (request.auth.uid == uid). El admin la sincroniza
+    //    a state.receptores cuando entra a la app interna.
     showToast('Vinculando cuenta...', '');
-    const idx = receptores.findIndex(x => x.id === r.id);
-    if (idx >= 0) {
-      receptores[idx].inviteCodeUsed = true;
-      receptores[idx].clientLoginEmail = email;
-      receptores[idx].clientLoginUid = cred.user.uid;
-      receptores[idx].clientRegisteredAt = Date.now();
-      await firebase.firestore().collection('appState').doc('main').set(
-        { receptores: receptores },
-        { merge: true }
-      );
+    try {
+      await _clientesDb.collection('clientRegistrations').doc(cred.user.uid).set({
+        receptorId: r.id,
+        inviteCode: code,
+        email: email,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        applied: false  // el admin lo marca true cuando lo sincroniza al state
+      });
+    } catch(eRules) {
+      console.error('clientRegistrations write failed:', eRules);
+      // Rollback: borrar el usuario de auth para que pueda reintentar
+      try { await cred.user.delete(); } catch(e2){}
+      return setError('registerError', 'Error de permisos al registrar. Avisale al admin para que actualice las reglas de Firestore. (' + (eRules.message || eRules.code) + ')');
     }
 
-    // 4. Mostrar éxito y forzar entrada a la app principal
+    // 4. Mostrar éxito. El onAuthStateChanged ya está activo y va a cargar el portal.
     const success = document.getElementById('registerSuccess');
     success.textContent = '✓ Cuenta creada con éxito. Cargando portal...';
     success.classList.add('show');
-    // El onAuthStateChanged va a tomar el control y mostrar la app
   } catch(e) {
     console.error(e);
+    // Rollback si creamos el usuario antes del error
+    if (cred && cred.user) { try { await cred.user.delete(); } catch(e2){} }
     setError('registerError', 'Error inesperado: ' + (e.message || e.code || 'desconocido'));
   }
 }
@@ -879,16 +897,35 @@ async function doLogout(){
     state = null;
     currentReceptor = null;
     activeProjectId = null;
-    await firebase.auth().signOut();
+    await _clientesAuth.signOut();
     showLogin();
     showToast('Sesión cerrada', '');
   } catch(e) { console.error(e); }
 }
 
+/* clientReg cache: guarda el doc clientRegistrations/{uid} para no leerlo
+   cada vez que cambia el state. Se setea en loadStateAndStart. */
+let _clientRegistration = null;
+
 // ── CARGA DE STATE ──
-function loadStateAndStart(){
-  const ref = firebase.firestore().collection('appState').doc('main');
-  // Listener en tiempo real
+async function loadStateAndStart(){
+  if (!currentUser) return;
+
+  // 1. Leer clientRegistrations/{uid} para saber a qué receptor estoy vinculado
+  try {
+    const regSnap = await _clientesDb.collection('clientRegistrations').doc(currentUser.uid).get();
+    if (regSnap.exists) {
+      _clientRegistration = regSnap.data();
+    } else {
+      _clientRegistration = null;
+    }
+  } catch(e) {
+    console.error('clientRegistrations read failed:', e);
+    _clientRegistration = null;
+  }
+
+  // 2. Listener en tiempo real al state principal (lectura)
+  const ref = _clientesDb.collection('appState').doc('main');
   _stateUnsubscribe = ref.onSnapshot(
     (snap) => {
       if (!snap.exists) {
@@ -907,10 +944,19 @@ function loadStateAndStart(){
 
 function onStateLoaded(){
   if (!currentUser || !state) return;
-  // Buscar receptor por email
-  const email = (currentUser.email || '').toLowerCase();
   const receptores = state.receptores || [];
-  currentReceptor = receptores.find(r => !r.deleted && r.clientLoginEmail && r.clientLoginEmail.toLowerCase() === email);
+  const email = (currentUser.email || '').toLowerCase();
+
+  // Buscar receptor por DOS rutas, en orden:
+  //   1. clientRegistrations/{uid} → receptorId (más confiable, recién registrado)
+  //   2. state.receptores[].clientLoginEmail === email (después que admin sincronice)
+  currentReceptor = null;
+  if (_clientRegistration && _clientRegistration.receptorId) {
+    currentReceptor = receptores.find(r => !r.deleted && r.id === _clientRegistration.receptorId) || null;
+  }
+  if (!currentReceptor) {
+    currentReceptor = receptores.find(r => !r.deleted && r.clientLoginEmail && r.clientLoginEmail.toLowerCase() === email) || null;
+  }
 
   if (!currentReceptor) {
     // Caso: usuario logueado en Firebase pero sin receptor vinculado
@@ -1333,8 +1379,8 @@ window.descargarAcusePDF = async function(){
   }
 };
 
-// ── AUTH STATE LISTENER ──
-firebase.auth().onAuthStateChanged((user) => {
+// ── AUTH STATE LISTENER (en app aislado, no toca la sesión de la app interna) ──
+_clientesAuth.onAuthStateChanged((user) => {
   currentUser = user;
   if (user) {
     showToast('Sesión activa: ' + user.email, 'green');
