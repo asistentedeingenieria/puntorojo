@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v130-fotos-reales-de-puntorojo-com-gt';
+const CACHE_VERSION = 'v131-fix-pantalla-login-cliente-tambien-fotos-reales';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
