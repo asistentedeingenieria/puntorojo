@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v132-fondo-slider-hero-puntorojo-com-gt';
+const CACHE_VERSION = 'v133-fix-pantalla-registro-cliente-tambien-slider';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
