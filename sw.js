@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v155-firmar-desde-portal-video-bienvenida';
+const CACHE_VERSION = 'v156-splash-imagenes-locales-kebab-cliente';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
@@ -19,7 +19,11 @@ const CORE_ASSETS = [
   './bienvenida.html',
   './manifest.json',
   './logo.png',
-  './icon.svg'
+  './icon.svg',
+  './assets/hero-8.jpg',
+  './assets/hero-9.jpg',
+  './assets/hero-10.jpg',
+  './assets/hero-11.jpg'
 ];
 
 // ── INSTALL: pre-cachear los archivos básicos ──
