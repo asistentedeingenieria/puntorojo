@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v153-receptor-portal-mi-qr-firma-obligatoria';
+const CACHE_VERSION = 'v154-tour-bienvenida-inbox-admin-contacto';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

@@ -340,6 +340,52 @@ main { padding: 16px 22px 36px; max-width: 1100px; margin: 0 auto; }
 }
 .auth-toggle a:hover { text-decoration: underline; }
 
+/* ════════ TOUR DE BIENVENIDA ════════ */
+.pr-tour-overlay{
+  position:fixed;inset:0;z-index:9999;display:none;
+  background:rgba(15,23,42,.78);backdrop-filter:blur(4px);
+  align-items:center;justify-content:center;padding:24px;
+}
+.pr-tour-overlay.show{display:flex}
+.pr-tour-card{
+  background:var(--white);max-width:480px;width:100%;
+  border-radius:14px;overflow:hidden;
+  box-shadow:0 20px 60px rgba(0,0,0,.5);
+  border:1px solid var(--line);
+}
+.pr-tour-hero{
+  padding:36px 28px 26px;text-align:center;
+  background:linear-gradient(135deg,var(--red) 0%,var(--red-dark) 100%);color:#fff;
+  position:relative;
+}
+.pr-tour-hero img{width:64px;height:64px;margin-bottom:14px;filter:drop-shadow(0 4px 14px rgba(0,0,0,.3))}
+.pr-tour-step-num{
+  position:absolute;top:12px;right:14px;
+  font-size:9px;letter-spacing:1.5px;font-weight:800;
+  background:rgba(255,255,255,.2);padding:4px 10px;border-radius:12px;
+}
+.pr-tour-title{font-size:22px;font-weight:800;letter-spacing:-.3px;line-height:1.2;margin-bottom:4px}
+.pr-tour-subtitle{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;font-weight:600;opacity:.9}
+.pr-tour-body{padding:24px 28px;color:var(--text);font-size:13.5px;line-height:1.6;letter-spacing:.2px}
+.pr-tour-body strong{color:var(--ink)}
+.pr-tour-actions{display:flex;gap:8px;align-items:center;padding:14px 22px 22px;background:var(--cream);border-top:1px solid var(--line)}
+.pr-tour-dots{display:flex;gap:5px;flex:1}
+.pr-tour-dots .dot{width:7px;height:7px;border-radius:50%;background:var(--line);transition:all .2s}
+.pr-tour-dots .dot.active{background:var(--red);transform:scale(1.3)}
+.pr-tour-dots .dot.done{background:var(--mute-light)}
+.pr-tour-actions .btn-skip{background:none;border:none;color:var(--mute);font-size:10px;letter-spacing:1.4px;text-transform:uppercase;font-weight:700;cursor:pointer;padding:8px}
+.pr-tour-actions .btn-next{background:var(--red);color:#fff;border:none;padding:11px 22px;border-radius:8px;font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;cursor:pointer}
+.pr-tour-actions .btn-next:hover{background:var(--red-dark)}
+body.pr-dark .pr-tour-card{background:#23201D;border-color:#3A332A}
+body.pr-dark .pr-tour-actions{background:#1F1C1A;border-top-color:#3A332A}
+body.pr-dark .pr-tour-body{color:#EDE5D5}
+body.pr-dark .pr-tour-body strong{color:#FFFFFF}
+@media (max-width:480px){
+  .pr-tour-hero{padding:28px 22px 22px}
+  .pr-tour-title{font-size:19px}
+  .pr-tour-body{padding:20px 22px;font-size:13px}
+}
+
 /* ════════ TABS INTERNOS DEL MODAL DE FIRMA ════════ */
 .firma-tab{
   flex:1;background:none;border:none;padding:10px 14px;
@@ -1013,6 +1059,24 @@ table{max-width:100%}
 </div>
 
 <!-- ════════ MODAL: CAMBIAR CONTRASEÑA ════════ -->
+<!-- ════════ TOUR DE BIENVENIDA DEL PORTAL CLIENTE ════════ -->
+<div id="prTourOverlay" class="pr-tour-overlay">
+  <div class="pr-tour-card">
+    <div class="pr-tour-hero">
+      <span class="pr-tour-step-num" id="prTourStepNum">1 / 4</span>
+      <img src="logo.png" alt="Punto Rojo">
+      <div class="pr-tour-title" id="prTourTitle">¡Bienvenido!</div>
+      <div class="pr-tour-subtitle" id="prTourSubtitle">Tour del portal</div>
+    </div>
+    <div class="pr-tour-body" id="prTourBody"></div>
+    <div class="pr-tour-actions">
+      <button class="btn-skip" onclick="prTourSkip()">SALTAR</button>
+      <div class="pr-tour-dots" id="prTourDots"></div>
+      <button class="btn-next" id="prTourNextBtn" onclick="prTourNext()">SIGUIENTE</button>
+    </div>
+  </div>
+</div>
+
 <!-- ════════ MODAL: FIRMA DIGITAL OBLIGATORIA ════════
      Aparece al primer login del receptor si no tiene firma registrada.
      No se puede cerrar sin haberla cargado/dibujado. -->
@@ -1639,6 +1703,9 @@ function onStateLoaded(){
   // Si no tiene firma digital → mostrar modal obligatorio
   try { checkFirmaDigital(); } catch(e) { console.warn('checkFirmaDigital:', e); }
 
+  // Tour de bienvenida (solo primer login)
+  try { _maybeStartTourClient(); } catch(e) { console.warn('Tour:', e); }
+
   // Filtrar proyectos asignados
   const assignedIds = new Set((currentReceptor.assignedProjectIds || []).map(String));
   const projects = (state.projects || []).filter(p => !p.archived && assignedIds.has(p.id));
@@ -1724,6 +1791,91 @@ window.setClientTab = function(tab){
   if (tab === 'miqr') startMiQrRotating();
   else stopMiQrRotating();
 };
+
+/* ════════════════════════════════════════════════════════════════
+   TOUR DE BIENVENIDA · onboarding del cliente/receptor
+   Se muestra al primer login. Solo se ve UNA vez (localStorage).
+   Tiene una versión para clientes (PM) y otra para receptores. */
+const TOUR_STEPS_CLIENTE = [
+  { title:'¡Bienvenido!', subtitle:'PORTAL CLIENTE · PUNTO ROJO',
+    body:'<p>Acá vas a ver el avance de la obra de tablayeso que Punto Rojo está haciendo en tu proyecto.</p><p style="margin-top:10px">Te muestro lo principal en 30 segundos.</p>' },
+  { title:'Acuses de Recepción', subtitle:'CADA ENTREGA QUEDA REGISTRADA',
+    body:'<p>En la pestaña <strong>ACUSES DE RECEPCIÓN</strong> ves todos los apartamentos del proyecto. Cada apto tiene 6 etapas (Trazo, Tabique, Refuerzos, Forro 2da Cara, Cielos, Masilla).</p><p style="margin-top:10px">Cuando un acuse se firma, podés ver las <strong>fotos de la entrega + firma del receptor</strong>.</p>' },
+  { title:'Reportes Semanales', subtitle:'CADA VIERNES, AUTOMÁTICO',
+    body:'<p>En <strong>REPORTES SEMANALES</strong> aparece un PDF cada viernes con el avance fotográfico de la semana.</p><p style="margin-top:10px">Lo podés ver online o descargarlo a tu computadora/celular.</p>' },
+  { title:'Cualquier duda', subtitle:'TENÉS UNA OPCIÓN DE CONTACTO',
+    body:'<p>Arriba a la derecha tenés el botón <strong>CONTACTO</strong>: si tenés algún problema o consulta, escribí lo que pasó y le llega directo al administrador.</p><p style="margin-top:10px">También podés cambiar al modo <strong>OSCURO</strong> con el botón TEMA.</p>' }
+];
+const TOUR_STEPS_RECEPTOR = [
+  { title:'¡Bienvenido!', subtitle:'PORTAL DEL RECEPTOR',
+    body:'<p>Sos receptor del cliente — vas a recibir y firmar los apartamentos que Punto Rojo entregue.</p><p style="margin-top:10px">Te muestro las funciones principales.</p>' },
+  { title:'Tu firma digital', subtitle:'OBLIGATORIA · UNA SOLA VEZ',
+    body:'<p>Si todavía no la cargaste, te aparece la pantalla de <strong>firma digital</strong> obligatoria. Podés <strong>dibujarla con el dedo</strong> o subir una foto.</p><p style="margin-top:10px">Después se reutiliza automáticamente cada vez que firmes un acuse — no la tenés que volver a hacer.</p>' },
+  { title:'Mi QR', subtitle:'PARA QUE EL SUPERVISOR TE ESCANEE',
+    body:'<p>En la pestaña <strong>MI QR</strong> ves un código QR que cambia cada 10 segundos.</p><p style="margin-top:10px">Cuando el supervisor de Punto Rojo te entregue un apartamento, le mostrás este QR — lo escanea y tu firma queda registrada al instante.</p>' },
+  { title:'Acuses y reportes', subtitle:'TODO LO QUE FIRMASTE',
+    body:'<p>En <strong>ACUSES DE RECEPCIÓN</strong> ves todos los apartamentos firmados (los tuyos, y todos si sos master).</p><p style="margin-top:10px">En <strong>REPORTES SEMANALES</strong> recibís cada viernes el resumen fotográfico de la obra.</p>' },
+  { title:'Listo', subtitle:'CUALQUIER PROBLEMA',
+    body:'<p>Arriba a la derecha tenés el botón <strong>CONTACTO</strong>. Si algo no anda o necesitás ayuda, escribinos por ahí.</p>' }
+];
+
+let _tourSteps = [];
+let _tourIdx = 0;
+
+function _tourKey(){
+  const u = _clientesAuth ? _clientesAuth.currentUser : null;
+  return 'pr_client_tour_v1_done_' + (u && u.uid ? u.uid : 'anon');
+}
+function _tourWasSeen(){ try { return localStorage.getItem(_tourKey()) === '1'; } catch(e){ return false; } }
+function _tourMarkSeen(){ try { localStorage.setItem(_tourKey(), '1'); } catch(e){} }
+
+window.startTour = function(forceShow){
+  // Steps según si es receptor o cliente
+  _tourSteps = currentReceptor ? TOUR_STEPS_RECEPTOR : TOUR_STEPS_CLIENTE;
+  if (!_tourSteps.length) return;
+  if (!forceShow && _tourWasSeen()) return;
+  _tourIdx = 0;
+  _renderTourStep();
+  document.getElementById('prTourOverlay').classList.add('show');
+};
+
+window.prTourNext = function(){
+  if (_tourIdx >= _tourSteps.length - 1) {
+    _tourMarkSeen();
+    document.getElementById('prTourOverlay').classList.remove('show');
+    return;
+  }
+  _tourIdx++;
+  _renderTourStep();
+};
+window.prTourSkip = function(){
+  _tourMarkSeen();
+  document.getElementById('prTourOverlay').classList.remove('show');
+};
+
+function _renderTourStep(){
+  const step = _tourSteps[_tourIdx];
+  if (!step) return;
+  document.getElementById('prTourStepNum').textContent = `${_tourIdx + 1} / ${_tourSteps.length}`;
+  document.getElementById('prTourTitle').textContent = step.title;
+  document.getElementById('prTourSubtitle').textContent = step.subtitle;
+  document.getElementById('prTourBody').innerHTML = step.body;
+  const dots = document.getElementById('prTourDots');
+  dots.innerHTML = _tourSteps.map((_, i) => {
+    const cls = i === _tourIdx ? 'active' : (i < _tourIdx ? 'done' : '');
+    return `<div class="dot ${cls}"></div>`;
+  }).join('');
+  document.getElementById('prTourNextBtn').textContent = (_tourIdx >= _tourSteps.length - 1) ? 'EMPEZAR' : 'SIGUIENTE';
+}
+
+function _maybeStartTourClient(){
+  // Mostrar tour si NO se vio antes — esperamos un poco para que la app termine de cargar
+  if (_tourWasSeen()) return;
+  // Si hay firma pendiente, no mostrar el tour (la firma toma prioridad)
+  if (currentReceptor && !currentReceptor.signatureImageUrl
+      && !(_clientRegistration && _clientRegistration.signatureImageUrl)) return;
+  setTimeout(() => { try { startTour(false); } catch(e){} }, 1400);
+}
 
 /* ════════════════════════════════════════════════════════════════
    MI QR — RECEPTOR muestra su QR ROTATIVO desde el portal
