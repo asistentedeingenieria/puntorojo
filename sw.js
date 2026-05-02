@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v145-rojo-puro-desplegables-cerrados-logo-sin-fondo';
+const CACHE_VERSION = 'v146-fotos-verticales-acuses-sin-texto-puntorojo';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

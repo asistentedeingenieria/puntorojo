@@ -8385,16 +8385,70 @@ async function openCameraModal(etapaIdx, slotIdx){
   }
 }
 
+/* POLÍTICA DEL PROYECTO: TODA foto subida debe ser VERTICAL (portrait).
+   Si la foto viene horizontal (landscape, width > height), se rota 90°
+   en sentido horario antes de guardarla. Esto garantiza que TODAS las
+   fotos en avance físico, acuses, etc. se vean uniformes en pantalla
+   y en los PDFs.
+   _forcePortraitBlob: convierte un blob/file a portrait (PNG no, siempre JPEG
+   para que pese menos). Si ya es portrait, lo deja igual y devuelve el mismo
+   blob (rápido). Si es landscape, rota 90° en canvas.
+   Devuelve un nuevo blob garantizado portrait. */
+async function _forcePortraitBlob(blob, quality = 0.85){
+  if (!blob) return blob;
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const w = img.naturalWidth || img.width;
+      const h = img.naturalHeight || img.height;
+      if (h >= w) {
+        // Ya es vertical o cuadrada — devolver tal cual
+        URL.revokeObjectURL(url);
+        return resolve(blob);
+      }
+      // Es horizontal — rotar 90° (sentido horario)
+      const canvas = document.createElement('canvas');
+      canvas.width = h;   // nuevo ancho = alto original
+      canvas.height = w;  // nuevo alto = ancho original
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingQuality = 'high';
+      // Para rotar 90° horario: trasladar al ancho nuevo y rotar PI/2
+      ctx.translate(canvas.width, 0);
+      ctx.rotate(Math.PI / 2);
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+      canvas.toBlob(b => resolve(b || blob), 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(blob); };
+    img.src = url;
+  });
+}
+
 window.captureCameraPhoto = function(){
   const video = document.getElementById('cameraVideo');
   const canvas = document.getElementById('cameraCanvas');
   const preview = document.getElementById('cameraPreview');
   if (!video || !canvas) return;
-  const w = video.videoWidth || 1280;
-  const h = video.videoHeight || 960;
-  canvas.width = w;
-  canvas.height = h;
-  canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+  let w = video.videoWidth || 1280;
+  let h = video.videoHeight || 960;
+  // FORZAR VERTICAL: si el video viene horizontal (cámara web/desktop),
+  // rotamos al capturar para que la foto guardada sea portrait.
+  const isLandscape = w > h;
+  if (isLandscape) {
+    // Canvas con dimensiones giradas
+    canvas.width = h;
+    canvas.height = w;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.translate(canvas.width, 0);
+    ctx.rotate(Math.PI / 2);
+    ctx.drawImage(video, 0, 0, w, h);
+  } else {
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+  }
   canvas.toBlob(blob => {
     if (!blob) return showToast('ERROR AL CAPTURAR', 'red');
     _cameraModalState.capturedBlob = blob;
@@ -8423,10 +8477,14 @@ window.retakeCameraPhoto = function(){
 };
 
 window.confirmCameraPhoto = async function(){
-  const blob = _cameraModalState.capturedBlob;
+  let blob = _cameraModalState.capturedBlob;
   if (!blob) return showToast('TOMÁ LA FOTO PRIMERO', 'red');
   const state = _cameraModalState;
   closeCameraModal();
+  // Defensa final: garantizar que el blob sea VERTICAL antes de subirlo,
+  // en caso de que captureCameraPhoto haya producido algo horizontal
+  // (p.ej. en algunos navegadores donde videoWidth/Height ya viene rotado).
+  blob = await _forcePortraitBlob(blob);
   if (state.mode === 'acuse') {
     await _uploadAcuseBlob(blob, state.towerId, state.levelId, state.aptoId, state.slotKey, state.photoIdx);
   } else {
@@ -13390,18 +13448,18 @@ async function generarAcusesMaestros(){
     const pageH = doc.internal.pageSize.height;
 
     // ═══════════ PORTADA ═══════════
+    // Política: el NOMBRE "PUNTO ROJO" NO aparece como texto en los acuses.
+    // En su lugar, el logo va arriba a la izquierda y el logo del proyecto
+    // (si existe) va a la derecha.
     doc.setFillColor(...ROJO);
     doc.rect(0, 0, pageW, 240, 'F');
 
+    // Logo Punto Rojo arriba a la izquierda (sin texto del nombre)
+    try {
+      doc.addImage(LOGO_DATA_URI, 'PNG', 50, 30, 90, 90, undefined, 'FAST');
+    } catch(e) { console.warn('No se pudo cargar logo en portada de acuses:', e); }
+
     doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(42);
-    doc.text('PUNTO ROJO', pageW/2, 110, { align: 'center' });
-
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'normal');
-    doc.text('GESTIÓN DE OBRA · DRYWALL', pageW/2, 135, { align: 'center' });
-
     doc.setDrawColor(255, 255, 255);
     doc.line(pageW/2 - 80, 155, pageW/2 + 80, 155);
 
@@ -13413,8 +13471,7 @@ async function generarAcusesMaestros(){
     doc.setFont('helvetica', 'normal');
     doc.text('CONSOLIDADO POR ETAPA Y APARTAMENTO', pageW/2, 222, { align: 'center' });
 
-    // Logo del proyecto en la portada (esquina superior derecha sobre la franja roja).
-    // Cuadro de hasta 140×90 — respeta aspect ratio natural del logo.
+    // Logo del proyecto a la derecha (si existe) con su forma natural.
     if (p.logoUrl) {
       await _addProjLogoToPDF(doc, p.logoUrl, pageW - 30, 28, 140, 90, 'right');
     }
@@ -13466,12 +13523,11 @@ async function generarAcusesMaestros(){
       margin: { left: 50, right: 50 }
     });
 
-    // Pie de portada
+    // Pie de portada — sin razón social ni dirección. Solo quien generó.
     doc.setFontSize(8);
     doc.setTextColor(...GRIS);
     doc.setFont('helvetica', 'normal');
     doc.text(`Generado por ${getCurrentUser()?.displayName || getCurrentUser()?.username || 'Usuario'}`, pageW/2, pageH - 50, { align: 'center' });
-    doc.text('PUNTO ROJO S.A. · 13 calle 12-33 zona 10, Colonia Oakland · www.puntorojo.com.gt', pageW/2, pageH - 35, { align: 'center' });
 
     // ═══════════ UNA PÁGINA POR CADA ACUSE ═══════════
     for (let i = 0; i < acuses.length; i++) {
@@ -13609,7 +13665,7 @@ async function generarAcusesMaestros(){
             ['Cargo', ac.acuse.receptorCargo || '—'],
             ['Tipo de firma', (ac.acuse.type || 'digital').toUpperCase() + ' · QR ROTATIVO PRE-VALIDADO'],
             ['Fecha y hora de firma', _amFormatFechaHora(ac.acuse.ts)],
-            ['Supervisor Punto Rojo', ac.acuse.userName || ac.acuse.user || '—']
+            ['Supervisor (entregó)', ac.acuse.userName || ac.acuse.user || '—']
           ],
           margin: { left: 50, right: 50 },
           styles: { fontSize: 10, cellPadding: 6 },
@@ -13708,7 +13764,7 @@ async function generarAcusesMaestros(){
       doc.setTextColor(...GRIS);
       doc.setFont('helvetica', 'normal');
       doc.text(
-        `Punto Rojo S.A.  ·  ${p.name}  ·  Acuses consolidados  ·  Página ${i} de ${totalPag}`,
+        `${p.name}  ·  Acuses consolidados  ·  Página ${i} de ${totalPag}`,
         pageW/2, pageH - 20, { align: 'center' }
       );
     }
@@ -20850,7 +20906,7 @@ function viewDigitalAcuse(slot, ctx){
       </div>
 
       <div style="border:1px solid var(--line);border-radius:6px;padding:12px 14px">
-        <div style="font-size:9px;font-weight:700;letter-spacing:1.4px;color:var(--mute);margin-bottom:4px">ENTREGADO POR (PUNTO ROJO)</div>
+        <div style="font-size:9px;font-weight:700;letter-spacing:1.4px;color:var(--mute);margin-bottom:4px">ENTREGADO POR (SUBCONTRATISTA)</div>
         <div style="font-size:12px;color:var(--ink);text-transform:uppercase;letter-spacing:.4px">${supervisor}</div>
       </div>
 
