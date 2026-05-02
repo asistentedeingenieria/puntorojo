@@ -1096,12 +1096,13 @@ table{max-width:100%}
       <select id="projectSelect" onchange="onProjectChange()"></select>
     </div>
     <div id="projHero" class="proj-hero" style="display:none"></div>
-    <!-- Tabs del portal cliente: Acuses · Reportes Semanales · MI QR (solo receptores) -->
+    <!-- Tabs del portal cliente -->
     <nav id="clientTabs" class="client-tabs" style="display:none">
-      <button class="client-tab active" data-ctab="acuses" onclick="setClientTab('acuses')">ACUSES DE RECEPCIÓN</button>
-      <button class="client-tab" data-ctab="reportes" onclick="setClientTab('reportes')">REPORTES SEMANALES <span id="reportesBadge" class="ctab-badge" style="display:none">0</span></button>
-      <button class="client-tab" data-ctab="firmar" onclick="setClientTab('firmar')" style="display:none" id="ctabFirmarBtn">FIRMAR <span id="firmarBadge" class="ctab-badge" style="display:none">0</span></button>
       <button class="client-tab" data-ctab="miqr" onclick="setClientTab('miqr')" style="display:none" id="ctabMiQrBtn">MI QR</button>
+      <button class="client-tab" data-ctab="misfirmas" onclick="setClientTab('misfirmas')" style="display:none" id="ctabMisFirmasBtn">MIS FIRMAS</button>
+      <button class="client-tab active" data-ctab="acuses" onclick="setClientTab('acuses')" id="ctabAcusesBtn">ACUSES DE RECEPCIÓN</button>
+      <button class="client-tab" data-ctab="reportes" onclick="setClientTab('reportes')" id="ctabReportesBtn">REPORTES SEMANALES <span id="reportesBadge" class="ctab-badge" style="display:none">0</span></button>
+      <button class="client-tab" data-ctab="firmar" onclick="setClientTab('firmar')" style="display:none" id="ctabFirmarBtn">FIRMAR <span id="firmarBadge" class="ctab-badge" style="display:none">0</span></button>
     </nav>
     <div id="ctabAcuses">
       <div id="kpis" class="kpis"></div>
@@ -1114,6 +1115,15 @@ table{max-width:100%}
       </div>
       <div id="reportesList"></div>
     </div>
+    <!-- Pestaña MIS FIRMAS — historial plano de los slots que el receptor firmó -->
+    <div id="ctabMisFirmas" style="display:none">
+      <div style="background:var(--white);border:1px solid var(--line);border-left:3px solid var(--green-dark);border-radius:8px;padding:14px 18px;margin-bottom:14px">
+        <div style="font-size:10px;letter-spacing:1.6px;text-transform:uppercase;font-weight:700;color:var(--green-dark);margin-bottom:4px">MIS FIRMAS · HISTORIAL</div>
+        <div style="font-size:11.5px;color:var(--mute);letter-spacing:.3px;line-height:1.5">Acuses que vos firmaste. Tocá uno para ver las fotos y los detalles del comprobante digital.</div>
+      </div>
+      <div id="misFirmasList"></div>
+    </div>
+
     <!-- Pestaña FIRMAR PENDIENTES — solo visible para receptores -->
     <div id="ctabFirmar" style="display:none">
       <div style="background:var(--white);border:1px solid var(--line);border-left:3px solid var(--red);border-radius:8px;padding:14px 18px;margin-bottom:14px">
@@ -1860,25 +1870,47 @@ async function onStateLoaded(){
   document.getElementById('userName').textContent = currentReceptor.nombre || currentReceptor.cargo || email;
   document.getElementById('userRole').textContent = currentReceptor.isMaster ? '★ MASTER' : 'Receptor';
 
-  // Mostrar pestaña "MI QR" si el receptor tiene token+secret (la mayoría)
-  const miqrBtn = document.getElementById('ctabMiQrBtn');
+  // ── v159: VISTA SIMPLIFICADA PARA RECEPTOR NO-MASTER ──
+  // Si el receptor NO es master, solo ve MI QR + MIS FIRMAS (historial).
+  // Master mantiene comportamiento original: ACUSES, REPORTES, FIRMAR, MI QR.
+  const isNonMaster = !currentReceptor.isMaster;
+  const acusesBtn   = document.getElementById('ctabAcusesBtn');
+  const reportesBtn = document.getElementById('ctabReportesBtn');
+  const firmarBtn   = document.getElementById('ctabFirmarBtn');
+  const miqrBtn     = document.getElementById('ctabMiQrBtn');
+  const misfirmasBtn= document.getElementById('ctabMisFirmasBtn');
+
+  // MI QR: visible para cualquiera con token+secret (master o no)
   if (miqrBtn) {
-    if (currentReceptor.token && currentReceptor.secret) {
-      miqrBtn.style.display = '';
-    } else {
-      miqrBtn.style.display = 'none';
-    }
+    miqrBtn.style.display = (currentReceptor.token && currentReceptor.secret) ? '' : 'none';
   }
 
-  // Pestaña FIRMAR PENDIENTES — visible para todos los receptores
-  const firmarBtn = document.getElementById('ctabFirmarBtn');
-  if (firmarBtn) firmarBtn.style.display = '';
-  // Cargar pending signatures que ya envié para no duplicar en la lista
-  loadMyPendingSignatures().then(() => {
-    try { renderFirmarPendientes(); } catch(e){}
-  });
+  if (isNonMaster) {
+    // No-master: ocultar ACUSES, REPORTES, FIRMAR. Mostrar solo MI QR + MIS FIRMAS.
+    if (acusesBtn)   acusesBtn.style.display   = 'none';
+    if (reportesBtn) reportesBtn.style.display = 'none';
+    if (firmarBtn)   firmarBtn.style.display   = 'none';
+    if (misfirmasBtn) misfirmasBtn.style.display = '';
+    // Default: arrancar en MI QR si lo tiene, si no en MIS FIRMAS.
+    if (currentReceptor.token && currentReceptor.secret) {
+      _activeClientTab = 'miqr';
+    } else {
+      _activeClientTab = 'misfirmas';
+    }
+  } else {
+    // Master: comportamiento original (todas las tabs salvo MIS FIRMAS).
+    if (acusesBtn)   acusesBtn.style.display   = '';
+    if (reportesBtn) reportesBtn.style.display = '';
+    if (firmarBtn)   firmarBtn.style.display   = '';
+    if (misfirmasBtn) misfirmasBtn.style.display = 'none';
+    _activeClientTab = 'acuses';
+    // Cargar pending signatures que ya envié para no duplicar en la lista
+    loadMyPendingSignatures().then(() => {
+      try { renderFirmarPendientes(); } catch(e){}
+    });
+  }
 
-  // Si no tiene firma digital → mostrar modal obligatorio
+  // Si no tiene firma digital → mostrar modal obligatorio (aplica a master y no-master)
   try { checkFirmaDigital(); } catch(e) { console.warn('checkFirmaDigital:', e); }
 
   // Tour de bienvenida (solo primer login)
@@ -1889,6 +1921,19 @@ async function onStateLoaded(){
   const projects = (state.projects || []).filter(p => !p.archived && assignedIds.has(p.id));
 
   if (projects.length === 0) {
+    // Para no-master: si no tiene proyectos asignados igual mostramos MI QR (sirve standalone)
+    if (isNonMaster && currentReceptor.token && currentReceptor.secret) {
+      document.getElementById('appContent').innerHTML = '';
+      document.getElementById('kpis').innerHTML = '';
+      document.getElementById('projectBar').style.display = 'none';
+      const heroEl = document.getElementById('projHero');
+      if (heroEl) heroEl.style.display = 'none';
+      const tabsEl = document.getElementById('clientTabs');
+      if (tabsEl) tabsEl.style.display = 'flex';
+      showMain();
+      setClientTab(_activeClientTab);
+      return;
+    }
     document.getElementById('appContent').innerHTML =
       '<div class="empty"><div class="big">SIN PROYECTOS</div><p>Todavía no tenés proyectos asignados. Contactá a Punto Rojo para que te asigne uno.</p></div>';
     document.getElementById('kpis').innerHTML = '';
@@ -1904,10 +1949,18 @@ async function onStateLoaded(){
     activeProjectId = projects[0].id;
   }
   sel.value = activeProjectId;
-  document.getElementById('projectBar').style.display = projects.length > 1 ? '' : 'none';
+  // Para no-master: ocultar selector de proyectos (MI QR no depende del proyecto y
+  // MIS FIRMAS muestra todos los proyectos juntos).
+  if (isNonMaster) {
+    document.getElementById('projectBar').style.display = 'none';
+  } else {
+    document.getElementById('projectBar').style.display = projects.length > 1 ? '' : 'none';
+  }
 
   showMain();
   renderApp();
+  // Para no-master: aplicar la pestaña por defecto (MI QR / MIS FIRMAS).
+  if (isNonMaster) setClientTab(_activeClientTab);
 }
 
 function onProjectChange(){
@@ -1963,14 +2016,82 @@ window.setClientTab = function(tab){
   const reportes = document.getElementById('ctabReportes');
   const firmar = document.getElementById('ctabFirmar');
   const miqr = document.getElementById('ctabMiQr');
+  const misfirmas = document.getElementById('ctabMisFirmas');
   if (acuses) acuses.style.display = (tab === 'acuses') ? '' : 'none';
   if (reportes) reportes.style.display = (tab === 'reportes') ? '' : 'none';
   if (firmar) firmar.style.display = (tab === 'firmar') ? '' : 'none';
   if (miqr) miqr.style.display = (tab === 'miqr') ? '' : 'none';
+  if (misfirmas) misfirmas.style.display = (tab === 'misfirmas') ? '' : 'none';
   if (tab === 'reportes') renderReportesSemanales();
   if (tab === 'firmar') renderFirmarPendientes();
+  if (tab === 'misfirmas') renderMisFirmas();
   if (tab === 'miqr') startMiQrRotating();
   else stopMiQrRotating();
+};
+
+/* ════════════════════════════════════════════════════════════════
+   MIS FIRMAS — vista simplificada para receptor NO master.
+   Solo lista los slots firmados POR el receptor actual, ordenados
+   por fecha de firma (mas reciente primero).
+   ═══════════════════════════════════════════════════════════════ */
+function _misFirmasList(){
+  const out = [];
+  if (!state || !currentReceptor) return out;
+  (state.projects || []).forEach(p => {
+    if (p.archived) return;
+    (p.towers || []).forEach(t => (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
+      if (!a.acuseRecepciones) return;
+      ACUSE_SLOTS.forEach(s => {
+        const slot = a.acuseRecepciones[s.key];
+        if (!slot) return;
+        if (slot.receptorId !== currentReceptor.id) return; // solo MIS firmas
+        out.push({
+          p, t, l, a, slotKey: s.key, label: s.label, slot,
+          ts: slot.signatureTs || slot.ts || 0,
+          urls: (slot.urls || []).filter(Boolean)
+        });
+      });
+    })));
+  });
+  // Mas reciente primero
+  out.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return out;
+}
+
+window.renderMisFirmas = function(){
+  const cont = document.getElementById('misFirmasList');
+  if (!cont) return;
+  const items = _misFirmasList();
+  if (!items.length) {
+    cont.innerHTML = `<div class="empty"><div class="big">SIN FIRMAS TODAVÍA</div><p>Cuando firmes tu primer acuse, aparecerá acá. Mostrale tu QR al supervisor de Punto Rojo cuando te entregue un apartamento.</p></div>`;
+    return;
+  }
+  // Agrupar por proyecto
+  const byProj = {};
+  items.forEach(it => {
+    const k = it.p.id;
+    if (!byProj[k]) byProj[k] = { p: it.p, items: [] };
+    byProj[k].items.push(it);
+  });
+  cont.innerHTML = Object.values(byProj).map(g => `
+    <div style="margin-bottom:18px">
+      <div style="font-size:11px;letter-spacing:1.6px;text-transform:uppercase;font-weight:700;color:var(--red);margin-bottom:8px">${escapeHtml(g.p.name)}</div>
+      ${g.items.map(it => {
+        const fechaStr = it.ts ? new Date(it.ts).toLocaleDateString('es-GT', { day:'2-digit', month:'2-digit', year:'numeric' }) : '—';
+        return `
+          <div class="report-card" style="border-left-color:var(--green-dark);cursor:pointer" onclick="abrirAcuse('${it.t.id}','${it.l.id}','${it.a.id}','${it.slotKey}')">
+            <div class="rc-icon" style="background:var(--green-soft);color:var(--green-dark)">✓</div>
+            <div class="rc-info">
+              <div class="rc-title">${escapeHtml(it.t.name)} · ${escapeHtml(it.l.name)} · ${escapeHtml(it.a.name)}</div>
+              <div class="rc-meta">${escapeHtml(it.label)} · Firmado el ${fechaStr}</div>
+            </div>
+            <div class="rc-actions">
+              <span class="btn ghost sm" style="white-space:nowrap">VER</span>
+            </div>
+          </div>`;
+      }).join('')}
+    </div>
+  `).join('');
 };
 
 /* ════════════════════════════════════════════════════════════════
@@ -2575,6 +2696,22 @@ function renderApp(){
   // Mostrar las tabs cuando hay proyecto cargado
   const tabsEl = document.getElementById('clientTabs');
   if (tabsEl) tabsEl.style.display = 'flex';
+
+  // ── v159: para no-master, omitir KPIs/torres/hero (no aplica a su vista) ──
+  if (currentReceptor && !currentReceptor.isMaster) {
+    const heroEl = document.getElementById('projHero');
+    if (heroEl) heroEl.style.display = 'none';
+    const kpisEl = document.getElementById('kpis');
+    if (kpisEl) kpisEl.innerHTML = '';
+    const cont = document.getElementById('appContent');
+    if (cont) cont.innerHTML = '';
+    // Refrescar MIS FIRMAS si está activa
+    if (_activeClientTab === 'misfirmas') {
+      try { renderMisFirmas(); } catch(e){}
+    }
+    return;
+  }
+
   _updateReportesBadge();
   // Re-render reportes si está activo
   if (_activeClientTab === 'reportes') renderReportesSemanales();
