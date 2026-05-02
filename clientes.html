@@ -242,6 +242,28 @@ main { padding: 20px 24px 40px; max-width: 1100px; margin: 0 auto; }
   display: none;
 }
 .auth-error.show { display: block; }
+
+/* ════════ MEDIDOR DE FORTALEZA DE CONTRASEÑA ════════ */
+.pwd-strength{margin:6px 0 12px;display:none}
+.pwd-strength.show{display:block}
+.pwd-bar{height:4px;background:#E5E2DC;border-radius:3px;overflow:hidden;margin-bottom:8px}
+.pwd-bar-fill{height:100%;width:0%;transition:width .25s ease,background-color .25s ease;background:#DC2626}
+.pwd-bar-fill.s1{width:20%;background:#DC2626}
+.pwd-bar-fill.s2{width:40%;background:#F59E0B}
+.pwd-bar-fill.s3{width:60%;background:#F59E0B}
+.pwd-bar-fill.s4{width:80%;background:#65A30D}
+.pwd-bar-fill.s5{width:100%;background:#1E6B1E}
+.pwd-label{font-size:9.5px;letter-spacing:1.2px;text-transform:uppercase;font-weight:700;margin-bottom:6px;color:var(--mute)}
+.pwd-label.s1{color:#DC2626}
+.pwd-label.s2{color:#F59E0B}
+.pwd-label.s3{color:#F59E0B}
+.pwd-label.s4{color:#65A30D}
+.pwd-label.s5{color:#1E6B1E}
+.pwd-checks{display:grid;grid-template-columns:1fr;gap:3px}
+.pwd-check{font-size:10px;color:var(--mute);display:flex;align-items:center;gap:6px;letter-spacing:.3px}
+.pwd-check::before{content:'○';color:var(--mute);font-weight:700;font-size:13px;width:13px;display:inline-block;line-height:1}
+.pwd-check.ok{color:#1E6B1E}
+.pwd-check.ok::before{content:'✓';color:#1E6B1E}
 .auth-success {
   background: #DCFCE7;
   border-left: 3px solid var(--green-dark);
@@ -673,12 +695,12 @@ main { padding: 20px 24px 40px; max-width: 1100px; margin: 0 auto; }
         <input id="regEmail" type="email" autocomplete="email" required>
       </div>
       <div class="field">
-        <label>Crear Contraseña (mín. 6 caracteres)</label>
-        <input id="regPassword" type="password" autocomplete="new-password" minlength="6" required>
+        <label>Crear Contraseña Fuerte</label>
+        <input id="regPassword" type="password" autocomplete="new-password" minlength="8" required>
       </div>
       <div class="field">
         <label>Confirmar Contraseña</label>
-        <input id="regPassword2" type="password" autocomplete="new-password" minlength="6" required>
+        <input id="regPassword2" type="password" autocomplete="new-password" minlength="8" required>
       </div>
       <div id="registerError" class="auth-error"></div>
       <div id="registerSuccess" class="auth-success"></div>
@@ -757,6 +779,95 @@ const ACUSE_SLOTS = [
   { key: '5', label: 'ETAPA 6 · MASILLA + ENTREGA FINAL' }
 ];
 
+// ── VALIDACIÓN DE CONTRASEÑA FUERTE ──
+// Mismas reglas que la app interna (puntorojo.html):
+//   - Mínimo 8 caracteres
+//   - Al menos 1 mayúscula, 1 minúscula, 1 número, 1 carácter especial
+//   - No puede contener la parte del email antes de la @
+function validatePasswordStrength(password, email){
+  const pwd = String(password || '');
+  const checks = [
+    { key: 'length',  label: 'Mínimo 8 caracteres',                ok: pwd.length >= 8 },
+    { key: 'upper',   label: 'Al menos 1 letra mayúscula (A–Z)',   ok: /[A-Z]/.test(pwd) },
+    { key: 'lower',   label: 'Al menos 1 letra minúscula (a–z)',   ok: /[a-z]/.test(pwd) },
+    { key: 'digit',   label: 'Al menos 1 número (0–9)',            ok: /[0-9]/.test(pwd) },
+    { key: 'special', label: 'Al menos 1 carácter especial (!@#$ etc.)',
+      ok: /[!@#$%^&*()_+\-=\[\]{};:'",.<>\/?\\|`~]/.test(pwd) }
+  ];
+  let emailIssue = false;
+  if (email && pwd) {
+    const emailUser = String(email).split('@')[0].toLowerCase().trim();
+    if (emailUser.length >= 4 && pwd.toLowerCase().includes(emailUser)) emailIssue = true;
+  }
+  const score = checks.filter(c => c.ok).length;
+  const ok = score === 5 && !emailIssue;
+  return { ok, score, checks, emailIssue };
+}
+
+function attachPasswordStrength(inputId, getEmailFn){
+  const input = document.getElementById(inputId);
+  if (!input || input.dataset.pwdStrengthAttached === '1') return;
+  input.dataset.pwdStrengthAttached = '1';
+  const wrap = document.createElement('div');
+  wrap.className = 'pwd-strength';
+  wrap.id = inputId + '_strength';
+  wrap.innerHTML = `
+    <div class="pwd-bar"><div class="pwd-bar-fill"></div></div>
+    <div class="pwd-label">FORTALEZA</div>
+    <div class="pwd-checks">
+      <div class="pwd-check" data-k="length">Mínimo 8 caracteres</div>
+      <div class="pwd-check" data-k="upper">Al menos 1 letra mayúscula</div>
+      <div class="pwd-check" data-k="lower">Al menos 1 letra minúscula</div>
+      <div class="pwd-check" data-k="digit">Al menos 1 número</div>
+      <div class="pwd-check" data-k="special">Al menos 1 carácter especial (!@#$ etc.)</div>
+      <div class="pwd-check" data-k="email" style="display:none">No debe contener tu email</div>
+    </div>`;
+  input.parentNode.insertBefore(wrap, input.nextSibling);
+
+  function _readEmail(){
+    if (typeof getEmailFn === 'function') return getEmailFn();
+    if (typeof getEmailFn === 'string') {
+      const el = document.getElementById(getEmailFn);
+      return el ? el.value : '';
+    }
+    return '';
+  }
+  function _update(){
+    const v = input.value;
+    if (!v) { wrap.classList.remove('show'); return; }
+    wrap.classList.add('show');
+    const result = validatePasswordStrength(v, _readEmail());
+    const fill = wrap.querySelector('.pwd-bar-fill');
+    const label = wrap.querySelector('.pwd-label');
+    const labels = ['Muy débil','Débil','Regular','Buena','Fuerte','Muy fuerte'];
+    const cls = 's' + Math.min(result.score, 5);
+    fill.className = 'pwd-bar-fill ' + cls;
+    label.className = 'pwd-label ' + cls;
+    label.textContent = labels[Math.min(result.score, 5)];
+    result.checks.forEach(c => {
+      const el = wrap.querySelector('.pwd-check[data-k="' + c.key + '"]');
+      if (el) el.classList.toggle('ok', !!c.ok);
+    });
+    const emailEl = wrap.querySelector('.pwd-check[data-k="email"]');
+    if (emailEl) {
+      emailEl.style.display = result.emailIssue ? '' : 'none';
+      emailEl.classList.toggle('ok', !result.emailIssue);
+    }
+  }
+  input.addEventListener('input', _update);
+  input.addEventListener('focus', _update);
+  if (typeof getEmailFn === 'string') {
+    const emailInput = document.getElementById(getEmailFn);
+    if (emailInput) emailInput.addEventListener('input', _update);
+  }
+}
+
+function getPasswordWeakReason(result){
+  if (result.emailIssue) return 'La clave no puede contener tu email';
+  const missing = result.checks.filter(c => !c.ok).map(c => c.label);
+  return missing.length ? 'Clave débil — falta: ' + missing.join(', ') : '';
+}
+
 // ── HELPERS ──
 function showToast(msg, type){
   const el = document.getElementById('toast');
@@ -777,6 +888,8 @@ function showRegister(){
   document.getElementById('screenMain').style.display = 'none';
   document.getElementById('registerError').classList.remove('show');
   document.getElementById('registerSuccess').classList.remove('show');
+  // Conectar medidor de fortaleza al campo de password
+  setTimeout(() => attachPasswordStrength('regPassword', 'regEmail'), 50);
 }
 function showMain(){
   document.getElementById('screenLogin').style.display = 'none';
@@ -835,7 +948,9 @@ async function doRegister(){
 
   if (!code) return setError('registerError', 'Pegá tu código de invitación');
   if (!email) return setError('registerError', 'Email requerido');
-  if (password.length < 6) return setError('registerError', 'La contraseña debe tener al menos 6 caracteres');
+  // Validación de contraseña FUERTE (mín. 8 chars + mayús + minús + número + especial)
+  const _passResult = validatePasswordStrength(password, email);
+  if (!_passResult.ok) return setError('registerError', getPasswordWeakReason(_passResult));
   if (password !== password2) return setError('registerError', 'Las contraseñas no coinciden');
 
   let cred = null;

@@ -553,6 +553,28 @@ input.inline:disabled,select.inline:disabled{opacity:.55;cursor:not-allowed;back
 .auth-field input:focus{outline:none;border-color:var(--red);background:#fff}
 .auth-error{font-size:11px;color:var(--red);letter-spacing:.5px;text-transform:uppercase;font-weight:600;margin:10px 0;min-height:14px;text-align:center}
 .auth-submit{width:100%;padding:13px;font-size:11px;letter-spacing:2px;margin-top:8px}
+
+/* ════════ MEDIDOR DE FORTALEZA DE CONTRASEÑA ════════ */
+.pwd-strength{margin:6px 0 12px;display:none}
+.pwd-strength.show{display:block}
+.pwd-bar{height:4px;background:#E5E2DC;border-radius:3px;overflow:hidden;margin-bottom:8px;position:relative}
+.pwd-bar-fill{height:100%;width:0%;transition:width .25s ease,background-color .25s ease;background:#DC2626}
+.pwd-bar-fill.s1{width:20%;background:#DC2626}
+.pwd-bar-fill.s2{width:40%;background:#F59E0B}
+.pwd-bar-fill.s3{width:60%;background:#F59E0B}
+.pwd-bar-fill.s4{width:80%;background:#65A30D}
+.pwd-bar-fill.s5{width:100%;background:#1E6B1E}
+.pwd-label{font-size:9.5px;letter-spacing:1.2px;text-transform:uppercase;font-weight:700;margin-bottom:6px;color:var(--mute)}
+.pwd-label.s1{color:#DC2626}
+.pwd-label.s2{color:#F59E0B}
+.pwd-label.s3{color:#F59E0B}
+.pwd-label.s4{color:#65A30D}
+.pwd-label.s5{color:#1E6B1E}
+.pwd-checks{display:grid;grid-template-columns:1fr;gap:3px}
+.pwd-check{font-size:10px;color:var(--mute);display:flex;align-items:center;gap:6px;letter-spacing:.3px}
+.pwd-check::before{content:'○';color:var(--mute);font-weight:700;font-size:13px;width:13px;display:inline-block;line-height:1}
+.pwd-check.ok{color:#1E6B1E}
+.pwd-check.ok::before{content:'✓';color:#1E6B1E}
 .auth-foot{text-align:center;margin-top:22px;padding-top:18px;border-top:1px solid var(--line-soft);font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--mute-light);font-weight:600}
 body.auth-locked{overflow:hidden}
 body.auth-locked .app{filter:blur(4px);pointer-events:none}
@@ -2347,7 +2369,7 @@ html,body,.main{background:#FFFFFF!important;}
       <p class="auth-sub">No hay usuarios registrados. Creá la cuenta de administrador maestro. Esta cuenta podrá crear los demás usuarios.</p>
       <div class="auth-field"><label>NOMBRE PARA MOSTRAR</label><input id="setupName" placeholder="EJ: JUAN PÉREZ"></div>
       <div class="auth-field"><label>EMAIL INSTITUCIONAL</label><input id="setupUser" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="tunombre@puntorojosa.com"><div class="hint" style="font-size:9px;color:var(--mute-light);letter-spacing:1px;text-transform:uppercase;margin-top:4px">Solo se aceptan correos @puntorojosa.com</div></div>
-      <div class="auth-field"><label>CLAVE (mínimo 6 caracteres)</label><input id="setupPass" type="password" autocomplete="new-password"></div>
+      <div class="auth-field"><label>CLAVE FUERTE</label><input id="setupPass" type="password" autocomplete="new-password"></div>
       <div class="auth-field"><label>CONFIRMAR CLAVE</label><input id="setupPass2" type="password" autocomplete="new-password" onkeydown="if(event.key==='Enter')doSetup()"></div>
       <div id="setupError" class="auth-error"></div>
       <button class="btn auth-submit" onclick="doSetup()">CREAR ADMINISTRADOR</button>
@@ -2817,7 +2839,7 @@ html,body,.main{background:#FFFFFF!important;}
       <div class="field"><label>NOMBRE</label><input id="euName" placeholder="EJ: MARÍA LÓPEZ"></div>
       <div class="field"><label>EMAIL INSTITUCIONAL</label><input id="euUser" type="email" placeholder="usuario@puntorojosa.com" autocapitalize="off" spellcheck="false"><div class="hint">Solo se aceptan correos @puntorojosa.com</div></div>
       <div class="field" style="grid-column:span 2"><label>CARGO / PUESTO (opcional)</label><input id="euCargo" placeholder="EJ: SUPERVISOR DE OBRA"></div>
-      <div class="field"><label id="euPassLabel">CLAVE (mín. 6 car.)</label><input id="euPass" type="password" autocomplete="new-password"></div>
+      <div class="field"><label id="euPassLabel">CLAVE FUERTE</label><input id="euPass" type="password" autocomplete="new-password"></div>
       <div class="field"><label>CONFIRMAR CLAVE</label><input id="euPass2" type="password" autocomplete="new-password"></div>
     </div>
 
@@ -3606,7 +3628,11 @@ function showAuthScreen(forceMode){
   if (mode === 'setup') {
     setup.style.display = 'block';
     login.style.display = 'none';
-    setTimeout(() => document.getElementById('setupName').focus(), 100);
+    setTimeout(() => {
+      document.getElementById('setupName').focus();
+      // Conectar medidor de fortaleza al campo de clave del setup
+      attachPasswordStrength('setupPass', 'setupUser');
+    }, 100);
   } else {
     setup.style.display = 'none';
     login.style.display = 'block';
@@ -3631,6 +3657,118 @@ function toggleAuthMode(mode){
   ['loginError','setupError'].forEach(id => { const el=document.getElementById(id); if(el) el.textContent=''; });
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   VALIDACIÓN DE CONTRASEÑA FUERTE
+   Aplica a TODOS los usuarios nuevos (admin, supervisor, oficina,
+   y clientes del portal). Reglas:
+     - Mínimo 8 caracteres
+     - Al menos 1 letra mayúscula
+     - Al menos 1 letra minúscula
+     - Al menos 1 número
+     - Al menos 1 carácter especial (! @ # $ % ^ & * _ - + . , ; : etc.)
+     - No puede contener la parte del email antes de la @
+   Devuelve: { ok, score (0..5), checks: [{key,label,ok}], emailIssue }
+   ═══════════════════════════════════════════════════════════════ */
+function validatePasswordStrength(password, email){
+  const pwd = String(password || '');
+  const checks = [
+    { key: 'length',  label: 'Mínimo 8 caracteres',                ok: pwd.length >= 8 },
+    { key: 'upper',   label: 'Al menos 1 letra mayúscula (A–Z)',   ok: /[A-Z]/.test(pwd) },
+    { key: 'lower',   label: 'Al menos 1 letra minúscula (a–z)',   ok: /[a-z]/.test(pwd) },
+    { key: 'digit',   label: 'Al menos 1 número (0–9)',            ok: /[0-9]/.test(pwd) },
+    { key: 'special', label: 'Al menos 1 carácter especial (!@#$ etc.)',
+      ok: /[!@#$%^&*()_+\-=\[\]{};:'",.<>\/?\\|`~]/.test(pwd) }
+  ];
+  let emailIssue = false;
+  if (email && pwd) {
+    const emailUser = String(email).split('@')[0].toLowerCase().trim();
+    if (emailUser.length >= 4 && pwd.toLowerCase().includes(emailUser)) emailIssue = true;
+  }
+  const score = checks.filter(c => c.ok).length;
+  const ok = score === 5 && !emailIssue;
+  return { ok, score, checks, emailIssue };
+}
+
+/* Renderiza el medidor visual de fortaleza después del input dado.
+   inputId: id del <input type=password>
+   getEmailFn: función que devuelve el email actual del formulario (para
+               la regla "no puede contener tu email"). Puede ser un id
+               de input o una función. */
+function attachPasswordStrength(inputId, getEmailFn){
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  // No duplicar si ya existe el medidor
+  if (input.dataset.pwdStrengthAttached === '1') return;
+  input.dataset.pwdStrengthAttached = '1';
+
+  // Construir DOM del medidor
+  const wrap = document.createElement('div');
+  wrap.className = 'pwd-strength';
+  wrap.id = inputId + '_strength';
+  wrap.innerHTML = `
+    <div class="pwd-bar"><div class="pwd-bar-fill"></div></div>
+    <div class="pwd-label">FORTALEZA</div>
+    <div class="pwd-checks">
+      <div class="pwd-check" data-k="length">Mínimo 8 caracteres</div>
+      <div class="pwd-check" data-k="upper">Al menos 1 letra mayúscula</div>
+      <div class="pwd-check" data-k="lower">Al menos 1 letra minúscula</div>
+      <div class="pwd-check" data-k="digit">Al menos 1 número</div>
+      <div class="pwd-check" data-k="special">Al menos 1 carácter especial (!@#$ etc.)</div>
+      <div class="pwd-check" data-k="email" style="display:none">No debe contener tu email</div>
+    </div>`;
+  input.parentNode.insertBefore(wrap, input.nextSibling);
+
+  function _readEmail(){
+    if (typeof getEmailFn === 'function') return getEmailFn();
+    if (typeof getEmailFn === 'string') {
+      const el = document.getElementById(getEmailFn);
+      return el ? el.value : '';
+    }
+    return '';
+  }
+
+  function _update(){
+    const v = input.value;
+    if (!v) {
+      wrap.classList.remove('show');
+      return;
+    }
+    wrap.classList.add('show');
+    const result = validatePasswordStrength(v, _readEmail());
+    const fill = wrap.querySelector('.pwd-bar-fill');
+    const label = wrap.querySelector('.pwd-label');
+    const labels = ['Muy débil','Débil','Regular','Buena','Fuerte','Muy fuerte'];
+    const cls = 's' + Math.min(result.score, 5);
+    fill.className = 'pwd-bar-fill ' + cls;
+    label.className = 'pwd-label ' + cls;
+    label.textContent = labels[Math.min(result.score, 5)];
+    result.checks.forEach(c => {
+      const el = wrap.querySelector('.pwd-check[data-k="' + c.key + '"]');
+      if (el) el.classList.toggle('ok', !!c.ok);
+    });
+    const emailEl = wrap.querySelector('.pwd-check[data-k="email"]');
+    if (emailEl) {
+      emailEl.style.display = result.emailIssue ? '' : 'none';
+      emailEl.classList.toggle('ok', !result.emailIssue);
+    }
+  }
+  input.addEventListener('input', _update);
+  input.addEventListener('focus', _update);
+  // También si cambia el email, re-evaluar
+  if (typeof getEmailFn === 'string') {
+    const emailInput = document.getElementById(getEmailFn);
+    if (emailInput) emailInput.addEventListener('input', _update);
+  }
+}
+
+/* Helper para mostrar error claro de password débil. */
+function getPasswordWeakReason(result){
+  if (result.emailIssue) return 'LA CLAVE NO PUEDE CONTENER TU EMAIL';
+  const missing = result.checks.filter(c => !c.ok).map(c => c.label);
+  if (missing.length === 0) return '';
+  return 'CLAVE DÉBIL · FALTA: ' + missing.join(', ').toUpperCase();
+}
+
 /* Crear el administrador maestro (solo se permite si no hay otros usuarios todavía). */
 async function doSetup(){
   const name = document.getElementById('setupName').value.trim();
@@ -3643,7 +3781,9 @@ async function doSetup(){
   if (!name) { err.textContent = 'NOMBRE REQUERIDO'; return; }
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { err.textContent = 'EMAIL INVÁLIDO'; return; }
   if (!isAllowedInstitutionalEmail(email)) { err.textContent = 'SOLO SE ACEPTAN CORREOS @' + INSTITUTIONAL_EMAIL_DOMAIN; return; }
-  if (pass.length < 6) { err.textContent = 'CLAVE REQUERIDA (MÍN. 6 CARACTERES)'; return; }
+  // Validación de contraseña fuerte (8+ chars, mayús, minús, número, especial, no contiene email)
+  const _passResult = validatePasswordStrength(pass, email);
+  if (!_passResult.ok) { err.textContent = getPasswordWeakReason(_passResult); return; }
   if (pass !== pass2) { err.textContent = 'LAS CLAVES NO COINCIDEN'; return; }
 
   err.textContent = 'CREANDO ADMINISTRADOR...';
@@ -3800,13 +3940,15 @@ function openNewUser(){
   editingUid = null;
   editingEmail = null;
   document.getElementById('euTitle').textContent = 'Nuevo usuario';
-  document.getElementById('euPassLabel').textContent = 'CLAVE (mín. 6 car.)';
+  document.getElementById('euPassLabel').textContent = 'CLAVE FUERTE';
   ['euName','euUser','euCargo','euPass','euPass2'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('euError').textContent = '';
   document.getElementById('euFullAdmin').checked = false;
   renderPermsChecklist([]);
   document.getElementById('euUser').removeAttribute('readonly');
   document.getElementById('modalEditUser').classList.add('show');
+  // Conectar medidor de fortaleza (solo cuando es nuevo usuario, en edición la clave no se cambia)
+  setTimeout(() => attachPasswordStrength('euPass', 'euUser'), 50);
 }
 
 function openEditUser(uid){
@@ -3876,7 +4018,9 @@ async function saveUser(){
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { err.textContent = 'EMAIL INVÁLIDO'; return; }
     if (!isAllowedInstitutionalEmail(email)) { err.textContent = 'SOLO SE ACEPTAN CORREOS @' + INSTITUTIONAL_EMAIL_DOMAIN; return; }
     if (loadUsers().find(x => x.email === email)) { err.textContent = 'YA EXISTE UN USUARIO CON ESE EMAIL'; return; }
-    if (pass.length < 6) { err.textContent = 'CLAVE REQUERIDA (MÍN. 6 CARACTERES)'; return; }
+    // Validación de contraseña fuerte
+    const _passResult = validatePasswordStrength(pass, email);
+    if (!_passResult.ok) { err.textContent = getPasswordWeakReason(_passResult); return; }
     if (pass !== pass2) { err.textContent = 'LAS CLAVES NO COINCIDEN'; return; }
   }
 
