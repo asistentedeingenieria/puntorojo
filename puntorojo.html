@@ -488,10 +488,13 @@ input.inline:disabled,select.inline:disabled{opacity:.55;cursor:not-allowed;back
 /* Card por apto que muestra los 7 slots de acuses */
 .acuse-card-multi{border:1px solid var(--line);background:var(--paper);border-radius:3px;overflow:hidden;border-left:3px solid var(--line)}
 .acuse-card-multi.all-done{border-left-color:var(--green-dark);background:#F0F8F4}
+.acuse-card-multi.is-pendiente{border-left-color:var(--amber);background:#FFFBEB}
 .acuse-card-multi-head{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--white);border-bottom:1px solid var(--line-soft)}
 .acuse-card-multi.all-done .acuse-card-multi-head{background:#F0F8F4}
+.acuse-card-multi.is-pendiente .acuse-card-multi-head{background:#FFFBEB}
 .acuse-progress-pill{font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--mute);background:var(--cream);padding:4px 10px;border-radius:10px;border:1px solid var(--line)}
 .acuse-progress-pill.all-done{color:#fff;background:var(--green-dark);border-color:var(--green-dark)}
+.acuse-progress-pill.is-pendiente{color:#fff;background:var(--amber);border-color:var(--amber)}
 .acuse-slots-list{display:flex;flex-direction:column}
 .acuse-slot-row{display:grid;grid-template-columns:1.4fr 1fr auto;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px dotted var(--line-soft);font-size:10.5px}
 .acuse-slot-row:last-child{border-bottom:none}
@@ -1819,7 +1822,7 @@ table{max-width:100%}
       <div class="mat-tabs">
         <button class="mat-tab active" data-mattab="receta" onclick="setMatTab('receta')">RECETA DE MATERIAL</button>
         <button class="mat-tab" data-mattab="pedidos" onclick="setMatTab('pedidos')">PEDIDOS DE MATERIAL</button>
-        <button class="mat-tab" data-mattab="ordenes" onclick="setMatTab('ordenes')" data-perm="view.materiales">ÓRDENES DE COMPRA</button>
+        <button class="mat-tab" data-mattab="ordenes" onclick="setMatTab('ordenes')" data-perm="compras.autorizar">ÓRDENES DE COMPRA</button>
         <button class="mat-tab" data-mattab="inventario" onclick="setMatTab('inventario')">INVENTARIOS</button>
       </div>
 
@@ -3763,22 +3766,24 @@ function applyPermissions(){
   // completamente cuando el usuario no tiene el permiso —para que no
   // aparezcan en gris ni causen confusión. Para botones/inputs sueltos
   // se mantiene el comportamiento previo (.locked + disabled).
+  // POLÍTICA DEL PROYECTO: si el usuario NO tiene un permiso, el elemento
+  // que lo requiere se OCULTA (display:none) — nunca se muestra en gris.
+  // Aplica a tabs, sub-tabs, items del kebab, botones de acción, secciones
+  // completas, etc. Solo el ADMINISTRADOR concede permisos.
+  // Los inputs/textareas/selects que excepcionalmente deban quedarse visibles
+  // pero deshabilitados pueden marcar `data-perm-keep="1"` para activar el
+  // comportamiento legacy de .locked + disabled.
   document.querySelectorAll('[data-perm]').forEach(el => {
     const p = el.getAttribute('data-perm');
     const allowed = can(p);
-    // ¿Es elemento de navegación que conviene OCULTAR (no solo bloquear)?
-    //   - Cualquier botón con clase tab / mat-tab / ped-tab / avance-tab / kebab-item
-    //   - Cualquier elemento con clase 'auto-hide' o atributo data-perm-hide="1"
-    const cls = el.className || '';
-    const isNavTab = /(?:^|\s)(?:tab|mat-tab|ped-tab|avance-tab|kebab-item|auto-hide)(?:\s|$)/.test(cls)
-                  || el.getAttribute('data-perm-hide') === '1';
-    if (isNavTab) {
-      el.style.display = allowed ? '' : 'none';
-      el.disabled = false; // sin .locked porque ya no se ve
-      el.classList.remove('locked');
-    } else {
+    const keepVisible = el.getAttribute('data-perm-keep') === '1';
+    if (keepVisible) {
       el.disabled = !allowed;
       el.classList.toggle('locked', !allowed);
+    } else {
+      el.style.display = allowed ? '' : 'none';
+      el.disabled = false;
+      el.classList.remove('locked');
     }
   });
 
@@ -9062,14 +9067,24 @@ function renderAcusesRecepcion(){
             return slot && (slot.receptorId || slot.receptorNombre);
           }).length;
           const allDone = completed === ACUSE_SLOTS.length;
+          const pendientes = ACUSE_SLOTS.length - completed;
 
-          return `<div class="acuse-card-multi${allDone ? ' all-done' : ''}">
+          // Si NADA está firmado, mostramos cuántos quedan PENDIENTES
+          // (en vez de un "0 de 6" frío). Si ya hay firmados, contadores normales.
+          const metaTxt = completed === 0
+            ? `${pendientes} ACUSES PENDIENTES DE FIRMA`
+            : `${completed} de ${ACUSE_SLOTS.length} ACUSES FIRMADOS`;
+          const pillTxt = completed === 0
+            ? `${pendientes} PEND.`
+            : `${completed} / ${ACUSE_SLOTS.length}`;
+
+          return `<div class="acuse-card-multi${allDone ? ' all-done' : ''}${completed === 0 ? ' is-pendiente' : ''}">
             <div class="acuse-card-multi-head">
               <div>
                 <div class="acuse-name">${a.name}</div>
-                <div class="acuse-meta">${completed} de ${ACUSE_SLOTS.length} ACUSES FIRMADOS</div>
+                <div class="acuse-meta">${metaTxt}</div>
               </div>
-              <div class="acuse-progress-pill${allDone ? ' all-done' : ''}">${completed} / ${ACUSE_SLOTS.length}</div>
+              <div class="acuse-progress-pill${allDone ? ' all-done' : ''}${completed === 0 ? ' is-pendiente' : ''}">${pillTxt}</div>
             </div>
             <div class="acuse-slots-list">${slotRows}</div>
           </div>`;
@@ -9084,6 +9099,13 @@ function renderAcusesRecepcion(){
           });
         });
         const pctLvl = totalLvl > 0 ? Math.round(firmLvl / totalLvl * 100) : 0;
+        const pendLvl = totalLvl - firmLvl;
+        // Si nadie firmó nada en este nivel, mostramos "X PENDIENTES" (en vez de
+        // un "0 / X firmados · 0%" frío). Si ya hay al menos uno firmado se
+        // mantiene el contador clásico.
+        const lvlMeta = (firmLvl === 0 && totalLvl > 0)
+          ? `<span style="color:var(--amber);font-weight:700">${pendLvl} PENDIENTES DE FIRMA</span>`
+          : `${firmLvl} / ${totalLvl} FIRMADOS · ${pctLvl}%`;
         // Por defecto colapsado, salvo que el usuario lo haya abierto en esta sesión.
         const isLvlCollapsed = !abiertosNiveles.has(l.id);
 
@@ -9091,7 +9113,7 @@ function renderAcusesRecepcion(){
           <div class="acuse-level-collapsable${isLvlCollapsed ? '' : ' open'}" onclick="toggleAcuseNivel('${l.id}')" style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--cream);border:1px solid var(--line);border-radius:4px;cursor:pointer;user-select:none;margin-bottom:${isLvlCollapsed ? '4px' : '10px'}">
             <span class="lr-chevron" aria-hidden="true"></span>
             <div style="flex:1;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--red)">${l.name}</div>
-            <div style="font-size:10px;color:var(--mute);font-weight:600">${firmLvl} / ${totalLvl} FIRMADOS · ${pctLvl}%</div>
+            <div style="font-size:10px;color:var(--mute);font-weight:600">${lvlMeta}</div>
           </div>
           ${isLvlCollapsed ? '' : `<div class="acuse-grid">${cards || '<div class="aptos-empty">SIN ELEMENTOS</div>'}</div>`}
         </div>`;
@@ -9837,8 +9859,12 @@ function renderPedidoCard(pd, p){
         actionBtn = `<span style="font-size:9px;color:var(--amber);letter-spacing:1px;text-transform:uppercase;font-weight:700">${pedidoOcsResumen(pd.id)}</span>`;
       }
     } else {
-      const canAdvance = (statusInfo.role === 'supervisor' && (can('pedidos.create') || can('pedidos.receive'))) ||
-                         (statusInfo.role === 'oficina' && can('pedidos.advance'));
+      // SOLICITADO → APROBADO genera OC y solo lo dispara quien autoriza OC.
+      // Los demás cambios de estado siguen la lógica clásica de roles.
+      const canAdvance = (pd.status === 'SOLICITADO')
+        ? (can('compras.autorizar') || can('users.manage'))
+        : ((statusInfo.role === 'supervisor' && (can('pedidos.create') || can('pedidos.receive'))) ||
+           (statusInfo.role === 'oficina' && can('pedidos.advance')));
       if (canAdvance) {
         actionBtn = `<button class="btn sm ${statusInfo.next === 'RECIBIDO' ? '' : 'cafe'}" onclick="advancePedido('${pd.id}')">${statusInfo.nextLabel.toUpperCase()}</button>`;
       }
@@ -9885,11 +9911,13 @@ function advancePedido(id){
   const statusInfo = PEDIDO_ESTADOS.find(s => s.key === pd.status);
   if (!statusInfo || !statusInfo.next) return;
 
-  // CASO ESPECIAL: pasar de SOLICITADO → APROBADO requiere generar Orden de Compra
-  // (POR EL MOMENTO, OC LIBRES — cualquier usuario con acceso a Materiales puede generarlas)
+  // CASO ESPECIAL: pasar de SOLICITADO → APROBADO requiere generar Orden de Compra.
+  // SOLO los usuarios con permiso 'Autorizar Órdenes de Compra' (compras.autorizar)
+  // o el admin pueden hacerlo. Los demás (ej. supervisor que solo crea pedidos)
+  // no ven siquiera el botón gracias a la lógica de canAdvance + applyPermissions.
   if (pd.status === 'SOLICITADO' && statusInfo.next === 'APROBADO') {
-    if (!can('view.materiales') && !can('users.manage')) {
-      return showToast('SIN ACCESO A MATERIALES', 'red');
+    if (!can('compras.autorizar') && !can('users.manage')) {
+      return showToast('SOLO QUIEN AUTORIZA OC PUEDE APROBAR Y GENERAR LAS ÓRDENES', 'red');
     }
     currentPedidoDetalleId = pd.id;
     openOrdenCompra();
@@ -9912,10 +9940,13 @@ function advancePedido(id){
     }
   }
 
-  // Verificar permiso para otros cambios de estado
-  const canAdvance = (statusInfo.role === 'supervisor' && (can('pedidos.create') || can('pedidos.receive'))) ||
-                     (statusInfo.role === 'oficina' && can('pedidos.advance')) ||
-                     false;
+  // Verificar permiso para cambios de estado.
+  // SOLICITADO → APROBADO solo lo puede disparar quien autoriza OC (genera OCs).
+  // Los demás siguen la lógica clásica de roles.
+  const canAdvance = (pd.status === 'SOLICITADO')
+    ? (can('compras.autorizar') || can('users.manage'))
+    : ((statusInfo.role === 'supervisor' && (can('pedidos.create') || can('pedidos.receive'))) ||
+       (statusInfo.role === 'oficina' && can('pedidos.advance')));
   if (!canAdvance) return showToast('SIN PERMISO PARA ESTA ACCIÓN', 'red');
 
   if (!confirm(`¿${statusInfo.nextLabel.toUpperCase()}?\n\nPedido ${pd.numero} pasará a: ${statusInfo.next}`)) return;
@@ -10579,8 +10610,9 @@ function openPedidoDetalle(id){
   const delBtn = document.getElementById('pedDetalleDeleteBtn');
   if (delBtn) delBtn.style.display = canDel ? '' : 'none';
 
-  // OC LIBRES por ahora — cualquier usuario con acceso a Materiales puede generarlas
-  const canOC = can('view.materiales') || can('users.manage');
+  // Generar OC requiere el permiso "Autorizar Órdenes de Compra (compras.autorizar)"
+  // o ser admin. Si el usuario solo crea pedidos (Rony p.ej.), no ve el botón ni la pestaña.
+  const canOC = can('compras.autorizar') || can('users.manage');
   const ocBtn = document.getElementById('pedDetalleOCBtn');
   if (ocBtn) ocBtn.style.display = canOC ? '' : 'none';
 }
@@ -10698,8 +10730,8 @@ function autoAssignOcProviders(){
 }
 
 function openOrdenCompra(){
-  // OC LIBRES — cualquier usuario con acceso a Materiales puede abrir el modal
-  if (!can('view.materiales') && !can('users.manage')) return showToast('SIN ACCESO A MATERIALES', 'red');
+  // Solo quien tiene 'compras.autorizar' o es admin puede generar OCs
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO QUIEN AUTORIZA OC PUEDE GENERARLAS', 'red');
   if (!currentPedidoDetalleId) return;
 
   const p = activeProj();
@@ -11016,8 +11048,8 @@ function saveNewDireccion(){
 }
 
 function generarOrdenCompra(){
-  // OC LIBRES — cualquier usuario con acceso a Materiales puede generar OC
-  if (!can('view.materiales') && !can('users.manage')) return showToast('SIN ACCESO A MATERIALES', 'red');
+  // Solo quien autoriza OC puede generarlas
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO QUIEN AUTORIZA OC PUEDE GENERARLAS', 'red');
   if (!currentPedidoDetalleId) return;
 
   const p = activeProj();
@@ -11450,9 +11482,10 @@ function renderOrdenesList(){
     return;
   }
 
-  // OC LIBRES — cualquier usuario con acceso a Materiales puede borrar/editar.
-  // SOLO el permiso de "Autorizar OC (Finanzas)" sigue restringido por compras.autorizar.
-  const canDelete = can('view.materiales') || can('users.manage');
+  // OC: TODO gateado por 'compras.autorizar' (o admin). Quien no tiene este
+  // permiso ni siquiera ve la pestaña — esta lista solo se renderiza si llegó
+  // hasta acá, así que ya cumple el permiso.
+  const canDelete = can('compras.autorizar') || can('users.manage');
   const canAuthorize = can('compras.autorizar') || can('users.manage');
 
   cont.innerHTML = ordenes.map(oc => {
@@ -11563,8 +11596,8 @@ function previewOrden(id){
 }
 
 function deleteOrden(id){
-  // OC LIBRES — cualquier usuario con acceso a Materiales puede borrar
-  if (!can('view.materiales') && !can('users.manage')) return showToast('SIN ACCESO A MATERIALES', 'red');
+  // Solo quien autoriza OC (o admin) puede borrar OCs
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO QUIEN AUTORIZA OC PUEDE BORRARLAS', 'red');
   const p = activeProj();
   const oc = (p.materiales.ordenes || []).find(x => x.id === id);
   if (!oc) return;

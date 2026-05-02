@@ -351,6 +351,10 @@ main { padding: 20px 24px 40px; max-width: 1100px; margin: 0 auto; }
   background:var(--white);border:1px solid var(--line);
   border-radius:8px;margin-bottom:12px;overflow:hidden;
 }
+/* Si la torre no tiene NADA firmado: borde y fondo en ambar para indicar
+   "todavía pendiente de entrega" — ayuda al cliente a ver qué falta */
+.tower-card.is-pendiente .tower-head{border-left-color:#D97706;background:#FFFBEB}
+.tower-card.is-pendiente .tower-head:hover{background:#FEF3C7}
 .tower-head{
   background:var(--white);border-left:4px solid var(--red);
   padding:18px 22px;display:flex;align-items:center;gap:14px;
@@ -358,6 +362,7 @@ main { padding: 20px 24px 40px; max-width: 1100px; margin: 0 auto; }
 }
 .tower-head:hover{background:var(--cream)}
 .tower-head.open{background:var(--cream);border-bottom:1px solid var(--line)}
+.tower-head .pct.pendiente{color:#B8801F}
 .tower-head .chev {
   width: 9px; height: 9px;
   border-right: 1.5px solid var(--red);
@@ -435,6 +440,8 @@ main { padding: 20px 24px 40px; max-width: 1100px; margin: 0 auto; }
   transition:border-color .15s,box-shadow .15s;
 }
 .apto-card:hover{border-color:var(--mute-light);box-shadow:0 2px 8px rgba(15,23,42,.04)}
+/* Apto sin nada firmado: marco izquierdo ambar para resaltar pendientes */
+.apto-card.is-pendiente{border-left:3px solid #D97706;background:#FFFBEB}
 .apto-card .apto-name {
   font-size: 13px;
   font-weight: 700;
@@ -1349,11 +1356,17 @@ function renderApp(){
       if (isAcuseFirmado(getAcuseSlot(a, s.key))) firmT++;
     })));
     const pctT = totalT > 0 ? Math.round(firmT / totalT * 100) : 0;
-    return `<div class="tower-card" data-tid="${t.id}">
+    const pendT = totalT - firmT;
+    // Si no hay nada firmado en la torre, mostramos cuántos quedan PENDIENTES
+    // (en vez de un "0% FIRMADOS" vacío). Si ya hay al menos uno, contadores normales.
+    const towerStatHtml = (firmT === 0 && totalT > 0)
+      ? `<div class="pct pendiente">${pendT}<small>PENDIENTES</small></div>`
+      : `<div class="pct">${pctT}%<small>FIRMADOS</small></div>`;
+    return `<div class="tower-card${firmT === 0 && totalT > 0 ? ' is-pendiente' : ''}" data-tid="${t.id}">
       <div class="tower-head" onclick="toggleTorre('${t.id}')">
         <span class="chev"></span>
         <div class="name">${escapeHtml(t.name || 'TORRE')}</div>
-        <div class="pct">${pctT}%<small>FIRMADOS</small></div>
+        ${towerStatHtml}
       </div>
       <div class="tower-body" style="display:none">
         ${(t.levels || []).map(l => renderLevel(t, l)).join('')}
@@ -1369,11 +1382,16 @@ function renderLevel(t, l){
     if (isAcuseFirmado(getAcuseSlot(a, s.key))) firm++;
   }));
   const pct = total > 0 ? Math.round(firm / total * 100) : 0;
+  const pend = total - firm;
+  // Idéntica lógica que en torre: si nada firmado, mostramos pendientes
+  const lvlStat = (firm === 0 && total > 0)
+    ? `<span style="color:#B8801F;font-weight:700">${pend} pendientes de firma</span>`
+    : `${firm} / ${total} firmados · ${pct}%`;
   return `<div class="level-card" data-lid="${l.id}">
     <div class="level-head" onclick="toggleLevel('${l.id}')">
       <span class="chev"></span>
       <div class="name">${escapeHtml(l.name || 'NIVEL')}</div>
-      <div class="stat">${firm} / ${total} firmados · ${pct}%</div>
+      <div class="stat">${lvlStat}</div>
     </div>
     <div class="level-body" style="display:none">
       <div class="aptos-grid">
@@ -1384,10 +1402,13 @@ function renderLevel(t, l){
 }
 
 function renderApto(t, l, a){
+  let firmCount = 0, totalVisible = 0;
   const rows = ACUSE_SLOTS.map(s => {
     const slot = getAcuseSlot(a, s.key);
     if (!clienteVeAcuse(slot)) return ''; // ocultar acuses firmados por otros si no es master
+    totalVisible++;
     const firmado = isAcuseFirmado(slot);
+    if (firmado) firmCount++;
     const fechaFirma = firmado && (slot.signatureTs || slot.ts)
       ? new Date(slot.signatureTs || slot.ts).toLocaleDateString('es-GT', { day:'2-digit', month:'2-digit', year:'numeric' })
       : '';
@@ -1408,9 +1429,16 @@ function renderApto(t, l, a){
     return `<div class="apto-card"><div class="apto-name">${escapeHtml(a.name || 'APTO')}</div><div class="apto-meta">Sin acuses visibles</div></div>`;
   }
 
-  return `<div class="apto-card" data-aid="${a.id}">
+  // Si nada está firmado, marcamos el apto entero como pendiente y mostramos
+  // "X PENDIENTES DE FIRMA" en vez del genérico "Acuses de las 6 etapas".
+  const pendApto = totalVisible - firmCount;
+  const aptoMeta = (firmCount === 0 && totalVisible > 0)
+    ? `<span style="color:#B8801F;font-weight:700;letter-spacing:.5px">${pendApto} acuses pendientes de firma</span>`
+    : `${firmCount} / ${totalVisible} firmados`;
+
+  return `<div class="apto-card${firmCount === 0 && totalVisible > 0 ? ' is-pendiente' : ''}" data-aid="${a.id}">
     <div class="apto-name">${escapeHtml(a.name || 'APTO')}</div>
-    <div class="apto-meta">Acuses de las 6 etapas</div>
+    <div class="apto-meta">${aptoMeta}</div>
     ${rows}
   </div>`;
 }
