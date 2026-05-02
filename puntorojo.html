@@ -1741,7 +1741,7 @@ html,body,.main{background:#FFFFFF!important;}
       <div class="mat-tabs">
         <button class="mat-tab active" data-mattab="receta" onclick="setMatTab('receta')">RECETA DE MATERIAL</button>
         <button class="mat-tab" data-mattab="pedidos" onclick="setMatTab('pedidos')">PEDIDOS DE MATERIAL</button>
-        <button class="mat-tab" data-mattab="ordenes" onclick="setMatTab('ordenes')" data-perm="compras.generate">ÓRDENES DE COMPRA</button>
+        <button class="mat-tab" data-mattab="ordenes" onclick="setMatTab('ordenes')" data-perm="view.materiales">ÓRDENES DE COMPRA</button>
         <button class="mat-tab" data-mattab="inventario" onclick="setMatTab('inventario')">INVENTARIOS</button>
       </div>
 
@@ -2036,6 +2036,27 @@ html,body,.main{background:#FFFFFF!important;}
   <div class="modal">
     <h3>EDITAR PROYECTO ACTIVO</h3>
     <p class="desc">SOLO EL ADMINISTRADOR PUEDE EDITAR ESTAS ESPECIFICACIONES. LOS CAMBIOS AFECTAN DASHBOARD, COBROS, PEDIDOS Y ÓRDENES NUEVAS.</p>
+
+    <!-- LOGO DEL PROYECTO — se usa en Acuses, PDFs y portal del cliente -->
+    <div class="field">
+      <label>LOGO DEL PROYECTO</label>
+      <div class="hint" style="margin-bottom:8px">Aparece en los acuses de recepción, en los PDFs del proyecto y en el portal del cliente. PNG o JPG con fondo transparente preferiblemente.</div>
+      <div id="epLogoBox" style="display:flex;align-items:center;gap:14px;padding:12px;border:1px dashed var(--line);border-radius:8px;background:var(--cream);min-height:90px">
+        <div id="epLogoPreviewWrap" style="width:96px;height:96px;border-radius:6px;background:#fff;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden">
+          <img id="epLogoPreview" alt="Logo del proyecto" style="display:none;max-width:100%;max-height:100%;object-fit:contain">
+          <span id="epLogoPlaceholder" style="font-size:9px;letter-spacing:1.5px;color:var(--mute);text-transform:uppercase;text-align:center;line-height:1.3;padding:6px">SIN LOGO</span>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;gap:8px;min-width:0">
+          <input type="file" id="epLogoFile" accept="image/png,image/jpeg,image/jpg,image/svg+xml,image/webp" style="display:none" onchange="onProjectLogoChosen(event)">
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            <button class="btn sm" type="button" onclick="document.getElementById('epLogoFile').click()">SELECCIONAR LOGO</button>
+            <button class="btn sm ghost" id="epLogoRemoveBtn" type="button" onclick="removeProjectLogo()" style="display:none">QUITAR</button>
+          </div>
+          <div id="epLogoStatus" style="font-size:10px;letter-spacing:.6px;color:var(--mute);text-transform:uppercase;line-height:1.4">Recomendado: 400×400 px o mayor. Se reduce automáticamente.</div>
+        </div>
+      </div>
+    </div>
+
     <div class="field"><label>NOMBRE DEL PROYECTO</label><input id="epName"></div>
     <div class="field"><label>CLIENTE</label><input id="epClient"></div>
     <div class="field"><label>UBICACIÓN</label><input id="epLocation"></div>
@@ -3143,9 +3164,8 @@ const PERMS_DISPONIBLES = [
   { key: 'pedidos.create',   label: 'Crear pedidos de material', group: 'EDICIÓN MATERIALES' },
   { key: 'pedidos.advance',  label: 'Aprobar/procesar pedidos (oficina)', group: 'EDICIÓN MATERIALES' },
   { key: 'pedidos.receive',  label: 'Confirmar recibido (supervisor)',    group: 'EDICIÓN MATERIALES' },
-  { key: 'compras.generate', label: 'Generar Orden de Compra para proveedor',group: 'EDICIÓN MATERIALES' },
   { key: 'receta.edit',      label: 'Editar receta de materiales por etapa',  group: 'EDICIÓN MATERIALES' },
-  { key: 'compras.autorizar',label: 'Autorizar Orden de Compra (Finanzas)',  group: 'EDICIÓN MATERIALES' },
+  { key: 'compras.autorizar',label: 'Autorizar Órdenes de Compra (Finanzas)',  group: 'EDICIÓN MATERIALES' },
   { key: 'personal.edit',    label: 'Editar colaboradores',    group: 'EDICIÓN PERSONAL' },
   { key: 'personal.asistencia', label: 'Marcar asistencia',    group: 'EDICIÓN PERSONAL' },
   { key: 'projects.create',  label: 'Crear proyectos nuevos',  group: 'ADMINISTRACIÓN' },
@@ -7869,20 +7889,30 @@ function renderPhotosModal(){
   if (!a.photos) a.photos = {};
 
   document.getElementById('photosTitle').textContent = `${t.name} · ${l.name} · ${a.name}`;
-  document.getElementById('photosSubtitle').textContent = `${aptoPct(a)}% ejecutado · Cada etapa requiere 2 fotos de áreas diferentes`;
+  document.getElementById('photosSubtitle').textContent = `${aptoPct(a)}% ejecutado · Cada etapa requiere 2 fotos de áreas diferentes · Las etapas se desbloquean en orden`;
+
+  // Helper: una etapa está "completa" cuando tiene LAS DOS fotos cargadas.
+  // Bloqueo secuencial: la etapa N solo se desbloquea cuando la etapa N-1 está completa.
+  // Dentro de la misma etapa: FOTO 2 sólo se desbloquea cuando FOTO 1 ya está cargada.
+  const _etapaCompleta = (i) => {
+    const ph = a.photos[i] || [null, null];
+    return !!(ph[0] && ph[1]);
+  };
 
   const body = document.getElementById('photosBody');
   body.innerHTML = ETAPAS.map((e, idx) => {
     const photos = a.photos[idx] || [null, null];
     const etapaActive = aptoPct(a) >= e.threshold;
-    return `<div class="photo-etapa-block">
+    // ¿Etapa anterior completa? (la primera siempre está desbloqueada)
+    const prevDone = idx === 0 ? true : _etapaCompleta(idx - 1);
+    return `<div class="photo-etapa-block${prevDone ? '' : ' is-locked'}">
       <div class="photo-etapa-head">
         <div>
-          <div class="photo-etapa-title"><span>●</span>ETAPA ${idx+1} · ${e.name}</div>
-          <div class="photo-etapa-sub">Umbral ≥${e.threshold}% · ${etapaActive ? 'ALCANZADA' : 'PENDIENTE'}</div>
+          <div class="photo-etapa-title"><span>●</span>ETAPA ${idx+1} · ${e.name}${prevDone ? '' : ' <span style="background:#FEF3C7;color:#92400E;font-size:9px;padding:2px 7px;border-radius:10px;letter-spacing:1px;font-weight:700;margin-left:8px">🔒 BLOQUEADA</span>'}</div>
+          <div class="photo-etapa-sub">Umbral ≥${e.threshold}% · ${etapaActive ? 'ALCANZADA' : 'PENDIENTE'}${prevDone ? '' : ' · TERMINÁ LA ETAPA ANTERIOR PRIMERO'}</div>
         </div>
       </div>
-      <div class="photo-etapa-slots">
+      <div class="photo-etapa-slots"${prevDone ? '' : ' style="opacity:.45;pointer-events:none"'}>
         ${[0,1].map(slotIdx => {
           const src = photos[slotIdx];
           if (src) {
@@ -7894,8 +7924,19 @@ function renderPhotosModal(){
               </div>` : ''}
             </div>`;
           } else {
-            // Slot vacío → abre la cámara EN VIVO (no permite galería).
-            // Esto garantiza que la foto se toma en el momento.
+            // Bloqueo intra-etapa: FOTO 2 solo si FOTO 1 ya está
+            const slotLocked = !prevDone || (slotIdx === 1 && !photos[0]);
+            const reasonTxt = !prevDone ? 'TERMINÁ ETAPA ANTERIOR' : (slotIdx === 1 ? 'SUBÍ FOTO 1 PRIMERO' : 'TOMAR EN EL MOMENTO');
+            if (slotLocked) {
+              return `<div class="photo-slot" style="cursor:not-allowed;opacity:.55" title="${reasonTxt}">
+                <div class="photo-slot-empty">
+                  <div class="ic" style="opacity:.6">🔒</div>
+                  <div>FOTO ${slotIdx+1}</div>
+                  <div style="font-size:9px;font-weight:600;color:var(--amber);letter-spacing:.4px">${reasonTxt}</div>
+                </div>
+              </div>`;
+            }
+            // Slot vacío y desbloqueado → abre la cámara EN VIVO (no permite galería).
             return `<div class="photo-slot" ${canEdit ? `onclick="openCameraModal(${idx},${slotIdx})" style="cursor:pointer"` : 'style="cursor:not-allowed;opacity:.5"'}>
               <div class="photo-slot-empty">
                 <div class="ic">+</div>
@@ -8025,6 +8066,24 @@ async function openCameraModal(etapaIdx, slotIdx){
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     return showToast('TU NAVEGADOR NO SOPORTA CÁMARA EN VIVO', 'red');
   }
+
+  // ── Defensa de bloqueo secuencial ──────────────────────────
+  // Aunque la UI ya esconde los slots bloqueados, validamos también acá
+  // por si el usuario llama esta función desde la consola.
+  try {
+    const _p = activeProj();
+    const _t = _p && _p.towers ? _p.towers.find(x => x.id === photoCtx.towerId) : null;
+    const _l = _t && _t.levels ? _t.levels.find(x => x.id === photoCtx.levelId) : null;
+    const _a = _l && _l.aptos ? _l.aptos.find(x => x.id === photoCtx.aptoId) : null;
+    if (_a) {
+      if (!_a.photos) _a.photos = {};
+      const _ph = _a.photos[etapaIdx] || [null, null];
+      const _prev = etapaIdx === 0 ? [null, null] : (_a.photos[etapaIdx - 1] || [null, null]);
+      const _prevDone = etapaIdx === 0 ? true : !!(_prev[0] && _prev[1]);
+      if (!_prevDone) return showToast('PRIMERO TERMINÁ LA ETAPA ANTERIOR (FOTO 1 + FOTO 2)', 'red');
+      if (slotIdx === 1 && !_ph[0]) return showToast('SUBÍ LA FOTO 1 ANTES QUE LA FOTO 2', 'red');
+    }
+  } catch(e) {}
 
   _cameraModalState = { mode:'avance', stream:null, etapaIdx, slotIdx, slotKey:null, photoIdx:null, towerId:null, levelId:null, aptoId:null, capturedBlob:null, contextoLabel:'' };
 
@@ -9703,9 +9762,10 @@ function advancePedido(id){
   if (!statusInfo || !statusInfo.next) return;
 
   // CASO ESPECIAL: pasar de SOLICITADO → APROBADO requiere generar Orden de Compra
+  // (POR EL MOMENTO, OC LIBRES — cualquier usuario con acceso a Materiales puede generarlas)
   if (pd.status === 'SOLICITADO' && statusInfo.next === 'APROBADO') {
-    if (!can('compras.generate') && !can('users.manage')) {
-      return showToast('SOLO COMPRAS PUEDE APROBAR Y GENERAR OC', 'red');
+    if (!can('view.materiales') && !can('users.manage')) {
+      return showToast('SIN ACCESO A MATERIALES', 'red');
     }
     currentPedidoDetalleId = pd.id;
     openOrdenCompra();
@@ -10395,8 +10455,8 @@ function openPedidoDetalle(id){
   const delBtn = document.getElementById('pedDetalleDeleteBtn');
   if (delBtn) delBtn.style.display = canDel ? '' : 'none';
 
-  // Mostrar/ocultar botón OC según permisos (solo compras/autorización)
-  const canOC = can('compras.generate') || can('users.manage');
+  // OC LIBRES por ahora — cualquier usuario con acceso a Materiales puede generarlas
+  const canOC = can('view.materiales') || can('users.manage');
   const ocBtn = document.getElementById('pedDetalleOCBtn');
   if (ocBtn) ocBtn.style.display = canOC ? '' : 'none';
 }
@@ -10514,7 +10574,8 @@ function autoAssignOcProviders(){
 }
 
 function openOrdenCompra(){
-  if (!can('compras.generate') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
+  // OC LIBRES — cualquier usuario con acceso a Materiales puede abrir el modal
+  if (!can('view.materiales') && !can('users.manage')) return showToast('SIN ACCESO A MATERIALES', 'red');
   if (!currentPedidoDetalleId) return;
 
   const p = activeProj();
@@ -10831,7 +10892,8 @@ function saveNewDireccion(){
 }
 
 function generarOrdenCompra(){
-  if (!can('compras.generate') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
+  // OC LIBRES — cualquier usuario con acceso a Materiales puede generar OC
+  if (!can('view.materiales') && !can('users.manage')) return showToast('SIN ACCESO A MATERIALES', 'red');
   if (!currentPedidoDetalleId) return;
 
   const p = activeProj();
@@ -11264,7 +11326,9 @@ function renderOrdenesList(){
     return;
   }
 
-  const canDelete = can('compras.generate') || can('users.manage');
+  // OC LIBRES — cualquier usuario con acceso a Materiales puede borrar/editar.
+  // SOLO el permiso de "Autorizar OC (Finanzas)" sigue restringido por compras.autorizar.
+  const canDelete = can('view.materiales') || can('users.manage');
   const canAuthorize = can('compras.autorizar') || can('users.manage');
 
   cont.innerHTML = ordenes.map(oc => {
@@ -11375,7 +11439,8 @@ function previewOrden(id){
 }
 
 function deleteOrden(id){
-  if (!can('compras.generate') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
+  // OC LIBRES — cualquier usuario con acceso a Materiales puede borrar
+  if (!can('view.materiales') && !can('users.manage')) return showToast('SIN ACCESO A MATERIALES', 'red');
   const p = activeProj();
   const oc = (p.materiales.ordenes || []).find(x => x.id === id);
   if (!oc) return;
@@ -11607,7 +11672,82 @@ function openEditProjectModal(){
   document.getElementById('epDiasPago').value = Number(p.diasPagoFactura || 30);
   const umbralEl = document.getElementById('epUmbralEst');
   if (umbralEl) umbralEl.value = Number(p.umbralEstimacion || 18);
+
+  // ─── LOGO DEL PROYECTO ───
+  // Resetear el input file y precargar el logo si existe
+  const fileInput = document.getElementById('epLogoFile');
+  if (fileInput) fileInput.value = '';
+  _epLogoStaged = null;            // Sin logo nuevo en staging por defecto
+  _epLogoStagedAction = null;      // 'set' | 'remove' | null
+  _renderEpLogoPreview(p.logoUrl || '');
+
   document.getElementById('modalEditProject').classList.add('show');
+}
+
+// ─── LOGO DEL PROYECTO ─────────────────────────────────────────
+// _epLogoStaged contiene el dataURL del logo NUEVO (en RAM, todavía no guardado).
+// _epLogoStagedAction indica qué hacer al guardar:
+//   'set'    → reemplazar p.logoUrl con _epLogoStaged
+//   'remove' → borrar p.logoUrl
+//   null     → no tocar p.logoUrl
+let _epLogoStaged = null;
+let _epLogoStagedAction = null;
+
+function _renderEpLogoPreview(dataUrl){
+  const img = document.getElementById('epLogoPreview');
+  const ph = document.getElementById('epLogoPlaceholder');
+  const removeBtn = document.getElementById('epLogoRemoveBtn');
+  if (!img || !ph) return;
+  if (dataUrl) {
+    img.src = dataUrl;
+    img.style.display = 'block';
+    ph.style.display = 'none';
+    if (removeBtn) removeBtn.style.display = 'inline-flex';
+  } else {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+    ph.style.display = 'block';
+    if (removeBtn) removeBtn.style.display = 'none';
+  }
+}
+
+async function onProjectLogoChosen(ev){
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const status = document.getElementById('epLogoStatus');
+  if (status) { status.textContent = 'PROCESANDO LOGO…'; status.style.color = 'var(--amber)'; }
+  try {
+    // Comprimir a máx 600px para mantener el doc liviano (logos suelen ser cuadrados)
+    const dataUrl = await compressImage(file, 600, 0.9);
+    _epLogoStaged = dataUrl;
+    _epLogoStagedAction = 'set';
+    _renderEpLogoPreview(dataUrl);
+    if (status) {
+      const kb = Math.round(dataUrl.length / 1024);
+      status.textContent = `LOGO LISTO · ~${kb} KB · GUARDÁ EL PROYECTO PARA APLICAR`;
+      status.style.color = 'var(--green-dark)';
+    }
+  } catch(err) {
+    console.error('Error procesando logo:', err);
+    if (status) {
+      status.textContent = 'NO SE PUDO PROCESAR LA IMAGEN';
+      status.style.color = 'var(--red)';
+    }
+    showToast('LOGO INVÁLIDO', 'red');
+  }
+}
+
+function removeProjectLogo(){
+  _epLogoStaged = null;
+  _epLogoStagedAction = 'remove';
+  _renderEpLogoPreview('');
+  const fileInput = document.getElementById('epLogoFile');
+  if (fileInput) fileInput.value = '';
+  const status = document.getElementById('epLogoStatus');
+  if (status) {
+    status.textContent = 'LOGO PENDIENTE DE QUITAR · GUARDÁ EL PROYECTO PARA APLICAR';
+    status.style.color = 'var(--amber)';
+  }
 }
 
 function saveProjectSpecs(){
@@ -11633,10 +11773,24 @@ function saveProjectSpecs(){
   p.diasPagoFactura = Math.max(1, Number(document.getElementById('epDiasPago').value) || 30);
   const umbralVal = Number(document.getElementById('epUmbralEst') && document.getElementById('epUmbralEst').value) || 18;
   p.umbralEstimacion = Math.max(1, umbralVal);
+
+  // ── LOGO DEL PROYECTO ──
+  let logoChange = '';
+  if (_epLogoStagedAction === 'set' && _epLogoStaged) {
+    p.logoUrl = _epLogoStaged;
+    logoChange = ' · Logo actualizado';
+  } else if (_epLogoStagedAction === 'remove') {
+    delete p.logoUrl;
+    logoChange = ' · Logo eliminado';
+  }
+  // Reset staging
+  _epLogoStaged = null;
+  _epLogoStagedAction = null;
+
   saveState();
   closeModal('editProject');
   renderAll();
-  logActivity('update', `Proyecto editado: ${p.name}`, `IVA ${Math.round(p.ivaPct*100)}% · Descuento ${fQ(p.descuentoAutorizado)}`);
+  logActivity('update', `Proyecto editado: ${p.name}`, `IVA ${Math.round(p.ivaPct*100)}% · Descuento ${fQ(p.descuentoAutorizado)}${logoChange}`);
   showToast('PROYECTO ACTUALIZADO', 'green');
 }
 
@@ -12158,7 +12312,7 @@ async function generarPDFMensual(){
       doc.addPage();
       let yp = 0;
 
-      // Header del proyecto
+      // Header del proyecto (alto 80pt). Si el proyecto tiene logo, se inserta a la derecha.
       doc.setFillColor(...ROJO);
       doc.rect(0, 0, pageW, 80, 'F');
       doc.setTextColor(255, 255, 255);
@@ -12169,6 +12323,13 @@ async function generarPDFMensual(){
       doc.setFont('helvetica', 'normal');
       const subtitle = [p.client, p.location].filter(Boolean).join('  ·  ');
       if (subtitle) doc.text(subtitle, 50, 60);
+      // Logo del proyecto (esquina superior derecha del header)
+      if (p.logoUrl) {
+        try {
+          const logoFmt = (p.logoUrl.startsWith('data:image/png') || p.logoUrl.startsWith('data:image/svg')) ? 'PNG' : 'JPEG';
+          doc.addImage(p.logoUrl, logoFmt, pageW - 110, 12, 56, 56, undefined, 'FAST');
+        } catch(e) { console.warn('No se pudo dibujar logo del proyecto en PDF:', e); }
+      }
 
       yp = 110;
       doc.setTextColor(0, 0, 0);
@@ -12621,6 +12782,14 @@ async function generarAcusesMaestros(){
     doc.setFont('helvetica', 'normal');
     doc.text('CONSOLIDADO POR ETAPA Y APARTAMENTO', pageW/2, 222, { align: 'center' });
 
+    // Logo del proyecto en la portada (esquina superior derecha sobre la franja roja)
+    if (p.logoUrl) {
+      try {
+        const _logoFmt = (p.logoUrl.startsWith('data:image/png') || p.logoUrl.startsWith('data:image/svg')) ? 'PNG' : 'JPEG';
+        doc.addImage(p.logoUrl, _logoFmt, pageW - 110, 30, 70, 70, undefined, 'FAST');
+      } catch(e) { console.warn('No se pudo dibujar logo del proyecto en portada de acuses:', e); }
+    }
+
     // Datos del proyecto
     let y = 290;
     doc.setTextColor(...NEGRO);
@@ -12689,12 +12858,22 @@ async function generarAcusesMaestros(){
       doc.setTextColor(255, 255, 255);
       doc.setFontSize(16);
       doc.setFont('helvetica', 'bold');
+      // Si hay logo, dejamos espacio a la derecha del título y movemos el contador abajo
       doc.text('ACUSE DE RECEPCIÓN', 50, 28);
       doc.setFontSize(9);
       doc.setFont('helvetica', 'normal');
-      doc.text(`No. ${String(i + 1).padStart(4, '0')} de ${String(acuses.length).padStart(4, '0')}`, pageW - 50, 28, { align: 'right' });
+      const _hasLogo = !!p.logoUrl;
+      const _rightX = _hasLogo ? (pageW - 110) : (pageW - 50);
+      doc.text(`No. ${String(i + 1).padStart(4, '0')} de ${String(acuses.length).padStart(4, '0')}`, _rightX, 28, { align: 'right' });
       doc.text(p.name, 50, 48);
-      doc.text((p.client || '—') + ' · ' + (p.location || '—'), pageW - 50, 48, { align: 'right' });
+      doc.text((p.client || '—') + ' · ' + (p.location || '—'), _rightX, 48, { align: 'right' });
+      // Logo del proyecto (esquina superior derecha)
+      if (_hasLogo) {
+        try {
+          const _lf = (p.logoUrl.startsWith('data:image/png') || p.logoUrl.startsWith('data:image/svg')) ? 'PNG' : 'JPEG';
+          doc.addImage(p.logoUrl, _lf, pageW - 100, 8, 44, 44, undefined, 'FAST');
+        } catch(e) {}
+      }
 
       let yc = 90;
       doc.setTextColor(...NEGRO);
@@ -19788,8 +19967,17 @@ window.descargarAcuseIndividualActual = async function(){
     doc.text('ACUSE DE RECEPCIÓN', 50, 32);
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
+    const _hasLogoInd = !!p.logoUrl;
+    const _rightInd = _hasLogoInd ? (pageW - 110) : (pageW - 50);
     doc.text(p.name, 50, 52);
-    doc.text((p.client || '—') + ' · ' + (p.location || '—'), pageW - 50, 52, { align: 'right' });
+    doc.text((p.client || '—') + ' · ' + (p.location || '—'), _rightInd, 52, { align: 'right' });
+    // Logo del proyecto (esquina superior derecha)
+    if (_hasLogoInd) {
+      try {
+        const _lf = (p.logoUrl.startsWith('data:image/png') || p.logoUrl.startsWith('data:image/svg')) ? 'PNG' : 'JPEG';
+        doc.addImage(p.logoUrl, _lf, pageW - 100, 12, 50, 50, undefined, 'FAST');
+      } catch(e) {}
+    }
 
     let yc = 100;
     doc.setTextColor(...NEGRO);
@@ -20008,8 +20196,23 @@ function viewDigitalAcuse(slot, ctx){
     alert(`COMPROBANTE DE ACUSE DIGITAL\n────────────────────────────\nRecibido por: ${nombre}\n${cargo}\nFecha: ${fecha}\nEntregado por: ${supervisor}`);
     return;
   }
+  // Logo + nombre del proyecto en la cabecera del comprobante
+  const _projForLogo = activeProj();
+  const _projLogoBlock = (_projForLogo && _projForLogo.logoUrl) ? `
+      <div style="display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:8px;padding:12px 16px;background:#fff">
+        <div style="width:64px;height:64px;border-radius:6px;background:#fff;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden">
+          <img src="${_projForLogo.logoUrl}" alt="Logo del proyecto" style="max-width:100%;max-height:100%;object-fit:contain">
+        </div>
+        <div style="min-width:0">
+          <div style="font-size:9px;font-weight:700;letter-spacing:1.4px;color:var(--mute);margin-bottom:2px">PROYECTO</div>
+          <div style="font-size:13px;font-weight:700;color:var(--ink);text-transform:uppercase;letter-spacing:.5px;line-height:1.2">${_projForLogo.name || ''}</div>
+          ${(_projForLogo.client||_projForLogo.location) ? `<div style="font-size:10px;color:var(--mute);letter-spacing:.4px;margin-top:2px">${[_projForLogo.client, _projForLogo.location].filter(Boolean).join(' · ')}</div>` : ''}
+        </div>
+      </div>` : '';
+
   body.innerHTML = `
     <div style="display:grid;grid-template-columns:1fr;gap:14px">
+      ${_projLogoBlock}
       <div style="border:1px solid var(--line);border-radius:6px;padding:12px 14px;background:var(--cream)">
         <div style="font-size:9px;font-weight:700;letter-spacing:1.4px;color:var(--mute);margin-bottom:4px">RECIBIDO Y FIRMADO POR (CLIENTE)</div>
         <div style="font-size:14px;font-weight:700;color:var(--ink);text-transform:uppercase;letter-spacing:.5px">${nombre}</div>
