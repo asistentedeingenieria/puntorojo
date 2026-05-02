@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v148-reporte-semanal-fotografico-cliente-y-auto-viernes';
+const CACHE_VERSION = 'v149-subtitulo-subcontratista-sin-tablayeso-gt';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
