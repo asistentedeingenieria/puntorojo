@@ -2423,8 +2423,40 @@ html,body,.main{background:#FFFFFF!important;}
       <div class="hint">Una vez activado, este dispositivo va a pedirte tu huella, Face ID o Windows Hello cada vez que abras la app. Es independiente por dispositivo.</div>
     </div>
 
+    <div class="field">
+      <label>SEGURIDAD DE TU CUENTA</label>
+      <button class="btn cafe sm" style="width:100%;padding:12px" onclick="openChangePasswordModal()">CAMBIAR MI CONTRASEÑA</button>
+      <div class="hint">Usá una clave fuerte: mínimo 8 caracteres, mayúsculas, minúsculas, números y un caracter especial.</div>
+    </div>
+
     <div class="modal-actions">
       <button class="btn" onclick="closeModal('settings')">CERRAR</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════ CAMBIAR MI CONTRASEÑA ═════════════ -->
+<div class="modal-bg" id="modalChangePassword" onclick="closeModalBg(event,'changePassword')">
+  <div class="modal" style="max-width:480px">
+    <h3>CAMBIAR MI CONTRASEÑA</h3>
+    <p class="desc">Por seguridad, ingresá tu clave actual y elegí una nueva clave fuerte. Te vamos a deslogear de los demás dispositivos por seguridad.</p>
+
+    <div class="field">
+      <label>CLAVE ACTUAL</label>
+      <input id="cpCurrent" type="password" autocomplete="current-password" placeholder="Tu clave actual">
+    </div>
+    <div class="field">
+      <label>CLAVE NUEVA (FUERTE)</label>
+      <input id="cpNew" type="password" autocomplete="new-password" placeholder="Mínimo 8 caracteres + mayús + minús + número + especial">
+    </div>
+    <div class="field">
+      <label>CONFIRMAR CLAVE NUEVA</label>
+      <input id="cpNew2" type="password" autocomplete="new-password" placeholder="Repetí la clave nueva" onkeydown="if(event.key==='Enter')doChangePassword()">
+    </div>
+    <div id="cpError" class="auth-error"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeModal('changePassword')">CANCELAR</button>
+      <button class="btn" onclick="doChangePassword()">ACTUALIZAR CONTRASEÑA</button>
     </div>
   </div>
 </div>
@@ -3768,6 +3800,76 @@ function getPasswordWeakReason(result){
   if (missing.length === 0) return '';
   return 'CLAVE DÉBIL · FALTA: ' + missing.join(', ').toUpperCase();
 }
+
+/* ════════ CAMBIAR MI CONTRASEÑA (usuario logueado) ════════
+   Pide la clave actual (re-auth) + la clave nueva con validación de fortaleza.
+   Usa firebase.auth().currentUser.reauthenticateWithCredential() para confirmar
+   identidad antes de updatePassword(). Esto es REQUERIDO por Firebase para
+   operaciones sensibles. */
+window.openChangePasswordModal = function(){
+  const u = firebase.auth().currentUser;
+  if (!u) return showToast('SIN SESIÓN ACTIVA', 'red');
+  // Limpiar campos y abrir
+  document.getElementById('cpCurrent').value = '';
+  document.getElementById('cpNew').value = '';
+  document.getElementById('cpNew2').value = '';
+  document.getElementById('cpError').textContent = '';
+  document.getElementById('modalChangePassword').classList.add('show');
+  // Conectar medidor de fortaleza al campo de clave nueva
+  setTimeout(() => attachPasswordStrength('cpNew', () => (firebase.auth().currentUser?.email || '')), 50);
+};
+
+window.doChangePassword = async function(){
+  const u = firebase.auth().currentUser;
+  const err = document.getElementById('cpError');
+  err.textContent = '';
+  if (!u) { err.textContent = 'SIN SESIÓN ACTIVA — VOLVÉ A INGRESAR'; return; }
+  const current = document.getElementById('cpCurrent').value;
+  const next = document.getElementById('cpNew').value;
+  const next2 = document.getElementById('cpNew2').value;
+
+  if (!current) { err.textContent = 'INGRESÁ TU CLAVE ACTUAL'; return; }
+  if (!next) { err.textContent = 'INGRESÁ LA CLAVE NUEVA'; return; }
+  if (next !== next2) { err.textContent = 'LAS CLAVES NUEVAS NO COINCIDEN'; return; }
+
+  // Validar fortaleza
+  const result = validatePasswordStrength(next, u.email || '');
+  if (!result.ok) { err.textContent = getPasswordWeakReason(result); return; }
+
+  // Validar que la nueva sea distinta de la actual
+  if (current === next) { err.textContent = 'LA CLAVE NUEVA DEBE SER DISTINTA A LA ACTUAL'; return; }
+
+  err.textContent = 'VERIFICANDO CLAVE ACTUAL...';
+  try {
+    // 1. Re-autenticar con la clave actual (Firebase lo exige antes de cambiar pass)
+    const cred = firebase.auth.EmailAuthProvider.credential(u.email, current);
+    await u.reauthenticateWithCredential(cred);
+
+    // 2. Actualizar la clave
+    err.textContent = 'ACTUALIZANDO CLAVE...';
+    await u.updatePassword(next);
+
+    err.textContent = '';
+    closeModal('changePassword');
+    showToast('CONTRASEÑA ACTUALIZADA · YA QUEDÓ APLICADA', 'green');
+    logActivity('update', 'Cambió su contraseña', u.email || '');
+  } catch(e) {
+    console.error('Change password error:', e);
+    let msg = 'ERROR AL CAMBIAR LA CLAVE';
+    if (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential') {
+      msg = 'CLAVE ACTUAL INCORRECTA';
+    } else if (e.code === 'auth/weak-password') {
+      msg = 'LA CLAVE NUEVA ES MUY DÉBIL';
+    } else if (e.code === 'auth/requires-recent-login') {
+      msg = 'POR SEGURIDAD, CERRÁ SESIÓN Y VOLVÉ A INGRESAR ANTES DE CAMBIAR LA CLAVE';
+    } else if (e.code === 'auth/too-many-requests') {
+      msg = 'DEMASIADOS INTENTOS — ESPERÁ UNOS MINUTOS';
+    } else if (e.message) {
+      msg += ': ' + e.message;
+    }
+    err.textContent = msg;
+  }
+};
 
 /* Crear el administrador maestro (solo se permite si no hay otros usuarios todavía). */
 async function doSetup(){

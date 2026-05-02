@@ -726,6 +726,7 @@ main { padding: 20px 24px 40px; max-width: 1100px; margin: 0 auto; }
       <span id="userName">—</span>
       <small id="userRole">—</small>
     </div>
+    <button class="btn ghost sm" onclick="openChangePasswordModal()" title="Cambiar mi contraseña">CLAVE</button>
     <button class="btn ghost sm" onclick="doLogout()">SALIR</button>
   </header>
   <main>
@@ -736,6 +737,31 @@ main { padding: 20px 24px 40px; max-width: 1100px; margin: 0 auto; }
     <div id="kpis" class="kpis"></div>
     <div id="appContent"></div>
   </main>
+</div>
+
+<!-- ════════ MODAL: CAMBIAR CONTRASEÑA ════════ -->
+<div id="modalChangePassword" class="modal-bg" onclick="if(event.target===this)closeModal('ChangePassword')">
+  <div class="modal" style="max-width:440px">
+    <h3>Cambiar Mi Contraseña</h3>
+    <p class="desc">Por seguridad, ingresá tu clave actual y elegí una nueva clave fuerte.</p>
+    <div class="field">
+      <label>Clave Actual</label>
+      <input id="cpCurrent" type="password" autocomplete="current-password">
+    </div>
+    <div class="field">
+      <label>Clave Nueva (Fuerte)</label>
+      <input id="cpNew" type="password" autocomplete="new-password">
+    </div>
+    <div class="field">
+      <label>Confirmar Clave Nueva</label>
+      <input id="cpNew2" type="password" autocomplete="new-password" onkeydown="if(event.key==='Enter')doChangePassword()">
+    </div>
+    <div id="cpError" class="auth-error"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeModal('ChangePassword')">CANCELAR</button>
+      <button class="btn" onclick="doChangePassword()">ACTUALIZAR</button>
+    </div>
+  </div>
 </div>
 
 <!-- ════════ MODAL: DETALLE ACUSE ════════ -->
@@ -1022,6 +1048,52 @@ async function doRegister(){
   success.textContent = '✓ Cuenta creada con éxito. Cargando portal...';
   success.classList.add('show');
 }
+
+// ── CAMBIAR MI CONTRASEÑA ──
+window.openChangePasswordModal = function(){
+  if (!currentUser) return showToast('Sin sesión activa', 'red');
+  document.getElementById('cpCurrent').value = '';
+  document.getElementById('cpNew').value = '';
+  document.getElementById('cpNew2').value = '';
+  document.getElementById('cpError').classList.remove('show');
+  document.getElementById('modalChangePassword').classList.add('show');
+  // Medidor de fortaleza
+  setTimeout(() => attachPasswordStrength('cpNew', () => (currentUser?.email || '')), 50);
+};
+
+window.doChangePassword = async function(){
+  const err = document.getElementById('cpError');
+  err.classList.remove('show');
+  if (!currentUser) { setError('cpError', 'Sin sesión activa'); return; }
+  const current = document.getElementById('cpCurrent').value;
+  const next = document.getElementById('cpNew').value;
+  const next2 = document.getElementById('cpNew2').value;
+  if (!current) return setError('cpError', 'Ingresá tu clave actual');
+  if (!next) return setError('cpError', 'Ingresá la clave nueva');
+  if (next !== next2) return setError('cpError', 'Las claves nuevas no coinciden');
+  const result = validatePasswordStrength(next, currentUser.email || '');
+  if (!result.ok) return setError('cpError', getPasswordWeakReason(result));
+  if (current === next) return setError('cpError', 'La clave nueva debe ser distinta a la actual');
+
+  showToast('Verificando clave actual...', '');
+  try {
+    const cred = firebase.auth.EmailAuthProvider.credential(currentUser.email, current);
+    await currentUser.reauthenticateWithCredential(cred);
+    showToast('Actualizando clave...', '');
+    await currentUser.updatePassword(next);
+    closeModal('ChangePassword');
+    showToast('Contraseña actualizada con éxito', 'green');
+  } catch(e) {
+    console.error('Change password error:', e);
+    let msg = 'Error al cambiar la clave';
+    if (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential') msg = 'Clave actual incorrecta';
+    else if (e.code === 'auth/weak-password') msg = 'La clave nueva es muy débil';
+    else if (e.code === 'auth/requires-recent-login') msg = 'Por seguridad, cerrá sesión y volvé a entrar antes de cambiar la clave';
+    else if (e.code === 'auth/too-many-requests') msg = 'Demasiados intentos — esperá unos minutos';
+    else if (e.message) msg += ': ' + e.message;
+    setError('cpError', msg);
+  }
+};
 
 // ── LOGOUT ──
 async function doLogout(){
