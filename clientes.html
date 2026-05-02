@@ -269,6 +269,47 @@ main { padding: 16px 22px 36px; max-width: 1100px; margin: 0 auto; }
 }
 .auth-toggle a:hover { text-decoration: underline; }
 
+/* ════════ TABS DEL PORTAL CLIENTE ════════ */
+.client-tabs{
+  display:flex;gap:0;margin-bottom:14px;border-bottom:1px solid var(--line);
+  overflow-x:auto;-webkit-overflow-scrolling:touch;
+}
+.client-tab{
+  background:none;border:none;padding:11px 18px;font-family:inherit;
+  font-size:11px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;
+  color:var(--mute);cursor:pointer;border-bottom:2px solid transparent;
+  transition:all .15s;white-space:nowrap;display:inline-flex;align-items:center;gap:8px;
+}
+.client-tab:hover{color:var(--ink)}
+.client-tab.active{color:var(--red);border-bottom-color:var(--red)}
+.ctab-badge{
+  background:var(--red);color:#fff;font-size:9px;font-weight:700;
+  padding:2px 7px;border-radius:10px;min-width:18px;text-align:center;letter-spacing:0;
+}
+
+/* ════════ REPORTES SEMANALES (lista de cards) ════════ */
+.report-card{
+  display:flex;align-items:center;gap:14px;background:var(--white);
+  border:1px solid var(--line);border-left:3px solid var(--red);
+  border-radius:8px;padding:13px 16px;margin-bottom:8px;
+  transition:border-color .15s,box-shadow .15s;
+}
+.report-card:hover{border-color:var(--mute-light);box-shadow:0 2px 8px rgba(15,23,42,.05)}
+.report-card .rc-icon{
+  width:42px;height:42px;border-radius:8px;background:var(--red-soft);
+  display:flex;align-items:center;justify-content:center;color:var(--red);
+  font-weight:800;font-size:15px;letter-spacing:.5px;flex-shrink:0;
+}
+.report-card .rc-info{flex:1;min-width:0}
+.report-card .rc-title{font-size:13px;font-weight:700;color:var(--ink);letter-spacing:.2px;text-transform:uppercase}
+.report-card .rc-meta{font-size:10px;color:var(--mute);margin-top:2px;letter-spacing:.3px}
+.report-card .rc-actions{display:flex;gap:6px;flex-shrink:0}
+@media (max-width:480px){
+  .report-card{flex-wrap:wrap;padding:11px 13px}
+  .report-card .rc-info{flex:1 1 100%}
+  .report-card .rc-actions{flex:1 1 100%;justify-content:flex-end;margin-top:4px}
+}
+
 /* ════════ PROYECTO SELECTOR ════════ */
 .project-bar{
   background:var(--white);border:1px solid var(--line);border-radius:6px;
@@ -818,8 +859,22 @@ table{max-width:100%}
       <select id="projectSelect" onchange="onProjectChange()"></select>
     </div>
     <div id="projHero" class="proj-hero" style="display:none"></div>
-    <div id="kpis" class="kpis"></div>
-    <div id="appContent"></div>
+    <!-- Tabs del portal cliente: Acuses · Reportes Semanales -->
+    <nav id="clientTabs" class="client-tabs" style="display:none">
+      <button class="client-tab active" data-ctab="acuses" onclick="setClientTab('acuses')">ACUSES DE RECEPCIÓN</button>
+      <button class="client-tab" data-ctab="reportes" onclick="setClientTab('reportes')">REPORTES SEMANALES <span id="reportesBadge" class="ctab-badge" style="display:none">0</span></button>
+    </nav>
+    <div id="ctabAcuses">
+      <div id="kpis" class="kpis"></div>
+      <div id="appContent"></div>
+    </div>
+    <div id="ctabReportes" style="display:none">
+      <div id="reportesIntro" style="background:var(--white);border:1px solid var(--line);border-left:3px solid var(--red);border-radius:8px;padding:14px 18px;margin-bottom:14px">
+        <div style="font-size:10px;letter-spacing:1.6px;text-transform:uppercase;font-weight:700;color:var(--red);margin-bottom:4px">REPORTES FOTOGRÁFICOS SEMANALES</div>
+        <div style="font-size:11.5px;color:var(--mute);letter-spacing:.3px;line-height:1.5">Cada viernes generamos un PDF con el avance fotográfico de la semana. Tocá un reporte para verlo o descargarlo.</div>
+      </div>
+      <div id="reportesList"></div>
+    </div>
   </main>
 </div>
 
@@ -1344,10 +1399,81 @@ function clienteVeAcuse(slot){
   return false;
 }
 
+// ── TABS DEL PORTAL ──
+let _activeClientTab = 'acuses';
+window.setClientTab = function(tab){
+  _activeClientTab = tab;
+  document.querySelectorAll('.client-tab').forEach(el => {
+    el.classList.toggle('active', el.dataset.ctab === tab);
+  });
+  const acuses = document.getElementById('ctabAcuses');
+  const reportes = document.getElementById('ctabReportes');
+  if (acuses) acuses.style.display = (tab === 'acuses') ? '' : 'none';
+  if (reportes) reportes.style.display = (tab === 'reportes') ? '' : 'none';
+  if (tab === 'reportes') renderReportesSemanales();
+};
+
+function renderReportesSemanales(){
+  const cont = document.getElementById('reportesList');
+  if (!cont) return;
+  const p = activeProj();
+  if (!p) { cont.innerHTML = ''; return; }
+  // Solo reportes publicados al cliente
+  const reps = (p.reportesSemanales || [])
+    .filter(r => r.status === 'publicado')
+    .slice()
+    .sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0));
+  if (!reps.length) {
+    cont.innerHTML = `<div class="empty"><div class="big">SIN REPORTES</div><p>Aún no hay reportes semanales publicados para este proyecto. El próximo reporte se publica el viernes a las 16:00.</p></div>`;
+    return;
+  }
+  cont.innerHTML = reps.map(r => {
+    const start = new Date(r.dateStart);
+    const end = new Date(r.dateEnd);
+    const meses = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+    const fmt = (d) => `${d.getDate()} ${meses[d.getMonth()]}`;
+    const fechaGen = new Date(r.generatedAt || Date.now()).toLocaleDateString('es-GT', { day:'2-digit', month:'2-digit', year:'numeric' });
+    return `
+      <div class="report-card">
+        <div class="rc-icon">${r.weekNumber}</div>
+        <div class="rc-info">
+          <div class="rc-title">SEMANA ${r.weekNumber}</div>
+          <div class="rc-meta">${fmt(start)} – ${fmt(end)} ${end.getFullYear()} · Publicado ${fechaGen}</div>
+        </div>
+        <div class="rc-actions">
+          <a href="${r.pdfUrl}" target="_blank" class="btn ghost sm" style="text-decoration:none">VER PDF</a>
+          <a href="${r.pdfUrl}" download="${escapeHtml(r.filename || `Reporte-Semana-${r.weekNumber}.pdf`)}" class="btn sm" style="text-decoration:none">DESCARGAR</a>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function _updateReportesBadge(){
+  const p = activeProj();
+  const badge = document.getElementById('reportesBadge');
+  if (!badge) return;
+  const count = (p && Array.isArray(p.reportesSemanales))
+    ? p.reportesSemanales.filter(r => r.status === 'publicado').length
+    : 0;
+  if (count > 0) {
+    badge.textContent = String(count);
+    badge.style.display = 'inline-flex';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
 // ── RENDER ──
 function renderApp(){
   const p = activeProj();
   if (!p) return;
+
+  // Mostrar las tabs cuando hay proyecto cargado
+  const tabsEl = document.getElementById('clientTabs');
+  if (tabsEl) tabsEl.style.display = 'flex';
+  _updateReportesBadge();
+  // Re-render reportes si está activo
+  if (_activeClientTab === 'reportes') renderReportesSemanales();
 
   // ── HERO DEL PROYECTO (logo + nombre + cliente) ──
   const heroEl = document.getElementById('projHero');

@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v147-paleta-balanceada-splash-limpio-quitarfondo-manual';
+const CACHE_VERSION = 'v148-reporte-semanal-fotografico-cliente-y-auto-viernes';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

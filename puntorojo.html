@@ -1833,6 +1833,16 @@ table{max-width:100%}
           </div>
           <button class="btn" onclick="openAcusesMaestrosModal()" style="white-space:nowrap">GENERAR PDF</button>
         </div>
+        <!-- Reporte Semanal Fotográfico -->
+        <div id="reporteSemanalBar" class="auto-hide" data-perm="users.manage" style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:0 0 14px;padding:14px 18px;background:#FFF;border:1px solid var(--line);border-left:3px solid var(--cafe);border-radius:6px">
+          <div style="flex:1;min-width:200px">
+            <div style="font-size:10px;letter-spacing:2px;text-transform:uppercase;font-weight:700;color:var(--cafe);margin-bottom:4px">REPORTE SEMANAL FOTOGRÁFICO</div>
+            <div style="font-size:11px;color:var(--mute);letter-spacing:.4px;line-height:1.4">PDF de avance de la semana usando las fotos de avance físico ya cargadas. Se publica en el portal del cliente. Auto-genera viernes 16:00.</div>
+          </div>
+          <button class="btn" onclick="openReporteSemanalModal()" style="white-space:nowrap;background:var(--cafe);border-color:var(--cafe);color:#fff">GENERAR REPORTE</button>
+        </div>
+        <!-- Lista de reportes ya generados (admin ve borradores y publicados) -->
+        <div id="reporteSemanalList" data-perm="users.manage" style="margin-bottom:14px"></div>
         <div id="acuseRecepcionList"></div>
       </div>
 
@@ -2189,6 +2199,7 @@ table{max-width:100%}
     <div class="field"><label>NOMBRE DEL PROYECTO</label><input id="epName"></div>
     <div class="field"><label>CLIENTE</label><input id="epClient"></div>
     <div class="field"><label>UBICACIÓN</label><input id="epLocation"></div>
+    <div class="field"><label>FECHA DE INICIO DE OBRA</label><input id="epStartDate" type="date"><div class="hint">Determina la SEMANA 1 del proyecto. Cada semana del reporte se cuenta desde el lunes de esta fecha.</div></div>
     <div class="field"><label>MONTO CONTRATADO SIN IVA (Q)</label><input id="epAmount" type="number" step="0.01"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="field"><label>IVA %</label><input id="epIva" type="number" step="0.01"></div>
@@ -2213,6 +2224,62 @@ table{max-width:100%}
     <div class="modal-actions">
       <button class="btn ghost" onclick="closeModal('newTower')">CANCELAR</button>
       <button class="btn cafe" onclick="createTower()">AGREGAR</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════ MODAL: GENERAR REPORTE SEMANAL ════════ -->
+<div class="modal-bg" id="modalReporteSemanal" onclick="closeModalBg(event,'reporteSemanal')">
+  <div class="modal" style="max-width:560px">
+    <h3>REPORTE FOTOGRÁFICO SEMANAL</h3>
+    <p class="desc">Generá el reporte de la semana con las fotos de avance ya cargadas. Se publica automáticamente en el portal del cliente.</p>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="field">
+        <label>SEMANA Nº</label>
+        <input id="rsWeekNum" type="number" min="1" step="1">
+        <div class="hint">Se calcula automáticamente desde la fecha de inicio del proyecto.</div>
+      </div>
+      <div class="field">
+        <label>TORRE</label>
+        <select id="rsTorre"><option value="">TODAS LAS TORRES</option></select>
+      </div>
+      <div class="field">
+        <label>DESDE (LUN)</label>
+        <input id="rsStart" type="date">
+      </div>
+      <div class="field">
+        <label>HASTA (DOM)</label>
+        <input id="rsEnd" type="date">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>VISTA PREVIA DE LA SEMANA</label>
+      <div id="rsPreview" style="background:var(--cream);border:1px solid var(--line);border-radius:6px;padding:14px;font-size:11px;letter-spacing:.3px;line-height:1.55;color:var(--text);min-height:60px">
+        Esperando rango de fechas…
+      </div>
+    </div>
+
+    <div class="field">
+      <label>ESTADO AL PUBLICAR</label>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="rsStatus" value="publicado" checked> <span>PUBLICADO (visible al cliente)</span></label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="rsStatus" value="borrador"> <span>BORRADOR (solo admin)</span></label>
+      </div>
+    </div>
+
+    <div id="rsProgress" style="display:none;margin-top:14px;padding:12px;background:var(--cream);border:1px solid var(--line);border-radius:6px">
+      <div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:700;margin-bottom:6px" id="rsProgressMsg">Generando…</div>
+      <div style="height:6px;background:var(--line);border-radius:3px;overflow:hidden">
+        <div id="rsProgressFill" style="height:100%;width:0%;background:var(--red);transition:width .25s ease"></div>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeModal('reporteSemanal')" id="rsCancelBtn">CANCELAR</button>
+      <button class="btn" onclick="generarReporteSemanalPreview()" id="rsPreviewBtn">VISTA PREVIA</button>
+      <button class="btn" onclick="generarYPublicarReporteSemanal()" id="rsGenerarBtn" style="background:var(--red-dark);border-color:var(--red-dark);color:#fff">GENERAR Y PUBLICAR</button>
     </div>
   </div>
 </div>
@@ -5983,6 +6050,135 @@ function activeProj(){
   return state.projects.find(p => p.id === state.activeProjectId) || state.projects[0];
 }
 
+/* ─────────────── HELPERS DE SEMANA / REPORTES SEMANALES ───────────────
+   Numeración: la "Semana 1" es la semana que contiene la fecha de inicio
+   del proyecto (p.startDate). Si el proyecto no tiene startDate, se usa
+   la fecha de la primera foto cargada o el primer activity log.
+   Las semanas son LUNES-DOMINGO. */
+const _MS_DAY = 24 * 60 * 60 * 1000;
+const _MS_WEEK = 7 * _MS_DAY;
+
+/* Devuelve un Date al LUNES 00:00 (hora local) de la semana de `d`.
+   d puede ser Date, ms o string ISO. */
+function getMondayOfWeek(d){
+  const date = new Date(typeof d === 'number' ? d : (d || Date.now()));
+  date.setHours(0, 0, 0, 0);
+  // getDay: 0=Domingo, 1=Lunes,...,6=Sábado. Queremos Lunes (1).
+  const dow = date.getDay();
+  const diff = (dow === 0) ? -6 : (1 - dow); // Domingo retrocede 6, otros calculan
+  date.setDate(date.getDate() + diff);
+  return date;
+}
+
+/* Devuelve {start, end} con start=Lunes 00:00 y end=Domingo 23:59:59 */
+function getWeekRange(d){
+  const start = getMondayOfWeek(d);
+  const end = new Date(start.getTime() + _MS_WEEK - 1); // domingo 23:59:59.999
+  return { start, end };
+}
+
+/* Devuelve la primera fecha conocida de actividad del proyecto. Sirve como
+   fallback si el admin nunca seteó startDate. */
+function _getProjectAnchorDate(p){
+  if (!p) return new Date();
+  if (p.startDate) {
+    const d = new Date(p.startDate);
+    if (!isNaN(d.getTime())) return d;
+  }
+  // Fallback: primera foto/stage timestamp o actividad
+  let earliest = Infinity;
+  (p.towers || []).forEach(t => (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
+    if (a.photoTs) Object.values(a.photoTs).forEach(arr => {
+      if (Array.isArray(arr)) arr.forEach(ts => { if (ts && ts < earliest) earliest = ts; });
+    });
+    if (Array.isArray(a.stagesTs)) a.stagesTs.forEach(ts => { if (ts && ts < earliest) earliest = ts; });
+  })));
+  if (earliest === Infinity) return new Date();
+  return new Date(earliest);
+}
+
+/* Calcula el número de semana del proyecto para una fecha dada.
+   Semana 1 = semana del Lunes que contiene/precede a startDate.
+   Si dateAt es anterior a la semana 1, devuelve 0. */
+function getProjectWeekNumber(p, dateAt){
+  const anchor = getMondayOfWeek(_getProjectAnchorDate(p));
+  const target = getMondayOfWeek(dateAt || Date.now());
+  const diffMs = target.getTime() - anchor.getTime();
+  return Math.max(0, Math.floor(diffMs / _MS_WEEK)) + 1;
+}
+
+/* Dado un weekNumber relativo al proyecto, devuelve {start, end} de esa semana */
+function getProjectWeekRange(p, weekNumber){
+  const anchor = getMondayOfWeek(_getProjectAnchorDate(p));
+  const target = new Date(anchor.getTime() + (weekNumber - 1) * _MS_WEEK);
+  return getWeekRange(target);
+}
+
+/* Recolecta toda la actividad del proyecto en el rango [startMs, endMs].
+   Devuelve aptos con: nuevas fotos, etapas completadas, acuses firmados.
+   Pensado para alimentar el PDF del reporte semanal. */
+function getActivityInRange(p, startMs, endMs){
+  const out = []; // [{tower, level, apto, newPhotos:[{etapaIdx,slotIdx,url,ts}], stagesDone:[idx], acuses:[{slotKey, ts, receptorNombre}]}]
+  if (!p) return out;
+  (p.towers || []).forEach(t => (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
+    const newPhotos = [];
+    if (a.photoTs && a.photos) {
+      Object.keys(a.photoTs).forEach(etapaIdxStr => {
+        const eIdx = parseInt(etapaIdxStr);
+        const tsArr = a.photoTs[etapaIdxStr] || [];
+        const urlArr = a.photos[eIdx] || [];
+        tsArr.forEach((ts, slotIdx) => {
+          if (ts && ts >= startMs && ts <= endMs && urlArr[slotIdx]) {
+            newPhotos.push({ etapaIdx: eIdx, slotIdx, url: urlArr[slotIdx], ts });
+          }
+        });
+      });
+    }
+    const stagesDone = [];
+    if (Array.isArray(a.stagesTs)) {
+      a.stagesTs.forEach((ts, idx) => {
+        if (ts && ts >= startMs && ts <= endMs) stagesDone.push(idx);
+      });
+    }
+    const acusesFirmados = [];
+    if (a.acuseRecepciones) {
+      Object.keys(a.acuseRecepciones).forEach(slotKey => {
+        const slot = a.acuseRecepciones[slotKey];
+        if (slot && slot.ts && slot.ts >= startMs && slot.ts <= endMs && (slot.receptorId || slot.receptorNombre)) {
+          acusesFirmados.push({ slotKey, ts: slot.ts, receptorNombre: slot.receptorNombre || '' });
+        }
+      });
+    }
+    if (newPhotos.length || stagesDone.length || acusesFirmados.length) {
+      out.push({ tower: t, level: l, apto: a, newPhotos, stagesDone, acuses: acusesFirmados });
+    }
+  })));
+  return out;
+}
+
+/* Formato corto de fecha en español */
+function _fmtDateEs(d){
+  if (!d) return '';
+  const date = (typeof d === 'number') ? new Date(d) : d;
+  const meses = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  return `${date.getDate()} ${meses[date.getMonth()]}`;
+}
+function _fmtDateEsLong(d){
+  if (!d) return '';
+  const date = (typeof d === 'number') ? new Date(d) : d;
+  const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  return `${date.getDate()} de ${meses[date.getMonth()]} ${date.getFullYear()}`;
+}
+
+/* Slug seguro para nombres de archivo (quita acentos, espacios → _) */
+function _safeFilename(s){
+  return String(s || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toUpperCase().trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^A-Z0-9_-]/g, '');
+}
+
 function descuentoProyecto(p){
   return Math.max(0, Number(p?.descuentoAutorizado || 0));
 }
@@ -7380,7 +7576,7 @@ function renderAvance(){
     return;
   }
   mx.innerHTML = visibleTowers.map(t => renderTowerSummary(t, p, canEditAv)).join('');
-  if (currentAvanceTab === 'acuses') renderAcusesRecepcion();
+  if (currentAvanceTab === 'acuses') { renderAcusesRecepcion(); if (typeof renderReporteSemanalList === 'function') renderReporteSemanalList(); }
   applyPermissions();
 }
 
@@ -7461,7 +7657,7 @@ function setAvanceSubTab(tab){
     // Re-renderizar Etapas para que el reset visual aplique inmediato
     renderAvance();
   }
-  if (currentAvanceTab === 'acuses') renderAcusesRecepcion();
+  if (currentAvanceTab === 'acuses') { renderAcusesRecepcion(); if (typeof renderReporteSemanalList === 'function') renderReporteSemanalList(); }
   if (currentAvanceTab === 'cuadritos' && typeof window.renderAvanceFisicoCuadritos === 'function') window.renderAvanceFisicoCuadritos();
 }
 
@@ -7978,7 +8174,13 @@ function toggleStage(towerId, levelId, aptoId, stageIdx){
       showToast('FALTAN LAS 2 FOTOS REQUERIDAS DE: ' + labels, 'red');
       return;
     }
-    for (let i = 0; i <= stageIdx; i++) a.stages[i] = true;
+    // Marcar etapas completadas con timestamp para reportes semanales.
+    if (!a.stagesTs) a.stagesTs = [];
+    const _now = Date.now();
+    for (let i = 0; i <= stageIdx; i++) {
+      if (!a.stages[i]) a.stagesTs[i] = _now;
+      a.stages[i] = true;
+    }
   }
 
   saveState();
@@ -8834,7 +9036,10 @@ async function _uploadPhotoBlob(blob, etapaIdx, slotIdx){
     const url = await ref.getDownloadURL();
 
     if (!a.photos[etapaIdx]) a.photos[etapaIdx] = [null, null];
+    if (!a.photoTs) a.photoTs = {};
+    if (!a.photoTs[etapaIdx]) a.photoTs[etapaIdx] = [null, null];
     a.photos[etapaIdx][slotIdx] = url;
+    a.photoTs[etapaIdx][slotIdx] = Date.now(); // para reportes semanales
     a.photoHashes[etapaIdx][slotIdx] = hash;
     a.photoPHashes[etapaIdx][slotIdx] = pHash;
     saveState();
@@ -8878,7 +9083,10 @@ async function uploadPhoto(event, etapaIdx, slotIdx){
     const l = t.levels.find(x => x.id === photoCtx.levelId);
     const a = (l.aptos||[]).find(x => x.id === aptoId);
     if (!a.photos[etapaIdx]) a.photos[etapaIdx] = [null, null];
+    if (!a.photoTs) a.photoTs = {};
+    if (!a.photoTs[etapaIdx]) a.photoTs[etapaIdx] = [null, null];
     a.photos[etapaIdx][slotIdx] = url;
+    a.photoTs[etapaIdx][slotIdx] = Date.now(); // para reportes semanales
     saveState();
 
     logActivity('update', `Foto agregada: ${l.name} · ${a.name}`, `${p.name} · ${ETAPAS[etapaIdx].name} (foto ${slotIdx+1})`);
@@ -12074,6 +12282,9 @@ function openEditProjectModal(){
   document.getElementById('epName').value = p.name || '';
   document.getElementById('epClient').value = p.client || '';
   document.getElementById('epLocation').value = p.location || '';
+  // startDate del proyecto (para numeración de semanas)
+  const sdEl = document.getElementById('epStartDate');
+  if (sdEl) sdEl.value = p.startDate ? new Date(p.startDate).toISOString().slice(0,10) : '';
   document.getElementById('epAmount').value = Number(p.totalSinIva || 0).toFixed(2);
   document.getElementById('epIva').value = ((p.ivaPct || 0) * 100).toFixed(2);
   document.getElementById('epAntic').value = ((p.anticipoPct || 0) * 100).toFixed(2);
@@ -12361,6 +12572,9 @@ function saveProjectSpecs(){
   p.name = name;
   p.client = document.getElementById('epClient').value.trim().toUpperCase();
   p.location = document.getElementById('epLocation').value.trim().toUpperCase();
+  // Fecha de inicio de obra (para numerar semanas en los reportes)
+  const sdVal = document.getElementById('epStartDate')?.value;
+  p.startDate = sdVal ? new Date(sdVal + 'T00:00:00').toISOString() : '';
   p.totalSinIva = totalSI;
   p.ivaPct = iva;
   p.totalConIva = totalSI * (1 + iva);
@@ -13326,6 +13540,399 @@ async function generarPDFMensual(){
     console.error('Error PDF:', e);
     showToast('ERROR EN PDF: ' + (e.message || e), 'red');
   }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   REPORTE SEMANAL · MODAL DE GENERACIÓN
+   Lógica del flujo:
+     1. openReporteSemanalModal: precarga semana actual + lun-dom +
+        torres + dispara vista previa.
+     2. generarReporteSemanalPreview: calcula y muestra resumen sin
+        generar PDF — ideal para validar fechas antes.
+     3. generarYPublicarReporteSemanal: genera, sube a Storage,
+        guarda metadata, opcionalmente notifica a clientes y
+        actualiza la lista visible.
+   ═══════════════════════════════════════════════════════════════ */
+function openReporteSemanalModal(){
+  if (!can('users.manage')) return showToast('SOLO ADMINISTRADOR', 'red');
+  const p = activeProj();
+  if (!p) return showToast('SELECCIONÁ UN PROYECTO', 'red');
+
+  // Cargar selector de torres
+  const tSel = document.getElementById('rsTorre');
+  if (tSel) {
+    tSel.innerHTML = '<option value="">TODAS LAS TORRES</option>' +
+      (p.towers || []).map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+  }
+
+  // Pre-llenar semana actual + rango Lun-Dom
+  const weekNum = getProjectWeekNumber(p, Date.now());
+  const range = getProjectWeekRange(p, weekNum);
+  const wn = document.getElementById('rsWeekNum');
+  if (wn) wn.value = weekNum;
+  const sd = document.getElementById('rsStart');
+  const ed = document.getElementById('rsEnd');
+  if (sd) sd.value = range.start.toISOString().slice(0, 10);
+  if (ed) ed.value = range.end.toISOString().slice(0, 10);
+
+  // Listeners para auto-recalcular semana cuando cambian las fechas
+  if (sd && !sd.dataset.bound) {
+    sd.dataset.bound = '1';
+    sd.addEventListener('change', _rsSyncFromDate);
+    if (ed) ed.addEventListener('change', _rsSyncFromDate);
+    if (wn) wn.addEventListener('change', _rsSyncFromWeek);
+  }
+
+  generarReporteSemanalPreview();
+
+  // Reset progress
+  const prog = document.getElementById('rsProgress');
+  if (prog) prog.style.display = 'none';
+  document.getElementById('modalReporteSemanal').classList.add('show');
+}
+
+function _rsSyncFromDate(){
+  const p = activeProj();
+  if (!p) return;
+  const sd = document.getElementById('rsStart');
+  const ed = document.getElementById('rsEnd');
+  if (!sd || !sd.value) return;
+  const startDate = new Date(sd.value + 'T00:00:00');
+  const range = getWeekRange(startDate);
+  if (sd) sd.value = range.start.toISOString().slice(0, 10);
+  if (ed) ed.value = range.end.toISOString().slice(0, 10);
+  const wn = document.getElementById('rsWeekNum');
+  if (wn) wn.value = getProjectWeekNumber(p, range.start.getTime() + _MS_DAY);
+  generarReporteSemanalPreview();
+}
+
+function _rsSyncFromWeek(){
+  const p = activeProj();
+  if (!p) return;
+  const wn = document.getElementById('rsWeekNum');
+  if (!wn || !wn.value) return;
+  const weekNum = Math.max(1, parseInt(wn.value) || 1);
+  const range = getProjectWeekRange(p, weekNum);
+  const sd = document.getElementById('rsStart');
+  const ed = document.getElementById('rsEnd');
+  if (sd) sd.value = range.start.toISOString().slice(0, 10);
+  if (ed) ed.value = range.end.toISOString().slice(0, 10);
+  generarReporteSemanalPreview();
+}
+
+function _rsGetParams(){
+  const p = activeProj();
+  if (!p) return null;
+  const sdEl = document.getElementById('rsStart');
+  const edEl = document.getElementById('rsEnd');
+  const wnEl = document.getElementById('rsWeekNum');
+  const tEl = document.getElementById('rsTorre');
+  const stEls = document.querySelectorAll('input[name="rsStatus"]');
+  if (!sdEl || !edEl || !wnEl || !sdEl.value || !edEl.value) return null;
+  const start = new Date(sdEl.value + 'T00:00:00');
+  const end = new Date(edEl.value + 'T23:59:59.999');
+  const weekNum = Math.max(1, parseInt(wnEl.value) || 1);
+  const torreId = tEl ? tEl.value : '';
+  let status = 'publicado';
+  stEls.forEach(el => { if (el.checked) status = el.value; });
+  return { p, start, end, weekNum, torreId, status };
+}
+
+function generarReporteSemanalPreview(){
+  const params = _rsGetParams();
+  const previewEl = document.getElementById('rsPreview');
+  if (!previewEl) return;
+  if (!params) { previewEl.innerHTML = 'Esperando rango de fechas…'; return; }
+  const { p, start, end, weekNum } = params;
+  const activity = getActivityInRange(p, start.getTime(), end.getTime());
+  let fotos = 0, etapas = 0, acuses = 0;
+  const torres = {};
+  activity.forEach(it => {
+    fotos += it.newPhotos.length;
+    etapas += it.stagesDone.length;
+    acuses += it.acuses.length;
+    if (!torres[it.tower.id]) torres[it.tower.id] = { name: it.tower.name, aptos: 0, fotos: 0 };
+    torres[it.tower.id].aptos++;
+    torres[it.tower.id].fotos += it.newPhotos.length;
+  });
+  const torreList = Object.values(torres)
+    .map(t => `&nbsp;&nbsp;• ${escapeHtml(t.name)} — ${t.aptos} aptos · ${t.fotos} fotos`)
+    .join('<br>');
+  previewEl.innerHTML = `
+    <div style="font-weight:700;color:var(--ink);margin-bottom:6px">Semana ${weekNum} · ${_fmtDateEs(start)} → ${_fmtDateEs(end)} ${end.getFullYear()}</div>
+    <div>${activity.length} apto${activity.length === 1 ? '' : 's'} con actividad</div>
+    <div>${fotos} foto${fotos === 1 ? '' : 's'} · ${etapas} etapa${etapas === 1 ? '' : 's'} completada${etapas === 1 ? '' : 's'} · ${acuses} acuse${acuses === 1 ? '' : 's'} firmado${acuses === 1 ? '' : 's'}</div>
+    ${torreList ? `<div style="margin-top:6px">${torreList}</div>` : '<div style="margin-top:6px;color:var(--amber)">Sin actividad en el período seleccionado.</div>'}
+    <div style="margin-top:8px;padding-top:6px;border-top:1px dashed var(--line);font-size:10px;color:var(--mute)">Archivo: <strong>${_safeFilename(p.name)}_REPORTE SEMANA ${weekNum}.pdf</strong></div>
+  `;
+}
+
+async function generarYPublicarReporteSemanal(){
+  const params = _rsGetParams();
+  if (!params) return showToast('FALTAN DATOS', 'red');
+  const { p, start, end, weekNum, status } = params;
+
+  const btnGen = document.getElementById('rsGenerarBtn');
+  const btnCancel = document.getElementById('rsCancelBtn');
+  const btnPrev = document.getElementById('rsPreviewBtn');
+  const prog = document.getElementById('rsProgress');
+  const progFill = document.getElementById('rsProgressFill');
+  const progMsg = document.getElementById('rsProgressMsg');
+  if (btnGen) btnGen.disabled = true;
+  if (btnCancel) btnCancel.disabled = true;
+  if (btnPrev) btnPrev.disabled = true;
+  if (prog) prog.style.display = 'block';
+
+  const setProg = (pct, msg) => {
+    if (progFill) progFill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    if (progMsg) progMsg.textContent = msg || 'Generando…';
+  };
+
+  try {
+    setProg(2, 'Generando PDF…');
+    const blob = await generarReporteSemanalPDF(p, weekNum, start, end, { onProgress: setProg });
+    setProg(85, 'Subiendo a la nube…');
+    const filename = `${_safeFilename(p.name)}_REPORTE SEMANA ${weekNum}.pdf`;
+    const reportId = `sem-${weekNum}-${start.getFullYear()}-${Date.now()}`;
+    const path = `reports/${p.id}/${reportId}.pdf`;
+    const ref = firebase.storage().ref(path);
+    await ref.put(blob, { contentType: 'application/pdf', customMetadata: {
+      projectId: p.id,
+      weekNumber: String(weekNum),
+      filename
+    }});
+    const pdfUrl = await ref.getDownloadURL();
+
+    setProg(94, 'Guardando metadata…');
+    if (!Array.isArray(p.reportesSemanales)) p.reportesSemanales = [];
+    const meta = {
+      id: reportId,
+      weekNumber: weekNum,
+      dateStart: start.toISOString(),
+      dateEnd: end.toISOString(),
+      generatedAt: Date.now(),
+      generatedBy: getCurrentUser()?.displayName || getCurrentUser()?.username || 'Sistema',
+      generatedByEmail: getCurrentUser()?.email || '',
+      pdfUrl,
+      pdfPath: path,
+      filename,
+      status: status || 'publicado',
+      autoGenerated: false
+    };
+    p.reportesSemanales.push(meta);
+    saveState();
+
+    setProg(98, 'Notificando…');
+    if (status === 'publicado') {
+      try { await _notificarReporteSemanalPublicado(p, meta); } catch(e){ console.warn('Notif fallida:', e); }
+    }
+    logActivity('create', `Reporte semanal SEMANA ${weekNum} generado`, `${p.name} · ${status.toUpperCase()}`);
+
+    setProg(100, 'Listo');
+    setTimeout(() => {
+      closeModal('reporteSemanal');
+      showToast(`REPORTE SEMANA ${weekNum} ${status === 'borrador' ? 'GUARDADO' : 'PUBLICADO'}`, 'green');
+      if (typeof renderReporteSemanalList === 'function') renderReporteSemanalList();
+    }, 600);
+  } catch(err) {
+    console.error('Error generando reporte semanal:', err);
+    showToast('ERROR: ' + (err.message || err), 'red');
+    if (prog) prog.style.display = 'none';
+  } finally {
+    if (btnGen) btnGen.disabled = false;
+    if (btnCancel) btnCancel.disabled = false;
+    if (btnPrev) btnPrev.disabled = false;
+  }
+}
+
+/* Notif a todos los receptores del proyecto cuando se publica un reporte. */
+async function _notificarReporteSemanalPublicado(p, meta){
+  if (typeof firebase === 'undefined' || !firebase.firestore) return;
+  const db = firebase.firestore();
+  const receptores = (state.receptores || []).filter(r =>
+    r.clientLoginEmail && (r.isMaster || (Array.isArray(r.assignedProjectIds) && r.assignedProjectIds.includes(p.id)))
+  );
+  // Buscar el uid de cada receptor (clientRegistrations)
+  const promises = receptores.map(async r => {
+    try {
+      const snap = await db.collection('clientRegistrations')
+        .where('email', '==', r.clientLoginEmail.toLowerCase())
+        .limit(1).get();
+      if (snap.empty) return;
+      const uid = snap.docs[0].id;
+      const notif = {
+        type: 'reporte_semanal',
+        title: 'Reporte semanal disponible', // sin emojis
+        body: `Semana ${meta.weekNumber} de ${p.name} · Tocá para verlo`,
+        projectId: p.id,
+        reportId: meta.id,
+        pdfUrl: meta.pdfUrl,
+        ts: firebase.firestore.FieldValue.serverTimestamp(),
+        read: false
+      };
+      await db.collection('users').doc(uid).collection('notifications').add(notif);
+    } catch(e) { console.warn('No pude notificar a', r.clientLoginEmail, e); }
+  });
+  await Promise.all(promises);
+}
+
+/* Render de la lista de reportes semanales en la pestaña Acuses (admin). */
+function renderReporteSemanalList(){
+  const cont = document.getElementById('reporteSemanalList');
+  if (!cont) return;
+  const p = activeProj();
+  if (!p) { cont.innerHTML = ''; return; }
+  const reps = (p.reportesSemanales || []).slice().sort((a,b) => (b.generatedAt||0) - (a.generatedAt||0));
+  if (reps.length === 0) {
+    cont.innerHTML = '';
+    return;
+  }
+  cont.innerHTML = `
+    <div style="font-size:10px;letter-spacing:1.8px;text-transform:uppercase;color:var(--mute);font-weight:700;margin:0 0 8px">REPORTES GENERADOS · HISTORIAL</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px">
+      ${reps.map(r => `
+        <div style="border:1px solid var(--line);border-left:3px solid ${r.status === 'publicado' ? 'var(--green-dark)' : 'var(--amber)'};border-radius:6px;padding:11px 13px;background:#fff">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
+            <div style="font-size:13px;font-weight:700;color:var(--ink)">SEMANA ${r.weekNumber}</div>
+            <span style="font-size:8px;letter-spacing:1.2px;text-transform:uppercase;font-weight:700;padding:2px 8px;border-radius:10px;color:#fff;background:${r.status === 'publicado' ? 'var(--green-dark)' : 'var(--amber)'}">${r.status}</span>
+          </div>
+          <div style="font-size:10px;color:var(--mute);margin-top:2px">${_fmtDateEs(new Date(r.dateStart))} – ${_fmtDateEs(new Date(r.dateEnd))} ${new Date(r.dateEnd).getFullYear()}</div>
+          <div style="font-size:9px;color:var(--mute);margin-top:2px">Por ${escapeHtml(r.generatedBy || 'Sistema')}${r.autoGenerated ? ' · auto' : ''}</div>
+          <div style="display:flex;gap:5px;margin-top:8px;flex-wrap:wrap">
+            <a href="${r.pdfUrl}" target="_blank" class="btn ghost sm" style="text-decoration:none;flex:1;text-align:center">VER</a>
+            <a href="${r.pdfUrl}" download="${escapeAttr(r.filename || '')}" class="btn ghost sm" style="text-decoration:none">↓</a>
+            ${r.status === 'borrador' ? `<button class="btn sm" onclick="publicarReporteSemanal('${r.id}')" style="background:var(--green-dark);border-color:var(--green-dark);color:#fff">PUBLICAR</button>` : ''}
+            <button class="btn ghost sm" onclick="eliminarReporteSemanal('${r.id}')" title="Eliminar">×</button>
+          </div>
+        </div>
+      `).join('')}
+    </div>`;
+}
+
+window.publicarReporteSemanal = async function(reportId){
+  if (!can('users.manage')) return showToast('SOLO ADMINISTRADOR', 'red');
+  const p = activeProj();
+  const r = (p.reportesSemanales || []).find(x => x.id === reportId);
+  if (!r) return;
+  r.status = 'publicado';
+  saveState();
+  try { await _notificarReporteSemanalPublicado(p, r); } catch(e){}
+  logActivity('update', `Reporte semanal SEMANA ${r.weekNumber} publicado`, p.name);
+  showToast('REPORTE PUBLICADO', 'green');
+  renderReporteSemanalList();
+};
+
+window.eliminarReporteSemanal = async function(reportId){
+  if (!can('users.manage')) return showToast('SOLO ADMINISTRADOR', 'red');
+  const p = activeProj();
+  const r = (p.reportesSemanales || []).find(x => x.id === reportId);
+  if (!r) return;
+  if (!confirm(`¿ELIMINAR REPORTE SEMANA ${r.weekNumber}?\n\nEsto borra el PDF y la entrada del listado.\nNo se puede deshacer.`)) return;
+  // Borrar de Storage
+  try {
+    if (r.pdfPath) await firebase.storage().ref(r.pdfPath).delete();
+  } catch(e) { console.warn('No se pudo borrar PDF de Storage:', e); }
+  p.reportesSemanales = (p.reportesSemanales || []).filter(x => x.id !== reportId);
+  saveState();
+  logActivity('delete', `Reporte semanal SEMANA ${r.weekNumber} eliminado`, p.name);
+  showToast('REPORTE ELIMINADO', 'red');
+  renderReporteSemanalList();
+};
+
+/* ════════════════════════════════════════════════════════════════
+   AUTO-TRIGGER · VIERNES 16:00
+   Chequea cada 5 min si:
+     · Es viernes (getDay()===5)
+     · Hora local >= 16:00
+     · Usuario actual es admin
+     · No hay reporte ya generado para esta semana en el proyecto activo
+   Si todo se cumple, dispara la generación silenciosamente. Si el admin
+   no estuvo conectado el viernes a las 16:00, el siguiente admin que
+   abra la app antes del lunes 04:00 disparará igual el reporte
+   "atrasado" para que el cliente no se quede sin él.
+   ═══════════════════════════════════════════════════════════════ */
+let _autoReporteTimer = null;
+async function _autoReporteSemanalCheck(){
+  try {
+    const u = getCurrentUser();
+    if (!u || !u.perms || !(u.perms.includes('*') || u.perms.includes('users.manage'))) return;
+    const p = activeProj();
+    if (!p) return;
+
+    const now = new Date();
+    const dow = now.getDay();          // 0=Dom, 1=Lun, ..., 5=Vie
+    const hour = now.getHours();
+    // Ventana de auto-trigger: Viernes 16:00 → Lunes 04:00.
+    const enWindow = (dow === 5 && hour >= 16) ||  // viernes tarde/noche
+                     (dow === 6) ||                // sábado
+                     (dow === 0) ||                // domingo
+                     (dow === 1 && hour < 4);      // lunes muy temprano
+    if (!enWindow) return;
+
+    // Calcular semana del Viernes que abre la ventana
+    let viernesRef = new Date(now);
+    if (dow === 5) {
+      viernesRef.setHours(0,0,0,0);
+    } else if (dow === 6) {
+      viernesRef.setDate(viernesRef.getDate() - 1);
+      viernesRef.setHours(0,0,0,0);
+    } else if (dow === 0) {
+      viernesRef.setDate(viernesRef.getDate() - 2);
+      viernesRef.setHours(0,0,0,0);
+    } else { // lunes < 4 AM
+      viernesRef.setDate(viernesRef.getDate() - 3);
+      viernesRef.setHours(0,0,0,0);
+    }
+    const weekNum = getProjectWeekNumber(p, viernesRef);
+    const range = getProjectWeekRange(p, weekNum);
+
+    // ¿Ya hay reporte para esta semana?
+    const existe = (p.reportesSemanales || []).some(r => Number(r.weekNumber) === weekNum);
+    if (existe) return;
+
+    // Disparar generación automática silenciosa
+    console.log(`[AUTO-REPORTE] Generando SEMANA ${weekNum} (${_fmtDateEs(range.start)}-${_fmtDateEs(range.end)})…`);
+    const blob = await generarReporteSemanalPDF(p, weekNum, range.start, range.end, { onProgress: ()=>{} });
+    const filename = `${_safeFilename(p.name)}_REPORTE SEMANA ${weekNum}.pdf`;
+    const reportId = `sem-${weekNum}-${range.start.getFullYear()}-${Date.now()}`;
+    const path = `reports/${p.id}/${reportId}.pdf`;
+    const ref = firebase.storage().ref(path);
+    await ref.put(blob, { contentType: 'application/pdf', customMetadata: {
+      projectId: p.id, weekNumber: String(weekNum), filename
+    }});
+    const pdfUrl = await ref.getDownloadURL();
+    if (!Array.isArray(p.reportesSemanales)) p.reportesSemanales = [];
+    const meta = {
+      id: reportId,
+      weekNumber: weekNum,
+      dateStart: range.start.toISOString(),
+      dateEnd: range.end.toISOString(),
+      generatedAt: Date.now(),
+      generatedBy: u.displayName || u.username || 'Auto',
+      generatedByEmail: u.email || '',
+      pdfUrl,
+      pdfPath: path,
+      filename,
+      status: 'publicado',
+      autoGenerated: true
+    };
+    p.reportesSemanales.push(meta);
+    saveState();
+    try { await _notificarReporteSemanalPublicado(p, meta); } catch(e){}
+    logActivity('create', `Reporte semanal SEMANA ${weekNum} (auto)`, `${p.name} · publicado por ${meta.generatedBy}`);
+    showToast(`REPORTE SEMANA ${weekNum} GENERADO Y PUBLICADO AUTOMÁTICAMENTE`, 'green');
+    if (typeof renderReporteSemanalList === 'function') renderReporteSemanalList();
+  } catch(e) {
+    console.warn('[AUTO-REPORTE] error:', e);
+  }
+}
+
+function _startAutoReporteTimer(){
+  if (_autoReporteTimer) return;
+  // Primera comprobación a los 30 s (no al instante para que la app inicie limpia),
+  // luego cada 5 min.
+  setTimeout(_autoReporteSemanalCheck, 30 * 1000);
+  _autoReporteTimer = setInterval(_autoReporteSemanalCheck, 5 * 60 * 1000);
 }
 
 /* ─────────────── ACUSES MAESTROS (PDF) ─────────────── */
@@ -20661,8 +21268,10 @@ async function processQRScan(decoded){
     let etapaMarcada = false;
     if (!isNaN(slotIdxNum) && slotIdxNum >= 0 && slotIdxNum < 6) {
       if (!Array.isArray(a.stages)) a.stages = [false,false,false,false,false,false];
+      if (!a.stagesTs) a.stagesTs = [];
+      const _firmaTs = Date.now();
       for (let i = 0; i <= slotIdxNum; i++) {
-        if (!a.stages[i]) etapaMarcada = true;
+        if (!a.stages[i]) { etapaMarcada = true; a.stagesTs[i] = _firmaTs; }
         a.stages[i] = true;
       }
     }
@@ -20681,6 +21290,410 @@ async function processQRScan(decoded){
     showToast('ERROR GUARDANDO LA FIRMA: ' + (e.message || ''), 'red');
   }
   closeModal('QRScanner');
+}
+
+/* ════════════════════════════════════════════════════════════════
+   REPORTE FOTOGRÁFICO SEMANAL · GENERADOR DE PDF
+   ────────────────────────────────────────────────────────────────
+   Estructura del PDF (basada en el formato actual de Punto Rojo):
+     1. Portada: Logo PR + logo del proyecto + "REPORTE FOTOGRÁFICO ·
+        SEMANA X · Del DD Al DD MES"
+     2. Resumen ejecutivo: % avance, aptos al 100%, etapas firmadas
+        en la semana, comparativa vs semana anterior.
+     3. Por torre con divider, por apartamento:
+        - Nombre del apto
+        - Tabla 5 etapas (Primera cara · Segunda cara · Cielos ·
+          Masilla · Entregado) con X según stages[] al fin de semana
+        - 2-4 fotos tomadas en la semana (grid)
+     4. Anexo: lista de acuses firmados durante la semana.
+   ════════════════════════════════════════════════════════════════ */
+
+/* Mapeo de las 6 etapas internas (TRAZO, TABIQUE, REFUERZOS, FORRO 2DA,
+   CIELOS, MASILLA + ENTREGA FINAL) a las 5 columnas del reporte:
+   Primera cara · Segunda cara · Cielos · Masilla · Entregado.
+   - Primera cara  = etapa 1 ó 2 completa (TABIQUE 1 CARA CON FORRO)
+   - Segunda cara  = etapa 3 (FORRO 2DA CARA + ENCHAPE)
+   - Cielos        = etapa 4 (CIELOS)
+   - Masilla       = etapa 5 (MASILLA + ENTREGA FINAL)
+   - Entregado     = etapa 5 firmada por receptor (acuseRecepciones[5])
+*/
+function _getReporteEstadoApto(a){
+  const s = a.stages || [];
+  const acuseFinal = a.acuseRecepciones && a.acuseRecepciones['5'];
+  const entregado = !!(acuseFinal && (acuseFinal.receptorId || acuseFinal.receptorNombre));
+  return {
+    primeraCara: !!s[1],   // tabique 1 cara con forro
+    segundaCara: !!s[3],   // forro 2da cara + enchape
+    cielos:      !!s[4],   // cielos
+    masilla:     !!s[5],   // masilla + entrega final
+    entregado:   entregado
+  };
+}
+
+/* Carga una imagen URL→dataURL respetando el orden vertical (portrait).
+   Reutiliza el flujo existente para que las fotos del Storage se incluyan
+   bien en el PDF. Si no se puede cargar, devuelve null. */
+async function _reportLoadImg(url){
+  if (!url) return null;
+  return new Promise(resolve => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        c.getContext('2d').drawImage(img, 0, 0);
+        resolve({ dataUrl: c.toDataURL('image/jpeg', 0.82), w: c.width, h: c.height });
+      } catch(e) { resolve(null); }
+    };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+/* Genera el PDF del reporte semanal completo. Devuelve un Blob.
+   Parámetros:
+     p           = proyecto activo
+     weekNum     = número de semana (1, 2, …)
+     startDate   = Date · lunes 00:00
+     endDate     = Date · domingo 23:59:59
+     opts        = { onProgress: fn(pct, msg) } */
+async function generarReporteSemanalPDF(p, weekNum, startDate, endDate, opts){
+  if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) {
+    throw new Error('JSPDF NO CARGÓ — RECARGÁ LA APP');
+  }
+  const onProgress = (opts && opts.onProgress) || function(){};
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
+
+  const ROJO = [200, 20, 28];
+  const NEGRO = [30, 30, 30];
+  const GRIS = [80, 80, 80];
+  const GRIS_LINEA = [200, 200, 200];
+  const VERDE = [16, 185, 129];
+  const CREMA = [248, 250, 252];
+
+  const pageW = doc.internal.pageSize.width;
+  const pageH = doc.internal.pageSize.height;
+
+  // ═══════════ PORTADA ═══════════
+  onProgress(2, 'Armando portada…');
+
+  // Banner rojo grande arriba
+  doc.setFillColor(...ROJO);
+  doc.rect(0, 0, pageW, 280, 'F');
+
+  // Logo PR a la izquierda
+  try {
+    if (typeof LOGO_DATA_URI === 'string') {
+      doc.addImage(LOGO_DATA_URI, 'PNG', 50, 35, 90, 90, undefined, 'FAST');
+    }
+  } catch(e){}
+
+  // Logo del proyecto a la derecha (si existe)
+  if (p.logoUrl) {
+    try {
+      await _addProjLogoToPDF(doc, p.logoUrl, pageW - 30, 35, 150, 90, 'right');
+    } catch(e){}
+  }
+
+  // Título central
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(36);
+  doc.text('REPORTE', pageW/2, 165, { align: 'center' });
+  doc.text('FOTOGRÁFICO', pageW/2, 200, { align: 'center' });
+
+  doc.setDrawColor(255, 255, 255);
+  doc.setLineWidth(0.6);
+  doc.line(pageW/2 - 100, 215, pageW/2 + 100, 215);
+
+  doc.setFontSize(20);
+  doc.text(`SEMANA ${weekNum}`, pageW/2, 245, { align: 'center' });
+
+  doc.setFontSize(13);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Del ${_fmtDateEs(startDate)} al ${_fmtDateEs(endDate)} ${endDate.getFullYear()}`, pageW/2, 265, { align: 'center' });
+
+  // ═══════════ DATOS DEL PROYECTO + RESUMEN ═══════════
+  let y = 320;
+  doc.setTextColor(...NEGRO);
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'bold');
+  doc.text('DATOS DEL PROYECTO', 50, y);
+
+  doc.autoTable({
+    startY: y + 6,
+    body: [
+      ['Proyecto', p.name || ''],
+      ['Cliente', p.client || '—'],
+      ['Ubicación', p.location || '—'],
+      ['Período', `${_fmtDateEsLong(startDate)} — ${_fmtDateEsLong(endDate)}`]
+    ],
+    margin: { left: 50, right: 50 },
+    styles: { fontSize: 10, cellPadding: 6 },
+    columnStyles: { 0: { fontStyle: 'bold', cellWidth: 130, fillColor: CREMA }, 1: { cellWidth: 'auto' } },
+    theme: 'grid'
+  });
+  y = doc.lastAutoTable.finalY + 18;
+
+  // Calcular métricas de la semana
+  const startMs = startDate.getTime();
+  const endMs = endDate.getTime();
+  const activity = getActivityInRange(p, startMs, endMs);
+  const aptosConActividad = activity.length;
+  let fotosSemana = 0, etapasSemana = 0, acusesSemana = 0;
+  activity.forEach(it => {
+    fotosSemana += it.newPhotos.length;
+    etapasSemana += it.stagesDone.length;
+    acusesSemana += it.acuses.length;
+  });
+
+  // Métricas globales del proyecto al final de la semana
+  let totalAptos = 0, completos100 = 0, totalPctSum = 0;
+  (p.towers || []).forEach(t => (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
+    totalAptos++;
+    const pct = aptoPct(a);
+    totalPctSum += pct;
+    if (pct >= 100) completos100++;
+  })));
+  const avancePct = totalAptos ? Math.round(totalPctSum / totalAptos) : 0;
+
+  // Comparativa con semana anterior
+  const prevWeekStart = new Date(startMs - _MS_WEEK);
+  const prevWeekEnd = new Date(endMs - _MS_WEEK);
+  const prevActivity = getActivityInRange(p, prevWeekStart.getTime(), prevWeekEnd.getTime());
+  let prevFotos = 0, prevEtapas = 0;
+  prevActivity.forEach(it => { prevFotos += it.newPhotos.length; prevEtapas += it.stagesDone.length; });
+  const deltaFotos = fotosSemana - prevFotos;
+  const deltaEtapas = etapasSemana - prevEtapas;
+
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...ROJO);
+  doc.text('RESUMEN DE LA SEMANA', 50, y);
+
+  doc.autoTable({
+    startY: y + 6,
+    head: [['Métrica', 'Esta semana', 'Semana anterior', 'Δ']],
+    body: [
+      ['Apartamentos con avance',     String(aptosConActividad), String(prevActivity.length), _signo(aptosConActividad - prevActivity.length)],
+      ['Fotos de avance cargadas',    String(fotosSemana), String(prevFotos), _signo(deltaFotos)],
+      ['Etapas completadas',          String(etapasSemana), String(prevEtapas), _signo(deltaEtapas)],
+      ['Acuses firmados',             String(acusesSemana), '—', '—'],
+      ['Avance promedio del proyecto',avancePct + '%', '—', '—'],
+      ['Aptos al 100%',               `${completos100} / ${totalAptos}`, '—', '—']
+    ],
+    headStyles: { fillColor: ROJO, textColor: 255, fontSize: 9, fontStyle: 'bold' },
+    bodyStyles: { fontSize: 10, cellPadding: 6 },
+    alternateRowStyles: { fillColor: CREMA },
+    margin: { left: 50, right: 50 }
+  });
+
+  // Pie de portada
+  doc.setFontSize(8);
+  doc.setTextColor(...GRIS);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Generado por ${getCurrentUser()?.displayName || getCurrentUser()?.username || 'Usuario'}`, pageW/2, pageH - 50, { align: 'center' });
+  doc.text(`Documento generado automáticamente — ${new Date().toLocaleString('es-GT', { dateStyle: 'long', timeStyle: 'short' })}`, pageW/2, pageH - 35, { align: 'center' });
+
+  // ═══════════ POR CADA TORRE ═══════════
+  // Agrupar actividad por torre
+  const torres = {};
+  activity.forEach(it => {
+    const tid = it.tower.id;
+    if (!torres[tid]) torres[tid] = { tower: it.tower, items: [] };
+    torres[tid].items.push(it);
+  });
+
+  // Si no hay actividad, página única
+  if (Object.keys(torres).length === 0) {
+    doc.addPage();
+    doc.setTextColor(...NEGRO);
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SIN ACTIVIDAD EN ESTA SEMANA', pageW/2, pageH/2, { align: 'center' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.setTextColor(...GRIS);
+    doc.text('No se cargaron fotos ni se completaron etapas en el período.', pageW/2, pageH/2 + 22, { align: 'center' });
+  }
+
+  let towerIdx = 0;
+  for (const tid of Object.keys(torres)) {
+    const { tower, items } = torres[tid];
+    towerIdx++;
+    onProgress(20 + Math.floor(70 * towerIdx / Object.keys(torres).length), `Procesando ${tower.name}…`);
+
+    // Página divisoria de torre
+    doc.addPage();
+    doc.setFillColor(...ROJO);
+    doc.rect(0, 0, pageW, 60, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.text(tower.name || 'TORRE', 50, 38);
+    if (p.logoUrl) {
+      try { await _addProjLogoToPDF(doc, p.logoUrl, pageW - 30, 8, 90, 44, 'right'); } catch(e){}
+    }
+
+    let yp = 100;
+    doc.setTextColor(...NEGRO);
+
+    // Por cada apto con actividad — un bloque
+    for (const it of items) {
+      // Si no entra en la página, agregar otra
+      if (yp > pageH - 220) {
+        doc.addPage();
+        yp = 50;
+      }
+
+      const aname = it.apto.name || 'APTO';
+      const estado = _getReporteEstadoApto(it.apto);
+
+      // Box del apto
+      doc.setDrawColor(...GRIS_LINEA);
+      doc.setLineWidth(0.5);
+      doc.rect(50, yp, pageW - 100, 165);
+
+      // Header del apto
+      doc.setFillColor(...CREMA);
+      doc.rect(50, yp, pageW - 100, 28, 'F');
+      doc.setTextColor(...NEGRO);
+      doc.setFontSize(13);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`APARTAMENTO ${aname}`, 60, yp + 18);
+
+      // Sub-info: nivel + actividad de la semana
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(...GRIS);
+      doc.text(it.level?.name || '', pageW - 60, yp + 18, { align: 'right' });
+
+      // Tabla de etapas a la izquierda (compacta, 5 filas)
+      const tableX = 60;
+      const tableY = yp + 38;
+      const rowH = 18;
+      const labelW = 95;
+      const valueW = 38;
+      const tableW = labelW + valueW;
+
+      const filas = [
+        ['Primera cara', estado.primeraCara],
+        ['Segunda cara', estado.segundaCara],
+        ['Cielos', estado.cielos],
+        ['Masilla', estado.masilla],
+        ['Entregado', estado.entregado]
+      ];
+
+      // Header de la tabla
+      doc.setFillColor(...ROJO);
+      doc.rect(tableX, tableY, tableW, 14, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(7.5);
+      doc.setFont('helvetica', 'bold');
+      doc.text('ACTIVIDAD', tableX + labelW/2, tableY + 9.5, { align: 'center' });
+      doc.text('AVANCE', tableX + labelW + valueW/2, tableY + 9.5, { align: 'center' });
+
+      filas.forEach((f, i) => {
+        const ry = tableY + 14 + i * rowH;
+        const fillRow = (i % 2 === 0) ? CREMA : [255,255,255];
+        doc.setFillColor(...fillRow);
+        doc.rect(tableX, ry, tableW, rowH, 'F');
+        doc.setDrawColor(...GRIS_LINEA);
+        doc.setLineWidth(0.3);
+        doc.line(tableX, ry + rowH, tableX + tableW, ry + rowH);
+        doc.line(tableX + labelW, ry, tableX + labelW, ry + rowH);
+
+        doc.setTextColor(...NEGRO);
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'normal');
+        doc.text(f[0], tableX + 5, ry + 12);
+        if (f[1]) {
+          doc.setTextColor(...VERDE);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(13);
+          doc.text('X', tableX + labelW + valueW/2, ry + 13, { align: 'center' });
+        }
+      });
+
+      // Marco de la tabla
+      doc.setDrawColor(...GRIS_LINEA);
+      doc.setLineWidth(0.5);
+      doc.rect(tableX, tableY, tableW, 14 + filas.length * rowH);
+
+      // Fotos a la derecha — máx 4 fotos en grid 2x2
+      const fotosX = tableX + tableW + 14;
+      const fotosY = tableY;
+      const fotosW = pageW - 50 - 10 - fotosX;
+      const fotosH = 14 + filas.length * rowH;
+
+      const cellW = (fotosW - 6) / 2;
+      const cellH = (fotosH - 6) / 2;
+      const fotos = (it.newPhotos || []).slice(0, 4);
+
+      for (let fi = 0; fi < 4; fi++) {
+        const col = fi % 2;
+        const row = Math.floor(fi / 2);
+        const cx = fotosX + col * (cellW + 6);
+        const cy = fotosY + row * (cellH + 6);
+        doc.setDrawColor(...GRIS_LINEA);
+        doc.setLineWidth(0.4);
+        doc.rect(cx, cy, cellW, cellH);
+        if (fotos[fi]) {
+          try {
+            const im = await _reportLoadImg(fotos[fi].url);
+            if (im) {
+              // Ajustar manteniendo aspect ratio (object-fit: contain)
+              const ir = im.w / im.h;
+              const cr = cellW / cellH;
+              let dw, dh;
+              if (ir > cr) { dw = cellW - 4; dh = dw / ir; }
+              else         { dh = cellH - 4; dw = dh * ir; }
+              doc.addImage(im.dataUrl, 'JPEG', cx + (cellW - dw)/2, cy + (cellH - dh)/2, dw, dh, undefined, 'FAST');
+            }
+          } catch(e){}
+        } else {
+          // Slot vacío sin foto
+          doc.setFillColor(248, 248, 248);
+          doc.rect(cx, cy, cellW, cellH, 'F');
+          doc.setDrawColor(...GRIS_LINEA);
+          doc.rect(cx, cy, cellW, cellH);
+          doc.setFontSize(7);
+          doc.setTextColor(...GRIS);
+          doc.setFont('helvetica', 'italic');
+          doc.text('SIN FOTO', cx + cellW/2, cy + cellH/2 + 2, { align: 'center' });
+        }
+      }
+
+      yp += 165 + 12;
+    }
+  }
+
+  // Footer en cada página
+  const totalPag = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= totalPag; i++) {
+    doc.setPage(i);
+    doc.setFontSize(7);
+    doc.setTextColor(...GRIS);
+    doc.setFont('helvetica', 'normal');
+    doc.text(
+      `${p.name || ''}  ·  Semana ${weekNum}  ·  Reporte fotográfico  ·  Página ${i} de ${totalPag}`,
+      pageW/2, pageH - 20, { align: 'center' }
+    );
+  }
+
+  onProgress(98, 'Generando archivo…');
+  return doc.output('blob');
+}
+
+/* Helper: signo + valor para deltas en el resumen ejecutivo. */
+function _signo(n){
+  if (n > 0) return `+${n}`;
+  if (n < 0) return String(n);
+  return '0';
 }
 
 /* Vista del comprobante digital (cuando el usuario hace VER en un acuse digital) */
@@ -21164,6 +22177,9 @@ function applyAuthSession(fbUser, profileData){
       setTimeout(() => {
         migrateBase64PhotosToStorage().catch(e => console.error('Migración de fotos:', e));
       }, 1500);
+      // Arrancar el timer del reporte semanal automático (Viernes 16:00).
+      // Es no-op si el usuario actual no es admin.
+      try { _startAutoReporteTimer(); } catch(e) { console.warn('Auto-reporte timer:', e); }
     }).catch((e) => {
       console.warn('CloudSync init falló:', e);
       hideSplash('LISTO');
