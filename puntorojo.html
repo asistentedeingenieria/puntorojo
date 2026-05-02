@@ -20429,28 +20429,49 @@ async function syncClientRegistrations(){
   if (!can('receptores.manage') && !can('users.manage')) return;
   if (typeof firebase === 'undefined' || !firebase.firestore) return;
   try {
+    // 1) Aplicar registros pendientes (cliente acaba de canjear código)
     const snap = await firebase.firestore().collection('clientRegistrations').where('applied','==',false).get();
-    if (snap.empty) return;
     let aplicados = 0;
     snap.forEach(doc => {
       const reg = doc.data();
       if (!reg || !reg.receptorId) return;
       const r = (state.receptores || []).find(x => x.id === reg.receptorId);
       if (!r) return;
-      // Aplicar al state
       r.inviteCodeUsed = true;
       r.clientLoginEmail = reg.email || '';
       r.clientLoginUid = doc.id;
       r.clientRegisteredAt = reg.createdAt && reg.createdAt.toMillis ? reg.createdAt.toMillis() : Date.now();
-      // Marcar el registro como aplicado en Firestore
       doc.ref.update({ applied: true, appliedAt: firebase.firestore.FieldValue.serverTimestamp() }).catch(()=>{});
       aplicados++;
       logActivity('update', 'Cliente activado en portal: ' + (r.nombre || ''), reg.email);
     });
-    if (aplicados > 0) {
+
+    // 2) Sincronizar firmas digitales — los receptores cargan su firma en
+    //    clientRegistrations/{uid}.signatureImageUrl desde el portal cliente.
+    //    Acá la levantamos a state.receptores[].signatureImageUrl si difiere.
+    let firmasNuevas = 0;
+    const allSnap = await firebase.firestore().collection('clientRegistrations').get();
+    allSnap.forEach(doc => {
+      const reg = doc.data();
+      if (!reg || !reg.signatureImageUrl) return;
+      const r = (state.receptores || []).find(x =>
+        x.id === reg.receptorId ||
+        (x.clientLoginUid === doc.id) ||
+        (x.clientLoginEmail && reg.email && x.clientLoginEmail.toLowerCase() === reg.email.toLowerCase())
+      );
+      if (!r) return;
+      if (r.signatureImageUrl !== reg.signatureImageUrl) {
+        r.signatureImageUrl = reg.signatureImageUrl;
+        firmasNuevas++;
+        logActivity('update', 'Firma digital cargada: ' + (r.nombre || ''), reg.email || '');
+      }
+    });
+
+    if (aplicados > 0 || firmasNuevas > 0) {
       saveState();
       try { renderReceptoresList(); } catch(e){}
-      showToast(`${aplicados} cliente${aplicados !== 1 ? 's' : ''} activado${aplicados !== 1 ? 's' : ''} en portal`, 'green');
+      if (aplicados > 0) showToast(`${aplicados} cliente${aplicados !== 1 ? 's' : ''} activado${aplicados !== 1 ? 's' : ''} en portal`, 'green');
+      if (firmasNuevas > 0) showToast(`${firmasNuevas} firma${firmasNuevas !== 1 ? 's' : ''} digital${firmasNuevas !== 1 ? 'es' : ''} sincronizada${firmasNuevas !== 1 ? 's' : ''}`, 'green');
     }
   } catch(e) {
     console.warn('syncClientRegistrations:', e && e.message);
