@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v157-fix-race-condition-registro-cliente';
+const CACHE_VERSION = 'v158-fondos-nuevos-8-imagenes';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
@@ -20,10 +20,14 @@ const CORE_ASSETS = [
   './manifest.json',
   './logo.png',
   './icon.svg',
-  './assets/hero-8.jpg',
-  './assets/hero-9.jpg',
-  './assets/hero-10.jpg',
-  './assets/hero-11.jpg'
+  './assets/bg-1.jpg',
+  './assets/bg-2.jpg',
+  './assets/bg-3.jpg',
+  './assets/bg-4.jpg',
+  './assets/bg-5.jpg',
+  './assets/bg-6.jpg',
+  './assets/bg-7.jpg',
+  './assets/bg-8.jpg'
 ];
 
 // ── INSTALL: pre-cachear los archivos básicos ──
