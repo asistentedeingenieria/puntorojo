@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v162-footer-vacio-sin-puntorojosa';
+const CACHE_VERSION = 'v163-mobile-html-routing';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
@@ -15,6 +15,7 @@ const CORE_ASSETS = [
   './',
   './index.html',
   './puntorojo.html',
+  './mobile.html',
   './clientes.html',
   './bienvenida.html',
   './manifest.json',
@@ -92,7 +93,17 @@ self.addEventListener('fetch', (event) => {
           return res;
         })
         .catch(() =>
-          caches.match(req).then((cached) => cached || caches.match('./puntorojo.html') || caches.match('./index.html'))
+          caches.match(req).then((cached) => {
+            if (cached) return cached;
+            // Fallback offline: si la URL parece mobile, devolvé mobile.html cacheado;
+            // si no, el index/puntorojo. Evita que un dispositivo mobile vea la versión
+            // web cuando está sin internet en el primer arranque.
+            const isMobileUrl = /\/mobile(\.html)?$/i.test(new URL(req.url).pathname);
+            if (isMobileUrl) {
+              return caches.match('./mobile.html') || caches.match('./index.html');
+            }
+            return caches.match('./puntorojo.html') || caches.match('./index.html') || caches.match('./mobile.html');
+          })
         )
     );
     return;
