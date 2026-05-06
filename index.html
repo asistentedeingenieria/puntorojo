@@ -2425,7 +2425,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v171</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v172</span>
   </footer>
 
 </div>
@@ -5202,6 +5202,15 @@ async function saveUser(){
         await saveUserDoc(uid, profile);
         await secondaryApp.auth().signOut();
         showToast('USUARIO CREADO · CAMBIARÁ SU CLAVE EN EL PRIMER LOGIN', 'green');
+        // Notif de bienvenida (queda guardada en Firestore — el usuario
+        // la ve al hacer su primer login y FCM la entrega como push).
+        try {
+          await _notifyByEmail(email, {
+            type: 'welcome',
+            title: 'BIENVENIDO A PUNTO ROJO',
+            body: `Tu cuenta fue creada por ${(currentUser?.displayName || 'el administrador').toUpperCase()}. Al hacer tu primer login te pedirá cambiar la clave temporal por una propia.`
+          });
+        } catch(e){ console.warn('Notif bienvenida:', e); }
       } finally {
         await secondaryApp.delete();
       }
@@ -5221,6 +5230,16 @@ async function saveUser(){
         Object.assign(currentUser, updates);
       }
       showToast('USUARIO ACTUALIZADO', 'green');
+      // Notif al usuario afectado: cambiaron sus permisos
+      if (email && (!currentUser || currentUser.email !== email)) {
+        try {
+          await _notifyByEmail(email, {
+            type: 'perms-changed',
+            title: 'TUS PERMISOS FUERON ACTUALIZADOS',
+            body: `${(currentUser?.displayName || 'El administrador').toUpperCase()} actualizó tu rol y permisos en la app.`
+          });
+        } catch(e){ console.warn('Notif perms:', e); }
+      }
     }
 
     closeModal('editUser');
@@ -7828,6 +7847,18 @@ async function uploadFacturaPDF(event, rowId) {
     renderCobro();
     logActivity('update', `Factura PDF subida: ${r.d}`, `${p.name}${r.factura ? ' · # ' + r.factura : ''}`);
     showToast('FACTURA SUBIDA · MARCADA COMO EMITIDA' + (r.factura ? ' · # ' + r.factura : ''), 'green');
+
+    // Notificar a admins, supervisores del proyecto y al equipo de cobro
+    // (excluyendo al actor) — la factura está emitida y se espera el pago.
+    try {
+      const actorName = (getCurrentUser()?.displayName || getCurrentUser()?.username || 'CONTABILIDAD').toUpperCase();
+      const tituloFact = `${actorName} · FACTURA EMITIDA · ${r.d || 'ESTIMACIÓN'}`;
+      const cuerpoFact = `${p.name}${r.factura ? ' · # ' + r.factura : ''}`;
+      const payloadFact = { type: 'factura-emitida', title: tituloFact, body: cuerpoFact, projectId: p.id };
+      await _notifyByPerm('users.manage', payloadFact);
+      await _notifyByPerm('cobro.edit', payloadFact);
+      await _notifyByPerm('avance.edit', payloadFact);
+    } catch(e){ console.warn('Notif uploadFacturaPDF:', e); }
   } catch (e) {
     console.error('Error subiendo factura:', e);
     showToast('ERROR: ' + (e.message || e), 'red');
@@ -7953,7 +7984,7 @@ function renderCobroFoot(cfg, t, p){
   </tr>${descuentoRow}`;
 }
 
-function updateEst(id, field, val){
+async function updateEst(id, field, val){
   if (!can('cobro.edit')) return;
   const p = activeProj();
   const r = p.cobro.rows.find(x => x.id === id);
@@ -7962,7 +7993,7 @@ function updateEst(id, field, val){
   r[field] = (field === 'f' || field === 'd' || field === 'fp') ? String(val).toUpperCase() : val;
   if (field === 'fp' || field === 'sc') { r.sc = evalCobroStatus(r.fp, r.sc); syncFact(r); }
 
-  // Eventos de actividad
+  // Eventos de actividad + notificaciones del workflow de cobranza
   if (field === 'sc' && oldVal !== r.sc) {
     if (r.sc === 'EN AUTORIZACIÓN') {
       logActivity('auth', r.d + ' en autorización', `${p.name} · marcada por ${getCurrentUser()?.displayName || 'SISTEMA'}`);
@@ -7970,6 +8001,16 @@ function updateEst(id, field, val){
     } else if (r.sc === 'PAGADO' && oldVal !== 'PAGADO') {
       logActivity('paid', r.d + ' pagada', `${p.name} · registrada por ${getCurrentUser()?.displayName || 'SISTEMA'}`);
       showToast('ESTIMACIÓN MARCADA COMO PAGADA', 'green');
+      // Notificar a admins, supervisores y equipo de cobro: ya entró el pago
+      try {
+        const actorName = (getCurrentUser()?.displayName || getCurrentUser()?.username || 'CONTABILIDAD').toUpperCase();
+        const tituloPag = `${actorName} · ${(r.d || 'ESTIMACIÓN').toUpperCase()} PAGADA`;
+        const cuerpoPag = `${p.name}${r.factura ? ' · Factura # ' + r.factura : ''}${r.fp ? ' · pago ' + r.fp : ''}`;
+        const payloadPag = { type: 'estimacion-pagada', title: tituloPag, body: cuerpoPag, projectId: p.id };
+        await _notifyByPerm('users.manage', payloadPag);
+        await _notifyByPerm('cobro.edit', payloadPag);
+        await _notifyByPerm('avance.edit', payloadPag);
+      } catch(e){ console.warn('Notif PAGADO:', e); }
     }
   }
 
@@ -11350,7 +11391,7 @@ function renderPedidoCard(pd, p){
   </div>`;
 }
 
-function advancePedido(id){
+async function advancePedido(id){
   const p = activeProj();
   const pd = p.materiales.pedidos.find(x => x.id === id);
   if (!pd) return;
@@ -11410,7 +11451,48 @@ function advancePedido(id){
   const actType = pd.status === 'RECIBIDO' ? 'paid' : pd.status === 'APROBADO' ? 'auth' : 'update';
   logActivity(actType, `Pedido ${pd.numero}: ${pd.status}`, `${p.name} · ${getCurrentUser()?.displayName || 'SISTEMA'}`);
 
-  // (notifs de cambio de estado desactivadas)
+  // Notificaciones de cambio de estado del pedido — workflow completo:
+  //  SOLICITADO → APROBADO  → notif a quien firma OC (oficina.firmar) y al solicitante
+  //  APROBADO   → RECIBIDO  → notif a Compras + Oficina + solicitante (cierre del ciclo)
+  try {
+    const actorName = (getCurrentUser()?.displayName || getCurrentUser()?.username || 'USUARIO').toUpperCase();
+    const proyName = p && p.name ? p.name : '';
+    if (pd.status === 'APROBADO') {
+      await _notifyByPerm('oficina.firmar', {
+        type: 'oc-pendiente-firma',
+        title: `${actorName} · APROBÓ PEDIDO ${pd.numero}`,
+        body: `${proyName} · Hay OC pendiente de firma para este pedido.`,
+        refPedidoId: pd.id,
+        projectId: p.id
+      });
+      if (pd.solicitanteUsername) {
+        await _notifyByUsername(pd.solicitanteUsername, {
+          type: 'pedido-aprobado',
+          title: `Pedido ${pd.numero} APROBADO`,
+          body: `${proyName} · El pedido ya pasó a Compras y está pendiente de firma de OC.`,
+          refPedidoId: pd.id,
+          projectId: p.id
+        });
+      }
+    } else if (pd.status === 'RECIBIDO') {
+      const tituloRec = `${actorName} · RECIBIÓ PEDIDO ${pd.numero}`;
+      const cuerpoRec = `${proyName} · El material ya está en obra. Cierra el ciclo del pedido.`;
+      await _notifyByPerm('compras.autorizar', {
+        type: 'pedido-recibido', title: tituloRec, body: cuerpoRec,
+        refPedidoId: pd.id, projectId: p.id
+      });
+      await _notifyByPerm('oficina.firmar', {
+        type: 'pedido-recibido', title: tituloRec, body: cuerpoRec,
+        refPedidoId: pd.id, projectId: p.id
+      });
+      if (pd.solicitanteUsername) {
+        await _notifyByUsername(pd.solicitanteUsername, {
+          type: 'pedido-recibido', title: `Pedido ${pd.numero} RECIBIDO en obra`,
+          body: cuerpoRec, refPedidoId: pd.id, projectId: p.id
+        });
+      }
+    }
+  } catch(e){ console.warn('Notif advancePedido:', e); }
 
   saveState();
   renderPedidosList();
@@ -11867,7 +11949,7 @@ function resetPedidoForm(){
   renderPedidoForm();
 }
 
-function submitPedido(){
+async function submitPedido(){
   if (!can('pedidos.create')) return showToast('SIN PERMISO', 'red');
 
   // SIEMPRE usar el usuario actual como solicitante (no confiar en el input)
@@ -11990,7 +12072,17 @@ function submitPedido(){
   const metalLabel = validMetal.length > 0 ? ` · ${validMetal.length} fabricación${validMetal.length!==1?'es':''} metal` : '';
   logActivity('create', `Pedido ${numero} creado`, `${p.name} · ${totalCount} materiales${extraLabel}${metalLabel} · ${solicitante}`);
 
-  // (notif a compras desactivada)
+  // Notificar a Compras: hay pedido nuevo pendiente de aprobación / OC
+  try {
+    const actorName = (getCurrentUser()?.displayName || solicitante || 'USUARIO').toUpperCase();
+    await _notifyByPerm('compras.autorizar', {
+      type: 'pedido-nuevo',
+      title: `${actorName} · SOLICITÓ PEDIDO ${numero}`,
+      body: `${p.name} · ${totalCount} material${totalCount !== 1 ? 'es' : ''}${extraLabel}${metalLabel}`,
+      refPedidoId: pedido.id,
+      projectId: p.id
+    });
+  } catch(e){ console.warn('Notif submitPedido:', e); }
 
   saveState();
 
@@ -12568,7 +12660,7 @@ function saveNewDireccion(){
   showToast('DIRECCIÓN AGREGADA', 'green');
 }
 
-function generarOrdenCompra(){
+async function generarOrdenCompra(){
   // Solo quien autoriza OC puede generarlas
   if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO QUIEN AUTORIZA OC PUEDE GENERARLAS', 'red');
   if (!currentPedidoDetalleId) return;
@@ -12681,7 +12773,29 @@ function generarOrdenCompra(){
   const proveedoresTxt = created.map(oc => oc.proveedorNombre).join(' · ');
   logActivity('create', `${created.length} OC generadas por proveedor para pedido ${pd.numero}`, `${p.name} · ${proveedoresTxt}`);
 
-  // (notifs de OC desactivadas)
+  // Notificar a Oficina (oficina.firmar): hay OCs nuevas pendientes de firma.
+  // También al solicitante del pedido para que vea que avanzó a Compras.
+  try {
+    const actorName = (getCurrentUser()?.displayName || getCurrentUser()?.username || 'COMPRAS').toUpperCase();
+    const numOC = created.length;
+    const ocLabel = numOC === 1 ? `OC ${created[0].numero}` : `${numOC} OCs`;
+    await _notifyByPerm('oficina.firmar', {
+      type: 'oc-pendiente-firma',
+      title: `${actorName} · GENERÓ ${ocLabel}`,
+      body: `${p.name} · Pedido ${pd.numero} · ${proveedoresTxt} · Pendiente de firma de Oficina.`,
+      refPedidoId: pd.id,
+      projectId: p.id
+    });
+    if (pd.solicitanteUsername) {
+      await _notifyByUsername(pd.solicitanteUsername, {
+        type: 'pedido-aprobado',
+        title: `Pedido ${pd.numero} APROBADO · OC generada`,
+        body: `${p.name} · ${ocLabel} · ${proveedoresTxt} · Pendiente de firma de Oficina.`,
+        refPedidoId: pd.id,
+        projectId: p.id
+      });
+    }
+  } catch(e){ console.warn('Notif generarOrdenesCompra:', e); }
 
   saveState();
 
@@ -18910,17 +19024,34 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     saveState(); renderPlanilla();
     showToast(pagoSinAcuse ? 'PAGO GENERADO · ¡FALTA ACUSE!' : 'PAGO GENERADO · PENDIENTE AUTORIZACIÓN', pagoSinAcuse ? '' : 'green');
 
-    // (notif de pago pendiente desactivada)
+    // Notificar a quien autoriza pagos: hay pago pendiente de autorización.
+    try {
+      const actorName = (getCurrentUser()?.displayName || getCurrentUser()?.username || 'PLANILLA').toUpperCase();
+      const tituloPag = `${actorName} · GENERÓ PAGO PLANILLA${pagoSinAcuse ? ' · SIN ACUSE' : ''}`;
+      const cuerpoPag = `${p.name} · ${a.name} · ETAPA ${stageIdx+1} · ${colaborador.toUpperCase()} · ${fQ(neto)}`;
+      const payloadPag = { type: 'pago-planilla-pendiente', title: tituloPag, body: cuerpoPag, projectId: p.id };
+      await _notifyByPerm('planilla.authorize', payloadPag);
+      await _notifyByPerm('users.manage', payloadPag);
+    } catch(e){ console.warn('Notif pago planilla generado:', e); }
   };
 
-  window.autorizarPagoPlanilla = function(id){
+  window.autorizarPagoPlanilla = async function(id){
     if (!can('planilla.authorize') && !can('users.manage')) return showToast('SIN PERMISO PARA AUTORIZAR', 'red');
     const p = activeProj(); const pg=(p.planilla.pagos||[]).find(x=>x.id===id); if(!pg) return;
     pg.autorizado = true; pg.autorizadoPor = (getCurrentUser()?.displayName || getCurrentUser()?.username || '').toUpperCase(); pg.autorizadoTs = Date.now();
     logActivity('auth', `Pago planilla autorizado`, `${p.name} · ${pg.aptoName||pg.tipo} · ${pg.colaborador||''}`);
     saveState(); renderPlanilla(); showToast('PAGO AUTORIZADO','green');
 
-    // (notif de pago autorizado desactivada)
+    // Notificar a contabilidad / admins: el pago ya está autorizado
+    // y se puede liquidar al colaborador.
+    try {
+      const actorName = (getCurrentUser()?.displayName || getCurrentUser()?.username || 'AUTORIZACIÓN').toUpperCase();
+      const tituloPag = `${actorName} · AUTORIZÓ PAGO PLANILLA`;
+      const cuerpoPag = `${p.name} · ${pg.aptoName||pg.tipo} · ${pg.colaborador||'sin colaborador'} · ${typeof fQ === 'function' ? fQ(pg.neto||pg.monto||0) : (pg.neto||pg.monto||0)}`;
+      const payloadPag = { type: 'pago-planilla-autorizado', title: tituloPag, body: cuerpoPag, projectId: p.id };
+      await _notifyByPerm('users.manage', payloadPag);
+      await _notifyByPerm('planilla.edit', payloadPag);
+    } catch(e){ console.warn('Notif pago planilla:', e); }
 
     // Tras autorizar, vemos si ya hay volumen para presentar estimación.
     try { window.chequearYNotificarEstimacion(p); } catch(e) { console.warn(e); }
@@ -21427,6 +21558,17 @@ async function syncClientRegistrations(){
       doc.ref.update({ applied: true, appliedAt: firebase.firestore.FieldValue.serverTimestamp() }).catch(()=>{});
       aplicados++;
       logActivity('update', 'Cliente activado en portal: ' + (r.nombre || ''), reg.email);
+      // Notif a admins / receptores.manage: receptor activó su acceso
+      _notifyByPerm('users.manage', {
+        type: 'cliente-activado',
+        title: `RECEPTOR ${(r.nombre || '').toUpperCase()} · ACTIVÓ PORTAL`,
+        body: `Canjeó su invitación · ${reg.email || 'sin email'}`
+      }).catch(()=>{});
+      _notifyByPerm('receptores.manage', {
+        type: 'cliente-activado',
+        title: `RECEPTOR ${(r.nombre || '').toUpperCase()} · ACTIVÓ PORTAL`,
+        body: `Canjeó su invitación · ${reg.email || 'sin email'}`
+      }).catch(()=>{});
     });
 
     // 2) Sincronizar firmas digitales — los receptores cargan su firma en
@@ -21447,6 +21589,17 @@ async function syncClientRegistrations(){
         r.signatureImageUrl = reg.signatureImageUrl;
         firmasNuevas++;
         logActivity('update', 'Firma digital cargada: ' + (r.nombre || ''), reg.email || '');
+        // Notif a admins / receptores.manage: receptor subió firma digital
+        _notifyByPerm('users.manage', {
+          type: 'firma-receptor',
+          title: `RECEPTOR ${(r.nombre || '').toUpperCase()} · SUBIÓ FIRMA`,
+          body: `Ahora puede firmar acuses desde el portal cliente`
+        }).catch(()=>{});
+        _notifyByPerm('receptores.manage', {
+          type: 'firma-receptor',
+          title: `RECEPTOR ${(r.nombre || '').toUpperCase()} · SUBIÓ FIRMA`,
+          body: `Ahora puede firmar acuses desde el portal cliente`
+        }).catch(()=>{});
       }
     });
 
@@ -21535,6 +21688,24 @@ async function processPendingAcuseSignatures(){
         }
         await doc.ref.update({ status: 'applied', processedAt: firebase.firestore.FieldValue.serverTimestamp(), processedBy: getCurrentUser()?.email || '' });
         logActivity('update', `Acuse firmado desde portal: ${a.name}`, `${p.name} · ${t.name}/${l.name} · etapa ${r.slotKey} · ${r.receptorNombre}`);
+
+        // Notificar a admins, supervisor del proyecto y contabilidad
+        // (cobro.edit) — la firma desde portal cliente cierra etapa y
+        // habilita el siguiente cobro/factura.
+        try {
+          const tituloAcuse = `RECEPTOR ${(r.receptorNombre || receptor.nombre || '').toUpperCase()} · FIRMÓ ACUSE`;
+          const cuerpoAcuse = `${p.name} · ${t.name}/${l.name}/${a.name} · etapa ${parseInt(r.slotKey) + 1}`;
+          const payloadAcuse = {
+            type: 'acuse-firmado',
+            title: tituloAcuse,
+            body: cuerpoAcuse,
+            projectId: p.id
+          };
+          await _notifyByPerm('users.manage', payloadAcuse);
+          await _notifyByPerm('cobro.edit', payloadAcuse);
+          await _notifyByPerm('avance.edit', payloadAcuse);
+        } catch(e){ console.warn('Notif acuse portal:', e); }
+
         aplicados++;
       } catch(e) {
         console.error('Error aplicando pending signature:', e);
@@ -22593,6 +22764,18 @@ async function processQRScan(decoded){
     renderAvance();
     // El acuse recién firmado puede haber completado una etapa lista para estimación.
     try { if (typeof window.chequearYNotificarEstimacion === 'function') window.chequearYNotificarEstimacion(p); } catch(e){ console.warn(e); }
+
+    // Notificar a admins, contabilidad (cobro.edit) y supervisores
+    // (avance.edit) — la firma del acuse cierra etapa y suele habilitar
+    // el siguiente cobro al cliente.
+    try {
+      const tituloAcuse = `${(r.nombre || '').toUpperCase()} · FIRMÓ ACUSE QR`;
+      const cuerpoAcuse = `${p.name} · ${t.name}/${l.name}/${a.name} · ${slotInfo ? slotInfo.label : 'etapa ' + (parseInt(ctx.slotKey) + 1)}${etapaMarcada ? ' · Etapa entregada' : ''}`;
+      const payloadAcuse = { type: 'acuse-firmado', title: tituloAcuse, body: cuerpoAcuse, projectId: p.id };
+      await _notifyByPerm('users.manage', payloadAcuse);
+      await _notifyByPerm('cobro.edit', payloadAcuse);
+      await _notifyByPerm('avance.edit', payloadAcuse);
+    } catch(e){ console.warn('Notif acuse QR:', e); }
   } catch(e) {
     console.error(e);
     showToast('ERROR GUARDANDO LA FIRMA: ' + (e.message || ''), 'red');
