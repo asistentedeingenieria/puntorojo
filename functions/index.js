@@ -70,11 +70,6 @@ exports.onNotificationCreated = onDocumentCreated(
       return;
     }
 
-    if (tokensSnap.empty) {
-      console.log(`Usuario ${uid} sin tokens FCM — sin push para notif ${notifId}`);
-      return;
-    }
-
     const fallbackTitle = TYPE_TITLES[notif.type] || TYPE_TITLES.info;
     const title = notif.title || fallbackTitle;
     const body  = notif.body  || '';
