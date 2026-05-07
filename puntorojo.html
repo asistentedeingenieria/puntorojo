@@ -1028,7 +1028,11 @@ html.ios-standalone .pedido-meta dd{font-size:11px}
 
 /* ═════ FORMATO PDF CATÁLOGO ═════ */
 .cat-pdf-section{background:var(--white);border:1px solid var(--line);border-radius:3px;margin-bottom:10px;overflow:hidden}
-.cat-pdf-head{background:var(--paper);color:var(--ink);padding:7px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);border-left:3px solid var(--red)}
+.cat-pdf-head{background:var(--paper);color:var(--ink);padding:7px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);border-left:3px solid var(--red);cursor:pointer;user-select:none;gap:10px}
+.cat-pdf-chevron{font-size:11px;color:var(--mute);transition:transform .15s ease;flex-shrink:0;width:16px;text-align:center}
+.cat-pdf-section.collapsed .cat-pdf-body{display:none}
+.cat-pdf-section.collapsed .cat-pdf-head{border-bottom:none}
+.cat-pdf-section.collapsed .cat-pdf-chevron{transform:rotate(-90deg)}
 .cat-pdf-title{font-family:'Inter',sans-serif;font-size:10px;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;color:var(--ink)}
 .cat-pdf-badge{background:transparent;color:var(--mute);font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;letter-spacing:.5px;border:1px solid var(--line)}
 .cat-pdf-badge:not(.empty){background:var(--red);color:#fff;border-color:var(--red)}
@@ -2443,7 +2447,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v175</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v176</span>
   </footer>
 
 </div>
@@ -7379,6 +7383,11 @@ function _resetAllCollapsibles(){
     document.querySelectorAll('.cat-head.open, .cat-pdf-head.open').forEach(el => el.classList.remove('open'));
   } catch(e){}
 
+  // 2b) M4a: forzar TODAS las categorías del catálogo de pedidos a colapsadas
+  try {
+    document.querySelectorAll('.cat-pdf-section').forEach(el => el.classList.add('collapsed'));
+  } catch(e){}
+
   // 3) Menú kebab (⋮) — cerrar si está abierto
   try {
     const km = document.getElementById('kebabMenu');
@@ -11619,10 +11628,14 @@ function renderPedidoForm(){
     // Helper para extraer nombre de item (puede ser string u objeto)
     const getName = it => typeof it === 'string' ? it : it.name;
     const selectedCount = block.items.filter(item => (pedidoFormItems[block.cat + '::' + getName(item)] || 0) > 0).length;
-    return `<div class="cat-pdf-section">
-      <div class="cat-pdf-head">
+    // M4a: cada seccion arranca COLAPSADA. Click en el head (cualquier
+    // parte) abre/cierra. El reset al cambiar de pestaña vuelve a cerrar
+    // todas para mantener la app ordenada.
+    return `<div class="cat-pdf-section collapsed">
+      <div class="cat-pdf-head" onclick="this.parentElement.classList.toggle('collapsed')">
         <div class="cat-pdf-title">${block.cat}</div>
         <span class="cat-pdf-badge${selectedCount === 0 ? ' empty' : ''}" id="catCount-${bIdx}">${selectedCount} / ${block.items.length}</span>
+        <span class="cat-pdf-chevron" aria-hidden="true">▾</span>
       </div>
       <div class="cat-pdf-body">
         ${block.items.map(item => renderCatalogItem(block.cat, item)).join('')}
@@ -11808,6 +11821,35 @@ function removeExtraMaterial(id){
 
 /* ═══════════ METAL A MEDIDA — FABRICACIÓN ESPECIAL ═══════════ */
 
+/* M5: helper que calcula cantidad de metal desde la receta de etapa 1 (postes/canales)
+   Busca en p.materiales.receta[0] items cuyo nombre matchee el tipo (POSTE, CANAL, etc.)
+   y suma sus cantidades multiplicado por la cantidad de aptos del nivel. */
+function _calcMetalDesdeReceta(p, tipo, levelId){
+  if (!p || !tipo || !levelId) return 0;
+  const recetaE1 = p.materiales?.receta?.[0] || {};
+  let level = null;
+  (p.towers || []).forEach(t => {
+    (t.levels || []).forEach(l => { if (l.id === levelId) level = l; });
+  });
+  if (!level) return 0;
+  const numAptos = (level.aptos || []).length;
+  if (numAptos === 0) return 0;
+  const tipoUpper = String(tipo).toUpperCase();
+  let total = 0;
+  Object.entries(recetaE1).forEach(([key, qtyBase]) => {
+    const itemName = (key.split('::')[1] || key).toUpperCase();
+    if (itemName.includes(tipoUpper)) {
+      total += (Number(qtyBase) || 0) * numAptos;
+    }
+  });
+  return Math.ceil(total);
+}
+
+/* M5: indica si la etapa 1 (postes y canales) ya fue pedida para un nivel */
+function _etapa1YaPedidaEnNivel(p, levelId){
+  return !!(p?.materiales?.etapasPedidas?.[levelId]?.[0]);
+}
+
 function renderMetalMedida(){
   const list = document.getElementById('metalMedidaList');
   if (!list) return;
@@ -11829,10 +11871,23 @@ function renderMetalMedida(){
       `<option value="${l.id}"${m.nivel === l.id ? ' selected' : ''}>${l.name}</option>`
     ).join('') : '';
 
-    return `<div class="metal-medida-row">
+    // M5: calcular cantidad automatica desde receta etapa 1 (postes y canales).
+    // El usuario NO modifica la cantidad — sale de la receta x aptos del nivel.
+    const blocked = m.nivel && _etapa1YaPedidaEnNivel(p, m.nivel);
+    const qtyAuto = (m.nivel && m.tipo) ? _calcMetalDesdeReceta(p, m.tipo, m.nivel) : 0;
+    if (m.qty !== qtyAuto) m.qty = qtyAuto;
+
+    const blockMsg = blocked
+      ? `<div style="grid-column:1/-1;color:var(--red-dark);font-size:9.5px;letter-spacing:.5px;font-weight:700;margin-top:4px;background:var(--red-soft);padding:6px 8px;border-radius:2px;text-transform:uppercase">⚠ ETAPA 1 YA FUE PEDIDA PARA ESTE NIVEL — EL METAL YA VA INCLUIDO EN ESE PEDIDO. REMOVER ESTA FILA.</div>`
+      : '';
+    const noRecetaMsg = (m.nivel && m.tipo && qtyAuto === 0 && !blocked)
+      ? `<div style="grid-column:1/-1;color:var(--cafe);font-size:9px;letter-spacing:.4px;margin-top:4px">⚠ Este nivel no tiene "${m.tipo}" definido en la receta de etapa 1. Verificar la receta o el tipo seleccionado.</div>`
+      : '';
+
+    return `<div class="metal-medida-row" style="${blocked?'opacity:.55;background:var(--red-soft)':''}">
       <div class="mm-field">
         <label>TIPO</label>
-        <select onchange="updateMetalMedida('${m.id}','tipo',this.value)">
+        <select onchange="updateMetalMedida('${m.id}','tipo',this.value)" ${blocked?'disabled':''}>
           <option value="POSTE"${m.tipo === 'POSTE' ? ' selected' : ''}>POSTE</option>
           <option value="CANAL"${m.tipo === 'CANAL' ? ' selected' : ''}>CANAL</option>
           <option value="CANALETA"${m.tipo === 'CANALETA' ? ' selected' : ''}>CANALETA</option>
@@ -11842,11 +11897,11 @@ function renderMetalMedida(){
       </div>
       <div class="mm-field">
         <label>MEDIDA / LARGO</label>
-        <input type="text" value="${m.medida || ''}" placeholder='EJ: 2½" X 14\'' oninput="updateMetalMedida('${m.id}','medida',this.value)">
+        <input type="text" value="${m.medida || ''}" placeholder='EJ: 2½" X 14\'' oninput="updateMetalMedida('${m.id}','medida',this.value)" ${blocked?'disabled':''}>
       </div>
       <div class="mm-field">
         <label>CALIBRE</label>
-        <select onchange="updateMetalMedida('${m.id}','calibre',this.value)">
+        <select onchange="updateMetalMedida('${m.id}','calibre',this.value)" ${blocked?'disabled':''}>
           <option value=""${!m.calibre ? ' selected' : ''}>—</option>
           <option value="CAL. 20"${m.calibre === 'CAL. 20' ? ' selected' : ''}>CAL. 20</option>
           <option value="CAL. 22"${m.calibre === 'CAL. 22' ? ' selected' : ''}>CAL. 22</option>
@@ -11869,10 +11924,12 @@ function renderMetalMedida(){
         </select>
       </div>
       <div class="mm-field mm-qty">
-        <label>CANT.</label>
-        <input type="number" min="0" step="1" value="${m.qty || ''}" placeholder="0" oninput="updateMetalMedida('${m.id}','qty',this.value)">
+        <label>CANT. (RECETA)</label>
+        <input type="number" value="${m.qty || 0}" readonly title="Cantidad calculada automaticamente desde la receta de etapa 1 x aptos del nivel" style="background:var(--cream);cursor:not-allowed">
       </div>
       <button class="btn-icon" onclick="removeMetalMedida('${m.id}')" title="ELIMINAR">✕</button>
+      ${blockMsg}
+      ${noRecetaMsg}
     </div>`;
   }).join('');
 }
@@ -12133,6 +12190,24 @@ async function submitPedido(){
   };
 
   p.materiales.pedidos.push(pedido);
+
+  // M5: marcar bloqueo bidireccional. Si este pedido contiene metal a la medida
+  // para algun nivel, ese nivel no puede pedir su etapa 1 después (el metal ya
+  // fue solicitado a la medida). Trackear los pedido IDs para poder limpiar
+  // cuando el pedido se cancele/elimine.
+  if (validMetal.length > 0) {
+    if (!p.materiales.metalMedidaPedida) p.materiales.metalMedidaPedida = {};
+    validMetal.forEach(mm => {
+      if (!mm.nivel) return;
+      if (!Array.isArray(p.materiales.metalMedidaPedida[mm.nivel])) {
+        p.materiales.metalMedidaPedida[mm.nivel] = [];
+      }
+      if (!p.materiales.metalMedidaPedida[mm.nivel].includes(pedido.id)) {
+        p.materiales.metalMedidaPedida[mm.nivel].push(pedido.id);
+      }
+    });
+  }
+
   const extraLabel = validExtras.length > 0 ? ` (${validExtras.length} extraordinario${validExtras.length!==1?'s':''})` : '';
   const metalLabel = validMetal.length > 0 ? ` · ${validMetal.length} fabricación${validMetal.length!==1?'es':''} metal` : '';
   logActivity('create', `Pedido ${numero} creado`, `${p.name} · ${totalCount} materiales${extraLabel}${metalLabel} · ${solicitante}`);
@@ -17082,13 +17157,41 @@ function pedirEtapaCompleta(towerId, levelId, stageIdx){
   const u = getCurrentUser();
   const solicitante = (u.displayName || u.username || '').toUpperCase();
 
+  // M5: si stageIdx === 0 (etapa 1: postes y canales) y este nivel ya
+  // tiene metal a la medida pedido en otro pedido, EXCLUIR los items de
+  // metal del pedido. El usuario no debe pedir el metal dos veces.
+  const metalKeywords = ['POSTE', 'CANAL', 'CANALETA', 'CANALILLO', 'ANGULAR'];
+  const yaTieneMetalMedida = stageIdx === 0
+    && Array.isArray(p.materiales?.metalMedidaPedida?.[levelId])
+    && p.materiales.metalMedidaPedida[levelId].length > 0;
+  const itemsExcluidos = [];
+  const recetaFiltrada = {};
+  Object.entries(etapaReceta).forEach(([key, qtyBase]) => {
+    const itemName = (key.split('::')[1] || key).toUpperCase();
+    const esMetal = metalKeywords.some(k => itemName.includes(k));
+    if (yaTieneMetalMedida && esMetal) {
+      itemsExcluidos.push(itemName);
+    } else {
+      recetaFiltrada[key] = qtyBase;
+    }
+  });
+
+  if (yaTieneMetalMedida && Object.keys(recetaFiltrada).length === 0) {
+    return showToast('TODO EL METAL DE ESTA ETAPA YA FUE PEDIDO COMO METAL A LA MEDIDA', 'red');
+  }
+
   // Armar preview
   let preview = `GENERAR PEDIDO AUTOMÁTICO\n\n` +
     `Torre: ${t.name}\n` +
     `Nivel: ${l.name} (${numAptos} apto${numAptos !== 1 ? 's' : ''})\n` +
-    `Etapa: ${stageIdx + 1} · ${etapaInfo.name} (${etapaInfo.pct}%)\n\n` +
-    `MATERIALES (cantidad = receta × ${numAptos} aptos):\n`;
-  Object.entries(etapaReceta).forEach(([key, qtyBase]) => {
+    `Etapa: ${stageIdx + 1} · ${etapaInfo.name} (${etapaInfo.pct}%)\n\n`;
+  if (itemsExcluidos.length > 0) {
+    preview += `⚠ EXCLUIDOS (ya pedidos como metal a la medida):\n`;
+    itemsExcluidos.forEach(n => { preview += `· ${n}\n`; });
+    preview += `\n`;
+  }
+  preview += `MATERIALES (cantidad = receta × ${numAptos} aptos):\n`;
+  Object.entries(recetaFiltrada).forEach(([key, qtyBase]) => {
     const [, name] = key.split('::');
     preview += `· ${name}: ${qtyBase} × ${numAptos} = ${qtyBase * numAptos}\n`;
   });
@@ -17105,9 +17208,9 @@ function pedirEtapaCompleta(towerId, levelId, stageIdx){
   const entrega = new Date(n.getTime() + 7*24*3600*1000);
   const fechaEntrega = `${String(entrega.getDate()).padStart(2,'0')}/${String(entrega.getMonth()+1).padStart(2,'0')}/${entrega.getFullYear()}`;
 
-  // Items multiplicados
+  // Items multiplicados (usando receta filtrada por M5)
   const items = {};
-  Object.entries(etapaReceta).forEach(([key, qtyBase]) => {
+  Object.entries(recetaFiltrada).forEach(([key, qtyBase]) => {
     items[key] = Math.ceil(qtyBase * numAptos);
   });
 
