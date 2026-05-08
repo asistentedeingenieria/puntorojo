@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v188-fix-est-fantasma-y-pdf-aptos-letra';
+const CACHE_VERSION = 'v189-fix-toggle-torre-cuando-set-vacio';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
