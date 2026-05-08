@@ -18626,7 +18626,9 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   }
 
   // Patrón de nombres de aptos válidos (no torres, no niveles, no totales)
-  const APTO_PATTERN = /^(apartamento\s*\d+|apto\s*\d+|pasillo|cine(ma)?|sal[óo]n|azotea|gimnasio|lobby|local|cowork|game\s*zone|piscina|área\s*social|coworking|recepci[óo]n|penthouse|s[óo]tano)/i;
+  // APTO_PATTERN: acepta nombres con número (Apartamento 101, Apto 202)
+  // y con letra (Apartamento A, Apartamento B PRIMA, Apartamento D, etc.)
+  const APTO_PATTERN = /^(apartamento\s+\S+|apto\s*\d+|pasillo|cine(ma)?|sal[óo]n|azotea|gimnasio|lobby|local|cowork|game\s*zone|piscina|área\s*social|coworking|recepci[óo]n|penthouse|s[óo]tano)/i;
   const ROW_SKIP_PATTERN = /^(torre|nivel|otros|total|chequeo|subtotal|amortizaci|anticipo|saldo|empresa|punto\s*rojo|estimaci[óo]n\s*no|fecha|descripci[óo]n)\b/i;
 
   // Convierte "TORRE III" / "TORRE 3" / "t3" a número 3
@@ -19288,10 +19290,21 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
           });
         });
       } else if (interpret.tipo === 'torelo' && interpret.estCols) {
-        // Formato TORELO: detectar estimaciones con A CANCELAR > 0 en cualquier fila.
+        // Formato TORELO: detectar estimaciones con A CANCELAR > 0 en filas
+        // de NIVEL/Apartamento/items (NO en filas resumen como "ANTICIPO TOTAL
+        // RECIBIDO" que tiene saldos acumulados y haría aparecer estimaciones
+        // que en realidad están vacías).
+        const TORELO_SKIP_DETECTION = /^(TOTAL\s+(DE\s+)?ESTIMACI[ÓO]N|AMORTIZACI|L[ÍI]QUIDO|ANTICIPO|ACUMULADO|SALDO|CHEQUEO)/i;
         for (let i = (interpret.headerRow || 0) + 1; i < interpret.dataRows.length; i++) {
           const dr = interpret.dataRows[i];
           if (!Array.isArray(dr)) continue;
+          // Saltar filas de resumen (las del bloque final del Excel TORELO)
+          let esResumen = false;
+          for (let c = 0; c < Math.min(dr.length, 5); c++) {
+            const v = String(dr[c] || '').trim();
+            if (v && TORELO_SKIP_DETECTION.test(v)) { esResumen = true; break; }
+          }
+          if (esResumen) continue;
           interpret.estCols.forEach(({ cancelCol, estNum }) => {
             if (cancelCol == null) return;
             const raw = dr[cancelCol];
@@ -19472,10 +19485,14 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       console.log('[Detección] Totales extraídos del Excel:', estTotalesExcel);
 
       // PASO 1: Limpiar estimaciones FANTASMA (creadas por error en uploads anteriores).
-      // Una fila se elimina solo si:
+      // Una fila se elimina si:
       //   - NO es anticipo.
       //   - NO tiene datos en el Excel actual (no está en estNumsConDatos).
-      //   - NO tiene info manualmente puesta (sin vp_ci, sin factura, sin fechas).
+      //   - NO tiene info manual REAL (sin vp_ci, sin factura, sin fecha de pago).
+      // NOTA: Solo la "fecha presentada" (r.f) ya NO cuenta como info manual —
+      // si la app la auto-llenó en un upload anterior pero la estimación quedó
+      // vacía (por el bug del header de TORELO con est02 placeholder), la fila
+      // debe poderse limpiar al re-subir el Excel.
       let estimacionesEliminadas = 0;
       const rowsAntes = (p.cobro.rows || []).length;
       p.cobro.rows = (p.cobro.rows || []).filter(r => {
@@ -19484,10 +19501,10 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         if (!m) return true; // sin número → la dejamos
         const n = parseInt(m[1]);
         if (estNumsConDatos.has(n)) return true; // tiene datos en Excel → válida
-        // No tiene datos en Excel — verificar si tiene info manual
-        const tieneInfo = (Number(r.vp_ci) > 0) || (r.factura && String(r.factura).trim()) || (r.fp && String(r.fp).trim()) || (r.f && String(r.f).trim());
-        if (tieneInfo) return true;
-        // Vacía y sin datos — eliminar
+        // No tiene datos en Excel — verificar si tiene info manual REAL
+        const tieneInfoReal = (Number(r.vp_ci) > 0) || (r.factura && String(r.factura).trim()) || (r.fp && String(r.fp).trim());
+        if (tieneInfoReal) return true;
+        // Vacía y sin datos reales — eliminar (incluso si tiene fecha auto-llenada)
         estimacionesEliminadas++;
         return false;
       });
