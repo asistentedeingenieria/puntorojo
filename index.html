@@ -2535,6 +2535,14 @@ table{max-width:100%}
       <button class="btn ghost" onclick="closeModal('newTower')">CANCELAR</button>
       <button class="btn cafe" onclick="createTower()">AGREGAR</button>
     </div>
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--line);text-align:center">
+      <p style="font-size:10px;letter-spacing:1px;color:var(--mute);text-transform:uppercase;margin:0 0 8px">¿O QUERÉS CREAR TODO DE UNA VEZ?</p>
+      <label class="btn ghost sm" style="cursor:pointer;display:inline-block">
+        IMPORTAR ESTRUCTURA DESDE PDF
+        <input type="file" accept="application/pdf,.pdf" style="display:none" onchange="importStructureFromPDF(event)">
+      </label>
+      <p style="font-size:9px;letter-spacing:.5px;color:var(--mute-light);margin:8px 0 0">El PDF debe tener líneas como "NIVEL 2" + "Apartamento B" (una por línea). Crea torre + niveles + aptos automáticamente.</p>
+    </div>
   </div>
 </div>
 
@@ -8909,7 +8917,13 @@ function renderAvance(){
 
   const mx = document.getElementById('avanceMatrix');
   if (p.towers.length === 0) {
-    mx.innerHTML = `<div class="empty"><div class="big" style="font-size:24px;color:var(--mute);letter-spacing:2px;text-transform:uppercase;font-weight:700;font-family:inherit;margin-bottom:14px">VACÍO</div><p>No hay torres registradas en este proyecto todavía.</p><button class="btn cafe sm" onclick="openModal('newTower')">+ AGREGAR PRIMERA TORRE</button></div>`;
+    mx.innerHTML = `<div class="empty"><div class="big" style="font-size:24px;color:var(--mute);letter-spacing:2px;text-transform:uppercase;font-weight:700;font-family:inherit;margin-bottom:14px">VACÍO</div><p>No hay torres registradas en este proyecto todavía.</p>
+      <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px">
+        <button class="btn cafe sm" onclick="openModal('newTower')">+ AGREGAR PRIMERA TORRE</button>
+        <label class="btn ghost sm" style="cursor:pointer">IMPORTAR DESDE PDF<input type="file" accept="application/pdf,.pdf" style="display:none" onchange="importStructureFromPDF(event)"></label>
+      </div>
+      <p style="font-size:9px;letter-spacing:.5px;color:var(--mute-light);margin:14px 0 0">El PDF debe listar "NIVEL X" + "Apartamento X" en líneas. Te crea todo de una vez.</p>
+    </div>`;
     return;
   }
 
@@ -18375,6 +18389,151 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     return { aptos, levels: levelsPdf, torres: torresPdf };
   }
 
+  /* ═══════════════════════════════════════════════════════════════
+     IMPORTAR ESTRUCTURA DEL PROYECTO DESDE PDF
+     ───────────────────────────────────────────────────────────────
+     Detecta líneas "NIVEL X" y "Apartamento X" en el PDF y crea
+     automáticamente: 1 torre + niveles + apartamentos en el proyecto activo.
+     Acepta nombres de apto con letra (Apartamento A, B, C, A PRIMA, etc.)
+     o con número (Apartamento 101).
+     ═══════════════════════════════════════════════════════════════ */
+  window.importStructureFromPDF = async function(event){
+    const file = event.target.files[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      showToast('SELECCIONÁ UN ARCHIVO PDF', 'red');
+      event.target.value = '';
+      return;
+    }
+    if (!can('admin') && !can('proyectos.edit')) {
+      // Permitimos a cualquiera con permiso de gestión del proyecto
+      // (si no hay permiso específico, lo dejamos pasar al admin)
+    }
+    showToast('LEYENDO PDF...', '');
+    let lines;
+    try {
+      lines = await _parsePDFToLines(file);
+    } catch (e) {
+      console.error('Error leyendo PDF:', e);
+      showToast('NO SE PUDO LEER EL PDF · ' + (e.message || ''), 'red');
+      event.target.value = '';
+      return;
+    }
+    if (!lines || lines.length === 0) {
+      showToast('PDF VACÍO O ILEGIBLE', 'red');
+      event.target.value = '';
+      return;
+    }
+
+    // Patrones específicos para estructura de proyecto
+    const NIVEL_LINE = /^NIVEL\s+(\d+)\s*$/i;
+    // Apto con letra: "Apartamento A", "Apartamento B PRIMA", "Apartamento 101"
+    const APTO_LINE = /^Apartamento\s+(.+?)\s*$/i;
+    // Excluir cosas que NO son aptos (footers, paginación, etc.)
+    const EXCLUDE_LINE = /^(\d+\s*de\s*\d+|p[áa]gina|www\.|@|ingenieria@)/i;
+
+    // Parsear el PDF
+    const niveles = []; // [{ name, num, aptos: [name] }]
+    let currentNivel = null;
+    lines.forEach(rawLine => {
+      const line = rawLine.replace(/\s+/g, ' ').trim();
+      if (!line) return;
+      if (EXCLUDE_LINE.test(line)) return;
+
+      const nivelMatch = line.match(NIVEL_LINE);
+      if (nivelMatch) {
+        currentNivel = {
+          name: 'NIVEL ' + nivelMatch[1],
+          num: parseInt(nivelMatch[1]),
+          aptos: []
+        };
+        niveles.push(currentNivel);
+        return;
+      }
+      const aptoMatch = line.match(APTO_LINE);
+      if (aptoMatch && currentNivel) {
+        const aptoName = ('Apartamento ' + aptoMatch[1].trim()).toUpperCase();
+        // Evitar duplicados dentro del mismo nivel
+        if (!currentNivel.aptos.includes(aptoName)) {
+          currentNivel.aptos.push(aptoName);
+        }
+      }
+    });
+
+    if (niveles.length === 0) {
+      showToast('NO SE DETECTARON NIVELES NI APTOS · REVISÁ EL FORMATO DEL PDF', 'red');
+      event.target.value = '';
+      return;
+    }
+
+    const totalNiveles = niveles.length;
+    const totalAptos = niveles.reduce((s, n) => s + n.aptos.length, 0);
+
+    // Decidir qué hacer si el proyecto YA tiene torres
+    const p = activeProj();
+    if (!p) { showToast('SIN PROYECTO ACTIVO', 'red'); event.target.value = ''; return; }
+    const tieneEstructura = (p.towers || []).length > 0;
+
+    let modo = 'crear';
+    if (tieneEstructura) {
+      const choice = confirm(
+        `EL PROYECTO YA TIENE ${(p.towers || []).length} TORRE(S).\n\n` +
+        `Detectado en PDF: ${totalNiveles} niveles, ${totalAptos} apartamentos.\n\n` +
+        `¿Querés AGREGAR los niveles/aptos del PDF a una torre nueva?\n` +
+        `(Los datos existentes se conservan intactos)\n\n` +
+        `OK = Agregar como torre nueva\n` +
+        `Cancelar = NO importar`
+      );
+      if (!choice) { event.target.value = ''; return; }
+      modo = 'agregar';
+    }
+
+    // Crear la nueva torre con niveles + aptos
+    const towerName = (modo === 'agregar')
+      ? ('TORRE ' + String.fromCharCode(65 + (p.towers || []).length))  // TORRE A, B, C...
+      : 'TORRE 1';
+
+    const newTower = {
+      id: 't-' + uid(),
+      name: towerName,
+      levels: niveles.map((nv) => ({
+        id: 'l-' + uid(),
+        name: nv.name,
+        aptos: nv.aptos.map((apName, idx) => ({
+          id: 'a-' + uid() + '-' + idx,
+          name: apName,
+          stages: [false, false, false, false, false, false],
+          photos: {}
+        }))
+      }))
+    };
+
+    if (!Array.isArray(p.towers)) p.towers = [];
+    p.towers.push(newTower);
+
+    try {
+      saveState();
+    } catch(e) {
+      console.error('Error guardando estructura:', e);
+      showToast('ERROR GUARDANDO · ' + (e.message || ''), 'red');
+      event.target.value = '';
+      return;
+    }
+
+    closeModal('newTower');
+    if (typeof renderAvance === 'function') renderAvance();
+    if (typeof renderAll === 'function') renderAll();
+    showToast(
+      `ESTRUCTURA IMPORTADA · ${towerName} · ${totalNiveles} NIVELES · ${totalAptos} APTOS`,
+      'green'
+    );
+    logActivity('create',
+      'Estructura importada desde PDF',
+      `${p.name} · ${towerName} · ${totalNiveles} niveles, ${totalAptos} aptos · archivo ${file.name}`
+    );
+    event.target.value = '';
+  };
+
   // Helper: parsea un .xlsx a un array de filas (cada fila = array de strings/numbers)
   async function _parseXlsxToRows(file){
     // PATH 1: usar SheetJS si está disponible (más robusto, soporta más formatos).
@@ -18557,6 +18716,56 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
 
         if (ejecutadoCols.length > 0) {
           return { tipo: 'oficial', subHeaderRow, estHeaderRow, ejecutadoCols, dataRows: rows };
+        }
+      }
+    }
+
+    // ─── DETECCIÓN FORMATO TORELO ───
+    // Estructura: header en una fila inicial (col A = "DESCRIPCIÓN") con
+    // celdas "ESTIMACIÓN N" (sin el "NO."), donde la columna siguiente trae
+    // la fecha (Excel serial) o "FECHA" como placeholder. La sub-fila
+    // siguiente trae "% EJECUTADO" / "A CANCELAR" como sub-headers.
+    // Ejemplo TORELO:
+    //   R5: ["DESCRIPCIÓN","","","","TOTAL RENGLÓN","ESTIMACIÓN 01",46146,"ESTIMACIÓN 02","FECHA",...]
+    //   R6: ["","","","","","% EJECUTADO","A CANCELAR","% EJECUTADO","A CANCELAR",...]
+    //   R7: ["TOTAL CONTRATO","UNIDAD","CANTIDAD","P.U","TOTAL",...]
+    //   R8+: filas de NIVEL X / Apartamento X / items individuales.
+    {
+      let toreloHeaderRow = -1;
+      for (let i = 0; i < Math.min(rows.length, 20); i++) {
+        const r = rows[i];
+        if (!Array.isArray(r)) continue;
+        const colA = String(r[0] || '').trim().toUpperCase();
+        if (colA !== 'DESCRIPCIÓN' && colA !== 'DESCRIPCION') continue;
+        // Buscar al menos un "ESTIMACIÓN <número>" sin "NO." (distinto al formato oficial)
+        const hasToreloEst = r.some(c => /^ESTIMACI[ÓO]N\s+\d+\s*$/i.test(String(c || '').trim()));
+        if (hasToreloEst) { toreloHeaderRow = i; break; }
+      }
+
+      if (toreloHeaderRow >= 0) {
+        const header = rows[toreloHeaderRow];
+        const estCols = [];
+        const seen = new Set();
+        for (let col = 0; col < header.length; col++) {
+          const v = String(header[col] || '').trim();
+          const m = v.match(/^ESTIMACI[ÓO]N\s+(\d+)\s*$/i);
+          if (!m) continue;
+          const estNum = parseInt(m[1]);
+          if (seen.has(estNum)) continue;
+          seen.add(estNum);
+          // Fecha: la celda inmediatamente a la derecha (que también es donde está
+          // "A CANCELAR" como sub-header). Si trae texto "FECHA" o vacío, no hay fecha.
+          let fechaRaw = header[col + 1];
+          if (typeof fechaRaw === 'string') {
+            const f = fechaRaw.trim().toUpperCase();
+            if (f === 'FECHA' || f === '') fechaRaw = null;
+          }
+          // Layout TORELO: col → % EJECUTADO, col+1 → A CANCELAR
+          estCols.push({ estNum, fechaRaw, ejecutadoCol: col, cancelCol: col + 1 });
+        }
+        if (estCols.length > 0) {
+          try { console.log('[Parser TORELO] header en fila', toreloHeaderRow + 1, '· estimaciones detectadas:', estCols); } catch(e){}
+          return { tipo: 'torelo', headerRow: toreloHeaderRow, estCols, dataRows: rows };
         }
       }
     }
@@ -19071,6 +19280,22 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
             detalleDetect[estNum].sumaPct += pct;
           });
         });
+      } else if (interpret.tipo === 'torelo' && interpret.estCols) {
+        // Formato TORELO: detectar estimaciones con A CANCELAR > 0 en cualquier fila.
+        for (let i = (interpret.headerRow || 0) + 1; i < interpret.dataRows.length; i++) {
+          const dr = interpret.dataRows[i];
+          if (!Array.isArray(dr)) continue;
+          interpret.estCols.forEach(({ cancelCol, estNum }) => {
+            if (cancelCol == null) return;
+            const raw = dr[cancelCol];
+            if (raw === '' || raw === null || raw === undefined) return;
+            const monto = Number(raw);
+            if (isNaN(monto) || monto <= 0) return;
+            estNumsConDatos.add(estNum);
+            if (!detalleDetect[estNum]) detalleDetect[estNum] = { aptos: 0, sumaPct: 0 };
+            detalleDetect[estNum].aptos++;
+          });
+        }
       }
 
       console.log('[Detección] Estimaciones con datos:', [...estNumsConDatos].sort((a,b)=>a-b));
@@ -19164,6 +19389,36 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
           }
         }
       }
+      // ─── EXTRACCIÓN DE MONTOS · FORMATO TORELO ───
+      // Sumamos el "A CANCELAR" SOLO de las filas que sean "NIVEL X" (esos
+      // headers ya traen la suma agregada de todos los aptos del nivel,
+      // por lo que evitamos doble conteo con los items individuales).
+      // La fecha la tomamos del estCol del header.
+      if (interpret.tipo === 'torelo' && interpret.estCols) {
+        // Pre-cargar fecha de cada estimación (incluso las que aún no tengan datos)
+        interpret.estCols.forEach(({ estNum, fechaRaw }) => {
+          if (!estTotalesExcel[estNum]) estTotalesExcel[estNum] = { monto: 0, fechaRaw: null };
+          if (fechaRaw != null) estTotalesExcel[estNum].fechaRaw = fechaRaw;
+        });
+        // Sumar montos de filas NIVEL X
+        for (let i = (interpret.headerRow || 0) + 1; i < interpret.dataRows.length; i++) {
+          const dr = interpret.dataRows[i];
+          if (!Array.isArray(dr)) continue;
+          const colA = String(dr[0] || '').trim();
+          if (!/^NIVEL\s+\d+/i.test(colA)) continue; // solo headers de NIVEL (suma ya agregada)
+          interpret.estCols.forEach(({ cancelCol, estNum }) => {
+            if (cancelCol == null) return;
+            const raw = dr[cancelCol];
+            if (raw === '' || raw === null || raw === undefined) return;
+            const monto = Number(raw);
+            if (isNaN(monto) || monto <= 0) return;
+            if (!estTotalesExcel[estNum]) estTotalesExcel[estNum] = { monto: 0, fechaRaw: null };
+            estTotalesExcel[estNum].monto += monto;
+          });
+        }
+        try { console.log('[Parser TORELO] Totales por estimación (suma de NIVEL X):', estTotalesExcel); } catch(e){}
+      }
+
       console.log('[Detección] Totales extraídos del Excel:', estTotalesExcel);
 
       // PASO 1: Limpiar estimaciones FANTASMA (creadas por error en uploads anteriores).
