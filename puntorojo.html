@@ -17608,16 +17608,45 @@ function renderRecetaPedir(){
   }
 
   // Cantidad de etapas a mostrar: las del PDF importado (4 o 5) o default 4.
-  // Las recetas de material nunca tienen 6 etapas.
-  const recetaEtapasCount = (Array.isArray(p.materiales.recetaEtapaLabels) && p.materiales.recetaEtapaLabels.length > 0)
+  // Las recetas de material nunca tienen 6 etapas (cap duro a 5).
+  const labelsCount = (Array.isArray(p.materiales.recetaEtapaLabels) && p.materiales.recetaEtapaLabels.length > 0)
     ? p.materiales.recetaEtapaLabels.length
     : 4;
+  const recetaEtapasCount = Math.min(5, labelsCount);
+
+  // Estado de colapso por torre (persistente en localStorage por proyecto).
+  // Default: todas expandidas (es una vista de acción, queremos ver los botones).
+  const collapsedKey = 'receta_pedir_torres_colapsadas_' + (p?.id || 'def');
+  let collapsedSet;
+  try {
+    const _raw = localStorage.getItem(collapsedKey);
+    if (_raw === null) {
+      collapsedSet = new Set();
+      try { localStorage.setItem(collapsedKey, JSON.stringify([])); } catch(_e){}
+    } else {
+      let _arr; try { _arr = JSON.parse(_raw); } catch(_e){ _arr = []; }
+      if (!Array.isArray(_arr)) _arr = [];
+      collapsedSet = new Set(_arr);
+    }
+  } catch(e) { collapsedSet = new Set(); }
 
   let html = '';
   torres.forEach(t => {
     const levels = (t.levels || []).filter(l => (l.aptos || []).length > 0);
     if (levels.length === 0) return;
-    html += `<div class="receta-tower-head">${t.name}</div>`;
+
+    const isCollapsed = collapsedSet.has(t.id);
+    const totalAptos = levels.reduce((s, l) => s + (l.aptos || []).length, 0);
+
+    // Header de torre — clickeable para colapsar/expandir
+    html += `<div class="receta-tower-head" style="cursor:pointer;display:flex;align-items:center;gap:10px;user-select:none" onclick="toggleRecetaPedirTorre('${escapeAttr(t.id)}')" title="Click para ${isCollapsed ? 'expandir' : 'colapsar'}">
+      <span class="ts-chevron${isCollapsed ? '' : ' open'}" aria-hidden="true" style="display:inline-block;width:0;height:0;border:5px solid transparent;border-left-color:currentColor;transform:${isCollapsed ? 'rotate(0deg)' : 'rotate(90deg)'};transition:transform .15s"></span>
+      <span style="flex:1">${t.name}</span>
+      <span style="font-size:10px;letter-spacing:1px;opacity:.7;font-weight:500">${levels.length} NIVEL${levels.length !== 1 ? 'ES' : ''} · ${totalAptos} APTO${totalAptos !== 1 ? 'S' : ''}</span>
+    </div>`;
+
+    if (isCollapsed) return; // No renderizar niveles si la torre está colapsada
+
     levels.forEach(l => {
       const numAptos = (l.aptos || []).length;
       const pedidas = (p.materiales.etapasPedidas || {})[l.id] || [false,false,false,false,false,false];
@@ -17653,6 +17682,21 @@ function renderRecetaPedir(){
 
   cont.innerHTML = html || `<div class="receta-empty" style="margin:14px">SIN TORRES NI NIVELES</div>`;
 }
+
+// Toggle colapsar/expandir torre en la sección "PEDIR ETAPA COMPLETA POR NIVEL"
+window.toggleRecetaPedirTorre = function(torreId){
+  const p = activeProj();
+  const collapsedKey = 'receta_pedir_torres_colapsadas_' + (p?.id || 'def');
+  let arr;
+  try { arr = JSON.parse(localStorage.getItem(collapsedKey) || '[]'); }
+  catch(e) { arr = []; }
+  if (!Array.isArray(arr)) arr = [];
+  const set = new Set(arr);
+  if (set.has(torreId)) set.delete(torreId);
+  else set.add(torreId);
+  try { localStorage.setItem(collapsedKey, JSON.stringify([...set])); } catch(e){}
+  if (typeof renderRecetaPedir === 'function') renderRecetaPedir();
+};
 
 function pedirEtapaCompleta(towerId, levelId, stageIdx){
   if (!can('pedidos.create')) return showToast('SIN PERMISO PARA CREAR PEDIDOS', 'red');
