@@ -2462,7 +2462,7 @@ table{max-width:100%}
     <div class="field"><label>NOMBRE DEL PROYECTO</label><input id="npName" placeholder="EJ: RESIDENCIAL SAN LUCAS"></div>
     <div class="field"><label>CLIENTE</label><input id="npClient" placeholder="EJ: CONSTRUCTORA ABC"></div>
     <div class="field"><label>UBICACIÓN</label><input id="npLocation" placeholder="EJ: ZONA 10, CIUDAD"></div>
-    <div class="field"><label>MONTO CONTRATADO SIN IVA (Q)</label><input id="npAmount" type="number" step="0.01" value="0"></div>
+    <div class="field"><label>MONTO CONTRATADO CON IVA (Q)</label><input id="npAmount" type="number" step="0.01" value="0"><div class="hint">Ingresá el monto que aparece en el contrato (ya con IVA incluido). El monto sin IVA se calcula automáticamente.</div></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="field"><label>IVA %</label><input id="npIva" type="number" step="0.01" value="12"><div class="hint">0 si el proyecto no factura IVA.</div></div>
       <div class="field"><label>ANTICIPO %</label><input id="npAntic" type="number" step="0.01" value="25"><div class="hint">La amortización siempre es igual al % del anticipo.</div></div>
@@ -2510,7 +2510,7 @@ table{max-width:100%}
     <div class="field"><label>CLIENTE</label><input id="epClient"></div>
     <div class="field"><label>UBICACIÓN</label><input id="epLocation"></div>
     <div class="field"><label>FECHA DE INICIO DE OBRA</label><input id="epStartDate" type="date"><div class="hint">Determina la SEMANA 1 del proyecto. Cada semana del reporte se cuenta desde el lunes de esta fecha.</div></div>
-    <div class="field"><label>MONTO CONTRATADO SIN IVA (Q)</label><input id="epAmount" type="number" step="0.01"></div>
+    <div class="field"><label>MONTO CONTRATADO CON IVA (Q)</label><input id="epAmount" type="number" step="0.01"><div class="hint">Ingresá el monto que aparece en el contrato (ya con IVA incluido). El monto sin IVA se calcula automáticamente.</div></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="field"><label>IVA %</label><input id="epIva" type="number" step="0.01"></div>
       <div class="field"><label>ANTICIPO %</label><input id="epAntic" type="number" step="0.01"><div class="hint">La amortización siempre es igual al % del anticipo.</div></div>
@@ -14018,7 +14018,11 @@ function openEditProjectModal(){
   // startDate del proyecto (para numeración de semanas)
   const sdEl = document.getElementById('epStartDate');
   if (sdEl) sdEl.value = p.startDate ? new Date(p.startDate).toISOString().slice(0,10) : '';
-  document.getElementById('epAmount').value = Number(p.totalSinIva || 0).toFixed(2);
+  // Mostrar el monto CON IVA (el form ahora pide CON IVA, no SIN IVA).
+  // Si no existe totalConIva en el doc, lo calculamos desde totalSinIva + ivaPct.
+  const _ivaPct = Number(p.ivaPct || 0);
+  const _ci = Number(p.totalConIva || (Number(p.totalSinIva || 0) * (1 + _ivaPct))) || 0;
+  document.getElementById('epAmount').value = _ci.toFixed(2);
   document.getElementById('epIva').value = ((p.ivaPct || 0) * 100).toFixed(2);
   document.getElementById('epAntic').value = ((p.anticipoPct || 0) * 100).toFixed(2);
   document.getElementById('epRet').value = ((p.retencionPct || 0) * 100).toFixed(2);
@@ -14300,8 +14304,10 @@ function saveProjectSpecs(){
   if (!p) return;
   const name = document.getElementById('epName').value.trim().toUpperCase();
   if (!name) return showToast('NOMBRE REQUERIDO', 'red');
-  const totalSI = Number(document.getElementById('epAmount').value) || 0;
+  // El input ahora trae el monto CON IVA. Calculamos el SIN IVA dividiendo.
+  const totalCI = Number(document.getElementById('epAmount').value) || 0;
   const iva = (Number(document.getElementById('epIva').value) || 0) / 100;
+  const totalSI = iva > 0 ? +(totalCI / (1 + iva)).toFixed(2) : totalCI;
   p.name = name;
   p.client = document.getElementById('epClient').value.trim().toUpperCase();
   p.location = document.getElementById('epLocation').value.trim().toUpperCase();
@@ -14310,7 +14316,7 @@ function saveProjectSpecs(){
   p.startDate = sdVal ? new Date(sdVal + 'T00:00:00').toISOString() : '';
   p.totalSinIva = totalSI;
   p.ivaPct = iva;
-  p.totalConIva = totalSI * (1 + iva);
+  p.totalConIva = totalCI;
   p.totalAmount = p.totalConIva;
   p.anticipoPct = (Number(document.getElementById('epAntic').value) || 0) / 100;
   // Regla de negocio: la amortización SIEMPRE es igual al % del anticipo.
@@ -14345,15 +14351,16 @@ function createProject(){
   const name = document.getElementById('npName').value.trim().toUpperCase();
   if (!name) return showToast('NOMBRE REQUERIDO', 'red');
   const id = 'p-' + uid();
-  const totalSI = parseFloat(document.getElementById('npAmount').value) || 0;
+  // El input ahora trae el monto CON IVA. Calculamos el SIN IVA dividiendo.
+  const totalCI = parseFloat(document.getElementById('npAmount').value) || 0;
   const iva = (parseFloat(document.getElementById('npIva').value) || 0) / 100;
+  const totalSI = iva > 0 ? +(totalCI / (1 + iva)).toFixed(2) : totalCI;
   const antic = (parseFloat(document.getElementById('npAntic').value) || 25) / 100;
   // Regla de negocio: la amortización SIEMPRE es igual al % del anticipo en todos los proyectos.
   const amort = antic;
   const ret = (parseFloat(document.getElementById('npRet').value) || 0) / 100;
   const descuento = Math.max(0, parseFloat(document.getElementById('npDescuento')?.value) || 0);
   const diasPago = Math.max(1, parseInt(document.getElementById('npDiasPago')?.value) || 30);
-  const totalCI = totalSI * (1 + iva);
   state.projects.push({
     id, name,
     client: document.getElementById('npClient').value.trim().toUpperCase(),
@@ -19403,33 +19410,76 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         }
       }
       // ─── EXTRACCIÓN DE MONTOS · FORMATO TORELO ───
-      // Sumamos el "A CANCELAR" SOLO de las filas que sean "NIVEL X" (esos
-      // headers ya traen la suma agregada de todos los aptos del nivel,
-      // por lo que evitamos doble conteo con los items individuales).
-      // La fecha la tomamos del estCol del header.
+      // ESTRATEGIA: el Excel TORELO tiene al final una fila "TOTAL ESTIMACIÓN"
+      // que ya trae el monto presentado oficial por estimación (ese es el
+      // valor que se muestra en el resumen del cliente). Lo leemos directo
+      // de esa fila — es la fuente autoritativa.
+      // Si no encontramos esa fila resumen, fallback a sumar las filas
+      // de NIVEL X (suma agregada, evita doble conteo con items).
       if (interpret.tipo === 'torelo' && interpret.estCols) {
-        // Pre-cargar fecha de cada estimación (incluso las que aún no tengan datos)
+        // Pre-cargar fecha de cada estimación
         interpret.estCols.forEach(({ estNum, fechaRaw }) => {
           if (!estTotalesExcel[estNum]) estTotalesExcel[estNum] = { monto: 0, fechaRaw: null };
           if (fechaRaw != null) estTotalesExcel[estNum].fechaRaw = fechaRaw;
         });
-        // Sumar montos de filas NIVEL X
+
+        // Patrones para identificar la fila "TOTAL ESTIMACIÓN" oficial.
+        // PRIORIDAD ALTA: exacto "TOTAL ESTIMACIÓN" o "TOTAL DE ESTIMACIÓN" sin sufijos.
+        // EXCLUIR: filas de líquido, amortización, saldo, anticipo, valor con IVA, etc.
+        const TOTAL_ESTIMACION_OK = /^TOTAL\s+(DE\s+)?ESTIMACI[ÓO]N\s*$/i;
+        const TOTAL_ESTIMACION_IGNORAR = /(L[ÍI]QUIDO|RECIBIR|AMORTIZ|SALDO|ANTICIPO\s+TOTAL|ACUMULADO|VALOR\s+CON\s+IVA|VALOR\s+SIN\s+IVA)/i;
+
+        let totalRowIdx = -1;
         for (let i = (interpret.headerRow || 0) + 1; i < interpret.dataRows.length; i++) {
           const dr = interpret.dataRows[i];
           if (!Array.isArray(dr)) continue;
-          const colA = String(dr[0] || '').trim();
-          if (!/^NIVEL\s+\d+/i.test(colA)) continue; // solo headers de NIVEL (suma ya agregada)
-          interpret.estCols.forEach(({ cancelCol, estNum }) => {
-            if (cancelCol == null) return;
-            const raw = dr[cancelCol];
-            if (raw === '' || raw === null || raw === undefined) return;
-            const monto = Number(raw);
-            if (isNaN(monto) || monto <= 0) return;
-            if (!estTotalesExcel[estNum]) estTotalesExcel[estNum] = { monto: 0, fechaRaw: null };
-            estTotalesExcel[estNum].monto += monto;
-          });
+          // Buscar el texto en las primeras 5 columnas (puede estar mergeado entre B-D)
+          for (let c = 0; c < Math.min(dr.length, 5); c++) {
+            const v = String(dr[c] || '').trim();
+            if (!v) continue;
+            if (TOTAL_ESTIMACION_IGNORAR.test(v)) break; // fila incorrecta, saltar
+            if (TOTAL_ESTIMACION_OK.test(v)) { totalRowIdx = i; break; }
+          }
+          if (totalRowIdx >= 0) break;
         }
-        try { console.log('[Parser TORELO] Totales por estimación (suma de NIVEL X):', estTotalesExcel); } catch(e){}
+
+        if (totalRowIdx >= 0) {
+          // ✅ Encontramos la fila "TOTAL ESTIMACIÓN" oficial — leer cancelCol directo
+          const totalRow = interpret.dataRows[totalRowIdx];
+          interpret.estCols.forEach(({ cancelCol, ejecutadoCol, estNum }) => {
+            // Probar AMBAS columnas (cancelCol y ejecutadoCol) — distintos templates
+            // ponen el monto en distinta col en la fila resumen.
+            const m1 = cancelCol != null ? Number(totalRow[cancelCol]) : NaN;
+            const m2 = ejecutadoCol != null ? Number(totalRow[ejecutadoCol]) : NaN;
+            let monto = 0;
+            if (!isNaN(m1) && m1 > 0) monto = m1;
+            else if (!isNaN(m2) && m2 > 0) monto = m2;
+            if (monto > 0) {
+              if (!estTotalesExcel[estNum]) estTotalesExcel[estNum] = { monto: 0, fechaRaw: null };
+              estTotalesExcel[estNum].monto = monto; // = (no +=) porque es valor oficial
+            }
+          });
+          try { console.log('[Parser TORELO] Fila TOTAL ESTIMACIÓN encontrada en row', totalRowIdx + 1, '· Totales:', estTotalesExcel); } catch(e){}
+        } else {
+          // Fallback: sumar montos de filas NIVEL X (menos preciso pero suele dar el mismo resultado)
+          console.warn('[Parser TORELO] No se encontró fila "TOTAL ESTIMACIÓN", usando suma de NIVEL X');
+          for (let i = (interpret.headerRow || 0) + 1; i < interpret.dataRows.length; i++) {
+            const dr = interpret.dataRows[i];
+            if (!Array.isArray(dr)) continue;
+            const colA = String(dr[0] || '').trim();
+            if (!/^NIVEL\s+\d+/i.test(colA)) continue;
+            interpret.estCols.forEach(({ cancelCol, estNum }) => {
+              if (cancelCol == null) return;
+              const raw = dr[cancelCol];
+              if (raw === '' || raw === null || raw === undefined) return;
+              const monto = Number(raw);
+              if (isNaN(monto) || monto <= 0) return;
+              if (!estTotalesExcel[estNum]) estTotalesExcel[estNum] = { monto: 0, fechaRaw: null };
+              estTotalesExcel[estNum].monto += monto;
+            });
+          }
+          try { console.log('[Parser TORELO] Totales (fallback NIVEL X):', estTotalesExcel); } catch(e){}
+        }
       }
 
       console.log('[Detección] Totales extraídos del Excel:', estTotalesExcel);
