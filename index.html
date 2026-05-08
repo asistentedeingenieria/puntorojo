@@ -17345,17 +17345,95 @@ function renderReceta(){
   // Contenido de la etapa actual
   const etapa = p.materiales.receta[currentRecetaStage] || {};
   const items = Object.entries(etapa);
-
   const cont = document.getElementById('recetaContent');
-  if (items.length === 0) {
+
+  // ── Si hay datos por torre (importados de PDF), renderizar como secciones
+  // comprimibles. La sección "TOTAL" siempre se muestra arriba (expandida por
+  // default); cada torre se muestra colapsada por default.
+  const recetaPorTorre = (p.materiales.recetaPorTorre && typeof p.materiales.recetaPorTorre === 'object')
+    ? p.materiales.recetaPorTorre : null;
+  const torresList = recetaPorTorre ? Object.keys(recetaPorTorre).sort((a, b) => {
+    const na = parseInt((a.match(/\d+/) || ['0'])[0]);
+    const nb = parseInt((b.match(/\d+/) || ['0'])[0]);
+    return na - nb || a.localeCompare(b);
+  }) : [];
+
+  const headerLabel = etapasFromPDF ? 'TOTAL' : 'POR APTO';
+
+  // Helper: renderizar una sección (torre o TOTAL) con su tabla de materiales
+  const renderRecetaSection = (sectionId, displayName, sectionItems, isCollapsed, allowEdit) => {
+    const itemsHtml = sectionItems.length === 0
+      ? `<div class="receta-empty" style="padding:14px 12px">SIN MATERIALES EN ESTA ETAPA</div>`
+      : `<div class="receta-table-hd">
+          <div>MATERIAL</div>
+          <div style="text-align:center">${headerLabel}</div>
+          <div></div>
+        </div>` + sectionItems.map(([key, qty]) => {
+          const parts = key.split('::');
+          const cat = parts.length > 1 ? parts[0] : '';
+          const name = parts.length > 1 ? parts.slice(1).join('::') : key;
+          return `<div class="receta-table-row">
+            <div class="rt-name">${name}${cat ? `<div style="font-size:9px;color:var(--mute);font-weight:500;letter-spacing:1px;margin-top:2px">${cat}</div>` : ''}</div>
+            <div>${(recetaEditMode && allowEdit)
+              ? `<input type="number" step="0.01" min="0" value="${qty}" onchange="updateRecetaQty('${escapeAttr(key)}', this.value)">`
+              : `<span class="rt-qty">${qty}</span>`}</div>
+            <div>${(recetaEditMode && allowEdit) ? `<button class="btn-icon" onclick="removeRecetaMaterial('${escapeAttr(key)}')" title="Quitar">✕</button>` : ''}</div>
+          </div>`;
+        }).join('');
+
+    const matCount = sectionItems.length;
+    return `<div class="tower-summary" style="margin-bottom:12px">
+      <div class="tower-summary-head simple${isCollapsed ? '' : ' open'}" onclick="toggleRecetaTorre('${escapeAttr(sectionId)}')" title="Click para ${isCollapsed ? 'expandir' : 'colapsar'}">
+        <span class="ts-chevron" aria-hidden="true"></span>
+        <div class="ts-name-wrap"><div class="ts-name">${displayName}</div></div>
+        <div class="ts-prom">${matCount}<small>MAT.</small></div>
+      </div>
+      ${isCollapsed ? '' : `<div style="padding:0 6px 6px">${itemsHtml}</div>`}
+    </div>`;
+  };
+
+  if (torresList.length > 0) {
+    // ── Estado de colapso (por proyecto, persistente) ──
+    const collapsedKey = 'receta_torres_colapsadas_' + (p?.id || 'def');
+    let collapsedSet;
+    try {
+      const _raw = localStorage.getItem(collapsedKey);
+      if (_raw === null) {
+        // PRIMERA VEZ: colapsamos solo las TORRES; TOTAL queda expandido.
+        const _arr = torresList.slice();
+        try { localStorage.setItem(collapsedKey, JSON.stringify(_arr)); } catch(_e){}
+        collapsedSet = new Set(_arr);
+      } else {
+        let _arr; try { _arr = JSON.parse(_raw); } catch(_e){ _arr = []; }
+        if (!Array.isArray(_arr)) _arr = [];
+        collapsedSet = new Set(_arr);
+      }
+    } catch(e) { collapsedSet = new Set(torresList); }
+
+    let html = '';
+    // Sección TOTAL
+    html += renderRecetaSection('__TOTAL__', `TOTAL · ${torresList.length} TORRE${torresList.length !== 1 ? 'S' : ''}`, items, collapsedSet.has('__TOTAL__'), true);
+    // Sección por torre
+    torresList.forEach(torre => {
+      const torreEtapa = (recetaPorTorre[torre] && recetaPorTorre[torre][currentRecetaStage]) || {};
+      const torreItems = Object.entries(torreEtapa);
+      html += renderRecetaSection(torre, torre, torreItems, collapsedSet.has(torre), false);
+    });
+    cont.innerHTML = html;
+
+    if (recetaEditMode && (items.length > 0 || true)) {
+      cont.innerHTML += `<button class="receta-add-btn" onclick="addRecetaMaterial()" style="margin-top:8px">+ AGREGAR MATERIAL A ESTA ETAPA (TOTAL)</button>`;
+    }
+  } else if (items.length === 0) {
     cont.innerHTML = `<div class="receta-empty">
       SIN MATERIALES DEFINIDOS PARA ESTA ETAPA
       ${recetaEditMode ? '<br><button class="receta-add-btn" onclick="addRecetaMaterial()" style="margin-top:12px">+ AGREGAR PRIMER MATERIAL</button>' : ''}
     </div>`;
   } else {
+    // Vista plana clásica (receta manual sin PDF)
     let html = `<div class="receta-table-hd">
       <div>MATERIAL</div>
-      <div style="text-align:center">${etapasFromPDF ? 'TOTAL' : 'POR APTO'}</div>
+      <div style="text-align:center">${headerLabel}</div>
       <div></div>
     </div>`;
     html += items.map(([key, qty]) => {
@@ -17377,6 +17455,21 @@ function renderReceta(){
 
   renderRecetaPedir();
 }
+
+// Toggle colapsar/expandir torre en la receta de materiales (incluye '__TOTAL__')
+window.toggleRecetaTorre = function(torreId){
+  const p = activeProj();
+  const collapsedKey = 'receta_torres_colapsadas_' + (p?.id || 'def');
+  let arr;
+  try { arr = JSON.parse(localStorage.getItem(collapsedKey) || '[]'); }
+  catch(e) { arr = []; }
+  if (!Array.isArray(arr)) arr = [];
+  const set = new Set(arr);
+  if (set.has(torreId)) set.delete(torreId);
+  else set.add(torreId);
+  try { localStorage.setItem(collapsedKey, JSON.stringify([...set])); } catch(e){}
+  if (typeof renderReceta === 'function') renderReceta();
+};
 
 function setRecetaStage(idx){
   currentRecetaStage = idx;
@@ -18475,7 +18568,9 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     const torres = new Set();
     const niveles = new Set();
     const etapasOrdenadas = []; // ["1RA ETAPA", "2NDA ETAPA", ...]
-    const dataPorEtapa = {}; // { etapaName: { materialName: { qty, unit } } }
+    // Datos por torre: { torreName: { etapaName: { materialName: { qty, unit } } } }
+    // qty acumulado por sumar todos los niveles de esa torre/etapa.
+    const dataPorTorre = {};
 
     let currentTorre = null;
     let currentNivel = null;
@@ -18526,21 +18621,23 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       if (em) {
         currentEtapa = normalizarEtapa(em[1], em[2]);
         if (!etapasOrdenadas.includes(currentEtapa)) etapasOrdenadas.push(currentEtapa);
-        if (!dataPorEtapa[currentEtapa]) dataPorEtapa[currentEtapa] = {};
         return;
       }
 
       // 4. Fila de material — sumamos el ÚLTIMO número (TOTAL NIVEL del PDF)
+      // dentro de la torre actual
       if (currentEtapa && currentTorre && currentNivel) {
         const parsed = parseMaterialRow(line);
         if (parsed && parsed.numbers.length > 0) {
           const total = parsed.numbers[parsed.numbers.length - 1];
           if (total > 0) {
             const matName = parsed.material;
-            if (!dataPorEtapa[currentEtapa][matName]) {
-              dataPorEtapa[currentEtapa][matName] = { qty: 0, unit: parsed.unit };
+            if (!dataPorTorre[currentTorre]) dataPorTorre[currentTorre] = {};
+            if (!dataPorTorre[currentTorre][currentEtapa]) dataPorTorre[currentTorre][currentEtapa] = {};
+            if (!dataPorTorre[currentTorre][currentEtapa][matName]) {
+              dataPorTorre[currentTorre][currentEtapa][matName] = { qty: 0, unit: parsed.unit };
             }
-            dataPorEtapa[currentEtapa][matName].qty += total;
+            dataPorTorre[currentTorre][currentEtapa][matName].qty += total;
             materiasDetectadas++;
           }
         }
@@ -18567,8 +18664,15 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       return;
     }
 
-    // Calcular totales para mostrar al usuario antes de aplicar
-    const matCount = etapasOrdenadas.reduce((s, et) => s + Object.keys(dataPorEtapa[et] || {}).length, 0);
+    // Calcular totales para mostrar al usuario antes de aplicar.
+    // Cuenta materiales únicos a través de TODAS las torres y etapas detectadas.
+    const matsUnicos = new Set();
+    Object.values(dataPorTorre).forEach(etapas => {
+      Object.values(etapas).forEach(mats => {
+        Object.keys(mats).forEach(m => matsUnicos.add(m));
+      });
+    });
+    const matCount = matsUnicos.size;
     const torresDetectadas = [...torres];
 
     // Confirmación: REEMPLAZAR vs SUMAR a la receta existente
@@ -18603,48 +18707,70 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       if (!ok) { event.target.value = ''; return; }
     }
 
-    // Aplicar los datos a p.materiales.receta
+    // ─── Aplicar datos al proyecto ───
+    // Resolver la lista FINAL de etapas (merge si SUMAR, exact si REEMPLAZAR)
+    const oldLabels = Array.isArray(p.materiales.recetaEtapaLabels) ? p.materiales.recetaEtapaLabels.slice() : [];
+    let etapasFinales;
     if (modo === 'reemplazar') {
-      // Resetear receta y etiquetas con los del PDF
-      p.materiales.receta = etapasOrdenadas.map(() => ({}));
-      p.materiales.recetaEtapaLabels = [...etapasOrdenadas];
+      etapasFinales = etapasOrdenadas.slice();
     } else {
-      // Sumar: asegurarnos que la receta tenga al menos las etapas del PDF
-      // (manteniendo las etapas existentes que estén)
-      const etapasExistentes = Array.isArray(p.materiales.recetaEtapaLabels)
-        ? p.materiales.recetaEtapaLabels.slice()
-        : [];
-      etapasOrdenadas.forEach(et => {
-        if (!etapasExistentes.includes(et)) etapasExistentes.push(et);
-      });
-      // Re-ordenar por número
-      etapasExistentes.sort((a, b) => {
+      const merged = new Set([...oldLabels, ...etapasOrdenadas]);
+      etapasFinales = [...merged].sort((a, b) => {
         const na = parseInt((a.match(/^\d+/) || ['0'])[0]);
         const nb = parseInt((b.match(/^\d+/) || ['0'])[0]);
         return na - nb;
       });
-      p.materiales.recetaEtapaLabels = etapasExistentes;
-      // Asegurar que el array receta tenga la longitud correcta
-      while (p.materiales.receta.length < etapasExistentes.length) {
-        p.materiales.receta.push({});
-      }
-      p.materiales.receta = p.materiales.receta.slice(0, etapasExistentes.length);
     }
 
-    // Volcar los datos al receta usando los índices correctos según los labels
-    etapasOrdenadas.forEach(etapaName => {
-      const idx = p.materiales.recetaEtapaLabels.indexOf(etapaName);
-      if (idx < 0) return;
-      const data = dataPorEtapa[etapaName] || {};
-      Object.entries(data).forEach(([matName, info]) => {
-        const key = 'PDF::' + matName;
-        if (modo === 'sumar' && p.materiales.receta[idx][key]) {
-          p.materiales.receta[idx][key] = (Number(p.materiales.receta[idx][key]) || 0) + info.qty;
-        } else {
-          p.materiales.receta[idx][key] = info.qty;
-        }
+    // Inicializar/remapear recetaPorTorre según las etapas finales
+    if (modo === 'reemplazar' || !p.materiales.recetaPorTorre || typeof p.materiales.recetaPorTorre !== 'object') {
+      p.materiales.recetaPorTorre = {};
+    } else {
+      // Remapear índices viejos → nuevos según etapasFinales
+      const remapped = {};
+      Object.entries(p.materiales.recetaPorTorre).forEach(([torre, etapas]) => {
+        remapped[torre] = {};
+        Object.entries(etapas || {}).forEach(([oldIdxStr, mats]) => {
+          const oldIdx = parseInt(oldIdxStr);
+          const oldLabel = oldLabels[oldIdx];
+          if (!oldLabel) return;
+          const newIdx = etapasFinales.indexOf(oldLabel);
+          if (newIdx < 0) return;
+          remapped[torre][newIdx] = mats;
+        });
+      });
+      p.materiales.recetaPorTorre = remapped;
+    }
+
+    // Volcar los datos del PDF a recetaPorTorre.
+    // En modo SUMAR: REEMPLAZAR la entrada de cada torre del PDF (no sumar
+    // dentro de la misma torre, así uploadear el mismo PDF dos veces no duplica).
+    // En modo REEMPLAZAR: ya limpiamos arriba, ahora simplemente asignamos.
+    Object.entries(dataPorTorre).forEach(([torre, etapas]) => {
+      p.materiales.recetaPorTorre[torre] = {};
+      Object.entries(etapas).forEach(([etapaName, materials]) => {
+        const idx = etapasFinales.indexOf(etapaName);
+        if (idx < 0) return;
+        p.materiales.recetaPorTorre[torre][idx] = {};
+        Object.entries(materials).forEach(([matName, info]) => {
+          const key = 'PDF::' + matName;
+          p.materiales.recetaPorTorre[torre][idx][key] = info.qty;
+        });
       });
     });
+
+    // Recomputar receta agregada (sumar a través de todas las torres)
+    p.materiales.receta = etapasFinales.map(() => ({}));
+    Object.values(p.materiales.recetaPorTorre).forEach(etapas => {
+      Object.entries(etapas || {}).forEach(([idxStr, mats]) => {
+        const idx = parseInt(idxStr);
+        if (!p.materiales.receta[idx]) p.materiales.receta[idx] = {};
+        Object.entries(mats).forEach(([k, qty]) => {
+          p.materiales.receta[idx][k] = (Number(p.materiales.receta[idx][k]) || 0) + Number(qty);
+        });
+      });
+    });
+    p.materiales.recetaEtapaLabels = etapasFinales;
 
     // Guardar lista de torres importadas para referencia futura
     if (!Array.isArray(p.materiales.recetaImportedTowers)) p.materiales.recetaImportedTowers = [];
@@ -18679,6 +18805,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     p.materiales.receta = [{},{},{},{},{},{}];
     delete p.materiales.recetaEtapaLabels;
     delete p.materiales.recetaImportedTowers;
+    delete p.materiales.recetaPorTorre;
     try { saveState(); } catch(e){}
     currentRecetaStage = 0;
     if (typeof renderReceta === 'function') renderReceta();
