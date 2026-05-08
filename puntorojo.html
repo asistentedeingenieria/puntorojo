@@ -17372,9 +17372,22 @@ function renderReceta(){
     </div>`;
   }).join('');
 
+  // ── Helper: ordena un array de entries [key, qty] usando el orden canónico
+  // del PDF (recetaMatOrder[etapaIdx]). Materiales fuera del orden van al final.
+  const sortEntriesByCanonical = (entries, etapaIdx) => {
+    const order = (p.materiales.recetaMatOrder && Array.isArray(p.materiales.recetaMatOrder[etapaIdx]))
+      ? p.materiales.recetaMatOrder[etapaIdx] : null;
+    if (!order || order.length === 0) return entries;
+    const idxOf = k => {
+      const i = order.indexOf(k);
+      return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+    };
+    return entries.slice().sort(([a], [b]) => idxOf(a) - idxOf(b));
+  };
+
   // Contenido de la etapa actual
   const etapa = p.materiales.receta[currentRecetaStage] || {};
-  const items = Object.entries(etapa);
+  const items = sortEntriesByCanonical(Object.entries(etapa), currentRecetaStage);
   const cont = document.getElementById('recetaContent');
 
   // ── Si hay datos por torre (importados de PDF), renderizar como secciones
@@ -17446,7 +17459,7 @@ function renderReceta(){
     // Sección por torre
     torresList.forEach(torre => {
       const torreEtapa = (recetaPorTorre[torre] && recetaPorTorre[torre][currentRecetaStage]) || {};
-      const torreItems = Object.entries(torreEtapa);
+      const torreItems = sortEntriesByCanonical(Object.entries(torreEtapa), currentRecetaStage);
       html += renderRecetaSection(torre, torre, torreItems, collapsedSet.has(torre), false);
     });
     cont.innerHTML = html;
@@ -18692,6 +18705,48 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     // qty es el TOTAL NIVEL directo del PDF (no se acumula entre niveles).
     // Se usa para pedirEtapaCompleta sin multiplicar por # aptos.
     const dataPorTorreYNivel = {};
+    // Orden canónico de materiales por etapa (preserva el orden del PDF).
+    // Algoritmo: cuando se procesa una nivel page, se compara con el orden
+    // canónico ya construido y los materiales NUEVOS se insertan en la
+    // posición que les corresponde según el sucesor (o predecesor) más
+    // cercano que ya esté en el canónico.
+    const matOrderPorEtapa = {}; // { etapaName: [matName1, matName2, ...] }
+    let currentNivelMats = {};   // { etapaName: [matName, ...] } — materiales en la nivel actual, en orden
+
+    function mergeIntoCanonical(canonical, nivelOrder) {
+      for (let i = 0; i < nivelOrder.length; i++) {
+        const mat = nivelOrder[i];
+        if (canonical.includes(mat)) continue;
+        // Buscar SUCESOR (preferido): siguiente material en nivelOrder que ya está en canonical
+        let successor = null;
+        for (let j = i + 1; j < nivelOrder.length; j++) {
+          if (canonical.includes(nivelOrder[j])) { successor = nivelOrder[j]; break; }
+        }
+        if (successor != null) {
+          canonical.splice(canonical.indexOf(successor), 0, mat);
+          continue;
+        }
+        // Buscar PREDECESOR: material anterior en nivelOrder que está en canonical
+        let predecessor = null;
+        for (let j = i - 1; j >= 0; j--) {
+          if (canonical.includes(nivelOrder[j])) { predecessor = nivelOrder[j]; break; }
+        }
+        if (predecessor != null) {
+          canonical.splice(canonical.indexOf(predecessor) + 1, 0, mat);
+          continue;
+        }
+        // Sin contexto → al final
+        canonical.push(mat);
+      }
+    }
+
+    function flushNivelOrder() {
+      Object.entries(currentNivelMats).forEach(([etapaName, order]) => {
+        if (!matOrderPorEtapa[etapaName]) matOrderPorEtapa[etapaName] = [];
+        mergeIntoCanonical(matOrderPorEtapa[etapaName], order);
+      });
+      currentNivelMats = {};
+    }
 
     let currentTorre = null;
     let currentNivel = null;
@@ -18732,6 +18787,9 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       // 1. Título de página: "TORRE X -- ... -- NIVEL Y"
       const tm = line.match(TITLE_RE);
       if (tm) {
+        // Antes de cambiar de página, mergeamos el orden de la nivel actual
+        // al canónico — así el orden del PDF se preserva entre niveles.
+        flushNivelOrder();
         currentTorre = 'TORRE ' + tm[1];
         currentNivel = 'NIVEL ' + tm[3];
         currentEtapa = null;
@@ -18755,33 +18813,44 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       // y lo guardamos en DOS estructuras:
       //   - dataPorTorre: suma a través de todos los niveles de la torre
       //   - dataPorTorreYNivel: el total directo de ese nivel (sin sumar)
+      // IMPORTANTE: NO saltamos materiales con qty 0. Los registramos para
+      // que aparezcan en el orden correcto (matOrderPorEtapa). Después se
+      // filtran los que tienen total === 0 al renderizar.
       if (currentEtapa && currentTorre && currentNivel) {
         const parsed = parseMaterialRow(line);
         if (parsed && parsed.numbers.length > 0) {
           const total = parsed.numbers[parsed.numbers.length - 1];
-          if (total > 0) {
-            const matName = parsed.material;
-            // dataPorTorre — acumular
-            if (!dataPorTorre[currentTorre]) dataPorTorre[currentTorre] = {};
-            if (!dataPorTorre[currentTorre][currentEtapa]) dataPorTorre[currentTorre][currentEtapa] = {};
-            if (!dataPorTorre[currentTorre][currentEtapa][matName]) {
-              dataPorTorre[currentTorre][currentEtapa][matName] = { qty: 0, unit: parsed.unit };
-            }
-            dataPorTorre[currentTorre][currentEtapa][matName].qty += total;
-            // dataPorTorreYNivel — guardar tal cual (puede haber dos filas del
-            // mismo material en el mismo nivel/etapa? raro; sumamos por seguridad)
-            if (!dataPorTorreYNivel[currentTorre]) dataPorTorreYNivel[currentTorre] = {};
-            if (!dataPorTorreYNivel[currentTorre][currentNivel]) dataPorTorreYNivel[currentTorre][currentNivel] = {};
-            if (!dataPorTorreYNivel[currentTorre][currentNivel][currentEtapa]) dataPorTorreYNivel[currentTorre][currentNivel][currentEtapa] = {};
-            if (!dataPorTorreYNivel[currentTorre][currentNivel][currentEtapa][matName]) {
-              dataPorTorreYNivel[currentTorre][currentNivel][currentEtapa][matName] = { qty: 0, unit: parsed.unit };
-            }
-            dataPorTorreYNivel[currentTorre][currentNivel][currentEtapa][matName].qty += total;
-            materiasDetectadas++;
+          const matName = parsed.material;
+
+          // Tracking de orden — siempre que la fila sea válida, marcar la
+          // posición de este material en la nivel actual.
+          if (!currentNivelMats[currentEtapa]) currentNivelMats[currentEtapa] = [];
+          if (!currentNivelMats[currentEtapa].includes(matName)) {
+            currentNivelMats[currentEtapa].push(matName);
           }
+
+          // Acumular cantidades (incluso si total === 0 — no afecta la suma)
+          // dataPorTorre — acumular
+          if (!dataPorTorre[currentTorre]) dataPorTorre[currentTorre] = {};
+          if (!dataPorTorre[currentTorre][currentEtapa]) dataPorTorre[currentTorre][currentEtapa] = {};
+          if (!dataPorTorre[currentTorre][currentEtapa][matName]) {
+            dataPorTorre[currentTorre][currentEtapa][matName] = { qty: 0, unit: parsed.unit };
+          }
+          dataPorTorre[currentTorre][currentEtapa][matName].qty += total;
+          // dataPorTorreYNivel
+          if (!dataPorTorreYNivel[currentTorre]) dataPorTorreYNivel[currentTorre] = {};
+          if (!dataPorTorreYNivel[currentTorre][currentNivel]) dataPorTorreYNivel[currentTorre][currentNivel] = {};
+          if (!dataPorTorreYNivel[currentTorre][currentNivel][currentEtapa]) dataPorTorreYNivel[currentTorre][currentNivel][currentEtapa] = {};
+          if (!dataPorTorreYNivel[currentTorre][currentNivel][currentEtapa][matName]) {
+            dataPorTorreYNivel[currentTorre][currentNivel][currentEtapa][matName] = { qty: 0, unit: parsed.unit };
+          }
+          dataPorTorreYNivel[currentTorre][currentNivel][currentEtapa][matName].qty += total;
+          if (total > 0) materiasDetectadas++;
         }
       }
     });
+    // Flush final: mergear el orden de la última nivel page al canónico
+    flushNivelOrder();
 
     // Ordenar etapas por número (1, 2, 3, 4)
     etapasOrdenadas.sort((a, b) => {
@@ -18900,21 +18969,47 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     p.materiales.recetaPorTorre = initOrRemap(p.materiales.recetaPorTorre, false);
     p.materiales.recetaPorTorreYNivel = initOrRemap(p.materiales.recetaPorTorreYNivel, true);
 
+    // Helper: ordena las entradas de un mapa de materiales según el orden canónico
+    // del PDF (matOrderPorEtapa[etapaName]) y devuelve un nuevo objeto con las
+    // claves insertadas en ese orden. Materiales no presentes en el orden canónico
+    // van al final.
+    const ordenarPorCanonico = (matsObj, etapaName) => {
+      const order = matOrderPorEtapa[etapaName] || [];
+      const result = {};
+      // Primero, insertar en el orden canónico
+      order.forEach(matName => {
+        const key = 'PDF::' + matName;
+        if (matsObj[matName] !== undefined) {
+          result[key] = matsObj[matName].qty;
+        }
+      });
+      // Luego, agregar al final cualquier material que no esté en el canónico
+      Object.entries(matsObj).forEach(([matName, info]) => {
+        const key = 'PDF::' + matName;
+        if (!(key in result)) result[key] = info.qty;
+      });
+      return result;
+    };
+
     // Volcar dataPorTorre a recetaPorTorre (REEMPLAZA cada torre detectada).
+    // Filtra qty=0 (materiales que estaban en el PDF pero suman 0 en esa torre).
     Object.entries(dataPorTorre).forEach(([torre, etapas]) => {
       p.materiales.recetaPorTorre[torre] = {};
       Object.entries(etapas).forEach(([etapaName, materials]) => {
         const idx = etapasFinales.indexOf(etapaName);
         if (idx < 0) return;
-        p.materiales.recetaPorTorre[torre][idx] = {};
-        Object.entries(materials).forEach(([matName, info]) => {
-          const key = 'PDF::' + matName;
-          p.materiales.recetaPorTorre[torre][idx][key] = info.qty;
-        });
+        const ordered = ordenarPorCanonico(materials, etapaName);
+        // Filtrar qty=0
+        const filtered = {};
+        Object.entries(ordered).forEach(([k, v]) => { if (Number(v) > 0) filtered[k] = v; });
+        p.materiales.recetaPorTorre[torre][idx] = filtered;
       });
     });
 
     // Volcar dataPorTorreYNivel a recetaPorTorreYNivel (REEMPLAZA cada torre detectada).
+    // En per-nivel también ordenamos por canónico (para que el preview de pedidos
+    // muestre los materiales en el orden correcto). Aquí filtramos qty=0 también
+    // — un material con 0 en ese nivel específico no se va a pedir.
     Object.entries(dataPorTorreYNivel).forEach(([torre, niveles]) => {
       p.materiales.recetaPorTorreYNivel[torre] = {};
       Object.entries(niveles).forEach(([nivelName, etapas]) => {
@@ -18922,13 +19017,33 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         Object.entries(etapas).forEach(([etapaName, materials]) => {
           const idx = etapasFinales.indexOf(etapaName);
           if (idx < 0) return;
-          p.materiales.recetaPorTorreYNivel[torre][nivelName][idx] = {};
-          Object.entries(materials).forEach(([matName, info]) => {
-            const key = 'PDF::' + matName;
-            p.materiales.recetaPorTorreYNivel[torre][nivelName][idx][key] = info.qty;
-          });
+          const ordered = ordenarPorCanonico(materials, etapaName);
+          const filtered = {};
+          Object.entries(ordered).forEach(([k, v]) => { if (Number(v) > 0) filtered[k] = v; });
+          p.materiales.recetaPorTorreYNivel[torre][nivelName][idx] = filtered;
         });
       });
+    });
+
+    // Guardar el orden canónico para usar en el rendering (sortear materiales).
+    if (!p.materiales.recetaMatOrder || modo === 'reemplazar') p.materiales.recetaMatOrder = {};
+    Object.entries(matOrderPorEtapa).forEach(([etapaName, order]) => {
+      const idx = etapasFinales.indexOf(etapaName);
+      if (idx < 0) return;
+      const keys = order.map(matName => 'PDF::' + matName);
+      // En modo SUMAR, mergear con el orden existente
+      if (modo === 'sumar' && Array.isArray(p.materiales.recetaMatOrder[idx])) {
+        const existing = p.materiales.recetaMatOrder[idx];
+        const mergedOrder = existing.slice();
+        // Algoritmo: cada nuevo key se inserta al final si no estaba.
+        // Para insertar en posición correcta, usaríamos el merge canónico
+        // pero por simplicidad aquí solo agregamos al final (dado que rara
+        // vez cambia el orden entre torres del mismo proyecto).
+        keys.forEach(k => { if (!mergedOrder.includes(k)) mergedOrder.push(k); });
+        p.materiales.recetaMatOrder[idx] = mergedOrder;
+      } else {
+        p.materiales.recetaMatOrder[idx] = keys;
+      }
     });
 
     // Recomputar receta agregada (sumar a través de todas las torres)
@@ -18979,6 +19094,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     delete p.materiales.recetaImportedTowers;
     delete p.materiales.recetaPorTorre;
     delete p.materiales.recetaPorTorreYNivel;
+    delete p.materiales.recetaMatOrder;
     try { saveState(); } catch(e){}
     currentRecetaStage = 0;
     if (typeof renderReceta === 'function') renderReceta();
