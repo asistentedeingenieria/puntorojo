@@ -17312,14 +17312,39 @@ function renderReceta(){
   const p = activeProj();
   if (!Array.isArray(p.materiales.receta)) p.materiales.receta = [{},{},{},{},{},{}];
 
-  // ── Etiquetas dinámicas: si la receta vino de un PDF, usar los nombres
-  // detectados (ej. "1RA ETAPA", "2NDA ETAPA"). Si no, usar ETAPAS_INFO.
-  const etapasFromPDF = (Array.isArray(p.materiales.recetaEtapaLabels) && p.materiales.recetaEtapaLabels.length > 0)
-    ? p.materiales.recetaEtapaLabels
-    : null;
-  const etapaList = etapasFromPDF
-    ? etapasFromPDF.map((name, idx) => ({ idx, name, pct: '' }))
-    : ETAPAS_INFO;
+  // ── Migración de labels viejos al formato ordinal (PRIMERA, SEGUNDA, ...) ──
+  // Si la receta de este proyecto fue importada en una versión anterior, las
+  // etiquetas pueden ser "1RA ETAPA", "2NDA ETAPA", etc. Los reemplazamos.
+  const ETAPA_NOMBRES_NUEVOS = {
+    '1RA ETAPA': 'PRIMERA ETAPA',
+    '2NDA ETAPA': 'SEGUNDA ETAPA',
+    '2DA ETAPA': 'SEGUNDA ETAPA',
+    '3ERA ETAPA': 'TERCERA ETAPA',
+    '4TA ETAPA': 'CUARTA ETAPA',
+    '5TA ETAPA': 'QUINTA ETAPA'
+  };
+  if (Array.isArray(p.materiales.recetaEtapaLabels)) {
+    let migrado = false;
+    p.materiales.recetaEtapaLabels = p.materiales.recetaEtapaLabels.map(l => {
+      if (ETAPA_NOMBRES_NUEVOS[l]) { migrado = true; return ETAPA_NOMBRES_NUEVOS[l]; }
+      return l;
+    });
+    if (migrado) { try { saveState(); } catch(e){} }
+  }
+
+  // ── Etiquetas: si está importada del PDF, usar las del PDF.
+  // Si no, default a 4 etapas (PRIMERA → CUARTA). Las recetas de material
+  // nunca tienen 6 etapas (regla de negocio).
+  const DEFAULT_LABELS = ['PRIMERA ETAPA', 'SEGUNDA ETAPA', 'TERCERA ETAPA', 'CUARTA ETAPA'];
+  const importadasDePDF = Array.isArray(p.materiales.recetaEtapaLabels) && p.materiales.recetaEtapaLabels.length > 0;
+  const labels = importadasDePDF ? p.materiales.recetaEtapaLabels : DEFAULT_LABELS;
+  const etapasFromPDF = importadasDePDF ? p.materiales.recetaEtapaLabels : null;
+
+  // Asegurar que la receta tenga al menos N elementos (donde N = labels.length)
+  while (p.materiales.receta.length < labels.length) p.materiales.receta.push({});
+
+  // Construir lista para los tabs (sin descripción ni pct%, solo el nombre)
+  const etapaList = labels.map((name, idx) => ({ idx, name }));
 
   // Mantener currentRecetaStage dentro de los límites
   if (currentRecetaStage >= etapaList.length) currentRecetaStage = 0;
@@ -17336,13 +17361,12 @@ function renderReceta(){
       : 'Cantidad POR APTO · se multiplica al pedir el nivel completo';
   }
 
-  // Tabs de etapas
+  // Tabs de etapas — solo el nombre de la etapa, sin descripción ni %.
   const tabsCont = document.getElementById('recetaStageTabs');
   tabsCont.innerHTML = etapaList.map((e, idx) => {
     const count = Object.keys(p.materiales.receta[idx] || {}).length;
     return `<div class="receta-stage-tab${idx === currentRecetaStage ? ' active' : ''}" onclick="setRecetaStage(${idx})">
       <div class="rs-num">${idx + 1}</div>
-      ${e.pct ? `<div class="rs-pct">${e.pct}%</div>` : ''}
       <div class="rs-name">${e.name}</div>
       <div class="rs-count">${count} MAT.</div>
     </div>`;
@@ -17583,6 +17607,12 @@ function renderRecetaPedir(){
     return;
   }
 
+  // Cantidad de etapas a mostrar: las del PDF importado (4 o 5) o default 4.
+  // Las recetas de material nunca tienen 6 etapas.
+  const recetaEtapasCount = (Array.isArray(p.materiales.recetaEtapaLabels) && p.materiales.recetaEtapaLabels.length > 0)
+    ? p.materiales.recetaEtapaLabels.length
+    : 4;
+
   let html = '';
   torres.forEach(t => {
     const levels = (t.levels || []).filter(l => (l.aptos || []).length > 0);
@@ -17595,8 +17625,8 @@ function renderRecetaPedir(){
       html += `<div class="receta-pedir-row">
         <div class="rpr-loc">${l.name}<small>${numAptos} APTO${numAptos !== 1 ? 'S' : ''}</small></div>`;
 
-      // 6 botones (uno por etapa) — muestro solo 4 por espacio, el resto en scroll
-      for (let i = 0; i < 6; i++) {
+      // Un botón por etapa (4 o 5 según receta)
+      for (let i = 0; i < recetaEtapasCount; i++) {
         const etapa = p.materiales.receta[i] || {};
         const hasReceta = Object.keys(etapa).length > 0;
         const yaPedida = pedidas[i];
@@ -17633,16 +17663,42 @@ function pedirEtapaCompleta(towerId, levelId, stageIdx){
   if (!t || !l) return;
 
   const numAptos = (l.aptos || []).length;
-  if (numAptos === 0) return showToast('EL NIVEL NO TIENE APTOS', 'red');
 
-  const etapaReceta = p.materiales.receta[stageIdx] || {};
+  // ── Buscar datos PER-NIVEL del PDF importado ──
+  // Si existen, los usamos como TOTALES directos del nivel (sin multiplicar
+  // por # aptos). Si no existen, fallback a la receta agregada × # aptos.
+  const _findPerNivelData = (towerName, levelName, idx) => {
+    const data = p.materiales && p.materiales.recetaPorTorreYNivel;
+    if (!data) return null;
+    const norm = s => String(s || '').toUpperCase().trim();
+    const num = s => { const m = String(s || '').match(/\d+/); return m ? parseInt(m[0]) : null; };
+    const tNorm = norm(towerName), tNum = num(towerName);
+    const lNorm = norm(levelName), lNum = num(levelName);
+    let torreKey = Object.keys(data).find(k => norm(k) === tNorm);
+    if (!torreKey && tNum != null) torreKey = Object.keys(data).find(k => num(k) === tNum);
+    if (!torreKey) return null;
+    const torreData = data[torreKey] || {};
+    let levelKey = Object.keys(torreData).find(k => norm(k) === lNorm);
+    if (!levelKey && lNum != null) levelKey = Object.keys(torreData).find(k => num(k) === lNum);
+    if (!levelKey) return null;
+    return (torreData[levelKey] && torreData[levelKey][idx]) || null;
+  };
+  const perNivelData = _findPerNivelData(t.name, l.name, stageIdx);
+  const usarTotalesPDF = !!perNivelData && Object.keys(perNivelData).length > 0;
+
+  const etapaReceta = usarTotalesPDF ? perNivelData : (p.materiales.receta[stageIdx] || {});
   if (Object.keys(etapaReceta).length === 0) return showToast('ESTA ETAPA NO TIENE RECETA DEFINIDA', 'red');
+  if (!usarTotalesPDF && numAptos === 0) return showToast('EL NIVEL NO TIENE APTOS', 'red');
 
   // Verificar que no se haya pedido ya
   const pedidas = (p.materiales.etapasPedidas || {})[levelId] || [false,false,false,false,false,false];
   if (pedidas[stageIdx]) return showToast('ESTA ETAPA YA FUE PEDIDA PARA ESTE NIVEL', 'red');
 
-  const etapaInfo = ETAPAS_INFO[stageIdx];
+  // Etapa display name: usar labels del PDF si existen, sino fallback a ETAPAS_INFO
+  const etapaLabel = (Array.isArray(p.materiales.recetaEtapaLabels) && p.materiales.recetaEtapaLabels[stageIdx])
+    ? p.materiales.recetaEtapaLabels[stageIdx]
+    : ((typeof ETAPAS_INFO !== 'undefined' && ETAPAS_INFO[stageIdx]) ? ETAPAS_INFO[stageIdx].name : `ETAPA ${stageIdx + 1}`);
+  const etapaInfo = (typeof ETAPAS_INFO !== 'undefined' && ETAPAS_INFO[stageIdx]) ? ETAPAS_INFO[stageIdx] : { name: etapaLabel, pct: 0 };
   const u = getCurrentUser();
   const solicitante = (u.displayName || u.username || '').toUpperCase();
 
@@ -17673,17 +17729,27 @@ function pedirEtapaCompleta(towerId, levelId, stageIdx){
   let preview = `GENERAR PEDIDO AUTOMÁTICO\n\n` +
     `Torre: ${t.name}\n` +
     `Nivel: ${l.name} (${numAptos} apto${numAptos !== 1 ? 's' : ''})\n` +
-    `Etapa: ${stageIdx + 1} · ${etapaInfo.name} (${etapaInfo.pct}%)\n\n`;
+    `Etapa: ${stageIdx + 1} · ${etapaLabel}\n\n`;
   if (itemsExcluidos.length > 0) {
     preview += `⚠ EXCLUIDOS (ya pedidos como metal a la medida):\n`;
     itemsExcluidos.forEach(n => { preview += `· ${n}\n`; });
     preview += `\n`;
   }
-  preview += `MATERIALES (cantidad = receta × ${numAptos} aptos):\n`;
-  Object.entries(recetaFiltrada).forEach(([key, qtyBase]) => {
-    const [, name] = key.split('::');
-    preview += `· ${name}: ${qtyBase} × ${numAptos} = ${qtyBase * numAptos}\n`;
-  });
+  if (usarTotalesPDF) {
+    preview += `MATERIALES (TOTALES del nivel del PDF):\n`;
+    Object.entries(recetaFiltrada).forEach(([key, qtyBase]) => {
+      const parts = key.split('::');
+      const name = parts.length > 1 ? parts.slice(1).join('::') : key;
+      preview += `· ${name}: ${qtyBase}\n`;
+    });
+  } else {
+    preview += `MATERIALES (cantidad = receta × ${numAptos} aptos):\n`;
+    Object.entries(recetaFiltrada).forEach(([key, qtyBase]) => {
+      const parts = key.split('::');
+      const name = parts.length > 1 ? parts.slice(1).join('::') : key;
+      preview += `· ${name}: ${qtyBase} × ${numAptos} = ${qtyBase * numAptos}\n`;
+    });
+  }
   preview += `\n¿CONFIRMAR PEDIDO?`;
 
   if (!confirm(preview)) return;
@@ -17697,10 +17763,11 @@ function pedirEtapaCompleta(towerId, levelId, stageIdx){
   const entrega = new Date(n.getTime() + 7*24*3600*1000);
   const fechaEntrega = `${String(entrega.getDate()).padStart(2,'0')}/${String(entrega.getMonth()+1).padStart(2,'0')}/${entrega.getFullYear()}`;
 
-  // Items multiplicados (usando receta filtrada por M5)
+  // Items: si vienen del PDF como totales del nivel → tal cual.
+  // Si vienen de receta clásica → multiplicados por # aptos.
   const items = {};
   Object.entries(recetaFiltrada).forEach(([key, qtyBase]) => {
-    items[key] = Math.ceil(qtyBase * numAptos);
+    items[key] = Math.ceil(usarTotalesPDF ? qtyBase : qtyBase * numAptos);
   });
 
   const pedido = {
@@ -17714,7 +17781,7 @@ function pedirEtapaCompleta(towerId, levelId, stageIdx){
     nivel: `${t.name} · ${l.name}`,
     apto: '',
     ordenCambio: '',
-    observaciones: `PEDIDO AUTOMÁTICO DESDE RECETA · ETAPA ${stageIdx + 1} (${etapaInfo.name} ${etapaInfo.pct}%) · ${numAptos} APTOS`,
+    observaciones: `PEDIDO AUTOMÁTICO DESDE RECETA · ETAPA ${stageIdx + 1} · ${etapaLabel}${usarTotalesPDF ? ' · TOTALES PDF' : ' · ' + numAptos + ' APTOS'}`,
     items,
     specs: {},
     extras: [],
@@ -18573,10 +18640,14 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
 
     const torres = new Set();
     const niveles = new Set();
-    const etapasOrdenadas = []; // ["1RA ETAPA", "2NDA ETAPA", ...]
+    const etapasOrdenadas = []; // ["PRIMERA ETAPA", "SEGUNDA ETAPA", ...]
     // Datos por torre: { torreName: { etapaName: { materialName: { qty, unit } } } }
     // qty acumulado por sumar todos los niveles de esa torre/etapa.
     const dataPorTorre = {};
+    // Datos por (torre, nivel): { torreName: { nivelName: { etapaName: { materialName: { qty, unit } } } } }
+    // qty es el TOTAL NIVEL directo del PDF (no se acumula entre niveles).
+    // Se usa para pedirEtapaCompleta sin multiplicar por # aptos.
+    const dataPorTorreYNivel = {};
 
     let currentTorre = null;
     let currentNivel = null;
@@ -18584,12 +18655,18 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     let materiasDetectadas = 0;
 
     function normalizarEtapa(num, sufijo) {
-      // Convertir variantes ("DA" → "NDA") al formato más común
+      // Convertir el número de etapa al nombre ordinal en español usado en
+      // recetas de material: PRIMERA, SEGUNDA, TERCERA, CUARTA, QUINTA.
+      // Las recetas de material nunca tienen 6 etapas (regla de negocio).
       const n = parseInt(num);
-      const s = String(sufijo || '').toUpperCase();
-      // Mapeo de sufijos canónicos
-      const sufijoNorm = (n === 1) ? 'RA' : (n === 2) ? 'NDA' : (n === 3) ? 'ERA' : (n >= 4) ? 'TA' : s;
-      return `${n}${sufijoNorm} ETAPA`;
+      const NOMBRES = {
+        1: 'PRIMERA ETAPA',
+        2: 'SEGUNDA ETAPA',
+        3: 'TERCERA ETAPA',
+        4: 'CUARTA ETAPA',
+        5: 'QUINTA ETAPA'
+      };
+      return NOMBRES[n] || `ETAPA ${n}`;
     }
 
     function parseMaterialRow(line) {
@@ -18630,20 +18707,32 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         return;
       }
 
-      // 4. Fila de material — sumamos el ÚLTIMO número (TOTAL NIVEL del PDF)
-      // dentro de la torre actual
+      // 4. Fila de material — extraemos el ÚLTIMO número (TOTAL NIVEL del PDF)
+      // y lo guardamos en DOS estructuras:
+      //   - dataPorTorre: suma a través de todos los niveles de la torre
+      //   - dataPorTorreYNivel: el total directo de ese nivel (sin sumar)
       if (currentEtapa && currentTorre && currentNivel) {
         const parsed = parseMaterialRow(line);
         if (parsed && parsed.numbers.length > 0) {
           const total = parsed.numbers[parsed.numbers.length - 1];
           if (total > 0) {
             const matName = parsed.material;
+            // dataPorTorre — acumular
             if (!dataPorTorre[currentTorre]) dataPorTorre[currentTorre] = {};
             if (!dataPorTorre[currentTorre][currentEtapa]) dataPorTorre[currentTorre][currentEtapa] = {};
             if (!dataPorTorre[currentTorre][currentEtapa][matName]) {
               dataPorTorre[currentTorre][currentEtapa][matName] = { qty: 0, unit: parsed.unit };
             }
             dataPorTorre[currentTorre][currentEtapa][matName].qty += total;
+            // dataPorTorreYNivel — guardar tal cual (puede haber dos filas del
+            // mismo material en el mismo nivel/etapa? raro; sumamos por seguridad)
+            if (!dataPorTorreYNivel[currentTorre]) dataPorTorreYNivel[currentTorre] = {};
+            if (!dataPorTorreYNivel[currentTorre][currentNivel]) dataPorTorreYNivel[currentTorre][currentNivel] = {};
+            if (!dataPorTorreYNivel[currentTorre][currentNivel][currentEtapa]) dataPorTorreYNivel[currentTorre][currentNivel][currentEtapa] = {};
+            if (!dataPorTorreYNivel[currentTorre][currentNivel][currentEtapa][matName]) {
+              dataPorTorreYNivel[currentTorre][currentNivel][currentEtapa][matName] = { qty: 0, unit: parsed.unit };
+            }
+            dataPorTorreYNivel[currentTorre][currentNivel][currentEtapa][matName].qty += total;
             materiasDetectadas++;
           }
         }
@@ -18728,30 +18817,46 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       });
     }
 
-    // Inicializar/remapear recetaPorTorre según las etapas finales
-    if (modo === 'reemplazar' || !p.materiales.recetaPorTorre || typeof p.materiales.recetaPorTorre !== 'object') {
-      p.materiales.recetaPorTorre = {};
-    } else {
+    // Inicializar/remapear recetaPorTorre y recetaPorTorreYNivel según las etapas finales
+    const initOrRemap = (storage, isNivelLevel) => {
+      if (modo === 'reemplazar' || !storage || typeof storage !== 'object') {
+        return {};
+      }
       // Remapear índices viejos → nuevos según etapasFinales
       const remapped = {};
-      Object.entries(p.materiales.recetaPorTorre).forEach(([torre, etapas]) => {
+      Object.entries(storage).forEach(([torre, dataT]) => {
         remapped[torre] = {};
-        Object.entries(etapas || {}).forEach(([oldIdxStr, mats]) => {
-          const oldIdx = parseInt(oldIdxStr);
-          const oldLabel = oldLabels[oldIdx];
-          if (!oldLabel) return;
-          const newIdx = etapasFinales.indexOf(oldLabel);
-          if (newIdx < 0) return;
-          remapped[torre][newIdx] = mats;
-        });
+        if (isNivelLevel) {
+          // dataT = { nivelName: { etapaIdx: { mat: qty } } }
+          Object.entries(dataT || {}).forEach(([nivel, etapas]) => {
+            remapped[torre][nivel] = {};
+            Object.entries(etapas || {}).forEach(([oldIdxStr, mats]) => {
+              const oldIdx = parseInt(oldIdxStr);
+              const oldLabel = oldLabels[oldIdx];
+              if (!oldLabel) return;
+              const newIdx = etapasFinales.indexOf(oldLabel);
+              if (newIdx < 0) return;
+              remapped[torre][nivel][newIdx] = mats;
+            });
+          });
+        } else {
+          // dataT = { etapaIdx: { mat: qty } }
+          Object.entries(dataT || {}).forEach(([oldIdxStr, mats]) => {
+            const oldIdx = parseInt(oldIdxStr);
+            const oldLabel = oldLabels[oldIdx];
+            if (!oldLabel) return;
+            const newIdx = etapasFinales.indexOf(oldLabel);
+            if (newIdx < 0) return;
+            remapped[torre][newIdx] = mats;
+          });
+        }
       });
-      p.materiales.recetaPorTorre = remapped;
-    }
+      return remapped;
+    };
+    p.materiales.recetaPorTorre = initOrRemap(p.materiales.recetaPorTorre, false);
+    p.materiales.recetaPorTorreYNivel = initOrRemap(p.materiales.recetaPorTorreYNivel, true);
 
-    // Volcar los datos del PDF a recetaPorTorre.
-    // En modo SUMAR: REEMPLAZAR la entrada de cada torre del PDF (no sumar
-    // dentro de la misma torre, así uploadear el mismo PDF dos veces no duplica).
-    // En modo REEMPLAZAR: ya limpiamos arriba, ahora simplemente asignamos.
+    // Volcar dataPorTorre a recetaPorTorre (REEMPLAZA cada torre detectada).
     Object.entries(dataPorTorre).forEach(([torre, etapas]) => {
       p.materiales.recetaPorTorre[torre] = {};
       Object.entries(etapas).forEach(([etapaName, materials]) => {
@@ -18761,6 +18866,23 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         Object.entries(materials).forEach(([matName, info]) => {
           const key = 'PDF::' + matName;
           p.materiales.recetaPorTorre[torre][idx][key] = info.qty;
+        });
+      });
+    });
+
+    // Volcar dataPorTorreYNivel a recetaPorTorreYNivel (REEMPLAZA cada torre detectada).
+    Object.entries(dataPorTorreYNivel).forEach(([torre, niveles]) => {
+      p.materiales.recetaPorTorreYNivel[torre] = {};
+      Object.entries(niveles).forEach(([nivelName, etapas]) => {
+        p.materiales.recetaPorTorreYNivel[torre][nivelName] = {};
+        Object.entries(etapas).forEach(([etapaName, materials]) => {
+          const idx = etapasFinales.indexOf(etapaName);
+          if (idx < 0) return;
+          p.materiales.recetaPorTorreYNivel[torre][nivelName][idx] = {};
+          Object.entries(materials).forEach(([matName, info]) => {
+            const key = 'PDF::' + matName;
+            p.materiales.recetaPorTorreYNivel[torre][nivelName][idx][key] = info.qty;
+          });
         });
       });
     });
@@ -18812,6 +18934,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     delete p.materiales.recetaEtapaLabels;
     delete p.materiales.recetaImportedTowers;
     delete p.materiales.recetaPorTorre;
+    delete p.materiales.recetaPorTorreYNivel;
     try { saveState(); } catch(e){}
     currentRecetaStage = 0;
     if (typeof renderReceta === 'function') renderReceta();
