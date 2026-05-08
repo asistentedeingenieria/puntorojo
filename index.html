@@ -2316,12 +2316,18 @@ table{max-width:100%}
       <div id="mat-receta">
         <div class="card">
           <div class="card-hd"><h3>RECETA DE MATERIAL POR ETAPA</h3>
-            <span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Cantidad POR APTO · se multiplica al pedir el nivel completo</span>
+            <span id="recetaModeLabel" style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Cantidad POR APTO · se multiplica al pedir el nivel completo</span>
+            <label class="btn primary sm" style="cursor:pointer;margin-right:6px" data-perm="receta.edit" title="Subir un PDF tabular con la receta y la app extrae los datos automáticamente">
+              IMPORTAR DESDE PDF
+              <input type="file" accept="application/pdf,.pdf" style="display:none" onchange="importRecetaFromPDF(event)">
+            </label>
+            <button class="btn ghost sm" onclick="limpiarRecetaImportada()" data-perm="receta.edit" id="btnRecetaLimpiar" style="display:none" title="Borrar la receta actual y volver a las 6 etapas vacías">LIMPIAR RECETA</button>
             <button class="btn ghost sm" onclick="toggleRecetaEditMode()" data-perm="receta.edit" id="btnRecetaEdit">EDITAR RECETA</button>
           </div>
 
           <div class="receta-intro">
             <p>ESTA RECETA DEFINE CUÁNTO MATERIAL LLEVA UN APARTAMENTO EN CADA ETAPA. AL PEDIR UNA ETAPA DE UN NIVEL, LA APP MULTIPLICA AUTOMÁTICAMENTE LOS MATERIALES POR LA CANTIDAD DE APTOS DEL NIVEL. UNA VEZ PEDIDA UNA ETAPA, NO SE PUEDE PEDIR DE NUEVO.</p>
+            <p style="margin-top:8px"><strong>O subí un PDF</strong> con la receta tabular del cliente (formato: TORRE X, NIVEL Y, columnas por apto, filas por material agrupadas en etapas). La app detecta TODOS los datos automáticamente y los carga aquí.</p>
           </div>
 
           <div class="receta-stage-tabs" id="recetaStageTabs"></div>
@@ -17300,13 +17306,37 @@ function renderReceta(){
   const p = activeProj();
   if (!Array.isArray(p.materiales.receta)) p.materiales.receta = [{},{},{},{},{},{}];
 
+  // ── Etiquetas dinámicas: si la receta vino de un PDF, usar los nombres
+  // detectados (ej. "1RA ETAPA", "2NDA ETAPA"). Si no, usar ETAPAS_INFO.
+  const etapasFromPDF = (Array.isArray(p.materiales.recetaEtapaLabels) && p.materiales.recetaEtapaLabels.length > 0)
+    ? p.materiales.recetaEtapaLabels
+    : null;
+  const etapaList = etapasFromPDF
+    ? etapasFromPDF.map((name, idx) => ({ idx, name, pct: '' }))
+    : ETAPAS_INFO;
+
+  // Mantener currentRecetaStage dentro de los límites
+  if (currentRecetaStage >= etapaList.length) currentRecetaStage = 0;
+
+  // Mostrar/ocultar el botón LIMPIAR RECETA según si está importada
+  const btnLimpiar = document.getElementById('btnRecetaLimpiar');
+  if (btnLimpiar) btnLimpiar.style.display = etapasFromPDF ? '' : 'none';
+
+  // Actualizar el label del modo (POR APTO vs TOTALES DEL PDF)
+  const lblMode = document.getElementById('recetaModeLabel');
+  if (lblMode) {
+    lblMode.textContent = etapasFromPDF
+      ? 'CANTIDAD TOTAL · sumas por etapa importadas del PDF'
+      : 'Cantidad POR APTO · se multiplica al pedir el nivel completo';
+  }
+
   // Tabs de etapas
   const tabsCont = document.getElementById('recetaStageTabs');
-  tabsCont.innerHTML = ETAPAS_INFO.map((e, idx) => {
+  tabsCont.innerHTML = etapaList.map((e, idx) => {
     const count = Object.keys(p.materiales.receta[idx] || {}).length;
     return `<div class="receta-stage-tab${idx === currentRecetaStage ? ' active' : ''}" onclick="setRecetaStage(${idx})">
       <div class="rs-num">${idx + 1}</div>
-      <div class="rs-pct">${e.pct}%</div>
+      ${e.pct ? `<div class="rs-pct">${e.pct}%</div>` : ''}
       <div class="rs-name">${e.name}</div>
       <div class="rs-count">${count} MAT.</div>
     </div>`;
@@ -17325,7 +17355,7 @@ function renderReceta(){
   } else {
     let html = `<div class="receta-table-hd">
       <div>MATERIAL</div>
-      <div style="text-align:center">POR APTO</div>
+      <div style="text-align:center">${etapasFromPDF ? 'TOTAL' : 'POR APTO'}</div>
       <div></div>
     </div>`;
     html += items.map(([key, qty]) => {
@@ -18400,6 +18430,261 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     });
     return { aptos, levels: levelsPdf, torres: torresPdf };
   }
+
+  /* ═══════════════════════════════════════════════════════════════
+     IMPORTAR RECETA DE MATERIALES DESDE PDF
+     ───────────────────────────────────────────────────────────────
+     Detecta tablas con: TORRE X -- ... -- NIVEL Y, columnas por apto,
+     filas por material agrupadas en etapas (1RA ETAPA, 2NDA ETAPA, etc.).
+     Suma el TOTAL NIVEL de cada material a través de todos los niveles
+     y los acumula en p.materiales.receta[etapaIdx][material].
+     ═══════════════════════════════════════════════════════════════ */
+  window.importRecetaFromPDF = async function(event){
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      showToast('SELECCIONÁ UN ARCHIVO PDF', 'red');
+      event.target.value = '';
+      return;
+    }
+    showToast('LEYENDO PDF DE RECETA...', '');
+
+    let lines;
+    try {
+      lines = await _parsePDFToLines(file);
+    } catch(e) {
+      console.error('[Receta PDF] Error leyendo:', e);
+      showToast('NO SE PUDO LEER EL PDF · ' + (e.message || ''), 'red');
+      event.target.value = '';
+      return;
+    }
+    if (!lines || lines.length === 0) {
+      showToast('PDF VACÍO O ILEGIBLE', 'red');
+      event.target.value = '';
+      return;
+    }
+
+    // Patrones de detección
+    const TITLE_RE = /^TORRE\s+(\d+|[IVX]+|[A-Z])\s*--\s*(.+?)\s*--\s*NIVEL\s+(\d+)/i;
+    const HEADER_RE = /^RENGLONIZADO\s+UNIDAD/i;
+    const ETAPA_RE = /^(\d+)\s*(RA|NDA|DA|ERA|TA|MA)\s+ETAPA\s*$/i;
+    const PAGE_FOOTER_RE = /^\d+\s*de\s*\d+\s*$/i;
+    // Fila de material: "<nombre> <unidad U|LB> <num1> <num2> ... <numN>"
+    const MATERIAL_RE = /^(.+?)\s+(U|LB|UND|UNID|UNIDAD|LBS)\s+([\d\s,\.\-]+)$/i;
+
+    const torres = new Set();
+    const niveles = new Set();
+    const etapasOrdenadas = []; // ["1RA ETAPA", "2NDA ETAPA", ...]
+    const dataPorEtapa = {}; // { etapaName: { materialName: { qty, unit } } }
+
+    let currentTorre = null;
+    let currentNivel = null;
+    let currentEtapa = null;
+    let materiasDetectadas = 0;
+
+    function normalizarEtapa(num, sufijo) {
+      // Convertir variantes ("DA" → "NDA") al formato más común
+      const n = parseInt(num);
+      const s = String(sufijo || '').toUpperCase();
+      // Mapeo de sufijos canónicos
+      const sufijoNorm = (n === 1) ? 'RA' : (n === 2) ? 'NDA' : (n === 3) ? 'ERA' : (n >= 4) ? 'TA' : s;
+      return `${n}${sufijoNorm} ETAPA`;
+    }
+
+    function parseMaterialRow(line) {
+      const m = line.match(MATERIAL_RE);
+      if (!m) return null;
+      const material = m[1].trim();
+      const unit = m[2].toUpperCase();
+      const numsStr = m[3].trim();
+      const nums = numsStr.split(/\s+/).map(s => Number(s.replace(/,/g, ''))).filter(n => !isNaN(n));
+      if (nums.length === 0) return null;
+      return { material, unit, numbers: nums };
+    }
+
+    lines.forEach(rawLine => {
+      const line = String(rawLine || '').replace(/\s+/g, ' ').trim();
+      if (!line) return;
+      if (PAGE_FOOTER_RE.test(line)) return;
+
+      // 1. Título de página: "TORRE X -- ... -- NIVEL Y"
+      const tm = line.match(TITLE_RE);
+      if (tm) {
+        currentTorre = 'TORRE ' + tm[1];
+        currentNivel = 'NIVEL ' + tm[3];
+        currentEtapa = null;
+        torres.add(currentTorre);
+        niveles.add(currentTorre + ' / ' + currentNivel);
+        return;
+      }
+
+      // 2. Header de tabla
+      if (HEADER_RE.test(line)) return;
+
+      // 3. Etiqueta de etapa: "1RA ETAPA", "2NDA ETAPA", etc.
+      const em = line.match(ETAPA_RE);
+      if (em) {
+        currentEtapa = normalizarEtapa(em[1], em[2]);
+        if (!etapasOrdenadas.includes(currentEtapa)) etapasOrdenadas.push(currentEtapa);
+        if (!dataPorEtapa[currentEtapa]) dataPorEtapa[currentEtapa] = {};
+        return;
+      }
+
+      // 4. Fila de material — sumamos el ÚLTIMO número (TOTAL NIVEL del PDF)
+      if (currentEtapa && currentTorre && currentNivel) {
+        const parsed = parseMaterialRow(line);
+        if (parsed && parsed.numbers.length > 0) {
+          const total = parsed.numbers[parsed.numbers.length - 1];
+          if (total > 0) {
+            const matName = parsed.material;
+            if (!dataPorEtapa[currentEtapa][matName]) {
+              dataPorEtapa[currentEtapa][matName] = { qty: 0, unit: parsed.unit };
+            }
+            dataPorEtapa[currentEtapa][matName].qty += total;
+            materiasDetectadas++;
+          }
+        }
+      }
+    });
+
+    // Ordenar etapas por número (1, 2, 3, 4)
+    etapasOrdenadas.sort((a, b) => {
+      const na = parseInt((a.match(/^\d+/) || ['0'])[0]);
+      const nb = parseInt((b.match(/^\d+/) || ['0'])[0]);
+      return na - nb;
+    });
+
+    if (etapasOrdenadas.length === 0 || materiasDetectadas === 0) {
+      alert(
+        'NO SE PUDO INTERPRETAR EL PDF\n\n' +
+        'No se detectaron etapas ni materiales válidos. Verificá que el PDF tenga:\n\n' +
+        '• Título por página: "TORRE X -- [PROYECTO] -- NIVEL Y"\n' +
+        '• Headers: "1RA ETAPA", "2NDA ETAPA", etc.\n' +
+        '• Filas: "<material> <unidad U|LB> <num apto1> <num apto2> ... <total nivel>"\n\n' +
+        'Si el formato del PDF es distinto, contactar al desarrollador.'
+      );
+      event.target.value = '';
+      return;
+    }
+
+    // Calcular totales para mostrar al usuario antes de aplicar
+    const matCount = etapasOrdenadas.reduce((s, et) => s + Object.keys(dataPorEtapa[et] || {}).length, 0);
+    const torresDetectadas = [...torres];
+
+    // Confirmación: REEMPLAZAR vs SUMAR a la receta existente
+    const p = activeProj();
+    if (!p.materiales) p.materiales = {};
+    const recetaActualTieneDatos = Array.isArray(p.materiales.receta)
+      && p.materiales.receta.some(et => et && Object.keys(et).length > 0);
+
+    let modo = 'reemplazar'; // por default
+    if (recetaActualTieneDatos) {
+      const respuesta = confirm(
+        `PDF PROCESADO:\n\n` +
+        `• Torre(s): ${torresDetectadas.join(', ')}\n` +
+        `• Niveles: ${niveles.size}\n` +
+        `• Etapas: ${etapasOrdenadas.length} (${etapasOrdenadas.join(', ')})\n` +
+        `• Materiales únicos detectados: ${matCount}\n\n` +
+        `LA RECETA ACTUAL YA TIENE DATOS.\n\n` +
+        `OK = SUMAR esta nueva data a la receta existente (recomendado si subiste otra torre)\n` +
+        `Cancelar = REEMPLAZAR la receta entera con los datos del PDF (borra lo anterior)`
+      );
+      modo = respuesta ? 'sumar' : 'reemplazar';
+    } else {
+      // Receta vacía → simplemente reemplazar (idéntico a sumar a vacío)
+      const ok = confirm(
+        `PDF PROCESADO:\n\n` +
+        `• Torre(s): ${torresDetectadas.join(', ')}\n` +
+        `• Niveles: ${niveles.size}\n` +
+        `• Etapas: ${etapasOrdenadas.length} (${etapasOrdenadas.join(', ')})\n` +
+        `• Materiales únicos detectados: ${matCount}\n\n` +
+        `¿Cargar estos datos en la receta?`
+      );
+      if (!ok) { event.target.value = ''; return; }
+    }
+
+    // Aplicar los datos a p.materiales.receta
+    if (modo === 'reemplazar') {
+      // Resetear receta y etiquetas con los del PDF
+      p.materiales.receta = etapasOrdenadas.map(() => ({}));
+      p.materiales.recetaEtapaLabels = [...etapasOrdenadas];
+    } else {
+      // Sumar: asegurarnos que la receta tenga al menos las etapas del PDF
+      // (manteniendo las etapas existentes que estén)
+      const etapasExistentes = Array.isArray(p.materiales.recetaEtapaLabels)
+        ? p.materiales.recetaEtapaLabels.slice()
+        : [];
+      etapasOrdenadas.forEach(et => {
+        if (!etapasExistentes.includes(et)) etapasExistentes.push(et);
+      });
+      // Re-ordenar por número
+      etapasExistentes.sort((a, b) => {
+        const na = parseInt((a.match(/^\d+/) || ['0'])[0]);
+        const nb = parseInt((b.match(/^\d+/) || ['0'])[0]);
+        return na - nb;
+      });
+      p.materiales.recetaEtapaLabels = etapasExistentes;
+      // Asegurar que el array receta tenga la longitud correcta
+      while (p.materiales.receta.length < etapasExistentes.length) {
+        p.materiales.receta.push({});
+      }
+      p.materiales.receta = p.materiales.receta.slice(0, etapasExistentes.length);
+    }
+
+    // Volcar los datos al receta usando los índices correctos según los labels
+    etapasOrdenadas.forEach(etapaName => {
+      const idx = p.materiales.recetaEtapaLabels.indexOf(etapaName);
+      if (idx < 0) return;
+      const data = dataPorEtapa[etapaName] || {};
+      Object.entries(data).forEach(([matName, info]) => {
+        const key = 'PDF::' + matName;
+        if (modo === 'sumar' && p.materiales.receta[idx][key]) {
+          p.materiales.receta[idx][key] = (Number(p.materiales.receta[idx][key]) || 0) + info.qty;
+        } else {
+          p.materiales.receta[idx][key] = info.qty;
+        }
+      });
+    });
+
+    // Guardar lista de torres importadas para referencia futura
+    if (!Array.isArray(p.materiales.recetaImportedTowers)) p.materiales.recetaImportedTowers = [];
+    if (modo === 'reemplazar') p.materiales.recetaImportedTowers = [];
+    torresDetectadas.forEach(t => {
+      if (!p.materiales.recetaImportedTowers.includes(t)) p.materiales.recetaImportedTowers.push(t);
+    });
+
+    try { saveState(); } catch(e){ console.error('Error saveState:', e); }
+    if (typeof renderReceta === 'function') {
+      try { currentRecetaStage = 0; renderReceta(); } catch(e){}
+    }
+
+    showToast(
+      `RECETA ${modo === 'sumar' ? 'ACTUALIZADA' : 'IMPORTADA'} · ${etapasOrdenadas.length} ETAPAS · ${matCount} MAT.`,
+      'green'
+    );
+    logActivity('update',
+      `Receta ${modo === 'sumar' ? 'sumada' : 'reemplazada'} desde PDF`,
+      `${p.name} · ${file.name} · ${torresDetectadas.join(', ')} · ${niveles.size} niveles, ${etapasOrdenadas.length} etapas, ${matCount} materiales`
+    );
+    event.target.value = '';
+  };
+
+  /* Limpia la receta importada del PDF y vuelve a la estructura por default
+     (6 etapas vacías de ETAPAS_INFO). Útil si el usuario quiere empezar de cero. */
+  window.limpiarRecetaImportada = function(){
+    if (!can('receta.edit') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
+    if (!confirm('¿LIMPIAR LA RECETA?\n\nSe borrarán todos los materiales actuales y volverá a la estructura de 6 etapas vacías.\n\nEsta acción NO se puede deshacer.')) return;
+    const p = activeProj();
+    if (!p.materiales) p.materiales = {};
+    p.materiales.receta = [{},{},{},{},{},{}];
+    delete p.materiales.recetaEtapaLabels;
+    delete p.materiales.recetaImportedTowers;
+    try { saveState(); } catch(e){}
+    currentRecetaStage = 0;
+    if (typeof renderReceta === 'function') renderReceta();
+    showToast('RECETA LIMPIADA', 'green');
+    logActivity('delete', 'Receta limpiada (manualmente)', p.name);
+  };
 
   /* ═══════════════════════════════════════════════════════════════
      IMPORTAR ESTRUCTURA DEL PROYECTO DESDE PDF
