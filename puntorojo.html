@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v198</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v199</span>
   </footer>
 
 </div>
@@ -3532,6 +3532,58 @@ table{max-width:100%}
     <div class="modal-actions">
       <button class="btn ghost" onclick="closeModal('forgotPass')">CANCELAR</button>
       <button class="btn" onclick="sendPasswordReset()">ENVIAR CORREO</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal de confirmación de pedido por etapa (estilizado) -->
+<div class="modal-bg" id="modalConfirmarPedido" onclick="closeModalBg(event,'confirmarPedido')">
+  <div class="modal" style="max-width:640px;max-height:85vh;display:flex;flex-direction:column">
+    <h3 style="margin-bottom:4px">GENERAR PEDIDO AUTOMÁTICO</h3>
+    <p class="desc" style="margin-bottom:14px">Revisar el detalle antes de confirmar. El pedido se genera con los materiales y cantidades de la receta.</p>
+
+    <!-- Header con datos del pedido -->
+    <div id="confirmarPedidoHead" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;padding:14px;background:var(--cream);border:1px solid var(--line);border-radius:4px">
+      <div>
+        <div style="font-size:9px;letter-spacing:1.5px;color:var(--mute);font-weight:700;text-transform:uppercase;margin-bottom:4px">TORRE</div>
+        <div id="cpTorre" style="font-size:13px;font-weight:700;color:var(--ink)">—</div>
+      </div>
+      <div>
+        <div style="font-size:9px;letter-spacing:1.5px;color:var(--mute);font-weight:700;text-transform:uppercase;margin-bottom:4px">NIVEL</div>
+        <div id="cpNivel" style="font-size:13px;font-weight:700;color:var(--ink)">—</div>
+      </div>
+      <div>
+        <div style="font-size:9px;letter-spacing:1.5px;color:var(--mute);font-weight:700;text-transform:uppercase;margin-bottom:4px">ETAPA</div>
+        <div id="cpEtapa" style="font-size:13px;font-weight:700;color:var(--red)">—</div>
+      </div>
+    </div>
+
+    <!-- Aviso de fuente de datos -->
+    <div id="cpFuenteAviso" style="margin-bottom:12px;padding:10px 14px;background:#FFF4E6;border-left:3px solid #F59E0B;border-radius:2px;font-size:10px;letter-spacing:.5px;color:#92400E;font-weight:600;text-transform:uppercase"></div>
+
+    <!-- Excluidos (metal a la medida) -->
+    <div id="cpExcluidosBox" style="display:none;margin-bottom:12px;padding:10px 14px;background:#FEE2E2;border-left:3px solid #DC2626;border-radius:2px">
+      <div style="font-size:10px;letter-spacing:1px;color:#991B1B;font-weight:700;text-transform:uppercase;margin-bottom:6px">EXCLUIDOS · YA PEDIDOS COMO METAL A LA MEDIDA</div>
+      <div id="cpExcluidosList" style="font-size:11px;color:#7F1D1D;font-weight:500"></div>
+    </div>
+
+    <!-- Tabla de materiales -->
+    <div style="font-size:9px;letter-spacing:1.5px;color:var(--mute);font-weight:700;text-transform:uppercase;margin:0 0 6px">MATERIALES DEL PEDIDO</div>
+    <div style="flex:1;overflow-y:auto;border:1px solid var(--line);border-radius:4px">
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead style="background:var(--cream);position:sticky;top:0;z-index:1">
+          <tr>
+            <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);font-size:9px;letter-spacing:1px;color:var(--mute);font-weight:700">MATERIAL</th>
+            <th style="text-align:right;padding:8px 12px;border-bottom:1px solid var(--line);font-size:9px;letter-spacing:1px;color:var(--mute);font-weight:700;width:120px">CANTIDAD</th>
+          </tr>
+        </thead>
+        <tbody id="cpMaterialesBody"></tbody>
+      </table>
+    </div>
+
+    <div class="modal-actions" style="margin-top:14px">
+      <button class="btn ghost" onclick="closeModal('confirmarPedido');window._confirmarPedidoResolve&&window._confirmarPedidoResolve(false)">CANCELAR</button>
+      <button class="btn cafe" onclick="closeModal('confirmarPedido');window._confirmarPedidoResolve&&window._confirmarPedidoResolve(true)">CONFIRMAR PEDIDO</button>
     </div>
   </div>
 </div>
@@ -17752,7 +17804,73 @@ window.toggleRecetaPedirTorre = function(torreId){
   if (typeof renderRecetaPedir === 'function') renderRecetaPedir();
 };
 
-function pedirEtapaCompleta(towerId, levelId, stageIdx){
+/* Modal estilizado para confirmar la generación de pedido por etapa.
+   Reemplaza el confirm() nativo del browser que era feo. Devuelve Promise<boolean>. */
+function showConfirmarPedidoModal(data){
+  return new Promise((resolve) => {
+    try {
+      // Llenar header
+      document.getElementById('cpTorre').textContent = data.torre || '—';
+      document.getElementById('cpNivel').textContent = `${data.nivel || '—'} (${data.numAptos || 0} apto${data.numAptos !== 1 ? 's' : ''})`;
+      document.getElementById('cpEtapa').textContent = data.etapa || '—';
+
+      // Aviso de fuente (PDF totales vs receta × aptos)
+      const aviso = document.getElementById('cpFuenteAviso');
+      if (data.usarTotalesPDF) {
+        aviso.textContent = '✓ TOTALES DEL NIVEL — datos directos del PDF, sin multiplicar';
+        aviso.style.background = '#DCFCE7';
+        aviso.style.borderLeftColor = '#16A34A';
+        aviso.style.color = '#14532D';
+      } else {
+        aviso.textContent = `RECETA × ${data.numAptos} APTOS · cantidad calculada por aptos del nivel`;
+        aviso.style.background = '#FFF4E6';
+        aviso.style.borderLeftColor = '#F59E0B';
+        aviso.style.color = '#92400E';
+      }
+
+      // Excluidos
+      const excBox = document.getElementById('cpExcluidosBox');
+      const excList = document.getElementById('cpExcluidosList');
+      if (Array.isArray(data.itemsExcluidos) && data.itemsExcluidos.length > 0) {
+        excBox.style.display = '';
+        excList.innerHTML = data.itemsExcluidos.map(n => `· ${n}`).join('<br>');
+      } else {
+        excBox.style.display = 'none';
+        excList.innerHTML = '';
+      }
+
+      // Tabla de materiales
+      const tbody = document.getElementById('cpMaterialesBody');
+      const fmt = (n) => Number(n).toLocaleString('es-GT');
+      tbody.innerHTML = (data.materiales || []).map((m, i) => {
+        const detalle = data.usarTotalesPDF
+          ? ''
+          : `<div style="font-size:9px;color:var(--mute);font-weight:500;margin-top:2px">${fmt(m.qtyBase)} × ${data.numAptos}</div>`;
+        return `<tr style="background:${i % 2 === 0 ? '#FFF' : 'var(--cream-light, #FAF7F2)'}">
+          <td style="padding:8px 12px;border-bottom:1px solid var(--line-soft);color:var(--ink);font-weight:500">${m.name}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid var(--line-soft);text-align:right;color:var(--red);font-weight:700;font-variant-numeric:tabular-nums">
+            ${fmt(m.qtyFinal)}
+            ${detalle}
+          </td>
+        </tr>`;
+      }).join('') || `<tr><td colspan="2" style="padding:30px;text-align:center;color:var(--mute);font-size:11px">SIN MATERIALES</td></tr>`;
+
+      // Setup resolve handler y abrir el modal
+      window._confirmarPedidoResolve = (val) => {
+        window._confirmarPedidoResolve = null;
+        resolve(!!val);
+      };
+      document.getElementById('modalConfirmarPedido').classList.add('show');
+    } catch(e) {
+      console.error('Error mostrando modal de confirmación de pedido:', e);
+      // Fallback al confirm nativo si algo falla
+      const fallback = confirm('Generar pedido para ' + (data.torre || '') + ' · ' + (data.nivel || '') + '?');
+      resolve(!!fallback);
+    }
+  });
+}
+
+async function pedirEtapaCompleta(towerId, levelId, stageIdx){
   if (!can('pedidos.create')) return showToast('SIN PERMISO PARA CREAR PEDIDOS', 'red');
 
   const p = activeProj();
@@ -17823,34 +17941,22 @@ function pedirEtapaCompleta(towerId, levelId, stageIdx){
     return showToast('TODO EL METAL DE ESTA ETAPA YA FUE PEDIDO COMO METAL A LA MEDIDA', 'red');
   }
 
-  // Armar preview
-  let preview = `GENERAR PEDIDO AUTOMÁTICO\n\n` +
-    `Torre: ${t.name}\n` +
-    `Nivel: ${l.name} (${numAptos} apto${numAptos !== 1 ? 's' : ''})\n` +
-    `Etapa: ${stageIdx + 1} · ${etapaLabel}\n\n`;
-  if (itemsExcluidos.length > 0) {
-    preview += `⚠ EXCLUIDOS (ya pedidos como metal a la medida):\n`;
-    itemsExcluidos.forEach(n => { preview += `· ${n}\n`; });
-    preview += `\n`;
-  }
-  if (usarTotalesPDF) {
-    preview += `MATERIALES (TOTALES del nivel del PDF):\n`;
-    Object.entries(recetaFiltrada).forEach(([key, qtyBase]) => {
+  // Mostrar modal de confirmación estilizado.
+  const confirmado = await showConfirmarPedidoModal({
+    torre: t.name,
+    nivel: l.name,
+    numAptos,
+    etapa: `${stageIdx + 1} · ${etapaLabel}`,
+    usarTotalesPDF,
+    itemsExcluidos,
+    materiales: Object.entries(recetaFiltrada).map(([key, qtyBase]) => {
       const parts = key.split('::');
       const name = parts.length > 1 ? parts.slice(1).join('::') : key;
-      preview += `· ${name}: ${qtyBase}\n`;
-    });
-  } else {
-    preview += `MATERIALES (cantidad = receta × ${numAptos} aptos):\n`;
-    Object.entries(recetaFiltrada).forEach(([key, qtyBase]) => {
-      const parts = key.split('::');
-      const name = parts.length > 1 ? parts.slice(1).join('::') : key;
-      preview += `· ${name}: ${qtyBase} × ${numAptos} = ${qtyBase * numAptos}\n`;
-    });
-  }
-  preview += `\n¿CONFIRMAR PEDIDO?`;
-
-  if (!confirm(preview)) return;
+      const qtyFinal = usarTotalesPDF ? qtyBase : qtyBase * numAptos;
+      return { name, qtyBase, qtyFinal };
+    })
+  });
+  if (!confirmado) return;
 
   // Generar el pedido
   p.materiales.pedidoCounter = (p.materiales.pedidoCounter || 0) + 1;
