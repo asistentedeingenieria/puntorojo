@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v215</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v216</span>
   </footer>
 
 </div>
@@ -26864,7 +26864,7 @@ window.addEventListener('load', () => {
     </div>`;
 
     html += `<div class="card"><div class="card-hd"><h3>MODELOS DE APTO Y COSTOS POR ETAPA</h3><div class="planilla-receta-actions"><button class="btn ghost sm" ${canEdit?'':'disabled'} onclick="document.getElementById('pdfImportModelosFile').click()" title="Importar modelos y costos desde un PDF">IMPORTAR PDF</button><button class="btn sm" ${canEdit?'':'disabled'} onclick="addPlanillaModelo()">NUEVO MODELO</button></div></div>${adminLockMsg}<p class="receta-intro">CADA APARTAMENTO TIENE UN MODELO ASIGNADO. EL MODELO DEFINE EL COSTO DE CADA ETAPA. CADA ETAPA SE PUEDE PAGAR AL 30%, 50%, 70% O 100%. EL BOTÓN <strong>IMPORTAR PDF</strong> DETECTA AUTOMÁTICAMENTE NOMBRES DE MODELO Y SUS COSTOS POR ETAPA.</p><div class="tbl-wrap"><table class="planilla-model-table"><thead><tr><th>MODELO</th>${ETAPAS_PROJ.map((e,i)=>`<th>ET. ${i+1}<br>${h(e.name)}</th>`).join('')}</tr></thead><tbody>${modelos.map(m=>`<tr><td><input style="width:100%;text-align:left;font-family:inherit" value="${h(m.nombre)}" ${canEdit?'':'disabled'} onchange="updatePlanillaModeloNombre('${h(m.key)}',this.value)"></td>${ETAPAS_PROJ.map((e,i)=>`<td><input type="number" step="0.01" value="${Number(m.costos?.[i]||0)}" ${canEdit?'':'disabled'} onchange="updatePlanillaModeloCosto('${h(m.key)}',${i},this.value)"></td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`;
-    html += `<div class="card"><div class="card-hd"><h3>ASIGNACIÓN DE MODELO POR APTO / ÁREA</h3></div>${adminLockMsg}`;
+    html += `<div class="card"><div class="card-hd"><h3>ASIGNACIÓN DE MODELO POR APTO / ÁREA</h3><button class="btn sm" ${canEdit?'':'disabled'} onclick="autoDetectarModelosAptos()" title="Detecta automaticamente el modelo de cada apto por nombre y nivel">DETECTAR AUTO</button></div>${adminLockMsg}<p class="receta-intro" style="padding:8px 14px">EL BOTÓN <strong>DETECTAR AUTO</strong> ASIGNA EL MODELO A CADA APTO USANDO REGLAS: COINCIDENCIA DEL NOMBRE, NÚMERO + NIVEL, O KEYWORDS (PASILLO, SALÓN, AZOTEA, CINE). LOS APTOS QUE NO TENGAN COINCIDENCIA QUEDAN PARA ASIGNAR MANUALMENTE.</p>`;
     (p.towers||[]).forEach(t=>{ html += `<div class="receta-tower-head">${h(t.name)}</div>`; (t.levels||[]).forEach(l=>(l.aptos||[]).forEach(a=>{ const current=p.planilla.aptoModelMap?.[a.id] || defaultKeyForPlanilla(t,l,a); html += `<div class="planilla-assign-row"><div><div class="apt-name">${h(a.name)}</div><div class="apt-meta">${h(t.name)} · ${h(l.name)}</div></div><select ${canEdit?'':'disabled'} onchange="updateAptoModelo('${h(a.id)}',this.value)">${modelos.map(m=>`<option value="${h(m.key)}" ${m.key===current?'selected':''}>${h(m.nombre)}</option>`).join('')}</select></div>`; })); });
     html += `</div>`; const el=document.getElementById('planilla-receta'); if(el) el.innerHTML=html;
   };
@@ -27810,6 +27810,143 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       else if(typeof renderPlanilla === 'function') renderPlanilla();
     } catch(e){ console.error('[v214 UPD-ROL] render error:', e); }
     showT('TIPO ACTUALIZADO','green');
+  };
+
+  /* ═══════ v216: AUTO-DETECCION DE MODELO POR APTO ═══════ */
+  function _normalizaAptoNombre(s){
+    return String(s||'').toUpperCase()
+      .replace(/^(APARTAMENTO|APTO\.?|APTOS|ÁREA|AREA|UNIDAD|N°|NRO\.?)\s+/i, '')
+      .replace(/\s+/g,' ').trim();
+  }
+  function _nivelNumero(nivelName){
+    const m = String(nivelName||'').match(/\d+/);
+    return m ? parseInt(m[0], 10) : 0;
+  }
+  function _detectarModeloParaApto(aptoName, nivelName, modelos){
+    const apto = _normalizaAptoNombre(aptoName);
+    const nivelNum = _nivelNumero(nivelName);
+
+    let m = modelos.find(x => x.nombre.toUpperCase() === apto);
+    if(m) return { modelo: m, razon: 'nombre exacto' };
+
+    const numMatch = apto.match(/^(\d{2,5})/);
+    if(numMatch){
+      const aptoNum = numMatch[1];
+      m = modelos.find(x => new RegExp('(?:^|[^\\d])' + aptoNum + '(?:[^\\d]|$)').test(x.nombre));
+      if(m) return { modelo: m, razon: 'numero exacto ' + aptoNum };
+
+      if(aptoNum.length >= 3){
+        const sufijo = aptoNum.slice(-2);
+        const sufijoNum = parseInt(sufijo, 10);
+        for(const mod of modelos){
+          const rangoMatch = mod.nombre.match(/^(\d+)\s*AL\s*(\d+)\s*-\s*(\d{1,2})$/i);
+          if(!rangoMatch) continue;
+          const rN = parseInt(rangoMatch[1],10), rM = parseInt(rangoMatch[2],10), rS = parseInt(rangoMatch[3],10);
+          if(nivelNum >= rN && nivelNum <= rM && rS === sufijoNum){
+            return { modelo: mod, razon: `sufijo ${sufijo} + nivel ${nivelNum} en rango ${rN}-${rM}` };
+          }
+        }
+      }
+    }
+
+    if(/PASILLO/i.test(apto)){
+      m = modelos.find(x => x.nombre.toUpperCase() === apto);
+      if(m) return { modelo: m, razon: 'pasillo nombre exacto' };
+      for(const mod of modelos){
+        if(!/PASILLO/i.test(mod.nombre)) continue;
+        const rangoMatch = mod.nombre.match(/PASILLO\s*N(\d+)\s*AL\s*N(\d+)/i);
+        if(rangoMatch){
+          const rN = parseInt(rangoMatch[1],10), rM = parseInt(rangoMatch[2],10);
+          if(nivelNum >= rN && nivelNum <= rM){
+            return { modelo: mod, razon: `pasillo nivel ${nivelNum} en rango ${rN}-${rM}` };
+          }
+        }
+        const soloN = mod.nombre.match(/PASILLO\s*N(\d+)\s*$/i);
+        if(soloN && parseInt(soloN[1],10) === nivelNum){
+          return { modelo: mod, razon: `pasillo N${nivelNum} exacto` };
+        }
+      }
+    }
+    if(/SAL[ÓO]N/i.test(apto)){
+      m = modelos.find(x => /SAL[ÓO]N/i.test(x.nombre));
+      if(m) return { modelo: m, razon: 'keyword salon' };
+    }
+    if(/AZOTEA/i.test(apto)){
+      m = modelos.find(x => /AZOTEA/i.test(x.nombre));
+      if(m) return { modelo: m, razon: 'keyword azotea' };
+    }
+    if(/CINE/i.test(apto)){
+      m = modelos.find(x => /CINE/i.test(x.nombre));
+      if(m) return { modelo: m, razon: 'keyword cine' };
+    }
+
+    return null;
+  }
+
+  window.autoDetectarModelosAptos = function(){
+    if(typeof can === 'function' && !can('users.manage')){
+      showT('SOLO EL ADMINISTRADOR','red'); return;
+    }
+    const S = (typeof state !== 'undefined' && state) ? state : window.state;
+    if(!S){ showT('ERROR: STATE','red'); return; }
+    const p = (typeof activeProj === 'function') ? activeProj() : null;
+    if(!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    const modelos = (p.planilla?.modelos||[]);
+    if(modelos.length === 0){
+      showT('PRIMERO CARGAR LOS MODELOS Y SUS COSTOS','red'); return;
+    }
+
+    const detecciones = [];
+    const sinMatch = [];
+    (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
+      const r = _detectarModeloParaApto(a.name, l.name, modelos);
+      if(r){
+        detecciones.push({ apto: a, torre: t.name, nivel: l.name, modelo: r.modelo, razon: r.razon });
+      } else {
+        sinMatch.push({ apto: a, torre: t.name, nivel: l.name });
+      }
+    })));
+
+    if(detecciones.length === 0){
+      showT('NO SE DETECTÓ NINGÚN MATCH','red');
+      console.warn('Sin matches. Aptos:', sinMatch);
+      return;
+    }
+
+    const porModelo = {};
+    detecciones.forEach(d => {
+      const k = d.modelo.nombre;
+      if(!porModelo[k]) porModelo[k] = [];
+      porModelo[k].push(d.apto.name);
+    });
+    const lineas = Object.entries(porModelo).slice(0, 10).map(([mod, aptos]) =>
+      `• ${mod}: ${aptos.length} apto${aptos.length!==1?'s':''} (${aptos.slice(0,3).join(', ')}${aptos.length>3?'...':''})`
+    );
+    const masMod = Object.keys(porModelo).length > 10 ? `\n... y ${Object.keys(porModelo).length - 10} modelos más` : '';
+    const sinMatchTxt = sinMatch.length > 0
+      ? `\n\n${sinMatch.length} APTOS SIN MATCH (quedan en blanco):\n${sinMatch.slice(0,5).map(s => `• ${s.torre} · ${s.nivel} · ${s.apto.name}`).join('\n')}${sinMatch.length>5 ? `\n... y ${sinMatch.length-5} más` : ''}`
+      : '';
+
+    const ok = confirm(
+      `DETECCIÓN AUTOMÁTICA DE MODELOS\n\n` +
+      `${detecciones.length} APTOS ASIGNADOS A ${Object.keys(porModelo).length} MODELOS:\n\n` +
+      `${lineas.join('\n')}${masMod}` +
+      `${sinMatchTxt}\n\n` +
+      `Esto REEMPLAZA las asignaciones actuales con las detectadas.\n¿Aplicar?`
+    );
+    if(!ok) return;
+
+    if(!p.planilla.aptoModelMap) p.planilla.aptoModelMap = {};
+    detecciones.forEach(d => {
+      p.planilla.aptoModelMap[d.apto.id] = d.modelo.key;
+    });
+
+    try { saveState(); } catch(e){ console.error('[v216] saveState error:', e); }
+    try {
+      if(typeof renderPlanilla === 'function') renderPlanilla();
+    } catch(e){ console.error('[v216] render error:', e); }
+
+    showT(`ASIGNADOS ${detecciones.length} APTOS · ${sinMatch.length} SIN MATCH`, 'green');
   };
 })();
 </script>
