@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v209</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v210</span>
   </footer>
 
 </div>
@@ -25727,10 +25727,12 @@ window.addEventListener('load', () => {
   window.addPlanillaColaborador=function(){ if(!can('planilla.generate')&&!can('users.manage')) return showToast('SIN PERMISO','red'); const p=activeProj(); const nombre=upper(document.getElementById('newColabNombre')?.value||''); const rol=upper(document.getElementById('newColabRol')?.value||'PERSONAL'); if(!nombre) return showToast('ESCRIBIR EL NOMBRE','red'); if((p.planilla.colaboradores||[]).some(c=>upper(c.nombre)===nombre)) return showToast('YA EXISTE EN EL LISTADO','red'); p.planilla.colaboradores.push({id:'col-'+uid(),nombre,rol}); window.planillaSelectedColaborador=p.planilla.colaboradores[p.planilla.colaboradores.length-1].id; saveState(); renderPlanilla(); showToast('COLABORADOR AGREGADO','green'); };
   window.deletePlanillaColaborador=function(id){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE ELIMINAR COLABORADORES','red');
-    // v208: el listado es sincronizado. Bloquear si hay pagos en CUALQUIER proyecto.
-    const list = (typeof window.getColabsPlanilla === 'function') ? window.getColabsPlanilla() : [];
-    const c = list.find(x=>x.id===id);
-    const nombre = c ? upper(c.nombre) : '';
+    // v210: buscar nombre en cualquier proyecto (no via helper).
+    let nombre = '';
+    for(const pr of (window.state?.projects||[])){
+      const c = (pr.planilla?.colaboradores||[]).find(x => x.id === id);
+      if(c){ nombre = upper(c.nombre); break; }
+    }
     let used = false;
     (window.state?.projects||[]).forEach(pr => {
       (pr.planilla?.pagos||[]).forEach(pg => { if(pg.colaboradorId===id || (nombre && upper(pg.colaborador)===nombre)) used=true; });
@@ -25885,11 +25887,13 @@ window.addEventListener('load', () => {
 
   window.updatePlanillaColaboradorRol = function(id, rol){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE CAMBIAR EL TIPO','red');
-    // v208: actualizar el rol en TODOS los proyectos (sincronizado).
+    // v210: actualizar rol en TODOS los proyectos directamente (no via helper).
     const nuevoRol = normalizeRole(rol);
-    const list = (typeof window.getColabsPlanilla === 'function') ? window.getColabsPlanilla() : [];
-    const ref = list.find(x=>x.id===id);
-    const nombre = ref ? upper(ref.nombre) : '';
+    let nombre = '';
+    for(const pr of (window.state?.projects||[])){
+      const c = (pr.planilla?.colaboradores||[]).find(x => x.id === id);
+      if(c){ nombre = upper(c.nombre); break; }
+    }
     (window.state?.projects||[]).forEach(p => {
       if(!Array.isArray(p.planilla?.colaboradores)) return;
       p.planilla.colaboradores.forEach(c => {
@@ -25908,11 +25912,18 @@ window.addEventListener('load', () => {
 
   window.renderPlanillaColaboradores = function(){
     ensureEnhancedData();
-    // v206: el listado de colaboradores es GLOBAL (compartido entre proyectos).
+    // v210: lee DIRECTAMENTE del proyecto activo. Como add/delete/updateRol
+    // escriben a TODOS los proyectos, el activo siempre tiene la lista completa.
     const p=activeProj(); const canEdit=can('users.manage');
-    const list = (typeof window.getColabsPlanilla === 'function') ? window.getColabsPlanilla() : [];
+    let list = (p?.planilla?.colaboradores || []);
+    // Fallback: si el activo no tiene, buscar en cualquier proyecto que tenga
+    if(list.length === 0){
+      for(const otro of (window.state?.projects||[])){
+        if((otro.planilla?.colaboradores||[]).length > 0){ list = otro.planilla.colaboradores; break; }
+      }
+    }
     const roleOpts = r => ROLE_OPTIONS.map(op=>`<option value="${op}" ${normalizeRole(r)===op?'selected':''}>${op==='SIN DEFINIR'?'SELECCIONAR':op}</option>`).join('');
-    // Contar pagos de TODOS los proyectos por nombre (no solo del activo).
+    // Contar pagos de TODOS los proyectos por nombre.
     function pagosDeColab(c){
       let n=0; (window.state?.projects||[]).forEach(pr => (pr.planilla?.pagos||[]).forEach(pg => { if(pg.colaboradorId===c.id || upper(pg.colaborador)===upper(c.nombre)) n++; })); return n;
     }
@@ -25925,28 +25936,32 @@ window.addEventListener('load', () => {
 
   window.addPlanillaColaborador = function(){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE AGREGAR COLABORADORES','red');
-    // v208: agrega a TODOS los proyectos (sincronizado).
-    const nombre=upper(document.getElementById('newColabNombre')?.value||''); const rol=normalizeRole(document.getElementById('newColabRol')?.value||'');
+    // v210: escribe DIRECTAMENTE a TODOS los proyectos. No depende de helpers
+    // ni sincronizacion. Garantiza persistencia.
+    const nombre = upper(document.getElementById('newColabNombre')?.value||'');
+    const rol = normalizeRole(document.getElementById('newColabRol')?.value||'');
     if(!nombre) return showToast('ESCRIBIR EL NOMBRE','red');
     if(rol==='SIN DEFINIR') return showToast('ELEGIR INSTALADOR O MASILLERO','red');
-    const list = (typeof window.getColabsPlanilla === 'function') ? window.getColabsPlanilla() : [];
-    if(list.some(c=>upper(c.nombre)===nombre)) return showToast('YA EXISTE EN EL LISTADO','red');
-    const nuevo = {id:'col-'+uid(),nombre,rol};
-    list.push(nuevo);
+    // Verificar duplicado en CUALQUIER proyecto
+    const existe = (window.state?.projects||[]).some(p =>
+      (p.planilla?.colaboradores||[]).some(c => upper(c.nombre)===nombre)
+    );
+    if(existe) return showToast('YA EXISTE EN EL LISTADO','red');
+    const nuevo = {id:'col-'+uid(), nombre, rol};
+    // Agregar DIRECTAMENTE a cada proyecto
+    (window.state?.projects||[]).forEach(p => {
+      if(!p.planilla) p.planilla = {pagos:[],retencionesPagadas:[],ajustes:[],modelos:[],aptoModelMap:{},colaboradores:[],etapas:[]};
+      if(!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores = [];
+      p.planilla.colaboradores.push({...nuevo});
+    });
+    // Cache global
+    if(!Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal = [];
+    window.state.colaboradoresGlobal.push({...nuevo});
     window.planillaSelectedColaborador = nuevo.id;
-    // Propagar a TODOS los proyectos
-    if(typeof _sincronizarColaboradoresEntreProyectos === 'function'){
-      try { _sincronizarColaboradoresEntreProyectos(); } catch(e){}
-    } else {
-      (window.state?.projects||[]).forEach(p => {
-        if(!p.planilla) p.planilla = {pagos:[],retencionesPagadas:[],ajustes:[],modelos:[],aptoModelMap:{},colaboradores:[],etapas:[]};
-        if(!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores = [];
-        if(!p.planilla.colaboradores.some(c => upper(c.nombre) === nombre)){
-          p.planilla.colaboradores.push({...nuevo});
-        }
-      });
-    }
-    saveState(); renderPlanilla(); showToast('PERSONAL AGREGADO · DISPONIBLE EN TODOS LOS PROYECTOS','green');
+    // Limpiar input
+    const inp = document.getElementById('newColabNombre'); if(inp) inp.value = '';
+    saveState(); renderPlanilla();
+    showToast('PERSONAL AGREGADO · DISPONIBLE EN TODOS LOS PROYECTOS','green');
   };
 
   window.cargarColaboradoresBase = function(){
@@ -26416,9 +26431,10 @@ window.addEventListener('load', () => {
   function paidPct5(p,aid,idx){ const list=(p.planilla?.pagos||[]).filter(x=>x.tipo==='ETAPA' && x.aptoId===aid && Number(x.stageIdx)===Number(idx)); return list.length ? Math.max(...list.map(x=>Number(x.targetPct||100))) : 0; }
   function pctOptions5(current){ return PLANILLA_PCTS_5.filter(x=>x>current); }
   function nextPct5(current){ return pctOptions5(current)[0] || ''; }
-  // v209: BUSQUEDA EXHAUSTIVA de colaboradores en TODOS los lugares posibles
-  // y sincronizacion entre proyectos. Cada proyecto guarda su propia copia
-  // del mismo listado (asi saveState la persiste sin problemas).
+  // v210: BUSQUEDA EXHAUSTIVA + MERGE NO DESTRUCTIVO. La sincronizacion
+  // ya no REEMPLAZA p.planilla.colaboradores — solo AGREGA los que faltan
+  // (preservando ID y rol si ya existian). Esto evita que CloudSync.applyRemote
+  // borre datos recien agregados localmente.
   function _sincronizarColaboradoresEntreProyectos(){
     if(!window.state || !Array.isArray(window.state.projects)) return;
     const merged = [];
@@ -26431,7 +26447,7 @@ window.addEventListener('load', () => {
       const rol = normalizeRole(c.rol || c.role || c.tipo || '');
       merged.push({id: c.id || c.colaboradorId || ('col-'+uid()), nombre: nomU, rol: rol || 'SIN DEFINIR'});
     }
-    // 1. state.colaboradoresGlobal (legado de v206/v207)
+    // 1. state.colaboradoresGlobal
     if(Array.isArray(window.state.colaboradoresGlobal)){
       window.state.colaboradoresGlobal.forEach(addUnico);
     }
@@ -26439,12 +26455,11 @@ window.addEventListener('load', () => {
     window.state.projects.forEach(p => {
       (p.planilla?.colaboradores||[]).forEach(addUnico);
     });
-    // 3. p.personal.colaboradores (modulo Personal - source legacy)
+    // 3. p.personal.colaboradores legacy
     window.state.projects.forEach(p => {
       (p.personal?.colaboradores||[]).forEach(addUnico);
     });
-    // 4. Recuperar nombres de pagos viejos (por si los datos del CRUD se borraron
-    // pero los pagos quedaron). Recupera tambien el rol del pago original.
+    // 4. Recuperar de pagos viejos
     window.state.projects.forEach(p => {
       (p.planilla?.pagos||[]).forEach(pg => {
         if(pg && pg.colaborador){
@@ -26452,13 +26467,28 @@ window.addEventListener('load', () => {
         }
       });
     });
-    // 5. Aplicar la lista unificada a TODOS los proyectos (clonando)
+    // 5. v210: MERGE NO DESTRUCTIVO en cada proyecto. Conservar lo que ya esta,
+    // solo agregar lo que falta. Si un nombre existe pero con rol diferente,
+    // el merged gana (asume que el ultimo update tiene la verdad).
     window.state.projects.forEach(p => {
       if(!p.planilla) p.planilla = {pagos:[],retencionesPagadas:[],ajustes:[],modelos:[],aptoModelMap:{},colaboradores:[],etapas:[]};
-      p.planilla.colaboradores = merged.map(c => ({...c}));
+      if(!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores = [];
+      merged.forEach(m => {
+        const existente = p.planilla.colaboradores.find(x => (x.nombre||'').toUpperCase() === m.nombre);
+        if(!existente){
+          p.planilla.colaboradores.push({...m});
+        } else {
+          if(m.rol && m.rol !== 'SIN DEFINIR') existente.rol = m.rol;
+        }
+      });
     });
-    // 6. Mantener state.colaboradoresGlobal como cache
-    window.state.colaboradoresGlobal = merged.map(c => ({...c}));
+    // 6. Cache global (no destructivo)
+    if(!Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal = [];
+    merged.forEach(m => {
+      const existente = window.state.colaboradoresGlobal.find(x => (x.nombre||'').toUpperCase() === m.nombre);
+      if(!existente) window.state.colaboradoresGlobal.push({...m});
+      else if(m.rol && m.rol !== 'SIN DEFINIR') existente.rol = m.rol;
+    });
   }
 
   // v209: funcion de diagnostico — el admin la corre en consola del browser
@@ -26517,8 +26547,17 @@ window.addEventListener('load', () => {
   // Alias para compat con codigo v206/v207 que llamaba esta funcion
   function _migrarColaboradoresGlobal(){ _sincronizarColaboradoresEntreProyectos(); }
 
-  function activeColabId5(p){ const colabs=getColabsPlanilla(); if(!window.planillaSelectedColaborador || !colabs.some(c=>c.id===window.planillaSelectedColaborador)){ window.planillaSelectedColaborador = colabs[0]?.id || ''; } return window.planillaSelectedColaborador; }
-  function selectedColab5(p){ return getColabsPlanilla().find(c=>c.id===activeColabId5(p)); }
+  // v210: leen DIRECTO del proyecto activo (que ya tiene la lista sincronizada)
+  function activeColabId5(p){
+    const colabs = (p?.planilla?.colaboradores || []);
+    if(!window.planillaSelectedColaborador || !colabs.some(c=>c.id===window.planillaSelectedColaborador)){
+      window.planillaSelectedColaborador = colabs[0]?.id || '';
+    }
+    return window.planillaSelectedColaborador;
+  }
+  function selectedColab5(p){
+    return (p?.planilla?.colaboradores || []).find(c => c.id === activeColabId5(p));
+  }
 
   // v201: CRUD de etapas (admin only). La regla rol↔etapa siempre es: ÚLTIMA = MASILLERO.
   window.addEtapaPlanilla = function(){
