@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v216</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v217</span>
   </footer>
 
 </div>
@@ -18692,6 +18692,42 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
 
   // Helper: extrae el texto de un PDF respetando líneas (usa pdf.js)
   window._parsePDFToLines = _parsePDFToLines;  // v212: exponer para que otros parches lo usen
+  // v217: variante que preserva coordenadas X de cada texto para parsers tabulares
+  window._parsePDFToItemsByLine = async function(file){
+    if(typeof pdfjsLib === 'undefined') throw new Error('PDF.js no cargo. Recargar la app.');
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const pages = [];
+    for(let i = 1; i <= pdf.numPages; i++){
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const items = textContent.items.map(it => ({
+        str: it.str || '',
+        x: it.transform[4],
+        y: it.transform[5],
+        w: it.width || ((it.str || '').length * 4.5)
+      })).filter(x => x.str.trim() !== '');
+      items.sort((a,b) => {
+        const dy = b.y - a.y;
+        if(Math.abs(dy) > 3) return dy;
+        return a.x - b.x;
+      });
+      const lines = [];
+      let curY = null, curItems = [];
+      items.forEach(it => {
+        if(curY === null){ curY = it.y; curItems.push(it); }
+        else if(Math.abs(it.y - curY) <= 3){ curItems.push(it); }
+        else {
+          if(curItems.length) lines.push({ y: curY, items: [...curItems] });
+          curY = it.y;
+          curItems = [it];
+        }
+      });
+      if(curItems.length) lines.push({ y: curY, items: curItems });
+      pages.push({ pageIndex: i, lines });
+    }
+    return pages;
+  };
   async function _parsePDFToLines(file){
     if (typeof pdfjsLib === 'undefined') throw new Error('PDF.js no cargó. Recargar la app.');
     const arrayBuffer = await file.arrayBuffer();
@@ -27497,6 +27533,129 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     return modelos;
   }
 
+  /* v217: parser de PDF formato TRANSPUESTO */
+  function _agruparEnModelos(items){
+    if(items.length === 0) return [];
+    const gaps = [];
+    for(let i = 1; i < items.length; i++){
+      const prev = items[i-1];
+      const cur = items[i];
+      gaps.push(cur.x - (prev.x + (prev.w||5)));
+    }
+    const sortedGaps = [...gaps].sort((a,b) => a-b);
+    const p60 = sortedGaps[Math.floor(sortedGaps.length * 0.6)] || 5;
+    const threshold = Math.max(p60 * 1.8, 8);
+
+    const grupos = [];
+    let curGrupo = [items[0]];
+    let curEnd = items[0].x + (items[0].w||5);
+    for(let i = 1; i < items.length; i++){
+      const it = items[i];
+      const gap = it.x - curEnd;
+      if(gap < threshold){
+        curGrupo.push(it);
+      } else {
+        grupos.push(_finalizarGrupo(curGrupo));
+        curGrupo = [it];
+      }
+      curEnd = it.x + (it.w||5);
+    }
+    if(curGrupo.length) grupos.push(_finalizarGrupo(curGrupo));
+    return grupos;
+  }
+  function _finalizarGrupo(items){
+    const nombre = items.map(i => i.str).join(' ').replace(/\s+/g,' ').trim();
+    const xStart = items[0].x;
+    const xEnd = items[items.length-1].x + (items[items.length-1].w||5);
+    return { nombre, xStart, xEnd, xCenter: (xStart + xEnd) / 2 };
+  }
+
+  function detectarModelosTranspuesto(pages){
+    if(!pages || !pages.length) return [];
+    const modelosPorNombre = {};
+    let etapasDetectadas = 0;
+
+    for(const page of pages){
+      const lines = page.lines || [];
+      let headerIdx = -1;
+      let headerModelos = [];
+      for(let i = 0; i < lines.length; i++){
+        const items = lines[i].items;
+        if(!items.length) continue;
+        const first = (items[0].str || '').toUpperCase().trim();
+        if(first === 'ETAPA' || first === 'MODELOS'){
+          const rest = items.slice(1);
+          if(rest.length >= 2){
+            const grupos = _agruparEnModelos(rest);
+            const filtrados = grupos.filter(g =>
+              g.nombre.length >= 2 &&
+              !/^Q$/i.test(g.nombre) &&
+              !/^\d+$/.test(g.nombre)
+            );
+            if(filtrados.length >= 2){
+              headerIdx = i;
+              headerModelos = filtrados;
+              break;
+            }
+          }
+        }
+      }
+      if(headerIdx < 0 || !headerModelos.length) continue;
+
+      for(let i = headerIdx + 1; i < lines.length; i++){
+        const items = lines[i].items;
+        if(!items.length) continue;
+        const first = (items[0].str || '').trim();
+        const etapaM = first.match(/^([1-9])$/);
+        if(!etapaM) {
+          if(first.toUpperCase() === 'ETAPA' || first.toUpperCase() === 'MODELOS') break;
+          continue;
+        }
+        const etapaIdx = parseInt(etapaM[1]) - 1;
+        if(etapaIdx > etapasDetectadas) etapasDetectadas = etapaIdx;
+
+        const numerosConX = [];
+        for(let j = 1; j < items.length; j++){
+          const it = items[j];
+          const s = (it.str || '').trim();
+          if(!s || /^Q$/i.test(s)) continue;
+          const limpio = s.replace(/[Q\s,]/g, '');
+          const val = parseFloat(limpio);
+          if(isFinite(val) && val > 0){
+            numerosConX.push({ valor: val, x: it.x });
+          }
+        }
+
+        for(const n of numerosConX){
+          let mejor = null;
+          let mejorDist = Infinity;
+          for(const m of headerModelos){
+            const dist = Math.abs(n.x - m.xCenter);
+            if(dist < mejorDist){
+              mejorDist = dist;
+              mejor = m;
+            }
+          }
+          if(mejor){
+            const key = mejor.nombre.toUpperCase();
+            if(!modelosPorNombre[key]) modelosPorNombre[key] = { nombre: key, costos: [] };
+            while(modelosPorNombre[key].costos.length <= etapaIdx) modelosPorNombre[key].costos.push(0);
+            if(modelosPorNombre[key].costos[etapaIdx] === 0 || n.valor > modelosPorNombre[key].costos[etapaIdx]){
+              modelosPorNombre[key].costos[etapaIdx] = n.valor;
+            }
+          }
+        }
+      }
+    }
+
+    const maxEtapas = etapasDetectadas + 1;
+    const modelos = Object.values(modelosPorNombre).map(m => {
+      while(m.costos.length < maxEtapas) m.costos.push(0);
+      return m;
+    });
+    return modelos.filter(m => m.costos.some(c => c > 0));
+  }
+
   window.importarModelosDesdePDF = async function(event){
     if(typeof can === 'function' && !can('users.manage')){
       showT('SOLO EL ADMINISTRADOR PUEDE IMPORTAR','red');
@@ -27520,12 +27679,26 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       showT('PDF VACÍO O ILEGIBLE','red');
       event.target.value = ''; return;
     }
-    const modelos = detectarModelos(lines);
+    // v217: probar primero el parser SIMPLE (1 modelo por fila).
+    let modelos = detectarModelos(lines);
+    let formatoUsado = 'simple (1 modelo por fila)';
+    if(modelos.length === 0){
+      console.log('[Modelos PDF] Parser simple detecto 0 modelos. Probando formato transpuesto con coordenadas X...');
+      try {
+        const pages = await window._parsePDFToItemsByLine(file);
+        modelos = detectarModelosTranspuesto(pages);
+        formatoUsado = 'transpuesto (etapas en filas, modelos en columnas)';
+        console.log('[Modelos PDF] Formato transpuesto detecto:', modelos.length, 'modelos');
+      } catch(e){
+        console.error('[Modelos PDF] Error en parser transpuesto:', e);
+      }
+    }
     if(modelos.length === 0){
       showT('NO SE DETECTARON MODELOS · VER CONSOLA PARA DEBUG','red');
       console.warn('Líneas del PDF (no detectado ningún modelo):', lines);
       event.target.value = ''; return;
     }
+    console.log('[Modelos PDF] Formato usado:', formatoUsado, '· Modelos:', modelos.length);
     const maxEtapas = Math.max(...modelos.map(m => m.costos.length));
     const preview = modelos.slice(0, 6).map(m => `• ${m.nombre}: [${m.costos.map(n=>n.toFixed(2)).join(', ')}]`).join('\n');
     const masTexto = modelos.length > 6 ? `\n... y ${modelos.length - 6} más` : '';
