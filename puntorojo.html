@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v218</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v219</span>
   </footer>
 
 </div>
@@ -26921,7 +26921,7 @@ window.addEventListener('load', () => {
     </div>`;
 
     html += `<div class="card"><div class="card-hd"><h3>MODELOS DE APTO Y COSTOS POR ETAPA</h3><div class="planilla-receta-actions"><button class="btn ghost sm" ${canEdit?'':'disabled'} onclick="document.getElementById('pdfImportModelosFile').click()" title="Importar modelos y costos desde un PDF">IMPORTAR PDF</button><button class="btn sm" ${canEdit?'':'disabled'} onclick="addPlanillaModelo()">NUEVO MODELO</button></div></div>${adminLockMsg}<p class="receta-intro">CADA APARTAMENTO TIENE UN MODELO ASIGNADO. EL MODELO DEFINE EL COSTO DE CADA ETAPA. CADA ETAPA SE PUEDE PAGAR AL 30%, 50%, 70% O 100%. EL BOTÓN <strong>IMPORTAR PDF</strong> DETECTA AUTOMÁTICAMENTE NOMBRES DE MODELO Y SUS COSTOS POR ETAPA.</p><div class="tbl-wrap"><table class="planilla-model-table"><thead><tr><th>MODELO</th>${ETAPAS_PROJ.map((e,i)=>`<th>ET. ${i+1}<br>${h(e.name)}</th>`).join('')}</tr></thead><tbody>${modelos.map(m=>`<tr><td><input style="width:100%;text-align:left;font-family:inherit" value="${h(m.nombre)}" ${canEdit?'':'disabled'} onchange="updatePlanillaModeloNombre('${h(m.key)}',this.value)"></td>${ETAPAS_PROJ.map((e,i)=>`<td><input type="number" step="0.01" value="${Number(m.costos?.[i]||0)}" ${canEdit?'':'disabled'} onchange="updatePlanillaModeloCosto('${h(m.key)}',${i},this.value)"></td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`;
-    html += `<div class="card"><div class="card-hd"><h3>ASIGNACIÓN DE MODELO POR APTO / ÁREA</h3><button class="btn sm" ${canEdit?'':'disabled'} onclick="autoDetectarModelosAptos()" title="Detecta automaticamente el modelo de cada apto por nombre y nivel">DETECTAR AUTO</button></div>${adminLockMsg}<p class="receta-intro" style="padding:8px 14px">EL BOTÓN <strong>DETECTAR AUTO</strong> ASIGNA EL MODELO A CADA APTO USANDO REGLAS: COINCIDENCIA DEL NOMBRE, NÚMERO + NIVEL, O KEYWORDS (PASILLO, SALÓN, AZOTEA, CINE). LOS APTOS QUE NO TENGAN COINCIDENCIA QUEDAN PARA ASIGNAR MANUALMENTE.</p>`;
+    html += `<div class="card"><div class="card-hd"><h3>ASIGNACIÓN DE MODELO POR APTO / ÁREA</h3><button class="btn ghost sm" ${canEdit?'':'disabled'} onclick="document.getElementById('pdfImportAptosFile').click()" title="Importar asignacion apto -> modelo desde PDF (2 columnas: APARTAMENTO, MODELO)">IMPORTAR PDF</button></div>${adminLockMsg}<p class="receta-intro" style="padding:8px 14px">EL BOTÓN <strong>IMPORTAR PDF</strong> ASIGNA EL MODELO A CADA APARTAMENTO DESDE UN PDF DE DOS COLUMNAS (APARTAMENTO | MODELO). LOS QUE NO MATCHEEN QUEDAN PARA ASIGNAR MANUALMENTE CON EL DROPDOWN.</p>`;
     (p.towers||[]).forEach(t=>{ html += `<div class="receta-tower-head">${h(t.name)}</div>`; (t.levels||[]).forEach(l=>(l.aptos||[]).forEach(a=>{ const current=p.planilla.aptoModelMap?.[a.id] || defaultKeyForPlanilla(t,l,a); html += `<div class="planilla-assign-row"><div><div class="apt-name">${h(a.name)}</div><div class="apt-meta">${h(t.name)} · ${h(l.name)}</div></div><select ${canEdit?'':'disabled'} onchange="updateAptoModelo('${h(a.id)}',this.value)">${modelos.map(m=>`<option value="${h(m.key)}" ${m.key===current?'selected':''}>${h(m.nombre)}</option>`).join('')}</select></div>`; })); });
     html += `</div>`; const el=document.getElementById('planilla-receta'); if(el) el.innerHTML=html;
   };
@@ -27514,6 +27514,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 <!-- ═══════ v212: IMPORTADOR PDF — MODELOS+COSTOS Y COLABORADORES ═══════ -->
 <input type="file" id="pdfImportModelosFile" accept="application/pdf,.pdf" style="display:none" onchange="importarModelosDesdePDF(event)">
 <input type="file" id="pdfImportColabsFile" accept="application/pdf,.pdf" style="display:none" onchange="importarColaboradoresDesdePDF(event)">
+<input type="file" id="pdfImportAptosFile" accept="application/pdf,.pdf" style="display:none" onchange="importarAptosModeloDesdePDF(event)">
 <script>
 (function(){
   function showT(msg, type){ if(typeof showToast === 'function') showToast(msg, type||''); else alert(msg); }
@@ -28143,71 +28144,219 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     return null;
   }
 
+  /* v219: la funcion autoDetectarModelosAptos fue ELIMINADA. Quedaria como
+     fallback inactivo aqui por si alguien la invoca desde codigo legacy. */
   window.autoDetectarModelosAptos = function(){
-    if(typeof can === 'function' && !can('users.manage')){
-      showT('SOLO EL ADMINISTRADOR','red'); return;
+    showT('FUNCION REEMPLAZADA POR IMPORTAR PDF', 'red');
+    console.warn('[v219] autoDetectarModelosAptos fue reemplazada por importarAptosModeloDesdePDF');
+  };
+
+  // Normaliza string para comparacion: uppercase, sin tildes, sin caracteres especiales
+  function _normalizaParaMatch(s){
+    return String(s||'').toUpperCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g,'')
+      .replace(/[^A-Z0-9\s]/g,' ')
+      .replace(/\s+/g,' ').trim();
+  }
+
+  // Busca un apto del proyecto que coincida con el texto del PDF.
+  function _buscarAptoEnProyecto(textoPdf, aptosProyecto){
+    const tnorm = _normalizaParaMatch(textoPdf);
+    if(!tnorm) return null;
+
+    const torreMatch = tnorm.match(/\bTORRE\s+(\d+)\b/);
+    const torreFiltro = torreMatch ? torreMatch[1] : null;
+    let candidatos = aptosProyecto;
+    if(torreFiltro){
+      const filtrados = aptosProyecto.filter(a =>
+        a.torreNorm.includes('TORRE ' + torreFiltro) ||
+        a.torreNorm.endsWith(' ' + torreFiltro) ||
+        a.torreNorm === 'T' + torreFiltro
+      );
+      if(filtrados.length > 0) candidatos = filtrados;
     }
+
+    // 1. Match exacto del nombre del apto
+    for(const c of candidatos){
+      if(c.nombreNorm === tnorm) return c;
+    }
+    // 2. tnorm CONTIENE el nombre del apto
+    for(const c of candidatos){
+      if(c.nombreNorm.length >= 3 && tnorm.endsWith(c.nombreNorm)) return c;
+    }
+    // 3. Match por numero al final
+    const numMatch = tnorm.match(/(\d{2,5})\s*$/);
+    if(numMatch){
+      const numero = numMatch[1];
+      for(const c of candidatos){
+        if(c.nombreNorm.endsWith(' ' + numero) ||
+           c.nombreNorm === numero ||
+           c.nombreNorm.match(new RegExp('\\b' + numero + '$'))){
+          return c;
+        }
+      }
+    }
+    // 4. Match por keyword (PASILLO, SALON, AZOTEA, CINE) + nivel
+    const keywords = ['PASILLO', 'SALON', 'AZOTEA', 'CINE'];
+    for(const kw of keywords){
+      if(tnorm.includes(kw)){
+        for(const c of candidatos){
+          if(c.nombreNorm.includes(kw)){
+            const nivelMatch = tnorm.match(/\bN(\d+)\b/);
+            if(nivelMatch){
+              if(c.nombreNorm.match(new RegExp('\\bN' + nivelMatch[1] + '\\b'))) return c;
+              if(c.nivelNorm.includes(nivelMatch[1])) return c;
+            } else {
+              return c;
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /* v219: importador PDF de asignacion APARTAMENTO -> MODELO. Formato:
+       APARTAMENTO          MODELO
+       APARTAMENTO 101      T3 - 101
+       APARTAMENTO 102      T3 - 102
+     Cada linea debe terminar con el nombre exacto de un modelo cargado en
+     p.planilla.modelos. Lo que esta al inicio se busca contra los aptos del
+     proyecto (por nombre, contiene, numero, keyword). */
+  window.importarAptosModeloDesdePDF = async function(event){
+    if(typeof can === 'function' && !can('users.manage')){
+      showT('SOLO EL ADMINISTRADOR','red');
+      event.target.value = ''; return;
+    }
+    const file = event.target.files && event.target.files[0];
+    if(!file){ event.target.value = ''; return; }
+    if(!file.name.toLowerCase().endsWith('.pdf')){
+      showT('SELECCIONÁ UN ARCHIVO PDF','red');
+      event.target.value = ''; return;
+    }
+
     const S = (typeof state !== 'undefined' && state) ? state : window.state;
-    if(!S){ showT('ERROR: STATE','red'); return; }
+    if(!S){ showT('ERROR: STATE','red'); event.target.value = ''; return; }
     const p = (typeof activeProj === 'function') ? activeProj() : null;
-    if(!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    if(!p){ showT('SIN PROYECTO ACTIVO','red'); event.target.value = ''; return; }
     const modelos = (p.planilla?.modelos||[]);
     if(modelos.length === 0){
-      showT('PRIMERO CARGAR LOS MODELOS Y SUS COSTOS','red'); return;
+      showT('PRIMERO CARGAR LOS MODELOS Y SUS COSTOS','red');
+      event.target.value = ''; return;
     }
+
+    const aptosProyecto = [];
+    (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
+      aptosProyecto.push({
+        apto: a, torre: t, nivel: l,
+        nombreNorm: _normalizaParaMatch(a.name),
+        torreNorm: _normalizaParaMatch(t.name),
+        nivelNorm: _normalizaParaMatch(l.name)
+      });
+    })));
+    if(aptosProyecto.length === 0){
+      showT('EL PROYECTO NO TIENE APARTAMENTOS','red');
+      event.target.value = ''; return;
+    }
+
+    showT('LEYENDO PDF...');
+    let lines;
+    try { lines = await leerPDF(file); }
+    catch(e){
+      console.error('[Aptos PDF]', e);
+      showT('NO SE PUDO LEER EL PDF: ' + (e.message||''),'red');
+      event.target.value = ''; return;
+    }
+    if(!lines || lines.length === 0){
+      showT('PDF VACÍO O ILEGIBLE','red');
+      event.target.value = ''; return;
+    }
+
+    console.log('[v219 Aptos PDF] Lineas extraidas:', lines.length);
 
     const detecciones = [];
-    const sinMatch = [];
-    (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
-      const r = _detectarModeloParaApto(a.name, l.name, modelos);
-      if(r){
-        detecciones.push({ apto: a, torre: t.name, nivel: l.name, modelo: r.modelo, razon: r.razon });
-      } else {
-        sinMatch.push({ apto: a, torre: t.name, nivel: l.name });
-      }
-    })));
+    const aptosSinMatch = [];
+    const lineasIgnoradas = [];
+    const modelosOrdenados = [...modelos].sort((a,b) => (b.nombre||'').length - (a.nombre||'').length);
 
-    if(detecciones.length === 0){
-      showT('NO SE DETECTÓ NINGÚN MATCH','red');
-      console.warn('Sin matches. Aptos:', sinMatch);
-      return;
+    for(const lineRaw of lines){
+      const line = lineRaw.trim().replace(/\s+/g,' ');
+      if(!line || line.length < 4) continue;
+      if(/^(APARTAMENTO\s+MODELO|APTO\s+MODELO|UNIDAD\s+MODELO|NOMBRE\s+TIPO)$/i.test(line)) continue;
+      if(/^(APARTAMENTO|APTO|UNIDAD|NOMBRE)$/i.test(line)) continue;
+
+      let modeloMatch = null;
+      let textoAptoRaw = null;
+      const lineU = line.toUpperCase();
+      for(const m of modelosOrdenados){
+        const modNombreU = (m.nombre||'').toUpperCase().trim();
+        if(!modNombreU) continue;
+        if(lineU === modNombreU){ modeloMatch = m; textoAptoRaw = ''; break; }
+        if(lineU.endsWith(' ' + modNombreU)){
+          modeloMatch = m;
+          textoAptoRaw = line.substring(0, line.length - modNombreU.length).trim();
+          break;
+        }
+      }
+
+      if(!modeloMatch){ lineasIgnoradas.push(line); continue; }
+      if(!textoAptoRaw){ lineasIgnoradas.push(line); continue; }
+
+      const aptoMatch = _buscarAptoEnProyecto(textoAptoRaw, aptosProyecto);
+      if(aptoMatch){
+        detecciones.push({ apto: aptoMatch.apto, torre: aptoMatch.torre, nivel: aptoMatch.nivel, modelo: modeloMatch });
+      } else {
+        aptosSinMatch.push({ texto: textoAptoRaw, modelo: modeloMatch.nombre });
+      }
     }
 
-    // Preview agrupado por modelo
+    console.log('[v219 Aptos PDF] Detecciones:', detecciones.length,
+      '· Sin match apto:', aptosSinMatch.length, '· Lineas ignoradas:', lineasIgnoradas.length);
+    if(lineasIgnoradas.length > 0){
+      console.log('[v219 Aptos PDF] Primeras lineas ignoradas:', lineasIgnoradas.slice(0,8));
+    }
+    if(aptosSinMatch.length > 0){
+      console.log('[v219 Aptos PDF] Primeros aptos sin match:', aptosSinMatch.slice(0,8));
+    }
+
+    if(detecciones.length === 0){
+      showT('NO SE DETECTÓ NINGUNA ASIGNACIÓN · VER CONSOLA','red');
+      event.target.value = ''; return;
+    }
+
     const porModelo = {};
     detecciones.forEach(d => {
       const k = d.modelo.nombre;
       if(!porModelo[k]) porModelo[k] = [];
       porModelo[k].push(d.apto.name);
     });
-    const lineas = Object.entries(porModelo).slice(0, 10).map(([mod, aptos]) =>
-      `• ${mod}: ${aptos.length} apto${aptos.length!==1?'s':''} (${aptos.slice(0,3).join(', ')}${aptos.length>3?'...':''})`
+    const lineasPv = Object.entries(porModelo).slice(0, 8).map(([mod, aptos]) =>
+      `• ${mod}: ${aptos.length} apto${aptos.length!==1?'s':''} (${aptos.slice(0,2).join(', ')}${aptos.length>2?'...':''})`
     );
-    const masMod = Object.keys(porModelo).length > 10 ? `\n... y ${Object.keys(porModelo).length - 10} modelos más` : '';
-    const sinMatchTxt = sinMatch.length > 0
-      ? `\n\n${sinMatch.length} APTOS SIN MATCH (quedan en blanco):\n${sinMatch.slice(0,5).map(s => `• ${s.torre} · ${s.nivel} · ${s.apto.name}`).join('\n')}${sinMatch.length>5 ? `\n... y ${sinMatch.length-5} más` : ''}`
+    const masMod = Object.keys(porModelo).length > 8 ? `\n... y ${Object.keys(porModelo).length - 8} modelos más` : '';
+    const sinMatchTxt = aptosSinMatch.length > 0
+      ? `\n\n${aptosSinMatch.length} APTOS DEL PDF SIN MATCH EN EL PROYECTO:\n${aptosSinMatch.slice(0,5).map(s => `• ${s.texto} → ${s.modelo}`).join('\n')}${aptosSinMatch.length>5 ? `\n... y ${aptosSinMatch.length-5} más` : ''}`
       : '';
 
     const ok = confirm(
-      `DETECCIÓN AUTOMÁTICA DE MODELOS\n\n` +
+      `IMPORTAR ASIGNACIÓN APTO → MODELO\n\n` +
       `${detecciones.length} APTOS ASIGNADOS A ${Object.keys(porModelo).length} MODELOS:\n\n` +
-      `${lineas.join('\n')}${masMod}` +
+      `${lineasPv.join('\n')}${masMod}` +
       `${sinMatchTxt}\n\n` +
-      `Esto REEMPLAZA las asignaciones actuales con las detectadas.\n¿Aplicar?`
+      `Esto REEMPLAZA las asignaciones actuales de cada apto detectado.\n¿Aplicar?`
     );
-    if(!ok) return;
+    if(!ok){ event.target.value = ''; return; }
 
     if(!p.planilla.aptoModelMap) p.planilla.aptoModelMap = {};
     detecciones.forEach(d => {
       p.planilla.aptoModelMap[d.apto.id] = d.modelo.key;
     });
 
-    try { saveState(); } catch(e){ console.error('[v216] saveState error:', e); }
-    try {
-      if(typeof renderPlanilla === 'function') renderPlanilla();
-    } catch(e){ console.error('[v216] render error:', e); }
+    try { saveState(); } catch(e){ console.error('[v219] saveState error:', e); }
+    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){ console.error('[v219] render error:', e); }
 
-    showT(`ASIGNADOS ${detecciones.length} APTOS · ${sinMatch.length} SIN MATCH`, 'green');
+    showT(`ASIGNADOS ${detecciones.length} APTOS` + (aptosSinMatch.length>0 ? ` · ${aptosSinMatch.length} SIN MATCH` : ''), 'green');
+    event.target.value = '';
   };
 })();
 </script>
