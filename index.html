@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v217</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v218</span>
   </footer>
 
 </div>
@@ -27574,6 +27574,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(!pages || !pages.length) return [];
     const modelosPorNombre = {};
     let etapasDetectadas = 0;
+    let descartados = 0;
 
     for(const page of pages){
       const lines = page.lines || [];
@@ -27601,6 +27602,24 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         }
       }
       if(headerIdx < 0 || !headerModelos.length) continue;
+
+      // v218: pre-registrar todos los modelos del header (aunque no tengan costos)
+      headerModelos.forEach(m => {
+        const key = m.nombre.toUpperCase();
+        if(!modelosPorNombre[key]) modelosPorNombre[key] = { nombre: key, costos: [] };
+      });
+
+      // v218: distancia maxima permitida (60% del ancho mediano de columna)
+      let distanciaMax = 40;
+      if(headerModelos.length >= 2){
+        const anchos = [];
+        for(let i = 1; i < headerModelos.length; i++){
+          anchos.push(headerModelos[i].xCenter - headerModelos[i-1].xCenter);
+        }
+        anchos.sort((a,b) => a-b);
+        const median = anchos[Math.floor(anchos.length / 2)];
+        distanciaMax = median * 0.6;
+      }
 
       for(let i = headerIdx + 1; i < lines.length; i++){
         const items = lines[i].items;
@@ -27630,22 +27649,33 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           let mejor = null;
           let mejorDist = Infinity;
           for(const m of headerModelos){
-            const dist = Math.abs(n.x - m.xCenter);
+            let dist;
+            if(n.x >= m.xStart && n.x <= m.xEnd) dist = 0;
+            else if(n.x < m.xStart) dist = m.xStart - n.x;
+            else dist = n.x - m.xEnd;
             if(dist < mejorDist){
               mejorDist = dist;
               mejor = m;
             }
           }
-          if(mejor){
+          if(mejor && mejorDist <= distanciaMax){
             const key = mejor.nombre.toUpperCase();
-            if(!modelosPorNombre[key]) modelosPorNombre[key] = { nombre: key, costos: [] };
             while(modelosPorNombre[key].costos.length <= etapaIdx) modelosPorNombre[key].costos.push(0);
             if(modelosPorNombre[key].costos[etapaIdx] === 0 || n.valor > modelosPorNombre[key].costos[etapaIdx]){
               modelosPorNombre[key].costos[etapaIdx] = n.valor;
             }
+          } else {
+            descartados++;
+            console.log('[v218 Modelos PDF] Costo descartado:', n.valor, 'X:', n.x.toFixed(1),
+              '· modelo mas cercano:', mejor ? mejor.nombre : 'ninguno',
+              '· dist:', mejorDist.toFixed(1), '> max:', distanciaMax.toFixed(1));
           }
         }
       }
+    }
+
+    if(descartados > 0){
+      console.warn('[v218 Modelos PDF] Total costos descartados por distancia:', descartados);
     }
 
     const maxEtapas = etapasDetectadas + 1;
@@ -27653,7 +27683,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       while(m.costos.length < maxEtapas) m.costos.push(0);
       return m;
     });
-    return modelos.filter(m => m.costos.some(c => c > 0));
+    return modelos;
   }
 
   window.importarModelosDesdePDF = async function(event){

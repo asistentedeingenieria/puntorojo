@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v217</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v218</span>
   </footer>
 
 </div>
@@ -27600,12 +27600,12 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(!pages || !pages.length) return [];
     const modelosPorNombre = {};
     let etapasDetectadas = 0;
+    let descartados = 0;
 
     for(const page of pages){
       const lines = page.lines || [];
       let headerIdx = -1;
       let headerModelos = [];
-      // Buscar header: "ETAPA" o "MODELOS" como primer item
       for(let i = 0; i < lines.length; i++){
         const items = lines[i].items;
         if(!items.length) continue;
@@ -27614,7 +27614,6 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           const rest = items.slice(1);
           if(rest.length >= 2){
             const grupos = _agruparEnModelos(rest);
-            // Filtrar grupos que sean obviamente no-modelos (numeros sueltos, simbolos)
             const filtrados = grupos.filter(g =>
               g.nombre.length >= 2 &&
               !/^Q$/i.test(g.nombre) &&
@@ -27630,21 +27629,38 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       }
       if(headerIdx < 0 || !headerModelos.length) continue;
 
-      // Procesar filas de etapa
+      // v218: PRE-REGISTRAR todos los modelos del header (aunque no tengan costos).
+      // Asi el usuario ve TODOS los modelos del PDF, incluyendo los que tienen
+      // celdas vacias (pendientes de llenar despues).
+      headerModelos.forEach(m => {
+        const key = m.nombre.toUpperCase();
+        if(!modelosPorNombre[key]) modelosPorNombre[key] = { nombre: key, costos: [] };
+      });
+
+      // v218: calcular distancia maxima permitida (60% del ancho de columna)
+      let distanciaMax = 40;
+      if(headerModelos.length >= 2){
+        const anchos = [];
+        for(let i = 1; i < headerModelos.length; i++){
+          anchos.push(headerModelos[i].xCenter - headerModelos[i-1].xCenter);
+        }
+        anchos.sort((a,b) => a-b);
+        const median = anchos[Math.floor(anchos.length / 2)];
+        distanciaMax = median * 0.6;
+      }
+
       for(let i = headerIdx + 1; i < lines.length; i++){
         const items = lines[i].items;
         if(!items.length) continue;
         const first = (items[0].str || '').trim();
         const etapaM = first.match(/^([1-9])$/);
         if(!etapaM) {
-          // Si encontramos otro "ETAPA" o "MODELOS", romper esta seccion
           if(first.toUpperCase() === 'ETAPA' || first.toUpperCase() === 'MODELOS') break;
           continue;
         }
         const etapaIdx = parseInt(etapaM[1]) - 1;
         if(etapaIdx > etapasDetectadas) etapasDetectadas = etapaIdx;
 
-        // Extraer numeros con sus X (ignorar "Q" individual)
         const numerosConX = [];
         for(let j = 1; j < items.length; j++){
           const it = items[j];
@@ -27657,39 +27673,54 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           }
         }
 
-        // Asignar cada numero al modelo cuyo xCenter este mas cerca
+        // v218: asignar cada numero al modelo cuyo X este DENTRO o cerca del rango
+        // del modelo. Si la distancia al borde mas cercano supera distanciaMax,
+        // descartar (probablemente el costo pertenece a una columna entre
+        // dos modelos que no logramos parsear, mejor 0 que valor incorrecto).
         for(const n of numerosConX){
           let mejor = null;
           let mejorDist = Infinity;
           for(const m of headerModelos){
-            const dist = Math.abs(n.x - m.xCenter);
+            let dist;
+            if(n.x >= m.xStart && n.x <= m.xEnd) dist = 0;
+            else if(n.x < m.xStart) dist = m.xStart - n.x;
+            else dist = n.x - m.xEnd;
             if(dist < mejorDist){
               mejorDist = dist;
               mejor = m;
             }
           }
-          if(mejor){
+          if(mejor && mejorDist <= distanciaMax){
             const key = mejor.nombre.toUpperCase();
-            if(!modelosPorNombre[key]) modelosPorNombre[key] = { nombre: key, costos: [] };
-            // Expandir array si etapaIdx es mas grande
+            // Ya pre-registrado arriba, expandir si hace falta
             while(modelosPorNombre[key].costos.length <= etapaIdx) modelosPorNombre[key].costos.push(0);
-            // Si ya hay un valor en esa etapa, mantener el mayor (puede ser duplicado por torre 3 y 4)
             if(modelosPorNombre[key].costos[etapaIdx] === 0 || n.valor > modelosPorNombre[key].costos[etapaIdx]){
               modelosPorNombre[key].costos[etapaIdx] = n.valor;
             }
+          } else {
+            descartados++;
+            console.log('[v218 Modelos PDF] Costo descartado:', n.valor, 'X:', n.x.toFixed(1),
+              '· modelo mas cercano:', mejor ? mejor.nombre : 'ninguno',
+              '· dist:', mejorDist.toFixed(1), '> max:', distanciaMax.toFixed(1));
           }
         }
       }
     }
 
-    // Normalizar todos los arrays al maximo de etapas detectado
+    if(descartados > 0){
+      console.warn('[v218 Modelos PDF] Total costos descartados por distancia:', descartados);
+    }
+
+    // Normalizar arrays de costos al maximo de etapas + rellenar con 0 los vacios
     const maxEtapas = etapasDetectadas + 1;
     const modelos = Object.values(modelosPorNombre).map(m => {
       while(m.costos.length < maxEtapas) m.costos.push(0);
       return m;
     });
-    // Filtrar modelos sin ningun costo
-    return modelos.filter(m => m.costos.some(c => c > 0));
+    // v218: NO filtramos modelos sin costos. Si un modelo aparece en el header
+    // del PDF, queremos crearlo en la app aunque sus 5 costos esten en 0
+    // (el admin los llenara despues manualmente).
+    return modelos;
   }
 
   window.importarModelosDesdePDF = async function(event){
