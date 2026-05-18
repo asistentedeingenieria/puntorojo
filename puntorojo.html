@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v212</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v213</span>
   </footer>
 
 </div>
@@ -27677,6 +27677,156 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(typeof renderPlanilla === 'function') renderPlanilla();
     showT(`IMPORTADOS · ${agregados} NUEVOS · ${omitidos} YA EXISTÍAN`,'green');
     event.target.value = '';
+  };
+
+  /* ═══════ v213: SOBREESCRITURA SIMPLE Y ROBUSTA DE CRUD COLABORADORES ═══════
+     Las versiones de v210 dependian de helpers y sincronizacion compleja que
+     fallaban silenciosamente. Esta version es plana, con logs en consola, y
+     usa el flag _v213_force_resync_colabs en cada CRUD para forzar repush a
+     todos los proyectos. */
+  function _v213_pushColab(nuevo){
+    if(!window.state || !Array.isArray(window.state.projects)){
+      console.error('[v213] state.projects no es array');
+      return 0;
+    }
+    let count = 0;
+    window.state.projects.forEach(p => {
+      if(!p.planilla) p.planilla = {pagos:[],retencionesPagadas:[],ajustes:[],modelos:[],aptoModelMap:{},colaboradores:[],etapas:[]};
+      if(!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores = [];
+      // Si ya existe por nombre, no duplicar en este proyecto
+      const yaExiste = p.planilla.colaboradores.some(c => (c.nombre||'').trim().toUpperCase() === nuevo.nombre);
+      if(!yaExiste){ p.planilla.colaboradores.push({...nuevo}); count++; }
+    });
+    if(!Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal = [];
+    const yaGlobal = window.state.colaboradoresGlobal.some(c => (c.nombre||'').trim().toUpperCase() === nuevo.nombre);
+    if(!yaGlobal) window.state.colaboradoresGlobal.push({...nuevo});
+    return count;
+  }
+
+  window.addPlanillaColaborador = function(){
+    if(typeof can === 'function' && !can('users.manage')){
+      showT('SOLO EL ADMINISTRADOR PUEDE AGREGAR COLABORADORES','red');
+      return;
+    }
+    const inputNombre = document.getElementById('newColabNombre');
+    const inputRol = document.getElementById('newColabRol');
+    const nombre = (inputNombre?.value || '').trim().toUpperCase();
+    const rol = (inputRol?.value || 'INSTALADOR').trim().toUpperCase();
+
+    console.log('[v213 ADD] Nombre="' + nombre + '" Rol="' + rol + '"');
+
+    if(!nombre){ showT('ESCRIBIR EL NOMBRE','red'); return; }
+    if(rol !== 'INSTALADOR' && rol !== 'MASILLERO'){
+      showT('ELEGIR INSTALADOR O MASILLERO','red'); return;
+    }
+    if(!window.state){ showT('ERROR: STATE NO LISTO','red'); return; }
+    if(!Array.isArray(window.state.projects) || window.state.projects.length === 0){
+      showT('ERROR: NO HAY PROYECTOS','red'); return;
+    }
+
+    // Check duplicate en cualquier proyecto
+    const yaExiste = window.state.projects.some(p =>
+      (p.planilla?.colaboradores||[]).some(c => (c.nombre||'').trim().toUpperCase() === nombre)
+    );
+    if(yaExiste){ showT('YA EXISTE EN EL LISTADO','red'); return; }
+
+    const nuevo = {
+      id: 'col-' + (typeof uid==='function' ? uid() : Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
+      nombre: nombre,
+      rol: rol
+    };
+    console.log('[v213 ADD] Nuevo objeto:', nuevo);
+
+    const count = _v213_pushColab(nuevo);
+    console.log('[v213 ADD] Pushed a', count, 'proyectos');
+
+    window.planillaSelectedColaborador = nuevo.id;
+    if(inputNombre) inputNombre.value = '';
+
+    try { saveState(); console.log('[v213 ADD] saveState OK'); }
+    catch(e){ console.error('[v213 ADD] saveState error:', e); showT('ERROR AL GUARDAR','red'); return; }
+
+    try {
+      if(typeof renderPlanillaColaboradores === 'function') renderPlanillaColaboradores();
+      else if(typeof renderPlanilla === 'function') renderPlanilla();
+      console.log('[v213 ADD] render OK');
+    } catch(e){ console.error('[v213 ADD] render error:', e); }
+
+    showT('AGREGADO: ' + nombre + ' (' + rol + ')','green');
+  };
+
+  window.deletePlanillaColaborador = function(id){
+    if(typeof can === 'function' && !can('users.manage')){
+      showT('SOLO EL ADMINISTRADOR','red'); return;
+    }
+    console.log('[v213 DELETE] id=', id);
+    if(!window.state?.projects){ showT('ERROR','red'); return; }
+    let nombreU = '';
+    for(const pr of window.state.projects){
+      const c = (pr.planilla?.colaboradores||[]).find(x => x.id === id);
+      if(c){ nombreU = (c.nombre||'').trim().toUpperCase(); break; }
+    }
+    console.log('[v213 DELETE] Nombre encontrado:', nombreU);
+    // Bloquear si tiene pagos en cualquier proyecto
+    let usado = false;
+    window.state.projects.forEach(pr => {
+      (pr.planilla?.pagos||[]).forEach(pg => {
+        if(pg.colaboradorId === id || (nombreU && (pg.colaborador||'').toUpperCase() === nombreU)) usado = true;
+      });
+    });
+    if(usado){ showT('NO SE PUEDE: YA TIENE PAGOS EN ALGÚN PROYECTO','red'); return; }
+    // Eliminar de TODOS los proyectos
+    window.state.projects.forEach(p => {
+      if(!Array.isArray(p.planilla?.colaboradores)) return;
+      p.planilla.colaboradores = p.planilla.colaboradores.filter(c => c.id !== id && (c.nombre||'').trim().toUpperCase() !== nombreU);
+    });
+    if(Array.isArray(window.state.colaboradoresGlobal)){
+      window.state.colaboradoresGlobal = window.state.colaboradoresGlobal.filter(c => c.id !== id && (c.nombre||'').trim().toUpperCase() !== nombreU);
+    }
+    if(window.planillaSelectedColaborador === id) window.planillaSelectedColaborador = '';
+    try { saveState(); } catch(e){ console.error('[v213 DEL] saveState error:', e); }
+    try {
+      if(typeof renderPlanillaColaboradores === 'function') renderPlanillaColaboradores();
+      else if(typeof renderPlanilla === 'function') renderPlanilla();
+    } catch(e){ console.error('[v213 DEL] render error:', e); }
+    showT('COLABORADOR ELIMINADO','green');
+  };
+
+  window.updatePlanillaColaboradorRol = function(id, rol){
+    if(typeof can === 'function' && !can('users.manage')){
+      showT('SOLO EL ADMINISTRADOR','red'); return;
+    }
+    const nuevoRol = (rol||'').toUpperCase();
+    if(nuevoRol !== 'INSTALADOR' && nuevoRol !== 'MASILLERO' && nuevoRol !== 'SIN DEFINIR'){
+      console.warn('[v213 UPD-ROL] Rol invalido:', rol);
+      return;
+    }
+    console.log('[v213 UPD-ROL] id=', id, 'rol=', nuevoRol);
+    if(!window.state?.projects) return;
+    let nombreU = '';
+    for(const pr of window.state.projects){
+      const c = (pr.planilla?.colaboradores||[]).find(x => x.id === id);
+      if(c){ nombreU = (c.nombre||'').trim().toUpperCase(); break; }
+    }
+    window.state.projects.forEach(p => {
+      if(!Array.isArray(p.planilla?.colaboradores)) return;
+      p.planilla.colaboradores.forEach(c => {
+        if(c.id === id || (nombreU && (c.nombre||'').trim().toUpperCase() === nombreU)){
+          c.rol = nuevoRol;
+        }
+      });
+    });
+    if(Array.isArray(window.state.colaboradoresGlobal)){
+      window.state.colaboradoresGlobal.forEach(c => {
+        if(c.id === id || (nombreU && (c.nombre||'').trim().toUpperCase() === nombreU)) c.rol = nuevoRol;
+      });
+    }
+    try { saveState(); } catch(e){ console.error('[v213 UPD-ROL] saveState error:', e); }
+    try {
+      if(typeof renderPlanillaColaboradores === 'function') renderPlanillaColaboradores();
+      else if(typeof renderPlanilla === 'function') renderPlanilla();
+    } catch(e){ console.error('[v213 UPD-ROL] render error:', e); }
+    showT('TIPO ACTUALIZADO','green');
   };
 })();
 </script>
