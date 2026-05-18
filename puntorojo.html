@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v207</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v208</span>
   </footer>
 
 </div>
@@ -25744,17 +25744,23 @@ window.addEventListener('load', () => {
   window.addPlanillaColaborador=function(){ if(!can('planilla.generate')&&!can('users.manage')) return showToast('SIN PERMISO','red'); const p=activeProj(); const nombre=upper(document.getElementById('newColabNombre')?.value||''); const rol=upper(document.getElementById('newColabRol')?.value||'PERSONAL'); if(!nombre) return showToast('ESCRIBIR EL NOMBRE','red'); if((p.planilla.colaboradores||[]).some(c=>upper(c.nombre)===nombre)) return showToast('YA EXISTE EN EL LISTADO','red'); p.planilla.colaboradores.push({id:'col-'+uid(),nombre,rol}); window.planillaSelectedColaborador=p.planilla.colaboradores[p.planilla.colaboradores.length-1].id; saveState(); renderPlanilla(); showToast('COLABORADOR AGREGADO','green'); };
   window.deletePlanillaColaborador=function(id){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE ELIMINAR COLABORADORES','red');
-    // v206: el listado es GLOBAL. Bloquear si hay pagos en CUALQUIER proyecto.
+    // v208: el listado es sincronizado. Bloquear si hay pagos en CUALQUIER proyecto.
     const list = (typeof window.getColabsPlanilla === 'function') ? window.getColabsPlanilla() : [];
     const c = list.find(x=>x.id===id);
-    const nombre = c ? c.nombre : '';
+    const nombre = c ? upper(c.nombre) : '';
     let used = false;
     (window.state?.projects||[]).forEach(pr => {
-      (pr.planilla?.pagos||[]).forEach(pg => { if(pg.colaboradorId===id || (nombre && upper(pg.colaborador)===upper(nombre))) used=true; });
+      (pr.planilla?.pagos||[]).forEach(pg => { if(pg.colaboradorId===id || (nombre && upper(pg.colaborador)===nombre)) used=true; });
     });
     if(used) return showToast('NO SE PUEDE ELIMINAR: YA TIENE PAGOS EN ALGÚN PROYECTO','red');
-    const idx = list.findIndex(x=>x.id===id);
-    if(idx>=0) list.splice(idx,1);
+    // Eliminar de TODOS los proyectos
+    (window.state?.projects||[]).forEach(p => {
+      if(!p.planilla?.colaboradores) return;
+      p.planilla.colaboradores = p.planilla.colaboradores.filter(c => c.id !== id && upper(c.nombre) !== nombre);
+    });
+    if(Array.isArray(window.state?.colaboradoresGlobal)){
+      window.state.colaboradoresGlobal = window.state.colaboradoresGlobal.filter(c => c.id !== id && upper(c.nombre) !== nombre);
+    }
     if(window.planillaSelectedColaborador===id) window.planillaSelectedColaborador='';
     saveState(); renderPlanilla(); showToast('COLABORADOR ELIMINADO');
   };
@@ -25896,10 +25902,25 @@ window.addEventListener('load', () => {
 
   window.updatePlanillaColaboradorRol = function(id, rol){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE CAMBIAR EL TIPO','red');
-    // v206: rol se guarda en el listado GLOBAL.
+    // v208: actualizar el rol en TODOS los proyectos (sincronizado).
+    const nuevoRol = normalizeRole(rol);
     const list = (typeof window.getColabsPlanilla === 'function') ? window.getColabsPlanilla() : [];
-    const c = list.find(x=>x.id===id); if(!c) return;
-    c.rol=normalizeRole(rol); saveState(); renderPlanilla(); showToast('TIPO ACTUALIZADO','green');
+    const ref = list.find(x=>x.id===id);
+    const nombre = ref ? upper(ref.nombre) : '';
+    (window.state?.projects||[]).forEach(p => {
+      if(!Array.isArray(p.planilla?.colaboradores)) return;
+      p.planilla.colaboradores.forEach(c => {
+        if(c.id === id || (nombre && upper(c.nombre) === nombre)){
+          c.rol = nuevoRol;
+        }
+      });
+    });
+    if(Array.isArray(window.state?.colaboradoresGlobal)){
+      window.state.colaboradoresGlobal.forEach(c => {
+        if(c.id === id || (nombre && upper(c.nombre) === nombre)) c.rol = nuevoRol;
+      });
+    }
+    saveState(); renderPlanilla(); showToast('TIPO ACTUALIZADO','green');
   };
 
   window.renderPlanillaColaboradores = function(){
@@ -25921,7 +25942,7 @@ window.addEventListener('load', () => {
 
   window.addPlanillaColaborador = function(){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE AGREGAR COLABORADORES','red');
-    // v206: agrega al listado GLOBAL.
+    // v208: agrega a TODOS los proyectos (sincronizado).
     const nombre=upper(document.getElementById('newColabNombre')?.value||''); const rol=normalizeRole(document.getElementById('newColabRol')?.value||'');
     if(!nombre) return showToast('ESCRIBIR EL NOMBRE','red');
     if(rol==='SIN DEFINIR') return showToast('ELEGIR INSTALADOR O MASILLERO','red');
@@ -25930,6 +25951,18 @@ window.addEventListener('load', () => {
     const nuevo = {id:'col-'+uid(),nombre,rol};
     list.push(nuevo);
     window.planillaSelectedColaborador = nuevo.id;
+    // Propagar a TODOS los proyectos
+    if(typeof _sincronizarColaboradoresEntreProyectos === 'function'){
+      try { _sincronizarColaboradoresEntreProyectos(); } catch(e){}
+    } else {
+      (window.state?.projects||[]).forEach(p => {
+        if(!p.planilla) p.planilla = {pagos:[],retencionesPagadas:[],ajustes:[],modelos:[],aptoModelMap:{},colaboradores:[],etapas:[]};
+        if(!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores = [];
+        if(!p.planilla.colaboradores.some(c => upper(c.nombre) === nombre)){
+          p.planilla.colaboradores.push({...nuevo});
+        }
+      });
+    }
     saveState(); renderPlanilla(); showToast('PERSONAL AGREGADO · DISPONIBLE EN TODOS LOS PROYECTOS','green');
   };
 
@@ -26400,39 +26433,62 @@ window.addEventListener('load', () => {
   function paidPct5(p,aid,idx){ const list=(p.planilla?.pagos||[]).filter(x=>x.tipo==='ETAPA' && x.aptoId===aid && Number(x.stageIdx)===Number(idx)); return list.length ? Math.max(...list.map(x=>Number(x.targetPct||100))) : 0; }
   function pctOptions5(current){ return PLANILLA_PCTS_5.filter(x=>x>current); }
   function nextPct5(current){ return pctOptions5(current)[0] || ''; }
-  // v206: COLABORADORES GLOBALES — listado compartido entre TODOS los proyectos.
-  function getColabsPlanilla(){
-    if(!window.state) return [];
-    if(!Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal = [];
-    return window.state.colaboradoresGlobal;
-  }
-  window.getColabsPlanilla = getColabsPlanilla;
-
-  // v206: MIGRACION ONE-SHOT — unir colaboradores existentes de TODOS los proyectos
-  // en state.colaboradoresGlobal (dedupe por nombre, preserva el ID del primero).
-  // ADITIVA: no borra los p.planilla.colaboradores de los proyectos (compat legacy).
-  function _migrarColaboradoresGlobal(){
-    if(!window.state) return;
-    if(!Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal = [];
-    // v207 fix: si el flag v206 esta seteado PERO el global esta vacio y hay
-    // colaboradores en algun proyecto (el caso del bug que reporto el admin),
-    // resetear el flag para forzar la re-migracion.
-    if(window.state._v206_colaboradoresGlobal && window.state.colaboradoresGlobal.length === 0){
-      const hayEnProyectos = (window.state.projects||[]).some(p => (p.planilla?.colaboradores||[]).length > 0);
-      if(hayEnProyectos){
-        window.state._v206_colaboradoresGlobal = false;
-      }
+  // v208: COLABORADORES SINCRONIZADOS — cada proyecto tiene su propia copia
+  // del mismo listado. saveState los persiste porque viven dentro de cada
+  // p.planilla.colaboradores. La sincronizacion garantiza que todos tengan
+  // los mismos nombres y roles.
+  function _sincronizarColaboradoresEntreProyectos(){
+    if(!window.state || !Array.isArray(window.state.projects)) return;
+    const merged = [];
+    // 1. Empezar con state.colaboradoresGlobal (legado de v206/v207)
+    if(Array.isArray(window.state.colaboradoresGlobal)){
+      window.state.colaboradoresGlobal.forEach(c => {
+        if(c && c.nombre && !merged.some(x => upper(x.nombre) === upper(c.nombre))){
+          merged.push({id: c.id || ('col-'+uid()), nombre: c.nombre, rol: c.rol || 'SIN DEFINIR'});
+        }
+      });
     }
-    if(window.state._v206_colaboradoresGlobal) return;  // ya hecho
-    (window.state.projects||[]).forEach(p => {
+    // 2. Sumar colaboradores de cada proyecto (dedupe por nombre, conserva ID del primero)
+    window.state.projects.forEach(p => {
       (p.planilla?.colaboradores||[]).forEach(c => {
-        if(c && c.nombre && !window.state.colaboradoresGlobal.some(x => upper(x.nombre) === upper(c.nombre))){
-          window.state.colaboradoresGlobal.push({id: c.id || ('col-'+uid()), nombre: c.nombre, rol: c.rol || 'SIN DEFINIR'});
+        if(c && c.nombre && !merged.some(x => upper(x.nombre) === upper(c.nombre))){
+          merged.push({id: c.id || ('col-'+uid()), nombre: c.nombre, rol: c.rol || 'SIN DEFINIR'});
         }
       });
     });
-    window.state._v206_colaboradoresGlobal = true;
+    // 3. Aplicar la lista unificada a TODOS los proyectos (clonando para evitar refs compartidas)
+    window.state.projects.forEach(p => {
+      if(!p.planilla) p.planilla = {pagos:[],retencionesPagadas:[],ajustes:[],modelos:[],aptoModelMap:{},colaboradores:[],etapas:[]};
+      p.planilla.colaboradores = merged.map(c => ({...c}));
+    });
+    // 4. Mantener state.colaboradoresGlobal como cache (no es source of truth)
+    window.state.colaboradoresGlobal = merged.map(c => ({...c}));
   }
+
+  // v208: getColabsPlanilla lee del proyecto activo (o cualquier proyecto que tenga
+  // datos). Como TODOS los proyectos tienen el mismo listado sincronizado, da igual.
+  function getColabsPlanilla(){
+    if(!window.state || !Array.isArray(window.state.projects)) return [];
+    const pa = (typeof activeProj === 'function') ? activeProj() : null;
+    if(pa?.planilla?.colaboradores) return pa.planilla.colaboradores;
+    // Fallback: tomar de cualquier proyecto que tenga colaboradores
+    for(const p of window.state.projects){
+      if(Array.isArray(p.planilla?.colaboradores) && p.planilla.colaboradores.length){
+        return p.planilla.colaboradores;
+      }
+    }
+    // Ultimo recurso: crear array vacio en el proyecto activo
+    if(pa){
+      if(!pa.planilla) pa.planilla = {pagos:[],retencionesPagadas:[],ajustes:[],modelos:[],aptoModelMap:{},colaboradores:[],etapas:[]};
+      if(!Array.isArray(pa.planilla.colaboradores)) pa.planilla.colaboradores = [];
+      return pa.planilla.colaboradores;
+    }
+    return [];
+  }
+  window.getColabsPlanilla = getColabsPlanilla;
+
+  // Alias para compat con codigo v206/v207 que llamaba esta funcion
+  function _migrarColaboradoresGlobal(){ _sincronizarColaboradoresEntreProyectos(); }
 
   function activeColabId5(p){ const colabs=getColabsPlanilla(); if(!window.planillaSelectedColaborador || !colabs.some(c=>c.id===window.planillaSelectedColaborador)){ window.planillaSelectedColaborador = colabs[0]?.id || ''; } return window.planillaSelectedColaborador; }
   function selectedColab5(p){ return getColabsPlanilla().find(c=>c.id===activeColabId5(p)); }
