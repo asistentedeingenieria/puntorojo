@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v208</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v209</span>
   </footer>
 
 </div>
@@ -26416,37 +26416,81 @@ window.addEventListener('load', () => {
   function paidPct5(p,aid,idx){ const list=(p.planilla?.pagos||[]).filter(x=>x.tipo==='ETAPA' && x.aptoId===aid && Number(x.stageIdx)===Number(idx)); return list.length ? Math.max(...list.map(x=>Number(x.targetPct||100))) : 0; }
   function pctOptions5(current){ return PLANILLA_PCTS_5.filter(x=>x>current); }
   function nextPct5(current){ return pctOptions5(current)[0] || ''; }
-  // v208: COLABORADORES SINCRONIZADOS — cada proyecto tiene su propia copia
-  // del mismo listado. saveState los persiste porque viven dentro de cada
-  // p.planilla.colaboradores. La sincronizacion garantiza que todos tengan
-  // los mismos nombres y roles.
+  // v209: BUSQUEDA EXHAUSTIVA de colaboradores en TODOS los lugares posibles
+  // y sincronizacion entre proyectos. Cada proyecto guarda su propia copia
+  // del mismo listado (asi saveState la persiste sin problemas).
   function _sincronizarColaboradoresEntreProyectos(){
     if(!window.state || !Array.isArray(window.state.projects)) return;
     const merged = [];
-    // 1. Empezar con state.colaboradoresGlobal (legado de v206/v207)
-    if(Array.isArray(window.state.colaboradoresGlobal)){
-      window.state.colaboradoresGlobal.forEach(c => {
-        if(c && c.nombre && !merged.some(x => upper(x.nombre) === upper(c.nombre))){
-          merged.push({id: c.id || ('col-'+uid()), nombre: c.nombre, rol: c.rol || 'SIN DEFINIR'});
-        }
-      });
+    function addUnico(c){
+      if(!c) return;
+      const nom = (c.nombre || c.name || c.colaborador || '').toString().trim();
+      if(!nom) return;
+      const nomU = nom.toUpperCase();
+      if(merged.some(x => x.nombre === nomU)) return;
+      const rol = normalizeRole(c.rol || c.role || c.tipo || '');
+      merged.push({id: c.id || c.colaboradorId || ('col-'+uid()), nombre: nomU, rol: rol || 'SIN DEFINIR'});
     }
-    // 2. Sumar colaboradores de cada proyecto (dedupe por nombre, conserva ID del primero)
+    // 1. state.colaboradoresGlobal (legado de v206/v207)
+    if(Array.isArray(window.state.colaboradoresGlobal)){
+      window.state.colaboradoresGlobal.forEach(addUnico);
+    }
+    // 2. p.planilla.colaboradores de cada proyecto
     window.state.projects.forEach(p => {
-      (p.planilla?.colaboradores||[]).forEach(c => {
-        if(c && c.nombre && !merged.some(x => upper(x.nombre) === upper(c.nombre))){
-          merged.push({id: c.id || ('col-'+uid()), nombre: c.nombre, rol: c.rol || 'SIN DEFINIR'});
+      (p.planilla?.colaboradores||[]).forEach(addUnico);
+    });
+    // 3. p.personal.colaboradores (modulo Personal - source legacy)
+    window.state.projects.forEach(p => {
+      (p.personal?.colaboradores||[]).forEach(addUnico);
+    });
+    // 4. Recuperar nombres de pagos viejos (por si los datos del CRUD se borraron
+    // pero los pagos quedaron). Recupera tambien el rol del pago original.
+    window.state.projects.forEach(p => {
+      (p.planilla?.pagos||[]).forEach(pg => {
+        if(pg && pg.colaborador){
+          addUnico({id: pg.colaboradorId, nombre: pg.colaborador, rol: pg.colaboradorRol});
         }
       });
     });
-    // 3. Aplicar la lista unificada a TODOS los proyectos (clonando para evitar refs compartidas)
+    // 5. Aplicar la lista unificada a TODOS los proyectos (clonando)
     window.state.projects.forEach(p => {
       if(!p.planilla) p.planilla = {pagos:[],retencionesPagadas:[],ajustes:[],modelos:[],aptoModelMap:{},colaboradores:[],etapas:[]};
       p.planilla.colaboradores = merged.map(c => ({...c}));
     });
-    // 4. Mantener state.colaboradoresGlobal como cache (no es source of truth)
+    // 6. Mantener state.colaboradoresGlobal como cache
     window.state.colaboradoresGlobal = merged.map(c => ({...c}));
   }
+
+  // v209: funcion de diagnostico — el admin la corre en consola del browser
+  // para ver donde estan los datos.
+  window.diagnosticoColaboradores = function(){
+    const out = {
+      'state.colaboradoresGlobal': window.state?.colaboradoresGlobal || null,
+      'proyectos': {}
+    };
+    (window.state?.projects||[]).forEach(p => {
+      const key = p.id || p.name || '???';
+      out.proyectos[key] = {
+        'planilla.colaboradores': (p.planilla?.colaboradores||[]).map(c => `${c.nombre} (${c.rol||'SIN ROL'})`),
+        'personal.colaboradores': (p.personal?.colaboradores||[]).map(c => c.nombre || c.name || '?'),
+        'pagos.colaboradores_unicos': [...new Set((p.planilla?.pagos||[]).map(pg => pg.colaborador).filter(Boolean))]
+      };
+    });
+    console.log('═══════ DIAGNOSTICO COLABORADORES ═══════');
+    console.log(JSON.stringify(out, null, 2));
+    return out;
+  };
+
+  // v209: rescate manual — corre la sincronizacion + guarda forzadamente.
+  window.recuperarColaboradores = function(){
+    if(!can('users.manage')) return showToast('SOLO ADMIN','red');
+    _sincronizarColaboradoresEntreProyectos();
+    saveState();
+    renderPlanilla();
+    const count = (window.state?.colaboradoresGlobal||[]).length;
+    showToast(`RECUPERADOS ${count} COLABORADORES`, 'green');
+    console.log('Colaboradores recuperados:', window.state.colaboradoresGlobal);
+  };
 
   // v208: getColabsPlanilla lee del proyecto activo (o cualquier proyecto que tenga
   // datos). Como TODOS los proyectos tienen el mismo listado sincronizado, da igual.
