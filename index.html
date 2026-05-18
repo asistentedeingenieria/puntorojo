@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v205</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v206</span>
   </footer>
 
 </div>
@@ -25725,7 +25725,22 @@ window.addEventListener('load', () => {
     const el=document.getElementById('planilla-colaboradores'); if(el) el.innerHTML=html;
   };
   window.addPlanillaColaborador=function(){ if(!can('planilla.generate')&&!can('users.manage')) return showToast('SIN PERMISO','red'); const p=activeProj(); const nombre=upper(document.getElementById('newColabNombre')?.value||''); const rol=upper(document.getElementById('newColabRol')?.value||'PERSONAL'); if(!nombre) return showToast('ESCRIBIR EL NOMBRE','red'); if((p.planilla.colaboradores||[]).some(c=>upper(c.nombre)===nombre)) return showToast('YA EXISTE EN EL LISTADO','red'); p.planilla.colaboradores.push({id:'col-'+uid(),nombre,rol}); window.planillaSelectedColaborador=p.planilla.colaboradores[p.planilla.colaboradores.length-1].id; saveState(); renderPlanilla(); showToast('COLABORADOR AGREGADO','green'); };
-  window.deletePlanillaColaborador=function(id){ if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE ELIMINAR COLABORADORES','red'); const p=activeProj(); const used=(p.planilla.pagos||[]).some(pg=>pg.colaboradorId===id); if(used) return showToast('NO SE PUEDE ELIMINAR: YA TIENE PAGOS','red'); p.planilla.colaboradores=(p.planilla.colaboradores||[]).filter(c=>c.id!==id); if(window.planillaSelectedColaborador===id) window.planillaSelectedColaborador=''; saveState(); renderPlanilla(); showToast('COLABORADOR ELIMINADO'); };
+  window.deletePlanillaColaborador=function(id){
+    if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE ELIMINAR COLABORADORES','red');
+    // v206: el listado es GLOBAL. Bloquear si hay pagos en CUALQUIER proyecto.
+    const list = (typeof window.getColabsPlanilla === 'function') ? window.getColabsPlanilla() : [];
+    const c = list.find(x=>x.id===id);
+    const nombre = c ? c.nombre : '';
+    let used = false;
+    (window.state?.projects||[]).forEach(pr => {
+      (pr.planilla?.pagos||[]).forEach(pg => { if(pg.colaboradorId===id || (nombre && upper(pg.colaborador)===upper(nombre))) used=true; });
+    });
+    if(used) return showToast('NO SE PUEDE ELIMINAR: YA TIENE PAGOS EN ALGÚN PROYECTO','red');
+    const idx = list.findIndex(x=>x.id===id);
+    if(idx>=0) list.splice(idx,1);
+    if(window.planillaSelectedColaborador===id) window.planillaSelectedColaborador='';
+    saveState(); renderPlanilla(); showToast('COLABORADOR ELIMINADO');
+  };
   window.cargarColaboradoresBase=function(){ if(!can('planilla.generate')&&!can('users.manage')) return showToast('SIN PERMISO','red'); const p=activeProj(); if(!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores=[]; let added=0; DEFAULT_PLANILLA_COLABS.forEach(dc=>{ if(!p.planilla.colaboradores.some(c=>upper(c.nombre)===upper(dc.nombre))){ p.planilla.colaboradores.push({...dc}); added++; }}); saveState(); renderPlanilla(); showToast(added ? `COLABORADORES AGREGADOS: ${added}` : 'LISTADO YA ACTUALIZADO','green'); };
 
   window.renderPlanillaReporte=function(){
@@ -25864,30 +25879,41 @@ window.addEventListener('load', () => {
 
   window.updatePlanillaColaboradorRol = function(id, rol){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE CAMBIAR EL TIPO','red');
-    const p=activeProj(); const c=(p.planilla.colaboradores||[]).find(x=>x.id===id); if(!c) return;
+    // v206: rol se guarda en el listado GLOBAL.
+    const list = (typeof window.getColabsPlanilla === 'function') ? window.getColabsPlanilla() : [];
+    const c = list.find(x=>x.id===id); if(!c) return;
     c.rol=normalizeRole(rol); saveState(); renderPlanilla(); showToast('TIPO ACTUALIZADO','green');
   };
 
   window.renderPlanillaColaboradores = function(){
     ensureEnhancedData();
-    // Solo admin puede modificar el listado (riesgo: cambia quién cobra y cuánto).
-    const p=activeProj(); const canEdit=can('users.manage'); const list=p.planilla.colaboradores||[];
+    // v206: el listado de colaboradores es GLOBAL (compartido entre proyectos).
+    const p=activeProj(); const canEdit=can('users.manage');
+    const list = (typeof window.getColabsPlanilla === 'function') ? window.getColabsPlanilla() : [];
     const roleOpts = r => ROLE_OPTIONS.map(op=>`<option value="${op}" ${normalizeRole(r)===op?'selected':''}>${op==='SIN DEFINIR'?'SELECCIONAR':op}</option>`).join('');
+    // Contar pagos de TODOS los proyectos por nombre (no solo del activo).
+    function pagosDeColab(c){
+      let n=0; (window.state?.projects||[]).forEach(pr => (pr.planilla?.pagos||[]).forEach(pg => { if(pg.colaboradorId===c.id || upper(pg.colaborador)===upper(c.nombre)) n++; })); return n;
+    }
     const html=`<div class="card"><div class="card-hd"><h3>LISTADO DESPLEGABLE DE INSTALADORES Y MASILLEROS</h3></div>
       <div class="planilla-toolbar"><div class="field"><label>NOMBRE</label><input id="newColabNombre" placeholder="NOMBRE COMPLETO" ${canEdit?'':'disabled'}></div><div class="field"><label>TIPO</label><select id="newColabRol" ${canEdit?'':'disabled'}><option>INSTALADOR</option><option>MASILLERO</option></select></div><button class="btn sm" ${canEdit?'':'disabled'} onclick="addPlanillaColaborador()">AGREGAR</button></div>
-      <p class="receta-intro">CADA PERSONA DEBE QUEDAR CLASIFICADA COMO INSTALADOR O MASILLERO ANTES DE GENERAR PAGOS.</p>
-      <div class="planilla-pay-list">${list.map(c=>{ const role=normalizeRole(c.rol); return `<div class="planilla-person-row role-edit"><div><div class="planilla-person-name">${h(c.nombre)}</div><div class="planilla-role-chip ${role==='INSTALADOR'?'instalador':role==='MASILLERO'?'masillero':'pending'}">${role==='SIN DEFINIR'?'TIPO PENDIENTE':h(role)}</div></div><select class="role-select ${role==='SIN DEFINIR'?'pending':''}" ${canEdit?'':'disabled'} onchange="updatePlanillaColaboradorRol('${h(c.id)}',this.value)">${roleOpts(role)}</select><div>${(p.planilla.pagos||[]).filter(pg=>pg.colaboradorId===c.id || upper(pg.colaborador)===upper(c.nombre)).length} PAGOS</div><button class="btn-icon danger" ${canEdit?'':'disabled'} onclick="deletePlanillaColaborador('${h(c.id)}')">✕</button></div>`; }).join('')||'<div class="empty" style="padding:30px">SIN PERSONAL REGISTRADO</div>'}</div></div>`;
+      <p class="receta-intro">LISTADO COMPARTIDO ENTRE TODOS LOS PROYECTOS. CADA PERSONA DEBE QUEDAR CLASIFICADA COMO INSTALADOR O MASILLERO ANTES DE GENERAR PAGOS. CUALQUIER ROL PUEDE COBRAR CUALQUIER ETAPA.</p>
+      <div class="planilla-pay-list">${list.map(c=>{ const role=normalizeRole(c.rol); return `<div class="planilla-person-row role-edit"><div><div class="planilla-person-name">${h(c.nombre)}</div><div class="planilla-role-chip ${role==='INSTALADOR'?'instalador':role==='MASILLERO'?'masillero':'pending'}">${role==='SIN DEFINIR'?'TIPO PENDIENTE':h(role)}</div></div><select class="role-select ${role==='SIN DEFINIR'?'pending':''}" ${canEdit?'':'disabled'} onchange="updatePlanillaColaboradorRol('${h(c.id)}',this.value)">${roleOpts(role)}</select><div>${pagosDeColab(c)} PAGOS</div><button class="btn-icon danger" ${canEdit?'':'disabled'} onclick="deletePlanillaColaborador('${h(c.id)}')">✕</button></div>`; }).join('')||'<div class="empty" style="padding:30px">SIN PERSONAL REGISTRADO</div>'}</div></div>`;
     const el=document.getElementById('planilla-colaboradores'); if(el) el.innerHTML=html;
   };
 
   window.addPlanillaColaborador = function(){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE AGREGAR COLABORADORES','red');
-    const p=activeProj(); const nombre=upper(document.getElementById('newColabNombre')?.value||''); const rol=normalizeRole(document.getElementById('newColabRol')?.value||'');
+    // v206: agrega al listado GLOBAL.
+    const nombre=upper(document.getElementById('newColabNombre')?.value||''); const rol=normalizeRole(document.getElementById('newColabRol')?.value||'');
     if(!nombre) return showToast('ESCRIBIR EL NOMBRE','red');
     if(rol==='SIN DEFINIR') return showToast('ELEGIR INSTALADOR O MASILLERO','red');
-    if((p.planilla.colaboradores||[]).some(c=>upper(c.nombre)===nombre)) return showToast('YA EXISTE EN EL LISTADO','red');
-    p.planilla.colaboradores.push({id:'col-'+uid(),nombre,rol}); window.planillaSelectedColaborador=p.planilla.colaboradores[p.planilla.colaboradores.length-1].id;
-    saveState(); renderPlanilla(); showToast('PERSONAL AGREGADO','green');
+    const list = (typeof window.getColabsPlanilla === 'function') ? window.getColabsPlanilla() : [];
+    if(list.some(c=>upper(c.nombre)===nombre)) return showToast('YA EXISTE EN EL LISTADO','red');
+    const nuevo = {id:'col-'+uid(),nombre,rol};
+    list.push(nuevo);
+    window.planillaSelectedColaborador = nuevo.id;
+    saveState(); renderPlanilla(); showToast('PERSONAL AGREGADO · DISPONIBLE EN TODOS LOS PROYECTOS','green');
   };
 
   window.cargarColaboradoresBase = function(){
@@ -26262,6 +26288,10 @@ window.addEventListener('load', () => {
     if(!Array.isArray(p.planilla.modelos)) p.planilla.modelos=[];
     if(!p.planilla.aptoModelMap || typeof p.planilla.aptoModelMap !== 'object') p.planilla.aptoModelMap={};
 
+    // v206: migrar colaboradores de p.planilla.colaboradores -> state.colaboradoresGlobal
+    // (aditivo, una sola vez por toda la app).
+    try { _migrarColaboradoresGlobal(); } catch(e){}
+
     // v205: SEGUNDO reset one-shot — un usuario apreto "CARGAR PRECIOS OFICIALES"
     // entre v204 y v205, reinyectando los datos Essenza. Volvemos a limpiar.
     // (Ahora el boton ya no existe y la funcion es no-op, asi que esto es definitivo.)
@@ -26353,8 +26383,33 @@ window.addEventListener('load', () => {
   function paidPct5(p,aid,idx){ const list=(p.planilla?.pagos||[]).filter(x=>x.tipo==='ETAPA' && x.aptoId===aid && Number(x.stageIdx)===Number(idx)); return list.length ? Math.max(...list.map(x=>Number(x.targetPct||100))) : 0; }
   function pctOptions5(current){ return PLANILLA_PCTS_5.filter(x=>x>current); }
   function nextPct5(current){ return pctOptions5(current)[0] || ''; }
-  function activeColabId5(p){ if(!window.planillaSelectedColaborador || !(p.planilla.colaboradores||[]).some(c=>c.id===window.planillaSelectedColaborador)){ window.planillaSelectedColaborador = p.planilla.colaboradores?.[0]?.id || ''; } return window.planillaSelectedColaborador; }
-  function selectedColab5(p){ return (p.planilla.colaboradores||[]).find(c=>c.id===activeColabId5(p)); }
+  // v206: COLABORADORES GLOBALES — listado compartido entre TODOS los proyectos.
+  function getColabsPlanilla(){
+    if(!window.state) return [];
+    if(!Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal = [];
+    return window.state.colaboradoresGlobal;
+  }
+  window.getColabsPlanilla = getColabsPlanilla;
+
+  // v206: MIGRACION ONE-SHOT — unir colaboradores existentes de TODOS los proyectos
+  // en state.colaboradoresGlobal (dedupe por nombre, preserva el ID del primero).
+  // ADITIVA: no borra los p.planilla.colaboradores de los proyectos (compat legacy).
+  function _migrarColaboradoresGlobal(){
+    if(!window.state) return;
+    if(window.state._v206_colaboradoresGlobal) return;  // ya hecho
+    if(!Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal = [];
+    (window.state.projects||[]).forEach(p => {
+      (p.planilla?.colaboradores||[]).forEach(c => {
+        if(c && c.nombre && !window.state.colaboradoresGlobal.some(x => upper(x.nombre) === upper(c.nombre))){
+          window.state.colaboradoresGlobal.push({id: c.id || ('col-'+uid()), nombre: c.nombre, rol: c.rol || 'SIN DEFINIR'});
+        }
+      });
+    });
+    window.state._v206_colaboradoresGlobal = true;
+  }
+
+  function activeColabId5(p){ const colabs=getColabsPlanilla(); if(!window.planillaSelectedColaborador || !colabs.some(c=>c.id===window.planillaSelectedColaborador)){ window.planillaSelectedColaborador = colabs[0]?.id || ''; } return window.planillaSelectedColaborador; }
+  function selectedColab5(p){ return getColabsPlanilla().find(c=>c.id===activeColabId5(p)); }
 
   // v201: CRUD de etapas (admin only). La regla rol↔etapa siempre es: ÚLTIMA = MASILLERO.
   window.addEtapaPlanilla = function(){
@@ -26363,7 +26418,7 @@ window.addEventListener('load', () => {
     if(!p.planilla) p.planilla={pagos:[],retencionesPagadas:[],ajustes:[],modelos:[],aptoModelMap:{},etapas:[]};
     if(!Array.isArray(p.planilla.etapas)) p.planilla.etapas = [];
     if(p.planilla.etapas.length >= 10) return showToast('MÁXIMO 10 ETAPAS POR PROYECTO','red');
-    const raw = prompt('NOMBRE DE LA NUEVA ETAPA:\n(la última siempre la cobra el masillero)');
+    const raw = prompt('NOMBRE DE LA NUEVA ETAPA:');
     if(!raw) return;
     const name = upper(raw); if(!name) return;
     if(p.planilla.etapas.length === 0){
@@ -26518,10 +26573,10 @@ window.addEventListener('load', () => {
           html += `<div class="planilla-stage-row adv" style="grid-template-columns:1.15fr repeat(${N_ETAPAS},minmax(118px,1fr))!important"><div class="apt-name-cell"><div class="apt-name">${h(a.name)}</div><div class="apt-meta">${h(l.name)} · ${h(t.name)}</div><span class="planilla-model-chip">${h(mo?.nombre||'SIN MODELO')}</span></div>`;
           for(let i=0;i<N_ETAPAS;i++){
             const total=stageTotal5(p,a,i); const paid=paidPct5(p,a.id,i); const opts=pctOptions5(paid); const next=nextPct5(paid);
-            const isUltima = (i === N_ETAPAS - 1);  // v201: ultima etapa = masillero
-            const roleAllowed = colRole==='MASILLERO' ? isUltima : (colRole==='INSTALADOR' ? !isUltima : false);
-            const roleMsg = colRole==='MASILLERO' ? 'MASILLERO SOLO PUEDE COBRAR LA ULTIMA ETAPA' : (colRole==='INSTALADOR' ? 'INSTALADOR NO COBRA LA ULTIMA ETAPA' : 'TIPO PENDIENTE');
-            const disabled=(!canGen || !colab || colRole==='SIN DEFINIR' || !roleAllowed || total<=0 || !opts.length);
+            // v206: restriccion rol-etapa eliminada. Cualquier rol cobra cualquier etapa.
+            const roleAllowed = !!colab && colRole !== 'SIN DEFINIR';
+            const roleMsg = (colRole === 'SIN DEFINIR') ? 'TIPO PENDIENTE' : '';
+            const disabled=(!canGen || !colab || colRole==='SIN DEFINIR' || total<=0 || !opts.length);
             const etapaName = (ETAPAS_PROJ[i] && ETAPAS_PROJ[i].name) || ('ETAPA '+(i+1));
             html += `<div class="planilla-stage-cell ${paid>=100?'paid':''} ${total<=0?'empty':''}"><div class="stage-mobile-label">ETAPA ${i+1} · ${h(etapaName)}</div><div class="stage-info"><div class="stage-money">${total>0?fQ(total):'SIN MONTO'}</div><div class="stage-pct">PAGADO: <strong>${paid}%</strong></div>${(!roleAllowed && colRole!=='SIN DEFINIR')?`<div class="stage-pct" style="color:var(--mute);font-size:7.8px">${h(roleMsg)}</div>`:''}</div><div class="planilla-stage-actions"><select id="pct-${h(a.id)}-${i}" ${disabled?'disabled':''}>${opts.map(x=>`<option value="${x}" ${x===next?'selected':''}>${x}%</option>`).join('')}</select><button class="btn sm" ${disabled?'disabled':''} onclick="pagarEtapaPlanilla('${h(t.id)}','${h(l.id)}','${h(a.id)}',${i})">PAGAR</button></div></div>`;
           }
@@ -26569,10 +26624,7 @@ window.addEventListener('load', () => {
     const t=(p.towers||[]).find(x=>x.id===tid); const l=t&&(t.levels||[]).find(x=>x.id===lid); const a=l&&(l.aptos||[]).find(x=>x.id===aid); if(!a) return;
     const colab=selectedColab5(p); if(!colab) return showToast('SELECCIONAR UN INSTALADOR O MASILLERO','red');
     const rol=normalizeRole(colab.rol); if(rol==='SIN DEFINIR') return showToast('PRIMERO CLASIFICAR A LA PERSONA COMO INSTALADOR O MASILLERO','red');
-    // v201: regla rol↔etapa generalizada — masillero solo última etapa
-    const isUltimaEtapa = (Number(stageIdx) === N_ETAPAS - 1);
-    if(rol==='MASILLERO' && !isUltimaEtapa) return showToast('EL MASILLERO SOLO PUEDE COBRAR LA ÚLTIMA ETAPA · MASILLA','red');
-    if(rol==='INSTALADOR' && isUltimaEtapa) return showToast('EL INSTALADOR NO PUEDE COBRAR LA ÚLTIMA ETAPA · MASILLA','red');
+    // v206: restriccion rol-etapa ELIMINADA. Cualquier rol puede cobrar cualquier etapa.
     const total=stageTotal5(p,a,stageIdx); if(total<=0) return showToast('ESTE MODELO NO TIENE MONTO PARA ESA ETAPA','red');
     const current=paidPct5(p,aid,stageIdx); const sel=document.getElementById(`pct-${aid}-${stageIdx}`); const target=Number(sel?.value || nextPct5(current) || 0);
     if(!PLANILLA_PCTS_5.includes(target) || target<=current) return showToast('ELEGIR UN PORCENTAJE MAYOR AL PAGADO','red');
@@ -26691,15 +26743,13 @@ window.addEventListener('load', () => {
         <button class="btn sm" ${canEdit?'':'disabled'} onclick="addEtapaPlanilla()">+ NUEVA ETAPA</button>
       </div>
       ${adminLockMsg}
-      <p class="receta-intro">DEFINE CUÁNTAS ETAPAS DE PAGO TIENE ESTE PROYECTO Y SUS NOMBRES. LA ÚLTIMA ETAPA SIEMPRE LA COBRA EL MASILLERO; LAS DEMÁS, EL INSTALADOR. SI CAMBIÁS EL NÚMERO DE ETAPAS, LOS COSTOS DE LOS MODELOS SE AJUSTAN AUTOMÁTICAMENTE.</p>
+      <p class="receta-intro">DEFINE CUÁNTAS ETAPAS DE PAGO TIENE ESTE PROYECTO Y SUS NOMBRES. CUALQUIER COLABORADOR (INSTALADOR O MASILLERO) PUEDE COBRAR CUALQUIER ETAPA. SI CAMBIÁS EL NÚMERO DE ETAPAS, LOS COSTOS DE LOS MODELOS SE AJUSTAN AUTOMÁTICAMENTE.</p>
       <div style="padding:4px 16px 14px">
         ${ETAPAS_PROJ.map((e,i)=>{
-          const esUltima = (i === N_ETAPAS-1);
           const tieneCobros = (p.planilla.pagos||[]).some(pg => Number(pg.stageIdx)===i);
-          return `<div style="display:grid;grid-template-columns:70px 1fr ${esUltima?'120px':''} ${canEdit?'auto':''};gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line-soft)">
+          return `<div style="display:grid;grid-template-columns:70px 1fr ${canEdit?'auto':''};gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line-soft)">
             <div style="font-size:11px;font-weight:800;color:var(--mute);letter-spacing:1.2px">ETAPA ${i+1}</div>
             <input type="text" value="${h(e.name)}" ${canEdit?'':'disabled'} onchange="updateEtapaNombre(${i}, this.value)" style="width:100%;text-align:left;font-family:inherit;padding:7px 10px;border:1px solid var(--line);border-radius:2px;font-size:11px;text-transform:uppercase">
-            ${esUltima ? '<span class="planilla-role-chip masillero" style="text-align:center">MASILLERO</span>' : ''}
             ${canEdit ? `<button class="btn-icon danger" onclick="removeEtapaPlanilla(${i})" title="${tieneCobros?'NO SE PUEDE: YA HAY PAGOS EN ESTA ETAPA':'Eliminar etapa'}" ${tieneCobros?'disabled style=\"opacity:.4;cursor:not-allowed\"':''}>✕</button>` : ''}
           </div>`;
         }).join('')}
