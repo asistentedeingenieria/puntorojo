@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v219</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v220</span>
   </footer>
 
 </div>
@@ -27535,22 +27535,45 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     return await window._parsePDFToLines(file);
   }
 
-  /* ── MODELOS + COSTOS ── */
+  /* ── MODELOS + COSTOS ── (v220: maneja "Q" y guiones "-" como celdas vacias) */
   function detectarModelos(lines){
     const modelos = [];
-    // Una fila valida: texto inicial + 2+ numeros separados por espacio al final
-    const ROW_RE = /^([A-Z0-9\-\sÀ-ſ\.\/]+?)\s+((?:[\d\.,]+\s*){2,})$/i;
+
+    // 1. Detectar cantidad de etapas del header "MODELO ETAPA 1 ETAPA 2 ..."
+    let numEtapas = 5;
     for(const line of lines){
       const t = line.trim();
-      if(!t || t.length < 3) continue;
-      if(/^(TOTAL|SUBTOTAL|GRAN\s*TOTAL|PROYECTO|FECHA|TORRE\s|NIVEL\s|APARTAMENTO|FASE|PAGINA|PÁGINA|FIRMA)/i.test(t)) continue;
-      const m = t.match(ROW_RE);
-      if(!m) continue;
-      const nombre = m[1].trim();
-      const numeros = m[2].trim().split(/\s+/).map(num).filter(n => n >= 0);
-      if(numeros.length < 2) continue;
-      if(nombre.length < 1 || nombre.length > 60) continue;
-      if(numeros.every(n => n === 0)) continue;
+      const m = t.match(/^MODELO\s+(.+)$/i);
+      if(m){
+        const etapaMatches = m[1].match(/ETAPA\s*\d+/gi);
+        if(etapaMatches && etapaMatches.length >= 2){
+          numEtapas = etapaMatches.length;
+          console.log('[v220 Modelos PDF] Header detectado:', numEtapas, 'etapas');
+          break;
+        }
+      }
+    }
+
+    // 2. Procesar cada línea
+    for(const lineRaw of lines){
+      let line = lineRaw.trim();
+      if(!line || line.length < 3) continue;
+      if(/^(MODELO\s+ETAPA|TOTAL|SUBTOTAL|GRAN\s*TOTAL|PROYECTO|FECHA|TORRE\s|NIVEL\s|APARTAMENTO|FASE|PAGINA|PÁGINA|FIRMA)/i.test(line)) continue;
+
+      // Limpiar "Q" sueltas (con espacio antes/después o al inicio/final)
+      line = line.replace(/(^|\s)Q(?=\s|$)/g, ' ').replace(/\s+/g, ' ').trim();
+      const tokens = line.split(/\s+/);
+      if(tokens.length < numEtapas + 1) continue;
+
+      // Tomar los últimos N tokens como costos
+      const costosTokens = tokens.slice(-numEtapas);
+      const todosValidos = costosTokens.every(tk => tk === '-' || /^[\d,\.]+$/.test(tk));
+      if(!todosValidos) continue;
+
+      const nombre = tokens.slice(0, tokens.length - numEtapas).join(' ').trim();
+      if(!nombre || nombre.length > 60) continue;
+
+      const numeros = costosTokens.map(tk => tk === '-' ? 0 : num(tk));
       modelos.push({ nombre: upperS(nombre).replace(/\s+/g,' '), costos: numeros });
     }
     return modelos;
