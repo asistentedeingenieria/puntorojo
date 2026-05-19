@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v227</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v228</span>
   </footer>
 
 </div>
@@ -28445,6 +28445,45 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   }
   window._getUserEmail = _getUserEmail;
 
+  // v227: nombre legible del usuario actual (displayName -> username -> email-local)
+  function _getUserDisplayName(){
+    try {
+      if(typeof getCurrentUser === 'function'){
+        const u = getCurrentUser();
+        if(u){
+          const n = u.displayName || u.username || u.name || u.fullName || u.nombre || '';
+          if(n) return String(n).trim().toUpperCase();
+          if(u.email) return String(u.email).split('@')[0].toUpperCase();
+        }
+      }
+    } catch(e){}
+    try {
+      if(typeof firebase !== 'undefined' && firebase.auth){
+        const u = firebase.auth().currentUser;
+        if(u){
+          const n = u.displayName || '';
+          if(n) return String(n).trim().toUpperCase();
+          if(u.email) return String(u.email).split('@')[0].toUpperCase();
+        }
+      }
+    } catch(e){}
+    return '';
+  }
+  window._getUserDisplayName = _getUserDisplayName;
+
+  function _emailLocalPart(email){
+    if(!email) return '—';
+    const s = String(email);
+    const at = s.indexOf('@');
+    return (at > 0 ? s.slice(0, at) : s).toUpperCase();
+  }
+  function _nameOrEmail(nombre, email){
+    if(nombre) return String(nombre).toUpperCase();
+    if(email) return _emailLocalPart(email);
+    return '—';
+  }
+  function fmtDateUp(iso){ return String(fmtDate(iso)).toUpperCase(); }
+
   window.isSupervisorPlanilla = function(){
     const e = _getUserEmail();
     if(!e) return false;
@@ -28606,6 +28645,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const numero = _nextPlanillaNumero(p);
     const ahora = nowStr();
     const supEmail = _getUserEmail();
+    const supNombre = _getUserDisplayName();
 
     if(!confirm('ENVIAR PLANILLA #'+numero+' AL PROJECT MANAGER\n\n'
       + totales.count+' PAGOS\n'
@@ -28623,14 +28663,16 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       fechaEnvio: ahora,
       fechaRespuesta: null,
       supervisorEmail: supEmail,
+      supervisorNombre: supNombre,
       pmEmail: null,
+      pmNombre: null,
       pagosIds: ids,
       totales: totales,
       comentariosPm: [],
       intentos: 1,
       historial: [
-        { fecha: ahora, evento: 'creada', autor: supEmail, comentario: '' },
-        { fecha: ahora, evento: 'enviada', autor: supEmail, comentario: '' }
+        { fecha: ahora, evento: 'creada', autor: supEmail, autorNombre: supNombre, comentario: '' },
+        { fecha: ahora, evento: 'enviada', autor: supEmail, autorNombre: supNombre, comentario: '' }
       ]
     };
 
@@ -28671,10 +28713,12 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
     const ahora = nowStr();
     const pmEmail = _getUserEmail();
+    const pmNombre = _getUserDisplayName();
     pl.estado = 'aprobada';
     pl.fechaRespuesta = ahora;
     pl.pmEmail = pmEmail;
-    pl.historial.push({ fecha: ahora, evento: 'aprobada', autor: pmEmail, comentario: '' });
+    pl.pmNombre = pmNombre;
+    pl.historial.push({ fecha: ahora, evento: 'aprobada', autor: pmEmail, autorNombre: pmNombre, comentario: '' });
 
     (p.planilla.pagos || []).forEach(pg => {
       if(pl.pagosIds.includes(pg.id)){
@@ -28706,11 +28750,13 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
     const ahora = nowStr();
     const pmEmail = _getUserEmail();
+    const pmNombre = _getUserDisplayName();
     pl.estado = 'rechazada';
     pl.fechaRespuesta = ahora;
     pl.pmEmail = pmEmail;
-    pl.comentariosPm.push({ fecha: ahora, texto: comentario, autor: pmEmail });
-    pl.historial.push({ fecha: ahora, evento: 'rechazada', autor: pmEmail, comentario: comentario });
+    pl.pmNombre = pmNombre;
+    pl.comentariosPm.push({ fecha: ahora, texto: comentario, autor: pmEmail, autorNombre: pmNombre });
+    pl.historial.push({ fecha: ahora, evento: 'rechazada', autor: pmEmail, autorNombre: pmNombre, comentario: comentario });
 
     (p.planilla.pagos || []).forEach(pg => {
       if(pl.pagosIds.includes(pg.id)) pg.estadoPlanilla = 'rechazada';
@@ -28739,8 +28785,9 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
     const ahora = nowStr();
     const supEmail = _getUserEmail();
+    const supNombre = _getUserDisplayName();
     pl.estado = 'archivada';
-    pl.historial.push({ fecha: ahora, evento: 'modificada', autor: supEmail, comentario: 'Liberada para nueva edición' });
+    pl.historial.push({ fecha: ahora, evento: 'modificada', autor: supEmail, autorNombre: supNombre, comentario: 'Liberada para nueva edición' });
 
     (p.planilla.pagos || []).forEach(pg => {
       if(pl.pagosIds.includes(pg.id)){
@@ -28762,14 +28809,15 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     let txt = 'HISTORIAL · PLANILLA #'+pl.numero+'\n';
     txt += 'ESTADO ACTUAL: '+upper(pl.estado)+'\n\n';
     (pl.historial || []).forEach(h => {
-      txt += '• '+fmtDate(h.fecha)+' — '+upper(h.evento)+' por '+(h.autor||'?');
+      const autorDisp = _nameOrEmail(h.autorNombre, h.autor);
+      txt += '• '+fmtDateUp(h.fecha)+' — '+upper(h.evento)+' POR '+autorDisp;
       if(h.comentario) txt += '\n  ' + h.comentario;
       txt += '\n';
     });
     alert(txt);
   };
 
-  // ─── RENDER DEL BLOQUE "PLANILLAS QUINCENALES" ──────────────────────
+  // ─── RENDER DEL BLOQUE "PLANILLAS QUINCENALES" (v228: nombre + MAYUS) ──
   window.renderPlanillasArmadasBlock = function(){
     const p = _activeProj();
     if(!p) return '';
@@ -28782,22 +28830,21 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
     const disponibles = _pagosDisponiblesParaArmar(p);
     const totalDisp = disponibles.reduce((s,x)=>s+Number(x.neto||x.monto||0),0);
-    const yo = _getUserEmail();
-    const rolTxt = isAdmin && !isSup && !isPM ? 'ADMIN (modo prueba)' : (isSup && isPM ? 'SUPERVISOR + PM' : (isSup ? 'SUPERVISOR' : (isPM ? 'PROJECT MANAGER' : 'ADMIN')));
+    const nombreUsuario = _getUserDisplayName();
 
-    let html = '<div class="card" style="margin-top:18px;border:2px solid #C62828;border-radius:10px;overflow:hidden">';
+    let html = '<div class="card" style="margin-top:18px;border:2px solid #C62828;border-radius:10px;overflow:hidden;text-transform:uppercase">';
     html += '<div style="padding:12px 16px;background:#C62828;color:#fff;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">';
     html += '<h3 style="margin:0;font-size:14px;letter-spacing:.5px">PLANILLAS QUINCENALES · FLUJO DE APROBACIÓN</h3>';
-    html += '<span style="font-size:11px;opacity:.95">VOS: '+esc(rolTxt)+(yo?' · '+esc(yo):'')+'</span>';
+    html += '<span style="font-size:11px;opacity:.95;font-weight:600">'+esc(nombreUsuario||'—')+'</span>';
     html += '</div>';
 
     if(isSup || isAdmin){
       html += '<div style="padding:14px 16px;border-bottom:1px solid #eee;background:#FFF8E1">';
       html += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">';
-      html += '<div style="font-size:13px"><strong>'+(isSup?'SUPERVISOR':'ADMIN')+'</strong> · '+disponibles.length+' pago'+(disponibles.length!==1?'s':'')+' disponible'+(disponibles.length!==1?'s':'')+' para armar · TOTAL '+money(totalDisp)+'</div>';
+      html += '<div style="font-size:13px"><strong>'+(isSup?'SUPERVISOR':'ADMIN')+'</strong> · '+disponibles.length+' PAGO'+(disponibles.length!==1?'S':'')+' DISPONIBLE'+(disponibles.length!==1?'S':'')+' PARA ARMAR · TOTAL '+money(totalDisp)+'</div>';
       html += '<button class="btn" '+(disponibles.length===0?'disabled':'')+' onclick="window.abrirModalArmarPlanilla()" style="background:#C62828;border-color:#C62828;color:#fff">ARMAR PLANILLA Y ENVIAR A PM</button>';
       html += '</div>';
-      html += '<div style="font-size:11px;color:#666;margin-top:6px">Seleccioná los pagos para enviar al PM. Una vez enviada queda pendiente de autorización.</div>';
+      html += '<div style="font-size:11px;color:#666;margin-top:6px">SELECCIONÁ LOS PAGOS PARA ENVIAR AL PM. UNA VEZ ENVIADA QUEDA PENDIENTE DE AUTORIZACIÓN.</div>';
       html += '</div>';
     }
 
@@ -28814,24 +28861,28 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           'archivada':'ARCHIVADA (MODIFICADA)'
         })[pl.estado] || upper(pl.estado);
 
+        const supDisp = _nameOrEmail(pl.supervisorNombre, pl.supervisorEmail);
+        const pmDisp = (pl.pmNombre || pl.pmEmail) ? _nameOrEmail(pl.pmNombre, pl.pmEmail) : '(PENDIENTE)';
+
         html += '<div style="margin:12px 14px;border:1.5px solid '+colorBorde+';border-radius:8px;background:'+colorBg+';overflow:hidden">';
         html += '<div style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;background:rgba(255,255,255,.55);flex-wrap:wrap;gap:6px">';
         html += '<div><strong style="font-size:14px">PLANILLA #'+pl.numero+'</strong> · '+esc(labelEstado)+(pl.intentos>1?' · INTENTO '+pl.intentos:'')+'</div>';
         html += '<div style="font-size:12px;color:#444">'+pl.totales.count+' PAGOS · '+money(pl.totales.neto)+' NETO</div>';
         html += '</div>';
         html += '<div style="padding:10px 14px;font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:6px 16px">';
-        html += '<div><strong>Supervisor:</strong> '+esc(pl.supervisorEmail||'—')+'</div>';
-        html += '<div><strong>Enviada:</strong> '+esc(fmtDate(pl.fechaEnvio))+'</div>';
-        html += '<div><strong>PM:</strong> '+esc(pl.pmEmail||'(pendiente)')+'</div>';
-        html += '<div><strong>Respondida:</strong> '+esc(fmtDate(pl.fechaRespuesta))+'</div>';
-        html += '<div><strong>Bruto:</strong> '+money(pl.totales.bruto)+'</div>';
-        html += '<div><strong>Retención 10%:</strong> '+money(pl.totales.retencion)+'</div>';
+        html += '<div><strong>SUPERVISOR:</strong> '+esc(supDisp)+'</div>';
+        html += '<div><strong>ENVIADA:</strong> '+esc(fmtDateUp(pl.fechaEnvio))+'</div>';
+        html += '<div><strong>PM:</strong> '+esc(pmDisp)+'</div>';
+        html += '<div><strong>RESPONDIDA:</strong> '+esc(fmtDateUp(pl.fechaRespuesta))+'</div>';
+        html += '<div><strong>BRUTO:</strong> '+money(pl.totales.bruto)+'</div>';
+        html += '<div><strong>RETENCIÓN 10%:</strong> '+money(pl.totales.retencion)+'</div>';
         html += '</div>';
         if(pl.comentariosPm && pl.comentariosPm.length){
           html += '<div style="margin:0 14px 10px;padding:8px 10px;background:#fff;border-left:3px solid '+colorBorde+';font-size:12px;border-radius:4px">';
           html += '<div style="font-weight:600;margin-bottom:4px;color:#C62828">COMENTARIOS DEL PM</div>';
           pl.comentariosPm.forEach(c => {
-            html += '<div style="margin-bottom:4px"><em>'+esc(fmtDate(c.fecha))+' — '+esc(c.autor||'PM')+':</em><br>'+esc(c.texto)+'</div>';
+            const autorDisp = _nameOrEmail(c.autorNombre, c.autor || 'PM');
+            html += '<div style="margin-bottom:4px"><em>'+esc(fmtDateUp(c.fecha))+' — '+esc(autorDisp)+':</em><br>'+esc(c.texto||'')+'</div>';
           });
           html += '</div>';
         }
