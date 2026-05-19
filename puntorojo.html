@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v237</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v238</span>
   </footer>
 
 </div>
@@ -29068,64 +29068,124 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       html += '</div>';
     }
 
-    // ─ LISTA DE PLANILLAS ─
+    // ─ LISTA DE PLANILLAS (v238: separar activas de cerradas) ─
+    // Activas = pendientes de PM o rechazadas. Aparecen completas porque
+    // requieren accion del usuario (aprobar, rechazar, modificar).
+    // Cerradas = aprobadas o archivadas. Van en una seccion HISTORIAL
+    // colapsable abajo, con resumen compacto, para no saturar la pantalla
+    // a medida que se acumulan.
+    const activas  = arr.filter(pl => pl.estado === 'pendiente_pm' || pl.estado === 'rechazada');
+    const cerradas = arr.filter(pl => pl.estado === 'aprobada' || pl.estado === 'archivada');
+
+    const renderTarjetaCompleta = (pl) => {
+      const colorBorde = pl.estado==='pendiente_pm' ? '#F57C00' : (pl.estado==='aprobada' ? '#2E7D32' : (pl.estado==='rechazada' ? '#C62828' : '#999'));
+      const colorBg = pl.estado==='pendiente_pm' ? '#FFF3E0' : (pl.estado==='aprobada' ? '#E8F5E9' : (pl.estado==='rechazada' ? '#FFEBEE' : '#F5F5F5'));
+      const labelEstado = ({
+        'pendiente_pm':'PENDIENTE DE AUTORIZACIÓN',
+        'aprobada':'APROBADA Y PAGADA',
+        'rechazada':'RECHAZADA',
+        'archivada':'ARCHIVADA (MODIFICADA)'
+      })[pl.estado] || upper(pl.estado);
+      const supDisp = _nameOrEmail(pl.supervisorNombre, pl.supervisorEmail);
+      const pmDisp = (pl.pmNombre || pl.pmEmail) ? _nameOrEmail(pl.pmNombre, pl.pmEmail) : '(PENDIENTE)';
+      let h2 = '';
+      h2 += '<div style="margin:12px 14px;border:1.5px solid '+colorBorde+';border-radius:8px;background:'+colorBg+';overflow:hidden">';
+      h2 += '<div style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;background:rgba(255,255,255,.55);flex-wrap:wrap;gap:6px">';
+      h2 += '<div><strong style="font-size:14px">PLANILLA #'+pl.numero+'</strong> · '+esc(labelEstado)+(pl.intentos>1?' · INTENTO '+pl.intentos:'')+'</div>';
+      h2 += '<div style="font-size:12px;color:#444">'+pl.totales.count+' PAGOS · '+money(pl.totales.neto)+' NETO</div>';
+      h2 += '</div>';
+      h2 += '<div style="padding:10px 14px;font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:6px 16px">';
+      h2 += '<div><strong>SUPERVISOR:</strong> '+esc(supDisp)+'</div>';
+      h2 += '<div><strong>ENVIADA:</strong> '+esc(fmtDateUp(pl.fechaEnvio))+'</div>';
+      h2 += '<div><strong>PM:</strong> '+esc(pmDisp)+'</div>';
+      h2 += '<div><strong>RESPONDIDA:</strong> '+esc(fmtDateUp(pl.fechaRespuesta))+'</div>';
+      h2 += '<div><strong>BRUTO:</strong> '+money(pl.totales.bruto)+'</div>';
+      h2 += '<div><strong>RETENCIÓN 10%:</strong> '+money(pl.totales.retencion)+'</div>';
+      h2 += '</div>';
+      if(pl.comentariosPm && pl.comentariosPm.length){
+        h2 += '<div style="margin:0 14px 10px;padding:8px 10px;background:#fff;border-left:3px solid '+colorBorde+';font-size:12px;border-radius:4px">';
+        h2 += '<div style="font-weight:600;margin-bottom:4px;color:#C62828">COMENTARIOS DEL PM</div>';
+        pl.comentariosPm.forEach(c => {
+          const autorDisp = _nameOrEmail(c.autorNombre, c.autor || 'PM');
+          h2 += '<div style="margin-bottom:4px"><em>'+esc(fmtDateUp(c.fecha))+' — '+esc(autorDisp)+':</em><br>'+esc(c.texto||'')+'</div>';
+        });
+        h2 += '</div>';
+      }
+      h2 += '<div style="padding:10px 14px;border-top:1px dashed '+colorBorde+';display:flex;flex-wrap:wrap;gap:8px;background:rgba(255,255,255,.4)">';
+      if(pl.estado === 'pendiente_pm' && (isPM || isAdmin)){
+        h2 += '<button class="btn" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.aprobarPlanilla(\''+esc(pl.id)+'\')">AUTORIZAR Y PAGAR PLANILLA</button>';
+        h2 += '<button class="btn ghost" style="border-color:#C62828;color:#C62828" onclick="window.rechazarPlanilla(\''+esc(pl.id)+'\')">RECHAZAR CON COMENTARIO</button>';
+      }
+      if(pl.estado === 'rechazada' && (isSup || isAdmin)){
+        h2 += '<button class="btn" onclick="window.modificarPlanillaRechazada(\''+esc(pl.id)+'\')">MODIFICAR Y REENVIAR</button>';
+      }
+      h2 += '<button class="btn ghost sm" onclick="window.previewPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#1C1917;color:#1C1917">VER PREVIEW PDF</button>';
+      h2 += '<button class="btn ghost sm" onclick="window.descargarPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#2E7D32;color:#2E7D32">DESCARGAR PDF</button>';
+      h2 += '<button class="btn ghost sm" onclick="window.verHistorialPlanilla(\''+esc(pl.id)+'\')">VER HISTORIAL</button>';
+      h2 += '</div>';
+      h2 += '</div>';
+      return h2;
+    };
+
+    const renderFilaCompacta = (pl) => {
+      const colorBorde = pl.estado==='aprobada' ? '#2E7D32' : '#999';
+      const labelEstado = pl.estado==='aprobada' ? 'APROBADA Y PAGADA' : 'ARCHIVADA (MODIFICADA)';
+      const fechaResp = fmtDateUp(pl.fechaRespuesta || pl.fechaEnvio);
+      const supDisp = _nameOrEmail(pl.supervisorNombre, pl.supervisorEmail);
+      let h2 = '';
+      h2 += '<div style="margin:6px 14px;border-left:3px solid '+colorBorde+';border-radius:4px;background:#fff;padding:8px 12px;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center">';
+      h2 += '<div style="font-size:11px;line-height:1.5"><strong>PLANILLA #'+pl.numero+'</strong> · '+esc(labelEstado)+' · '+pl.totales.count+' PAGOS · <strong>'+money(pl.totales.neto)+'</strong> NETO · '+esc(fechaResp)+' · SUP: '+esc(supDisp)+'</div>';
+      h2 += '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">';
+      if(pl.estado === 'aprobada'){
+        h2 += '<button class="btn ghost sm" onclick="window.previewPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#1C1917;color:#1C1917;font-size:9px">PREVIEW PDF</button>';
+        h2 += '<button class="btn ghost sm" onclick="window.descargarPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#2E7D32;color:#2E7D32;font-size:9px">DESCARGAR PDF</button>';
+      }
+      h2 += '<button class="btn ghost sm" onclick="window.verHistorialPlanilla(\''+esc(pl.id)+'\')" style="font-size:9px">HISTORIAL</button>';
+      h2 += '</div>';
+      h2 += '</div>';
+      return h2;
+    };
+
     if(!arr.length){
       html += '<div style="padding:24px;text-align:center;color:#888;font-size:13px">— SIN PLANILLAS ARMADAS TODAVÍA —</div>';
     } else {
-      arr.forEach(pl => {
-        const colorBorde = pl.estado==='pendiente_pm' ? '#F57C00' : (pl.estado==='aprobada' ? '#2E7D32' : (pl.estado==='rechazada' ? '#C62828' : '#999'));
-        const colorBg = pl.estado==='pendiente_pm' ? '#FFF3E0' : (pl.estado==='aprobada' ? '#E8F5E9' : (pl.estado==='rechazada' ? '#FFEBEE' : '#F5F5F5'));
-        const labelEstado = ({
-          'pendiente_pm':'PENDIENTE DE AUTORIZACIÓN',
-          'aprobada':'APROBADA Y PAGADA',
-          'rechazada':'RECHAZADA',
-          'archivada':'ARCHIVADA (MODIFICADA)'
-        })[pl.estado] || upper(pl.estado);
+      // Activas (siempre visibles, tarjeta completa)
+      if(activas.length === 0){
+        html += '<div style="padding:14px 16px;text-align:center;color:#888;font-size:11px;font-style:italic">— SIN PLANILLAS PENDIENTES DE PROCESAR —</div>';
+      } else {
+        activas.forEach(pl => { html += renderTarjetaCompleta(pl); });
+      }
 
-        const supDisp = _nameOrEmail(pl.supervisorNombre, pl.supervisorEmail);
-        const pmDisp = (pl.pmNombre || pl.pmEmail) ? _nameOrEmail(pl.pmNombre, pl.pmEmail) : '(PENDIENTE)';
-
-        html += '<div style="margin:12px 14px;border:1.5px solid '+colorBorde+';border-radius:8px;background:'+colorBg+';overflow:hidden">';
-        html += '<div style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;background:rgba(255,255,255,.55);flex-wrap:wrap;gap:6px">';
-        html += '<div><strong style="font-size:14px">PLANILLA #'+pl.numero+'</strong> · '+esc(labelEstado)+(pl.intentos>1?' · INTENTO '+pl.intentos:'')+'</div>';
-        html += '<div style="font-size:12px;color:#444">'+pl.totales.count+' PAGOS · '+money(pl.totales.neto)+' NETO</div>';
+      // Cerradas (colapsadas en seccion HISTORIAL)
+      if(cerradas.length > 0){
+        const histKey = 'planillas_historial_visible_' + (p.id || 'def');
+        const histVisible = (() => { try { return localStorage.getItem(histKey) === '1'; } catch(e){ return false; } })();
+        html += '<div style="border-top:2px solid #ddd;margin-top:8px;background:#FAFAFA">';
+        html += '<div onclick="window.togglePlanillasHistorial(\''+esc(p.id||'def')+'\')" style="padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none;background:#F0F0F0">';
+        html += '<strong style="font-size:12px;letter-spacing:.4px;color:#444">HISTORIAL DE PLANILLAS CERRADAS · '+cerradas.length+'</strong>';
+        html += '<span style="font-size:11px;color:#666;font-weight:600">'+(histVisible ? '▼ OCULTAR' : '▶ MOSTRAR')+'</span>';
         html += '</div>';
-        html += '<div style="padding:10px 14px;font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:6px 16px">';
-        html += '<div><strong>SUPERVISOR:</strong> '+esc(supDisp)+'</div>';
-        html += '<div><strong>ENVIADA:</strong> '+esc(fmtDateUp(pl.fechaEnvio))+'</div>';
-        html += '<div><strong>PM:</strong> '+esc(pmDisp)+'</div>';
-        html += '<div><strong>RESPONDIDA:</strong> '+esc(fmtDateUp(pl.fechaRespuesta))+'</div>';
-        html += '<div><strong>BRUTO:</strong> '+money(pl.totales.bruto)+'</div>';
-        html += '<div><strong>RETENCIÓN 10%:</strong> '+money(pl.totales.retencion)+'</div>';
-        html += '</div>';
-        if(pl.comentariosPm && pl.comentariosPm.length){
-          html += '<div style="margin:0 14px 10px;padding:8px 10px;background:#fff;border-left:3px solid '+colorBorde+';font-size:12px;border-radius:4px">';
-          html += '<div style="font-weight:600;margin-bottom:4px;color:#C62828">COMENTARIOS DEL PM</div>';
-          pl.comentariosPm.forEach(c => {
-            const autorDisp = _nameOrEmail(c.autorNombre, c.autor || 'PM');
-            html += '<div style="margin-bottom:4px"><em>'+esc(fmtDateUp(c.fecha))+' — '+esc(autorDisp)+':</em><br>'+esc(c.texto||'')+'</div>';
-          });
+        if(histVisible){
+          html += '<div style="padding:8px 0 12px">';
+          cerradas.forEach(pl => { html += renderFilaCompacta(pl); });
           html += '</div>';
         }
-        html += '<div style="padding:10px 14px;border-top:1px dashed '+colorBorde+';display:flex;flex-wrap:wrap;gap:8px;background:rgba(255,255,255,.4)">';
-        if(pl.estado === 'pendiente_pm' && (isPM || isAdmin)){
-          html += '<button class="btn" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.aprobarPlanilla(\''+esc(pl.id)+'\')">AUTORIZAR Y PAGAR PLANILLA</button>';
-          html += '<button class="btn ghost" style="border-color:#C62828;color:#C62828" onclick="window.rechazarPlanilla(\''+esc(pl.id)+'\')">RECHAZAR CON COMENTARIO</button>';
-        }
-        if(pl.estado === 'rechazada' && (isSup || isAdmin)){
-          html += '<button class="btn" onclick="window.modificarPlanillaRechazada(\''+esc(pl.id)+'\')">MODIFICAR Y REENVIAR</button>';
-        }
-        // v229/v232: PREVIEW + DESCARGA PDF disponibles en todos los estados
-        html += '<button class="btn ghost sm" onclick="window.previewPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#1C1917;color:#1C1917">VER PREVIEW PDF</button>';
-        html += '<button class="btn ghost sm" onclick="window.descargarPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#2E7D32;color:#2E7D32">DESCARGAR PDF</button>';
-        html += '<button class="btn ghost sm" onclick="window.verHistorialPlanilla(\''+esc(pl.id)+'\')">VER HISTORIAL</button>';
         html += '</div>';
-        html += '</div>';
-      });
+      }
     }
 
     html += '</div>';
     return html;
+  };
+
+  // v238: toggle del historial de planillas cerradas (persiste por proyecto).
+  window.togglePlanillasHistorial = function(pid){
+    const key = 'planillas_historial_visible_' + (pid || 'def');
+    try {
+      if(localStorage.getItem(key) === '1') localStorage.removeItem(key);
+      else localStorage.setItem(key, '1');
+    } catch(e){}
+    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
   };
 
   // ─── INTEGRACIÓN: wrap renderPlanillaPagosList para inyectar el bloque ─
