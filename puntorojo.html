@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v234</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v235</span>
   </footer>
 
 </div>
@@ -7036,9 +7036,16 @@ const CloudSync = {
      Si el usuario está editando, posterga el render. */
   applyRemote(remoteData, opts = {}){
     if (!remoteData) return;
+    // v235: GUARDAR el activeProjectId LOCAL antes de mergear datos remotos.
+    // Lo restauramos despues del merge para que la seleccion de proyecto sea
+    // estrictamente per-usuario y no se sobreescriba por sincronizaciones de
+    // otros usuarios. Fallback: si por algun motivo el local esta vacio, dejar
+    // el del remoto (compat con primera carga).
+    const localActivePID = (state && state.activeProjectId) || null;
     const localPhotos = this.extractPhotos(state);
     const merged = JSON.parse(JSON.stringify(remoteData));
     delete merged._lastUpdate;
+    delete merged.activeProjectId;  // v235: nunca aceptar el activeProjectId del remoto
     this.injectPhotos(merged, localPhotos);
 
     // Si el usuario está ocupado editando, no destruimos su input.
@@ -7062,6 +7069,13 @@ const CloudSync = {
     } catch(e) { console.warn('ensureDataV9 falló en applyRemote:', e); }
 
     state = merged;
+    // v235: restaurar el proyecto activo LOCAL del usuario (no compartir entre sesiones).
+    if (localActivePID && (state.projects||[]).some(pp => pp.id === localActivePID)) {
+      state.activeProjectId = localActivePID;
+    } else if (!state.activeProjectId && state.projects && state.projects.length) {
+      // Primera carga sin local previo: usar el primer proyecto disponible.
+      state.activeProjectId = state.projects[0].id;
+    }
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e) {}
     try { renderAll(); applyPermissions(); } catch(e) { console.error('Render error tras applyRemote:', e); }
     if (!opts.initial) {
@@ -7092,9 +7106,14 @@ const CloudSync = {
   /* Limpia el state antes de subirlo a la nube:
      - URLs de Storage: SE MANTIENEN (son chiquitas, ~200 bytes, y todos las necesitan)
      - Base64 legacy: SE QUITAN (ocupan mucho, sólo viven en localStorage hasta migrarlas)
+     - activeProjectId: SE QUITA (v235 — debe ser per-usuario, no compartido)
      Esta función NO modifica el state original, devuelve una copia. */
   stripLocal(s){
     const clone = JSON.parse(JSON.stringify(s));
+    // v235: el proyecto activo es una preferencia LOCAL del usuario. Si va
+    // a Firestore, cuando un usuario cambia de proyecto se le cambia a TODOS
+    // los demas usuarios. Lo eliminamos del upload.
+    delete clone.activeProjectId;
     (clone.projects || []).forEach(p =>
       (p.towers || []).forEach(t =>
         (t.levels || []).forEach(l =>
