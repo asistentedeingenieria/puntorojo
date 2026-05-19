@@ -2459,7 +2459,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v251</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v252</span>
   </footer>
 
 </div>
@@ -7876,6 +7876,11 @@ function _resetAllCollapsibles(){
       // Planilla / Reporte por Apto + Pagos por Etapa
       setLS('planilla_torres_colapsadas_' + projectId, towerIds);
       setLS('planilla_etapas_torres_colapsadas_' + projectId, towerIds);
+      // v252: sets de EXPANDIDOS — vaciar para que todo arranque cerrado.
+      setLS('planilla_workers_expanded_' + projectId, []);         // workers en PLANILLA GENERADA
+      setLS('planilla_etapas_niveles_expandidos_' + projectId, []); // niveles en PAGOS POR ETAPA
+      setLS('planilla_retenciones_expanded_' + projectId, []);     // personas en RETENCIONES
+      try { localStorage.removeItem('planillas_historial_visible_' + projectId); } catch(_e){}
       // Materiales / Receta (las torres en el storage usan NOMBRES, no IDs)
       setLS('receta_torres_colapsadas_' + projectId, recetaTorreNames);
       // Materiales / Pedir Etapa Completa por Nivel
@@ -26987,16 +26992,16 @@ window.addEventListener('load', () => {
       }
     } catch(e) { collapsedSet = new Set((p?.towers || []).map(t => t.id)); }
 
-    // v240: estado expand/collapse por NIVEL (persistente). Default expandido
-    // — solo guardamos los que el usuario decide colapsar.
-    const nivCollapsedKey = 'planilla_etapas_niveles_colapsados_' + (p.id || 'def');
-    let nivCollapsedSet;
+    // v240/v252: estado expand/collapse por NIVEL.
+    // v252: flip a EXPANDED set. Default = todos cerrados.
+    const nivExpKey = 'planilla_etapas_niveles_expandidos_' + (p.id || 'def');
+    let nivExpandedSet;
     try {
-      const _raw = localStorage.getItem(nivCollapsedKey);
+      const _raw = localStorage.getItem(nivExpKey);
       let _arr = _raw ? JSON.parse(_raw) : [];
       if (!Array.isArray(_arr)) _arr = [];
-      nivCollapsedSet = new Set(_arr);
-    } catch(e) { nivCollapsedSet = new Set(); }
+      nivExpandedSet = new Set(_arr);
+    } catch(e) { nivExpandedSet = new Set(); }
 
     // M1 v3: WRAPPER de scroll horizontal explícito que contiene header
     // global y todas las torres. Asi la matriz scrollea lateral en mobile
@@ -27032,7 +27037,7 @@ window.addEventListener('load', () => {
         (t.levels||[]).forEach(l => {
           const aptos = l.aptos || [];
           if (aptos.length === 0) return;
-          const isNivCol = nivCollapsedSet.has(l.id);
+          const isNivCol = !nivExpandedSet.has(l.id);  // v252: default cerrado
 
           // % autorizadas del nivel
           let totEt=0, autNiv=0;
@@ -27103,10 +27108,11 @@ window.addEventListener('load', () => {
     renderPlanillaEtapas();
   };
 
-  // v240: Toggle colapsar/expandir NIVEL en la vista PAGOS POR ETAPA Y APTO
+  // v240/v252: Toggle colapsar/expandir NIVEL en PAGOS POR ETAPA Y APTO.
+  // El set guarda EXPANDIDOS (default empty = closed).
   window.togglePlanillaEtapasNivel = function(levelId){
     const p = activeProj();
-    const key = 'planilla_etapas_niveles_colapsados_' + (p?.id || 'def');
+    const key = 'planilla_etapas_niveles_expandidos_' + (p?.id || 'def');
     let arr;
     try { arr = JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { arr = []; }
     const set = new Set(arr);
@@ -27561,19 +27567,25 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   function buildWorkerGroup(name, rows, canAuth){
     const subtotal = rows.reduce((s,x)=>s+Number(x.neto||x.monto||0),0);
     const role = upper(rows.find(x=>x.colaboradorRol)?.colaboradorRol || '');
-    // v243: cada trabajador en PLANILLA GENERADA es colapsable.
-    // Estado guardado por proyecto en localStorage. Default expandido.
+    // v243/v252: cada trabajador en PLANILLA GENERADA es colapsable.
+    // v252: invertimos la semantica: el localStorage guarda EXPANDIDOS (no
+    // colapsados), default = todos cerrados. _resetAllCollapsibles vacia
+    // el set al cambiar de vista, asi al volver siempre estan cerrados.
     const _p = (typeof activeProj === 'function') ? activeProj() : null;
     const _projId = (_p && _p.id) || 'def';
-    const _collKey = 'planilla_workers_collapsed_' + _projId;
-    let _collSet;
-    try { _collSet = new Set(JSON.parse(localStorage.getItem(_collKey) || '[]')); } catch(e){ _collSet = new Set(); }
-    const isCollapsed = _collSet.has(name);
+    const _expKey = 'planilla_workers_expanded_' + _projId;
+    let _expSet;
+    try { _expSet = new Set(JSON.parse(localStorage.getItem(_expKey) || '[]')); } catch(e){ _expSet = new Set(); }
+    const isCollapsed = !_expSet.has(name);
     const nameEsc = String(name).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    // v252: chevron siempre visible usando caracteres directos (no rotacion).
+    // El ancho fijo + monospace evita que el caracter se "esconda" en algunos
+    // anchos de header.
+    const chevron = isCollapsed ? '▶' : '▼';
 
     let html = '<div class="planilla-pay-group">';
     html += '<div class="planilla-pay-group-hd" onclick="togglePlanillaWorker(\''+nameEsc+'\')" title="Click para '+(isCollapsed?'expandir':'colapsar')+'" style="cursor:pointer;user-select:none">';
-    html += '<span style="display:inline-block;margin-right:8px;font-size:10px;color:rgba(255,255,255,.75);transform:rotate('+(isCollapsed?'0':'90')+'deg);transition:transform .15s">▶</span>';
+    html += '<span style="display:inline-block;margin-right:8px;font-size:11px;color:rgba(255,255,255,.95);width:12px;text-align:center;font-family:monospace;flex-shrink:0">'+chevron+'</span>';
     html += '<strong>'+esc(name)+(role?' · '+esc(role):'')+'</strong>';
     html += '<span>'+money(subtotal)+'</span>';
     html += '</div>';
@@ -27594,11 +27606,12 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     return html;
   }
 
-  // v243: toggle colapsar/expandir trabajador en la card PLANILLA GENERADA.
+  // v243/v252: toggle colapsar/expandir trabajador en PLANILLA GENERADA.
+  // Ahora el set guarda EXPANDIDOS (no colapsados) — default empty = closed.
   window.togglePlanillaWorker = function(name){
     const p = (typeof activeProj === 'function') ? activeProj() : null;
     const projId = (p && p.id) || 'def';
-    const key = 'planilla_workers_collapsed_' + projId;
+    const key = 'planilla_workers_expanded_' + projId;
     let set;
     try { set = new Set(JSON.parse(localStorage.getItem(key) || '[]')); } catch(e){ set = new Set(); }
     if(set.has(name)) set.delete(name); else set.add(name);
