@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v244-pdf-formato-essenza-total-arriba-descuentos-abajo';
+const CACHE_VERSION = 'v245-pdf-colores-foto2-apto-headers-azul';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
