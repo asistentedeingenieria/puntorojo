@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v223-layout-limpio-colaboradores-pagos-etapa';
+const CACHE_VERSION = 'v224-pagos-sin-bloqueo-acuse-recepcion';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
