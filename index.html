@@ -2459,7 +2459,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v239</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v240</span>
   </footer>
 
 </div>
@@ -26957,6 +26957,17 @@ window.addEventListener('load', () => {
       }
     } catch(e) { collapsedSet = new Set((p?.towers || []).map(t => t.id)); }
 
+    // v240: estado expand/collapse por NIVEL (persistente). Default expandido
+    // — solo guardamos los que el usuario decide colapsar.
+    const nivCollapsedKey = 'planilla_etapas_niveles_colapsados_' + (p.id || 'def');
+    let nivCollapsedSet;
+    try {
+      const _raw = localStorage.getItem(nivCollapsedKey);
+      let _arr = _raw ? JSON.parse(_raw) : [];
+      if (!Array.isArray(_arr)) _arr = [];
+      nivCollapsedSet = new Set(_arr);
+    } catch(e) { nivCollapsedSet = new Set(); }
+
     // M1 v3: WRAPPER de scroll horizontal explícito que contiene header
     // global y todas las torres. Asi la matriz scrollea lateral en mobile
     // SIN depender de :has() ni de overflow-x en el card padre.
@@ -26987,20 +26998,38 @@ window.addEventListener('load', () => {
         </div>`;
 
       if (!isCollapsed) {
-        (t.levels||[]).forEach(l=>(l.aptos||[]).forEach(a=>{
-          const mk=p.planilla.aptoModelMap?.[a.id] || defaultKeyForPlanilla(t,l,a); const mo=modeloObj5(p,mk);
-          html += `<div class="planilla-stage-row adv" style="grid-template-columns:1.15fr repeat(${N_ETAPAS},minmax(118px,1fr))!important"><div class="apt-name-cell"><div class="apt-name">${h(a.name)}</div><div class="apt-meta">${h(l.name)} · ${h(t.name)}</div><span class="planilla-model-chip">${h(mo?.nombre||'SIN MODELO')}</span></div>`;
-          for(let i=0;i<N_ETAPAS;i++){
-            const total=stageTotal5(p,a,i); const paid=paidPct5(p,a.id,i); const opts=pctOptions5(paid); const next=nextPct5(paid);
-            // v206: restriccion rol-etapa eliminada. Cualquier rol cobra cualquier etapa.
-            const roleAllowed = !!colab && colRole !== 'SIN DEFINIR';
-            const roleMsg = (colRole === 'SIN DEFINIR') ? 'TIPO PENDIENTE' : '';
-            const disabled=(!canGen || !colab || colRole==='SIN DEFINIR' || total<=0 || !opts.length);
-            const etapaName = (ETAPAS_PROJ[i] && ETAPAS_PROJ[i].name) || ('ETAPA '+(i+1));
-            html += `<div class="planilla-stage-cell ${paid>=100?'paid':''} ${total<=0?'empty':''}"><div class="stage-mobile-label">ETAPA ${i+1} · ${h(etapaName)}</div><div class="stage-info"><div class="stage-money">${total>0?fQ(total):'SIN MONTO'}</div><div class="stage-pct">PAGADO: <strong>${paid}%</strong></div>${(!roleAllowed && colRole!=='SIN DEFINIR')?`<div class="stage-pct" style="color:var(--mute);font-size:7.8px">${h(roleMsg)}</div>`:''}</div><div class="planilla-stage-actions"><select id="pct-${h(a.id)}-${i}" ${disabled?'disabled':''}>${opts.map(x=>`<option value="${x}" ${x===next?'selected':''}>${x}%</option>`).join('')}</select><button class="btn sm" ${disabled?'disabled':''} onclick="pagarEtapaPlanilla('${h(t.id)}','${h(l.id)}','${h(a.id)}',${i})">PAGAR</button></div></div>`;
+        // v240: agrupar por NIVEL con header colapsable (default expandido).
+        (t.levels||[]).forEach(l => {
+          const aptos = l.aptos || [];
+          if (aptos.length === 0) return;
+          const isNivCol = nivCollapsedSet.has(l.id);
+
+          let totEt=0, autNiv=0;
+          aptos.forEach(a => { for(let i=0;i<N_ETAPAS;i++){ totEt++; const st = window._estadoPagoEtapa(p, a, i); if (st==='autorizado' || st==='sinAcuse') autNiv++; }});
+          const pctNiv = totEt>0 ? Math.round(autNiv/totEt*100) : 0;
+
+          html += `<div onclick="togglePlanillaEtapasNivel('${h(l.id)}')" title="Click para ${isNivCol?'expandir':'colapsar'} este nivel" style="background:#FFF8E1;padding:8px 14px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);cursor:pointer;display:flex;align-items:center;gap:10px;font-size:10.5px;font-weight:700;letter-spacing:.5px;color:var(--ink);user-select:none">
+            <span style="display:inline-block;transform:${isNivCol?'rotate(0)':'rotate(90deg)'};transition:transform .15s;font-size:9px;color:var(--mute);width:10px">▶</span>
+            <span style="text-transform:uppercase">${h(l.name)}</span>
+            <span style="color:var(--mute);font-weight:500;letter-spacing:.3px">· ${aptos.length} APTO${aptos.length!==1?'S':''} · ${pctNiv}% AUTORIZADO</span>
+          </div>`;
+
+          if (!isNivCol) {
+            aptos.forEach(a => {
+              const mk=p.planilla.aptoModelMap?.[a.id] || defaultKeyForPlanilla(t,l,a); const mo=modeloObj5(p,mk);
+              html += `<div class="planilla-stage-row adv" style="grid-template-columns:1.15fr repeat(${N_ETAPAS},minmax(118px,1fr))!important"><div class="apt-name-cell"><div class="apt-name">${h(a.name)}</div><div class="apt-meta">${h(l.name)} · ${h(t.name)}</div><span class="planilla-model-chip">${h(mo?.nombre||'SIN MODELO')}</span></div>`;
+              for(let i=0;i<N_ETAPAS;i++){
+                const total=stageTotal5(p,a,i); const paid=paidPct5(p,a.id,i); const opts=pctOptions5(paid); const next=nextPct5(paid);
+                const roleAllowed = !!colab && colRole !== 'SIN DEFINIR';
+                const roleMsg = (colRole === 'SIN DEFINIR') ? 'TIPO PENDIENTE' : '';
+                const disabled=(!canGen || !colab || colRole==='SIN DEFINIR' || total<=0 || !opts.length);
+                const etapaName = (ETAPAS_PROJ[i] && ETAPAS_PROJ[i].name) || ('ETAPA '+(i+1));
+                html += `<div class="planilla-stage-cell ${paid>=100?'paid':''} ${total<=0?'empty':''}"><div class="stage-mobile-label">ETAPA ${i+1} · ${h(etapaName)}</div><div class="stage-info"><div class="stage-money">${total>0?fQ(total):'SIN MONTO'}</div><div class="stage-pct">PAGADO: <strong>${paid}%</strong></div>${(!roleAllowed && colRole!=='SIN DEFINIR')?`<div class="stage-pct" style="color:var(--mute);font-size:7.8px">${h(roleMsg)}</div>`:''}</div><div class="planilla-stage-actions"><select id="pct-${h(a.id)}-${i}" ${disabled?'disabled':''}>${opts.map(x=>`<option value="${x}" ${x===next?'selected':''}>${x}%</option>`).join('')}</select><button class="btn sm" ${disabled?'disabled':''} onclick="pagarEtapaPlanilla('${h(t.id)}','${h(l.id)}','${h(a.id)}',${i})">PAGAR</button></div></div>`;
+              }
+              html += `</div>`;
+            });
           }
-          html += `</div>`;
-        }));
+        });
       }
 
       html += `</div>`;
@@ -27023,6 +27052,18 @@ window.addEventListener('load', () => {
     if (set.has(torreId)) set.delete(torreId);
     else set.add(torreId);
     try { localStorage.setItem(collapsedKey, JSON.stringify([...set])); } catch(e){}
+    renderPlanillaEtapas();
+  };
+
+  // v240: Toggle colapsar/expandir NIVEL en la vista PAGOS POR ETAPA Y APTO
+  window.togglePlanillaEtapasNivel = function(levelId){
+    const p = activeProj();
+    const key = 'planilla_etapas_niveles_colapsados_' + (p?.id || 'def');
+    let arr;
+    try { arr = JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { arr = []; }
+    const set = new Set(arr);
+    if (set.has(levelId)) set.delete(levelId); else set.add(levelId);
+    try { localStorage.setItem(key, JSON.stringify([...set])); } catch(e){}
     renderPlanillaEtapas();
   };
 
