@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v241-orden-secuencial-y-titulo-etapa-visible';
+const CACHE_VERSION = 'v242-pdf-total-por-instalador-descuentos-derecha';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
