@@ -2459,7 +2459,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v247</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v248</span>
   </footer>
 
 </div>
@@ -18249,6 +18249,9 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     pushPerm({ key:'view.planilla', label:'Ver pago de planillas', group:'VISTAS' });
     pushPerm({ key:'planilla.generate', label:'Generar pagos de planilla', group:'EDICIÓN PLANILLAS' });
     pushPerm({ key:'planilla.authorize', label:'Revisar y autorizar planillas', group:'EDICIÓN PLANILLAS' });
+    // v248: nuevo permiso para la persona que agrega descuentos a la planilla
+    // despues del visto bueno del PM (prestamos, polizas, equipos, etc).
+    pushPerm({ key:'planilla.descuentos', label:'Agregar descuentos a planillas aprobadas', group:'EDICIÓN PLANILLAS' });
     pushPerm({ key:'cobro.avance', label:'Editar avance de cobro por apto', group:'EDICIÓN COBRO' });
   } catch(e) { console.warn(e); }
 
@@ -28801,6 +28804,16 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(!e) return false;
     return (window.PMS_PLANILLA || []).map(x => String(x).toLowerCase().trim()).includes(e);
   };
+  // v248: rol DESCUENTOS — la persona que agrega prestamos/polizas/equipos
+  // a la planilla despues que el PM da visto bueno. Se identifica por permiso
+  // 'planilla.descuentos' en la pantalla USUARIOS (no por email hardcoded).
+  // Admin tambien puede.
+  window.isDescuentosPlanilla = function(){
+    try {
+      if(typeof can === 'function') return !!(can('planilla.descuentos') || can('users.manage'));
+    } catch(e){}
+    return false;
+  };
 
   // ─── MIGRACIÓN (idempotente, se llama on-demand) ─────────────────────
   function _ensurePlanillasArmadas(p){
@@ -29014,28 +29027,33 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
     if(pl.estado !== 'pendiente_pm'){ showT('SOLO PLANILLAS PENDIENTES SE PUEDEN APROBAR','red'); return; }
 
-    if(!confirm('AUTORIZAR Y PAGAR PLANILLA #'+pl.numero+'\n\n'
+    if(!confirm('AUTORIZAR PLANILLA #'+pl.numero+'\n\n'
       + pl.totales.count+' PAGOS\n'
-      + 'TOTAL NETO: '+money(pl.totales.neto)+'\n'
+      + 'BRUTO: '+money(pl.totales.bruto)+'\n'
       + 'RETENCIÓN 10%: '+money(pl.totales.retencion)+'\n'
-      + 'BRUTO: '+money(pl.totales.bruto)+'\n\n'
-      + 'Esto autoriza definitivamente todos los pagos.\n'
-      + 'En FASE 2 vas a poder descargar el Excel.\n\n'
-      + '¿Confirmás la autorización?')) return;
+      + 'NETO SIN DESCUENTOS: '+money(pl.totales.neto)+'\n\n'
+      + 'v248: tras tu aprobación, la planilla pasa a estado\n'
+      + 'PENDIENTE DESCUENTOS para que la persona encargada\n'
+      + 'agregue préstamos, pólizas, equipos y abonos previos.\n'
+      + 'Cuando esa persona finalice, vas a poder generar el PDF final.\n\n'
+      + '¿Confirmás la autorización inicial?')) return;
 
     const ahora = nowStr();
     const pmEmail = _getUserEmail();
     const pmNombre = _getUserDisplayName();
-    pl.estado = 'aprobada';
+    // v248: state -> aprobada_inicial (intermedio). El estado final 'aprobada'
+    // lo setea la persona de DESCUENTOS al finalizar su parte.
+    pl.estado = 'aprobada_inicial';
     pl.fechaRespuesta = ahora;
     pl.pmEmail = pmEmail;
     pl.pmNombre = pmNombre;
-    pl.historial.push({ fecha: ahora, evento: 'aprobada', autor: pmEmail, autorNombre: pmNombre, comentario: '' });
+    if(!Array.isArray(pl.descuentosPlanilla)) pl.descuentosPlanilla = [];
+    pl.historial.push({ fecha: ahora, evento: 'aprobada_inicial', autor: pmEmail, autorNombre: pmNombre, comentario: 'Visto bueno PM — pendiente descuentos' });
 
     (p.planilla.pagos || []).forEach(pg => {
       if(pl.pagosIds.includes(pg.id)){
         pg.autorizado = true;
-        pg.estadoPlanilla = 'aprobada';
+        pg.estadoPlanilla = 'aprobada_inicial';
         pg.fechaAutorizado = ahora;
         pg.autorizadoPor = pmEmail;
       }
@@ -29043,7 +29061,179 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
     try { if(typeof saveState === 'function') saveState(); } catch(e){ console.error('[v226] saveState error:', e); }
     try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
-    showT('PLANILLA #'+pl.numero+' APROBADA · DESCARGA DE EXCEL EN FASE 2','green');
+    showT('PLANILLA #'+pl.numero+' APROBADA INICIALMENTE · PENDIENTE DESCUENTOS','green');
+  };
+
+  // v248: agregar/eliminar descuentos a una planilla en estado aprobada_inicial
+  window.abrirModalAgregarDescuento = function(planillaId){
+    if(!window.isDescuentosPlanilla()){ showT('SIN PERMISO PARA AGREGAR DESCUENTOS','red'); return; }
+    const p = _activeProj();
+    if(!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    const pl = (p.planilla && p.planilla.planillasArmadas || []).find(x => x.id === planillaId);
+    if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
+    if(pl.estado !== 'aprobada_inicial'){ showT('SOLO SE PUEDE AGREGAR DESCUENTOS EN PLANILLAS APROBADAS INICIALMENTE','red'); return; }
+    // Colaboradores que participan en esta planilla (extraidos de los pagos)
+    const colabsMap = {};
+    (p.planilla.pagos||[]).filter(pg => pl.pagosIds.includes(pg.id)).forEach(pg => {
+      const k = upper(pg.colaborador || 'SIN NOMBRE');
+      if(!colabsMap[k]) colabsMap[k] = { nombre: k, colaboradorId: pg.colaboradorId || '' };
+    });
+    const colabs = Object.values(colabsMap).sort((a,b)=>a.nombre.localeCompare(b.nombre));
+    if(!colabs.length){ showT('LA PLANILLA NO TIENE COLABORADORES','red'); return; }
+
+    const prev = document.getElementById('v248DescModal');
+    if(prev) prev.remove();
+
+    const subtipos = [
+      ['PRESTAMO',        'PRÉSTAMO'],
+      ['POLIZA',          'PÓLIZA DE SEGURO'],
+      ['EQUIPO_PRESTADO', 'EQUIPO PRESTADO'],
+      ['ABONO_PREVIO',    'ABONO PREVIO'],
+      ['OTRO',            'OTRO DESCUENTO']
+    ];
+
+    const html = ''
+      + '<div id="v248DescModal" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:15px">'
+      +   '<div style="background:#fff;border-radius:10px;max-width:560px;width:100%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.4)">'
+      +     '<div style="padding:14px 18px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;background:#1565C0;color:#fff;border-radius:10px 10px 0 0">'
+      +       '<h3 style="margin:0;font-size:15px">AGREGAR DESCUENTO · PLANILLA #'+pl.numero+'</h3>'
+      +       '<button onclick="window._v248CerrarDescModal()" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer;line-height:1">×</button>'
+      +     '</div>'
+      +     '<div style="padding:18px;overflow-y:auto;flex:1;display:grid;gap:12px">'
+      +       '<div><label style="font-size:10px;letter-spacing:1px;color:#666;font-weight:700;text-transform:uppercase">Trabajador</label>'
+      +         '<select id="v248DescColab" style="width:100%;padding:9px;border:1px solid #ccc;border-radius:4px;font-size:13px;margin-top:4px">'
+      +           colabs.map(c => '<option value="'+esc(c.nombre)+'" data-id="'+esc(c.colaboradorId||'')+'">'+esc(c.nombre)+'</option>').join('')
+      +         + '</select></div>'
+      +       '<div><label style="font-size:10px;letter-spacing:1px;color:#666;font-weight:700;text-transform:uppercase">Tipo</label>'
+      +         '<select id="v248DescSubtipo" onchange="window._v248ToggleCuotas()" style="width:100%;padding:9px;border:1px solid #ccc;border-radius:4px;font-size:13px;margin-top:4px">'
+      +           subtipos.map(s => '<option value="'+s[0]+'">'+s[1]+'</option>').join('')
+      +         + '</select></div>'
+      +       '<div><label style="font-size:10px;letter-spacing:1px;color:#666;font-weight:700;text-transform:uppercase">Descripción</label>'
+      +         '<input id="v248DescDesc" type="text" placeholder="EJ: Nivel Laser 360 / Préstamo Personal" style="width:100%;padding:9px;border:1px solid #ccc;border-radius:4px;font-size:13px;margin-top:4px;text-transform:uppercase"></div>'
+      +       '<div><label style="font-size:10px;letter-spacing:1px;color:#666;font-weight:700;text-transform:uppercase">Monto a descontar (Q)</label>'
+      +         '<input id="v248DescMonto" type="number" step="0.01" min="0" placeholder="0.00" style="width:100%;padding:9px;border:1px solid #ccc;border-radius:4px;font-size:13px;margin-top:4px"></div>'
+      +       '<div id="v248CuotasBox" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+      +         '<div><label style="font-size:10px;letter-spacing:1px;color:#666;font-weight:700;text-transform:uppercase">Cuota actual</label>'
+      +           '<input id="v248DescCuotaAct" type="number" step="1" min="1" placeholder="1" style="width:100%;padding:9px;border:1px solid #ccc;border-radius:4px;font-size:13px;margin-top:4px"></div>'
+      +         '<div><label style="font-size:10px;letter-spacing:1px;color:#666;font-weight:700;text-transform:uppercase">Total cuotas</label>'
+      +           '<input id="v248DescCuotaTot" type="number" step="1" min="1" placeholder="6" style="width:100%;padding:9px;border:1px solid #ccc;border-radius:4px;font-size:13px;margin-top:4px"></div>'
+      +       '</div>'
+      +       '<div style="font-size:10.5px;color:#666;background:#F1F5F9;padding:8px 10px;border-radius:4px;border-left:3px solid #475569">Las cuotas son opcionales. Si dejás vacío, no se muestran. Si pusiste 2 y 6 → aparecerá "(2/6)" en el PDF.</div>'
+      +     '</div>'
+      +     '<div style="padding:12px 16px;border-top:1px solid #eee;background:#F7F7F7;display:flex;gap:8px;justify-content:flex-end;border-radius:0 0 10px 10px">'
+      +       '<button class="btn ghost" onclick="window._v248CerrarDescModal()">CANCELAR</button>'
+      +       '<button class="btn" onclick="window._v248GuardarDescuento(\''+esc(pl.id)+'\')" style="background:#2E7D32;border-color:#2E7D32;color:#fff">AGREGAR DESCUENTO</button>'
+      +     '</div>'
+      +   '</div>'
+      + '</div>';
+
+    const wrap = document.createElement('div'); wrap.innerHTML = html;
+    document.body.appendChild(wrap.firstElementChild);
+  };
+
+  window._v248CerrarDescModal = function(){ const m = document.getElementById('v248DescModal'); if(m) m.remove(); };
+  window._v248ToggleCuotas = function(){
+    const sub = document.getElementById('v248DescSubtipo')?.value;
+    const box = document.getElementById('v248CuotasBox');
+    if(!box) return;
+    // Cuotas tipicas en PRESTAMO, EQUIPO_PRESTADO, POLIZA. Para ABONO_PREVIO/OTRO se muestran tambien (opcionales).
+    box.style.display = (sub ? 'grid' : 'none');
+  };
+  window._v248GuardarDescuento = function(planillaId){
+    if(!window.isDescuentosPlanilla()){ showT('SIN PERMISO','red'); return; }
+    const p = _activeProj();
+    if(!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    const pl = (p.planilla && p.planilla.planillasArmadas || []).find(x => x.id === planillaId);
+    if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
+    if(pl.estado !== 'aprobada_inicial'){ showT('LA PLANILLA YA NO ESTÁ EN ESTADO APROBADA INICIAL','red'); return; }
+
+    const colabSel = document.getElementById('v248DescColab');
+    const subtipo  = (document.getElementById('v248DescSubtipo')?.value || '').toUpperCase();
+    const desc     = (document.getElementById('v248DescDesc')?.value || '').trim();
+    const monto    = Number(document.getElementById('v248DescMonto')?.value || 0);
+    const cuotaAct = Number(document.getElementById('v248DescCuotaAct')?.value || 0);
+    const cuotaTot = Number(document.getElementById('v248DescCuotaTot')?.value || 0);
+    if(!colabSel || !colabSel.value){ showT('SELECCIONÁ UN TRABAJADOR','red'); return; }
+    if(!subtipo){ showT('SELECCIONÁ EL TIPO DE DESCUENTO','red'); return; }
+    if(!desc){ showT('AGREGÁ UNA DESCRIPCIÓN','red'); return; }
+    if(!(monto > 0)){ showT('EL MONTO DEBE SER MAYOR A 0','red'); return; }
+
+    const colaboradorId = colabSel.options[colabSel.selectedIndex]?.getAttribute('data-id') || '';
+    const ahora = nowStr();
+    const autor = _getUserEmail();
+    const autorNombre = _getUserDisplayName();
+
+    if(!Array.isArray(pl.descuentosPlanilla)) pl.descuentosPlanilla = [];
+    pl.descuentosPlanilla.push({
+      id: 'desc-'+uid(),
+      subtipo: subtipo,
+      desc: desc.toUpperCase(),
+      monto: +monto.toFixed(2),
+      cuotaActual: cuotaAct > 0 ? cuotaAct : null,
+      cuotasTotales: cuotaTot > 0 ? cuotaTot : null,
+      colaboradorNombre: colabSel.value,
+      colaboradorId: colaboradorId,
+      ts: ahora,
+      autor: autor,
+      autorNombre: autorNombre
+    });
+    pl.historial.push({ fecha: ahora, evento: 'descuento_agregado', autor: autor, autorNombre: autorNombre, comentario: subtipo+' · '+colabSel.value+' · '+desc+' · Q '+monto.toFixed(2) });
+
+    try { if(typeof saveState === 'function') saveState(); } catch(e){ console.error('[v248] save error:', e); }
+    window._v248CerrarDescModal();
+    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+    showT('DESCUENTO AGREGADO','green');
+  };
+
+  window.eliminarDescuentoPlanilla = function(planillaId, descuentoId){
+    if(!window.isDescuentosPlanilla()){ showT('SIN PERMISO','red'); return; }
+    const p = _activeProj();
+    if(!p) return;
+    const pl = (p.planilla && p.planilla.planillasArmadas || []).find(x => x.id === planillaId);
+    if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
+    if(pl.estado !== 'aprobada_inicial'){ showT('NO SE PUEDE ELIMINAR DESCUENTOS DE UNA PLANILLA YA FINALIZADA','red'); return; }
+    const idx = (pl.descuentosPlanilla||[]).findIndex(d => d.id === descuentoId);
+    if(idx < 0) return;
+    const d = pl.descuentosPlanilla[idx];
+    if(!confirm('ELIMINAR ESTE DESCUENTO\n\n'+d.colaboradorNombre+'\n'+d.desc+'\nMONTO: '+money(d.monto)+'\n\n¿Confirmás?')) return;
+    pl.descuentosPlanilla.splice(idx, 1);
+    pl.historial.push({ fecha: nowStr(), evento: 'descuento_eliminado', autor: _getUserEmail(), autorNombre: _getUserDisplayName(), comentario: d.subtipo+' · '+d.colaboradorNombre+' · '+d.desc+' · Q '+(Number(d.monto)||0).toFixed(2) });
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+    showT('DESCUENTO ELIMINADO','green');
+  };
+
+  window.finalizarDescuentosPlanilla = function(planillaId){
+    if(!window.isDescuentosPlanilla()){ showT('SIN PERMISO PARA FINALIZAR DESCUENTOS','red'); return; }
+    const p = _activeProj();
+    if(!p) return;
+    const pl = (p.planilla && p.planilla.planillasArmadas || []).find(x => x.id === planillaId);
+    if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
+    if(pl.estado !== 'aprobada_inicial'){ showT('SOLO SE PUEDE FINALIZAR PLANILLAS EN ESTADO APROBADA INICIAL','red'); return; }
+    const desc = (pl.descuentosPlanilla||[]);
+    const totalDesc = desc.reduce((s,d)=>s+Number(d.monto||0),0);
+    if(!confirm('FINALIZAR DESCUENTOS DE PLANILLA #'+pl.numero+'\n\n'
+      + desc.length+' descuento'+(desc.length!==1?'s':'')+'\n'
+      + 'Total descontado: '+money(totalDesc)+'\n\n'
+      + 'Tras finalizar, la planilla queda en estado APROBADA y\n'
+      + 'el PM podrá generar el PDF final con estos descuentos.\n'
+      + 'Ya no se podrán agregar/quitar descuentos.\n\n'
+      + '¿Confirmás?')) return;
+
+    const ahora = nowStr();
+    const autor = _getUserEmail();
+    const autorNombre = _getUserDisplayName();
+    pl.estado = 'aprobada';
+    pl.fechaDescuentosFinalizado = ahora;
+    pl.descuentosFinalizadoEmail = autor;
+    pl.descuentosFinalizadoNombre = autorNombre;
+    pl.historial.push({ fecha: ahora, evento: 'descuentos_finalizados', autor: autor, autorNombre: autorNombre, comentario: desc.length+' descuento(s) · Total: Q '+totalDesc.toFixed(2) });
+    (p.planilla.pagos||[]).forEach(pg => {
+      if(pl.pagosIds.includes(pg.id)) pg.estadoPlanilla = 'aprobada';
+    });
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+    showT('DESCUENTOS FINALIZADOS · PLANILLA APROBADA','green');
   };
 
   window.rechazarPlanilla = function(planillaId){
@@ -29161,20 +29351,28 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       html += '</div>';
     }
 
-    // ─ LISTA DE PLANILLAS (v238: separar activas de cerradas) ─
-    // Activas = pendientes de PM o rechazadas. Aparecen completas porque
-    // requieren accion del usuario (aprobar, rechazar, modificar).
-    // Cerradas = aprobadas o archivadas. Van en una seccion HISTORIAL
-    // colapsable abajo, con resumen compacto, para no saturar la pantalla
-    // a medida que se acumulan.
-    const activas  = arr.filter(pl => pl.estado === 'pendiente_pm' || pl.estado === 'rechazada');
+    // ─ LISTA DE PLANILLAS (v248: incluir aprobada_inicial como activa) ─
+    // Activas = pendiente_pm + rechazada + aprobada_inicial (esta nueva en v248,
+    // requiere accion de la persona de DESCUENTOS).
+    // Cerradas = aprobada (fully done) + archivada.
+    const activas  = arr.filter(pl => pl.estado === 'pendiente_pm' || pl.estado === 'rechazada' || pl.estado === 'aprobada_inicial');
     const cerradas = arr.filter(pl => pl.estado === 'aprobada' || pl.estado === 'archivada');
+    const isDescPerm = (typeof window.isDescuentosPlanilla === 'function') ? window.isDescuentosPlanilla() : false;
 
     const renderTarjetaCompleta = (pl) => {
-      const colorBorde = pl.estado==='pendiente_pm' ? '#F57C00' : (pl.estado==='aprobada' ? '#2E7D32' : (pl.estado==='rechazada' ? '#C62828' : '#999'));
-      const colorBg = pl.estado==='pendiente_pm' ? '#FFF3E0' : (pl.estado==='aprobada' ? '#E8F5E9' : (pl.estado==='rechazada' ? '#FFEBEE' : '#F5F5F5'));
+      const colorBorde = pl.estado==='pendiente_pm' ? '#F57C00'
+                       : pl.estado==='aprobada_inicial' ? '#1565C0'
+                       : pl.estado==='aprobada' ? '#2E7D32'
+                       : pl.estado==='rechazada' ? '#C62828'
+                       : '#999';
+      const colorBg = pl.estado==='pendiente_pm' ? '#FFF3E0'
+                    : pl.estado==='aprobada_inicial' ? '#E3F2FD'
+                    : pl.estado==='aprobada' ? '#E8F5E9'
+                    : pl.estado==='rechazada' ? '#FFEBEE'
+                    : '#F5F5F5';
       const labelEstado = ({
         'pendiente_pm':'PENDIENTE DE AUTORIZACIÓN',
+        'aprobada_inicial':'APROBADA POR PM · PENDIENTE DESCUENTOS',
         'aprobada':'APROBADA Y PAGADA',
         'rechazada':'RECHAZADA',
         'archivada':'ARCHIVADA (MODIFICADA)'
@@ -29204,6 +29402,29 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         });
         h2 += '</div>';
       }
+      // v248: bloque de DESCUENTOS APLICADOS — visible en aprobada_inicial siempre,
+      // y en aprobada solo si hay descuentos (registro historico).
+      const descuentosPl = pl.descuentosPlanilla || [];
+      if(pl.estado === 'aprobada_inicial' || (pl.estado === 'aprobada' && descuentosPl.length > 0)){
+        const totDesc = descuentosPl.reduce((s,d)=>s+Number(d.monto||0),0);
+        h2 += '<div style="margin:0 14px 10px;padding:10px 12px;background:#fff;border-left:3px solid #1565C0;font-size:12px;border-radius:4px">';
+        h2 += '<div style="font-weight:600;margin-bottom:6px;color:#1565C0;display:flex;justify-content:space-between"><span>DESCUENTOS APLICADOS · '+descuentosPl.length+'</span>'+(descuentosPl.length>0?'<span style="color:#C62828">-'+money(totDesc)+'</span>':'')+'</div>';
+        if(descuentosPl.length === 0){
+          h2 += '<div style="font-style:italic;color:#888;font-size:11px;padding:4px 0">— SIN DESCUENTOS AGREGADOS TODAVÍA —</div>';
+        } else {
+          descuentosPl.forEach(d => {
+            const cuotaTxt = (d.cuotasTotales && d.cuotasTotales > 1) ? '('+(d.cuotaActual||1)+'/'+d.cuotasTotales+') ' : '';
+            h2 += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-bottom:1px dashed #eee;font-size:11px">';
+            h2 += '<div style="flex:1"><strong>'+esc(d.colaboradorNombre || '')+'</strong> · '+esc(cuotaTxt + (d.desc || d.subtipo || ''))+'</div>';
+            h2 += '<div style="font-weight:700;color:#C62828;min-width:80px;text-align:right">-'+money(d.monto||0)+'</div>';
+            if(pl.estado === 'aprobada_inicial' && (isDescPerm || isAdmin)){
+              h2 += '<button class="btn ghost sm" onclick="window.eliminarDescuentoPlanilla(\''+esc(pl.id)+'\',\''+esc(d.id)+'\')" title="Eliminar descuento" style="color:#C62828;border-color:#C62828;font-size:9px;padding:2px 7px">×</button>';
+            }
+            h2 += '</div>';
+          });
+        }
+        h2 += '</div>';
+      }
       h2 += '<div style="padding:10px 14px;border-top:1px dashed '+colorBorde+';display:flex;flex-wrap:wrap;gap:8px;background:rgba(255,255,255,.4)">';
       if(pl.estado === 'pendiente_pm' && (isPM || isAdmin)){
         h2 += '<button class="btn" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.aprobarPlanilla(\''+esc(pl.id)+'\')">AUTORIZAR Y PAGAR PLANILLA</button>';
@@ -29211,6 +29432,11 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       }
       if(pl.estado === 'rechazada' && (isSup || isAdmin)){
         h2 += '<button class="btn" onclick="window.modificarPlanillaRechazada(\''+esc(pl.id)+'\')">MODIFICAR Y REENVIAR</button>';
+      }
+      // v248: botones para la persona de DESCUENTOS en estado aprobada_inicial
+      if(pl.estado === 'aprobada_inicial' && (isDescPerm || isAdmin)){
+        h2 += '<button class="btn" style="background:#1565C0;border-color:#1565C0;color:#fff" onclick="window.abrirModalAgregarDescuento(\''+esc(pl.id)+'\')">+ AGREGAR DESCUENTO</button>';
+        h2 += '<button class="btn" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.finalizarDescuentosPlanilla(\''+esc(pl.id)+'\')">FINALIZAR DESCUENTOS</button>';
       }
       h2 += '<button class="btn ghost sm" onclick="window.previewPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#1C1917;color:#1C1917">VER PREVIEW PDF</button>';
       h2 += '<button class="btn ghost sm" onclick="window.descargarPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#2E7D32;color:#2E7D32">DESCARGAR PDF</button>';
@@ -29393,14 +29619,24 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       };
       porColab[k].pagos.push(pg);
     });
-    // Anexar ajustes (OC y descuentos) por colaboradorId
+    // v248: los DESCUENTOS ahora vienen de la planilla armada (descuentosPlanilla),
+    // los agrega la persona con permiso 'planilla.descuentos' despues que el PM
+    // autoriza inicialmente. Las OCs siguen viniendo de p.planilla.ajustes.
     const colabIds = new Set(pagosF.map(pg => pg.colaboradorId).filter(Boolean));
-    const ajustes = (p && p.planilla && p.planilla.ajustes || []).filter(a => a && a.colaboradorId && colabIds.has(a.colaboradorId));
-    ajustes.forEach(a => {
+    // OCs desde p.planilla.ajustes (flujo aparte, no por planilla)
+    const ocs = (p && p.planilla && p.planilla.ajustes || []).filter(a => a && a.colaboradorId && colabIds.has(a.colaboradorId) && (a.tipo === 'ORDEN_CAMBIO' || a.tipo === 'ORDEN DE CAMBIO'));
+    ocs.forEach(a => {
       const k = upper(a.colaboradorNombre || '');
       if(!porColab[k]) return;
-      if(a.tipo === 'ORDEN_CAMBIO' || a.tipo === 'ORDEN DE CAMBIO') porColab[k].ocs.push(a);
-      else porColab[k].descuentos.push(a);
+      porColab[k].ocs.push(a);
+    });
+    // Descuentos desde la planilla.descuentosPlanilla (si la planilla existe)
+    const planillaObj = meta && meta.planilla ? meta.planilla : null;
+    const descuentosPl = (planillaObj && Array.isArray(planillaObj.descuentosPlanilla)) ? planillaObj.descuentosPlanilla : [];
+    descuentosPl.forEach(d => {
+      const k = upper(d.colaboradorNombre || '');
+      if(!porColab[k]) return;
+      porColab[k].descuentos.push(d);
     });
     // Calcular totales por colaborador
     Object.values(porColab).forEach(c => {
@@ -29964,7 +30200,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       numero: pl.numero, fecha: pl.fechaEnvio || pl.fechaCreacion,
       planillaId: pl.id, estado: pl.estado,
       supervisorNombre: pl.supervisorNombre || '',
-      pmNombre: pl.pmNombre || ''
+      pmNombre: pl.pmNombre || '',
+      planilla: pl  // v248: para que _construirDatos lea pl.descuentosPlanilla
     });
     if(!data.colabs.length) return showT('NO HAY DATOS PARA MOSTRAR','red');
     _abrirPreviewModal(data);
@@ -29979,7 +30216,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       numero: pl.numero, fecha: pl.fechaEnvio || pl.fechaCreacion,
       planillaId: pl.id, estado: pl.estado,
       supervisorNombre: pl.supervisorNombre || '',
-      pmNombre: pl.pmNombre || ''
+      pmNombre: pl.pmNombre || '',
+      planilla: pl  // v248: para que _construirDatos lea pl.descuentosPlanilla
     });
     if(!data.colabs.length) return showT('NO HAY DATOS PARA MOSTRAR','red');
     await _generarYDescargarExcel(data);
