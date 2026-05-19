@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v231</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v232</span>
   </footer>
 
 </div>
@@ -28598,8 +28598,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       +       '</div>'
       +       '<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">'
       +         '<button class="btn ghost" onclick="window._v226CerrarModal()">CANCELAR</button>'
-      +         '<button class="btn ghost" onclick="window.previewPlanillaSeleccion()" style="border-color:#1C1917;color:#1C1917">PREVISUALIZAR EXCEL</button>'
-      +         '<button class="btn ghost" onclick="window.descargarPlanillaSeleccion()" style="border-color:#1C1917;color:#1C1917">DESCARGAR BORRADOR</button>'
+      +         '<button class="btn ghost" onclick="window.previewPlanillaSeleccion()" style="border-color:#1C1917;color:#1C1917">PREVISUALIZAR PDF</button>'
+      +         '<button class="btn ghost" onclick="window.descargarPlanillaSeleccion()" style="border-color:#1C1917;color:#1C1917">DESCARGAR PDF (BORRADOR)</button>'
       +         '<button class="btn" id="v226BtnEnviar" onclick="window._v226Enviar()" style="background:#2E7D32;border-color:#2E7D32;color:#fff">ENVIAR PLANILLA A PROJECT MANAGER</button>'
       +       '</div>'
       +     '</div>'
@@ -28900,9 +28900,9 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         if(pl.estado === 'rechazada' && (isSup || isAdmin)){
           html += '<button class="btn" onclick="window.modificarPlanillaRechazada(\''+esc(pl.id)+'\')">MODIFICAR Y REENVIAR</button>';
         }
-        // v229: PREVIEW + DESCARGA disponibles en todos los estados
-        html += '<button class="btn ghost sm" onclick="window.previewPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#1C1917;color:#1C1917">VER PREVIEW EXCEL</button>';
-        html += '<button class="btn ghost sm" onclick="window.descargarPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#2E7D32;color:#2E7D32">DESCARGAR EXCEL</button>';
+        // v229/v232: PREVIEW + DESCARGA PDF disponibles en todos los estados
+        html += '<button class="btn ghost sm" onclick="window.previewPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#1C1917;color:#1C1917">VER PREVIEW PDF</button>';
+        html += '<button class="btn ghost sm" onclick="window.descargarPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#2E7D32;color:#2E7D32">DESCARGAR PDF</button>';
         html += '<button class="btn ghost sm" onclick="window.verHistorialPlanilla(\''+esc(pl.id)+'\')">VER HISTORIAL</button>';
         html += '</div>';
         html += '</div>';
@@ -29249,44 +29249,103 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     r.height = 32;
   }
 
+  // v232: la descarga ahora genera PDF (formato pedido por el usuario),
+  // no Excel. Se mantiene el nombre de la funcion por compatibilidad con
+  // los callers internos; ExcelJS ya no se usa aqui.
   async function _generarYDescargarExcel(data){
     try {
-      showT('GENERANDO EXCEL...','');
-      const ExcelJS = await _loadExcelJSv229();
-      const wb = new ExcelJS.Workbook();
-      wb.creator = 'Punto Rojo';
-      wb.created = new Date();
-      const S = _styles();
-      const wsR = wb.addWorksheet('RESUMEN', { pageSetup: { paperSize:9, orientation:'landscape', fitToPage:true } });
-      _addResumenSheet(wsR, data, S);
-      const usados = new Set();
+      if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) {
+        return showT('LIBRERÍA PDF NO CARGADA — RECARGAR LA APP','red');
+      }
+      showT('GENERANDO PDF...','');
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+
+      let y = 36;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(13);
+      const titulo = 'PLANILLA TABLAYESO - ' + (data.proyecto||'').toUpperCase() + (data.torres?' - '+data.torres.toUpperCase():'');
+      doc.text(titulo, 306, y, { align:'center' });
+      y += 14;
+      doc.setFont('helvetica','normal');
+      doc.setFontSize(9);
+      const numTxt = data.numero === 'PREVIEW' ? 'PREVIEW · NO ENVIADA' : 'PLANILLA #'+data.numero+' · '+String(data.estado||'').replace(/_/g,' ').toUpperCase();
+      const subTxt = numTxt + ' · GENERADO ' + _fmtFecha(data.fecha);
+      doc.text(subTxt, 306, y, { align:'center' });
+      y += 12;
+      if(data.supervisorNombre || data.pmNombre){
+        const meta = (data.supervisorNombre?'SUPERVISOR: '+data.supervisorNombre:'') + (data.supervisorNombre && data.pmNombre?'   ·   ':'') + (data.pmNombre?'PM: '+data.pmNombre:'');
+        doc.text(meta, 306, y, { align:'center' });
+        y += 12;
+      }
+      y += 6;
+
+      const body = [];
       data.colabs.forEach(c => {
-        let base = _safeSheetName(c.nombre);
-        let nombre = base, n = 1;
-        while(usados.has(nombre)){ n++; nombre = base.slice(0, 28-String(n).length) + ' ' + n; }
-        usados.add(nombre);
-        const ws = wb.addWorksheet(nombre, {
-          pageSetup: { paperSize:9, orientation:'portrait', fitToPage:true, fitToWidth:1, fitToHeight:0 },
-          properties: { defaultRowHeight:22 }
+        body.push([
+          { content: c.nombre + (c.rol?'  ('+c.rol+')':''), styles: { fontStyle:'bold', fillColor:[230,230,230] } },
+          { content: 'Q '+(Number(c.totalNeto)||0).toFixed(2), styles: { fontStyle:'bold', halign:'right', fillColor:[230,230,230] } }
+        ]);
+        c.pagos.forEach(pg => {
+          const idx = Number(pg.stageIdx||0);
+          const lbl = ((pg.towerName||'') + ' ' + (pg.aptoName||'') + ' ETAPA ' + (idx+1) + ' ABONO ' + (pg.pctDelta||100) + '%').toUpperCase().trim();
+          body.push([
+            lbl,
+            { content: 'Q '+(Number(pg.bruto||0)).toFixed(2), styles: { halign:'right' } }
+          ]);
         });
-        _addColabSheet(ws, c, data, S);
+        c.pagos.forEach(pg => {
+          const ret = Number(pg.retencion || (Number(pg.bruto||0)*0.10));
+          if(ret <= 0) return;
+          const aptoT = ((pg.towerName||'') + ' ' + (pg.aptoName||'')).trim();
+          body.push([
+            { content: '(-) RETENCIÓN 10% - '+aptoT.toUpperCase(), styles: { textColor:[200,20,28] } },
+            { content: '-Q '+ret.toFixed(2), styles: { halign:'right', textColor:[200,20,28] } }
+          ]);
+        });
+        c.descuentos.forEach(d => {
+          const cuotaTxt = (d.cuotasTotales && d.cuotasTotales > 1) ? '('+(d.cuotaActual||1)+'/'+d.cuotasTotales+') ' : '';
+          const lbl = '(-) '+cuotaTxt+(d.desc || d.subtipo || 'DESCUENTO');
+          body.push([
+            { content: lbl.toUpperCase(), styles: { textColor:[200,20,28] } },
+            { content: '-Q '+(Number(d.monto||0)).toFixed(2), styles: { halign:'right', textColor:[200,20,28] } }
+          ]);
+        });
+        c.ocs.forEach(oc => {
+          const m = Number(oc.neto || oc.monto || 0);
+          body.push([
+            { content: ('(+) OC: '+(oc.desc||'')).toUpperCase(), styles: { textColor:[22,101,52] } },
+            { content: '+Q '+m.toFixed(2), styles: { halign:'right', textColor:[22,101,52] } }
+          ]);
+        });
       });
-      const buf = await wb.xlsx.writeBuffer();
-      const blob = new Blob([buf], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const numeroTxt = data.numero === 'PREVIEW' ? 'PREVIEW' : 'PLN'+data.numero;
+      body.push([
+        { content: 'GRAN TOTAL', styles: { fontStyle:'bold', halign:'right', fillColor:[255,235,59] } },
+        { content: 'Q '+(Number(data.granTotal.neto)||0).toFixed(2), styles: { fontStyle:'bold', halign:'right', fillColor:[255,235,59] } }
+      ]);
+
+      doc.autoTable({
+        startY: y,
+        head: [[
+          { content: 'PAGO DE PLANILLA', styles: { halign:'left',  fillColor:[200,200,200], textColor:[0,0,0], fontStyle:'bold' } },
+          { content: 'TOTAL',            styles: { halign:'right', fillColor:[200,200,200], textColor:[0,0,0], fontStyle:'bold' } }
+        ]],
+        body: body,
+        theme: 'grid',
+        styles: { fontSize: 9, cellPadding: 4, lineColor:[180,180,180], lineWidth:0.3, font:'helvetica' },
+        columnStyles: { 0: { cellWidth: 380 }, 1: { cellWidth: 110, halign:'right' } },
+        margin: { left: 40, right: 40 }
+      });
+
+      const numeroTxt2 = data.numero === 'PREVIEW' ? 'PREVIEW' : 'PLN'+data.numero;
       const projClean = (data.proyecto||'PROYECTO').toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/_+$/,'');
       const fechaArch = (new Date()).toISOString().slice(0,10).replace(/-/g,'');
-      const filename = 'Planilla_'+projClean+'_'+numeroTxt+'_'+fechaArch+'.xlsx';
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(()=>{ try { URL.revokeObjectURL(a.href); a.remove(); } catch(e){} }, 1500);
-      showT('EXCEL DESCARGADO: '+filename,'green');
+      const filename = 'Planilla_'+projClean+'_'+numeroTxt2+'_'+fechaArch+'.pdf';
+      doc.save(filename);
+      showT('PDF DESCARGADO: '+filename,'green');
     } catch(e){
-      console.error('[v229] Excel error:', e);
-      showT('ERROR GENERANDO EXCEL: '+e.message,'red');
+      console.error('[v232] PDF error:', e);
+      showT('ERROR GENERANDO PDF: '+(e&&e.message?e.message:e),'red');
     }
   }
 
@@ -29391,7 +29450,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       +     '<div style="flex:1;overflow:auto;display:flex;flex-direction:column">' + bodyHtml + '</div>'
       +     '<div style="padding:12px 16px;border-top:1px solid #eee;background:#F7F7F7;display:flex;gap:8px;justify-content:flex-end;border-radius:0 0 10px 10px;flex-wrap:wrap">'
       +       '<button class="btn ghost" onclick="window._v229CerrarPreview()">CERRAR</button>'
-      +       '<button class="btn" id="v229BtnDescargar" style="background:#2E7D32;border-color:#2E7D32;color:#fff">DESCARGAR EXCEL</button>'
+      +       '<button class="btn" id="v229BtnDescargar" style="background:#2E7D32;border-color:#2E7D32;color:#fff">DESCARGAR PDF</button>'
       +     '</div>'
       +   '</div>'
       + '</div>';
@@ -29403,9 +29462,9 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(btnDl) btnDl.onclick = async () => {
       btnDl.disabled = true;
       const orig = btnDl.textContent;
-      btnDl.textContent = 'GENERANDO...';
-      try { await _generarYDescargarExcel(data); }
-      catch(e){ console.error('[v229] download:', e); }
+      btnDl.textContent = 'GENERANDO PDF...';
+      try { await _generarYDescargarExcel(data); }  // genera PDF en v232+
+      catch(e){ console.error('[v232] download:', e); }
       btnDl.disabled = false;
       btnDl.textContent = orig;
     };
