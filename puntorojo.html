@@ -2459,7 +2459,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v243</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v244</span>
   </footer>
 
 </div>
@@ -29671,64 +29671,77 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       y += 6;
 
       // ─── Filas de la tabla ───
-      // Formato v242: por trabajador
-      //   1. Header del trabajador (nombre + rol, fondo gris, sin monto)
-      //   2. Pagos (apto/etapa/abono, label izq, monto der)
-      //   3. Retenciones (label DERECHA, monto DERECHA, rojo)
-      //   4. Descuentos (label DERECHA, monto DERECHA, rojo)
-      //   5. OCs (label DERECHA, monto DERECHA, verde)
-      //   6. TOTAL <NOMBRE> en verde con monto NETO
-      //   7. Fila vacia separadora
-      // Pie: "GRAN TOTAL" general en amarillo.
+      // Formato v244 (matchea foto 2): por trabajador
+      //   1. Header del trabajador (oscuro): NOMBRE (ROL)  |  Liquidacion del <fecha>
+      //   2. Pagos: "TORRE - APTO - ETAPA N - ABONO M%"  |  Q bruto
+      //   3. TOTAL (fondo gris): "TOTAL"  |  Q subtotal_bruto  (BAJO los pagos)
+      //   4. Retenciones (fondo crema, rojo, label DERECHA)
+      //   5. Descuentos (fondo crema, rojo, label DERECHA)
+      //   6. OCs (verde claro, sumando)
+      //   7. GRAN TOTAL <NOMBRE> (amarillo, bold): NETO del trabajador
+      //   8. Fila vacia separadora
+      // Pie: "GRAN TOTAL PLANILLA" general en amarillo (suma de todos).
+      const _fechaTxt = _fmtFecha(data.fecha);
       const body = [];
       data.colabs.forEach((c, idx) => {
-        // 1. Header del trabajador (sin total)
+        // 1. Header del trabajador (oscuro): nombre + liquidacion
         body.push([
           { content: c.nombre + (c.rol?'  ('+c.rol+')':''), styles: { fontStyle:'bold', fillColor:[55,55,60], textColor:[255,255,255] } },
-          { content: '', styles: { fillColor:[55,55,60] } }
+          { content: 'Liquidacion del ' + _fechaTxt, styles: { fillColor:[55,55,60], textColor:[255,255,255], halign:'right' } }
         ]);
-        // 2. Pagos
+        // 2. Pagos con formato "TORRE - APTO - ETAPA - ABONO"
         c.pagos.forEach(pg => {
           const sIdx = Number(pg.stageIdx||0);
-          const lbl = ((pg.towerName||'') + ' ' + (pg.aptoName||'') + ' ETAPA ' + (sIdx+1) + ' ABONO ' + (pg.pctDelta||100) + '%').toUpperCase().trim();
+          const partes = [];
+          if(pg.towerName) partes.push(String(pg.towerName).trim());
+          if(pg.aptoName)  partes.push(String(pg.aptoName).trim());
+          partes.push('ETAPA ' + (sIdx+1));
+          partes.push('ABONO ' + (pg.pctDelta||100) + '%');
+          const lbl = partes.join(' - ').toUpperCase();
           body.push([
             lbl,
             { content: 'Q '+(Number(pg.bruto||0)).toFixed(2), styles: { halign:'right' } }
           ]);
         });
-        // 3. Retenciones por apto (label derecha, rojo)
+        // 3. TOTAL (fondo gris, subtotal bruto). Va ABAJO de los pagos
+        //    y ARRIBA de los descuentos — como pidio el usuario.
+        body.push([
+          { content: 'TOTAL', styles: { fontStyle:'bold', halign:'right', fillColor:[229,229,229] } },
+          { content: 'Q '+(Number(c.totalBruto)||0).toFixed(2), styles: { fontStyle:'bold', halign:'right', fillColor:[229,229,229] } }
+        ]);
+        // 4. Retenciones (fondo crema, label derecha, rojo)
         c.pagos.forEach(pg => {
           const ret = Number(pg.retencion || (Number(pg.bruto||0)*0.10));
           if(ret <= 0) return;
-          const aptoT = ((pg.towerName||'') + ' ' + (pg.aptoName||'')).trim();
+          const aptoT = ((pg.towerName||'').trim() + ' - ' + (pg.aptoName||'').trim()).replace(/^ - | - $/g,'');
           body.push([
-            { content: '(-) RETENCIÓN 10% - '+aptoT.toUpperCase(), styles: { halign:'right', textColor:[200,20,28] } },
-            { content: '-Q '+ret.toFixed(2), styles: { halign:'right', textColor:[200,20,28] } }
+            { content: '(-) RETENCIÓN 10% - '+aptoT.toUpperCase(), styles: { halign:'right', textColor:[200,20,28], fillColor:[254,243,199] } },
+            { content: '-Q '+ret.toFixed(2), styles: { halign:'right', textColor:[200,20,28], fillColor:[254,243,199] } }
           ]);
         });
-        // 4. Descuentos (abonos previos, polizas, prestamos, equipos)
+        // 5. Descuentos (abonos previos, polizas, prestamos, equipos)
         c.descuentos.forEach(d => {
           const cuotaTxt = (d.cuotasTotales && d.cuotasTotales > 1) ? '('+(d.cuotaActual||1)+'/'+d.cuotasTotales+') ' : '';
           const lbl = '(-) '+cuotaTxt+(d.desc || d.subtipo || 'DESCUENTO');
           body.push([
-            { content: lbl.toUpperCase(), styles: { halign:'right', textColor:[200,20,28] } },
-            { content: '-Q '+(Number(d.monto||0)).toFixed(2), styles: { halign:'right', textColor:[200,20,28] } }
+            { content: lbl.toUpperCase(), styles: { halign:'right', textColor:[200,20,28], fillColor:[254,243,199] } },
+            { content: '-Q '+(Number(d.monto||0)).toFixed(2), styles: { halign:'right', textColor:[200,20,28], fillColor:[254,243,199] } }
           ]);
         });
-        // 5. OCs (suman, verde)
+        // 6. OCs (sumando, verde palido)
         c.ocs.forEach(oc => {
           const m = Number(oc.neto || oc.monto || 0);
           body.push([
-            { content: ('(+) OC: '+(oc.desc||'')).toUpperCase(), styles: { halign:'right', textColor:[22,101,52] } },
-            { content: '+Q '+m.toFixed(2), styles: { halign:'right', textColor:[22,101,52] } }
+            { content: ('(+) OC: '+(oc.desc||'')).toUpperCase(), styles: { halign:'right', textColor:[22,101,52], fillColor:[220,252,231] } },
+            { content: '+Q '+m.toFixed(2), styles: { halign:'right', textColor:[22,101,52], fillColor:[220,252,231] } }
           ]);
         });
-        // 6. TOTAL <NOMBRE> — verde, bold, blanco
+        // 7. GRAN TOTAL <NOMBRE> — amarillo bold (NETO)
         body.push([
-          { content: 'TOTAL '+c.nombre, styles: { fontStyle:'bold', halign:'right', fillColor:[22,163,74], textColor:[255,255,255] } },
-          { content: 'Q '+(Number(c.totalNeto)||0).toFixed(2), styles: { fontStyle:'bold', halign:'right', fillColor:[22,163,74], textColor:[255,255,255] } }
+          { content: 'GRAN TOTAL '+c.nombre, styles: { fontStyle:'bold', halign:'right', fillColor:[255,235,59] } },
+          { content: 'Q '+(Number(c.totalNeto)||0).toFixed(2), styles: { fontStyle:'bold', halign:'right', fillColor:[255,235,59] } }
         ]);
-        // 7. Fila vacia separadora (solo si no es el ultimo)
+        // 8. Fila vacia separadora (solo si no es el ultimo)
         if(idx < data.colabs.length - 1){
           body.push([
             { content: '', styles: { fillColor:[255,255,255] } },
@@ -29736,11 +29749,17 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           ]);
         }
       });
-      // Pie: GRAN TOTAL en amarillo
-      body.push([
-        { content: 'GRAN TOTAL', styles: { fontStyle:'bold', halign:'right', fillColor:[255,235,59] } },
-        { content: 'Q '+(Number(data.granTotal.neto)||0).toFixed(2), styles: { fontStyle:'bold', halign:'right', fillColor:[255,235,59] } }
-      ]);
+      // Pie: GRAN TOTAL PLANILLA (suma del proyecto) — amarillo brillante
+      if(data.colabs.length > 1){
+        body.push([
+          { content: '', styles: { fillColor:[255,255,255] } },
+          { content: '', styles: { fillColor:[255,255,255] } }
+        ]);
+        body.push([
+          { content: 'GRAN TOTAL PLANILLA', styles: { fontStyle:'bold', halign:'right', fillColor:[255,215,0], textColor:[0,0,0] } },
+          { content: 'Q '+(Number(data.granTotal.neto)||0).toFixed(2), styles: { fontStyle:'bold', halign:'right', fillColor:[255,215,0], textColor:[0,0,0] } }
+        ]);
+      }
 
       doc.autoTable({
         startY: y,

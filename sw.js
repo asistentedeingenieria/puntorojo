@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v243-planilla-generada-trabajadores-colapsables';
+const CACHE_VERSION = 'v244-pdf-formato-essenza-total-arriba-descuentos-abajo';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
