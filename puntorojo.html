@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v224</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v225</span>
   </footer>
 
 </div>
@@ -26703,8 +26703,11 @@ window.addEventListener('load', () => {
     const canGen=can('planilla.generate')||can('users.manage'); const canAuth=can('planilla.authorize')||can('users.manage');
     const colab=selectedColab5(p); const colRole=normalizeRole(colab?.rol);
     // v223: layout limpio. Titulo a la izq + nav inline + toolbar compacto.
+    // v225: agregado boton LIMPIAR PAGOS (solo admin) para hacer pruebas.
+    const hayPagos = (p.planilla?.pagos||[]).length > 0;
     let html=`<div class="card"><div class="card-hd" style="display:flex;align-items:center;gap:10px">
       <h3 style="flex:1;margin:0;text-align:left">PAGOS POR ETAPA Y APARTAMENTO</h3>
+      ${can('users.manage') && hayPagos ? `<button class="btn ghost sm" onclick="limpiarPagosPlanilla()" title="Borrar todos los pagos del proyecto (uso: pruebas)" style="color:var(--red);border-color:var(--red)">🧹 LIMPIAR PAGOS</button>` : ''}
       <button class="btn ghost sm" onclick="setPlanillaTab('colaboradores')" title="Ir a Colaboradores">COLABORADORES</button>
       <button class="btn ghost sm" onclick="setPlanillaTab('receta')" title="Ir a Modelos y Costos">MODELOS / COSTOS</button>
     </div>`;
@@ -28423,6 +28426,55 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
     showT(`ASIGNADOS ${detecciones.length} APTOS` + (aptosSinMatch.length>0 ? ` · ${aptosSinMatch.length} SIN MATCH` : ''), 'green');
     event.target.value = '';
+  };
+
+  /* ═══════ v225: BOTON LIMPIAR PAGOS (para hacer pruebas sin ensuciar el proyecto) ═══════
+     Borra solo p.planilla.pagos y p.planilla.retencionesPagadas del proyecto activo.
+     NO toca: modelos, costos, etapas, colaboradores, ajustes (OC/descuentos). */
+  window.limpiarPagosPlanilla = function(){
+    if(typeof can === 'function' && !can('users.manage')){
+      showT('SOLO EL ADMINISTRADOR PUEDE LIMPIAR PAGOS','red'); return;
+    }
+    const S = (typeof state !== 'undefined' && state) ? state : window.state;
+    if(!S){ showT('ERROR: STATE','red'); return; }
+    const p = (typeof activeProj === 'function') ? activeProj() : null;
+    if(!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+
+    const pagos = p.planilla?.pagos || [];
+    const retsPag = p.planilla?.retencionesPagadas || [];
+
+    if(pagos.length === 0 && retsPag.length === 0){
+      showT('NO HAY PAGOS PARA LIMPIAR','red');
+      return;
+    }
+
+    const totalBruto = pagos.reduce((s,pg) => s + Number(pg.bruto||0), 0);
+    const totalNeto = pagos.reduce((s,pg) => s + Number(pg.neto||0), 0);
+    const totalRet = pagos.reduce((s,pg) => s + Number(pg.retencion||0), 0);
+    const fmtQ = (typeof fQ === 'function') ? fQ : (n => 'Q '+Number(n).toFixed(2));
+
+    const ok = confirm(
+      `LIMPIAR PAGOS DEL PROYECTO\n\n` +
+      `${p.name}\n\n` +
+      `Esto va a BORRAR:\n` +
+      `• ${pagos.length} pago${pagos.length!==1?'s':''} generado${pagos.length!==1?'s':''}\n` +
+      `• ${retsPag.length} retención${retsPag.length!==1?'es':''} pagada${retsPag.length!==1?'s':''}\n\n` +
+      `Totales que se van a borrar:\n` +
+      `• Bruto: ${fmtQ(totalBruto)}\n` +
+      `• Retención 10%: ${fmtQ(totalRet)}\n` +
+      `• Neto: ${fmtQ(totalNeto)}\n\n` +
+      `NO se tocan: modelos, costos, etapas, colaboradores, OC/descuentos.\n\n` +
+      `Esta acción NO se puede deshacer. ¿Continuar?`
+    );
+    if(!ok) return;
+
+    p.planilla.pagos = [];
+    p.planilla.retencionesPagadas = [];
+
+    try { saveState(); } catch(e){ console.error('[v225] saveState error:', e); }
+    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){ console.error('[v225] render error:', e); }
+
+    showT(`LIMPIADOS ${pagos.length} PAGO${pagos.length!==1?'S':''} · ${retsPag.length} RETENCIÓN${retsPag.length!==1?'ES':''}`, 'green');
   };
 })();
 </script>
