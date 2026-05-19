@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v225</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v226</span>
   </footer>
 
 </div>
@@ -28401,5 +28401,483 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
     showT(`LIMPIADOS ${pagos.length} PAGO${pagos.length!==1?'S':''} · ${retsPag.length} RETENCIÓN${retsPag.length!==1?'ES':''}`, 'green');
   };
+})();
+</script>
+
+<!-- ════════ v226 FASE 1 · FLUJO DE APROBACIÓN DE PLANILLAS QUINCENALES ════════
+     Supervisor selecciona pagos → "ARMAR PLANILLA Y ENVIAR A PM"
+     PM ve resumen → AUTORIZAR Y PAGAR PLANILLA  |  RECHAZAR CON COMENTARIO
+     Rechazada → Supervisor puede MODIFICAR (libera los pagos y vuelve a armar)
+     Aprobada → pagos quedan AUTORIZADOS. Descarga de Excel viene en FASE 2.
+     ──────────────────────────────────────────────────────────────────────── -->
+<script id="pr-v226-planilla-approval">
+(function(){
+  'use strict';
+
+  // ─── CONFIG DE EMAILS ───────────────────────────────────────────────
+  window.SUPERVISORES_PLANILLA = ['supervisor1@puntorojosa.com'];
+  window.PMS_PLANILLA = ['proyectos@puntorojosa.com'];
+
+  // ─── UTILS LOCALES ──────────────────────────────────────────────────
+  function showT(msg, type){ if(typeof showToast === 'function') showToast(msg, type||''); else alert(msg); }
+  function esc(s){ return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+  function money(n){ try { return typeof fQ === 'function' ? fQ(Number(n)||0) : 'Q ' + (Number(n)||0).toFixed(2); } catch(e){ return 'Q ' + (Number(n)||0).toFixed(2); } }
+  function upper(s){ return String(s||'').trim().toUpperCase(); }
+  function uid(){ return Math.random().toString(36).slice(2,10); }
+  function nowStr(){ return new Date().toISOString(); }
+  function fmtDate(iso){ if(!iso) return '—'; try { return new Date(iso).toLocaleString('es-GT'); } catch(e){ return iso; } }
+  function _activeProj(){ try { return typeof activeProj === 'function' ? activeProj() : null; } catch(e){ return null; } }
+
+  function _getUserEmail(){
+    try {
+      if(typeof getCurrentUser === 'function'){
+        const u = getCurrentUser();
+        if(u && u.email) return String(u.email).toLowerCase().trim();
+      }
+    } catch(e){}
+    try {
+      if(typeof firebase !== 'undefined' && firebase.auth){
+        const u = firebase.auth().currentUser;
+        if(u && u.email) return String(u.email).toLowerCase().trim();
+      }
+    } catch(e){}
+    return '';
+  }
+  window._getUserEmail = _getUserEmail;
+
+  window.isSupervisorPlanilla = function(){
+    const e = _getUserEmail();
+    if(!e) return false;
+    return (window.SUPERVISORES_PLANILLA || []).map(x => String(x).toLowerCase().trim()).includes(e);
+  };
+  window.isPMPlanilla = function(){
+    const e = _getUserEmail();
+    if(!e) return false;
+    return (window.PMS_PLANILLA || []).map(x => String(x).toLowerCase().trim()).includes(e);
+  };
+
+  // ─── MIGRACIÓN (idempotente, se llama on-demand) ─────────────────────
+  function _ensurePlanillasArmadas(p){
+    if(!p) return;
+    if(!p.planilla) p.planilla = {};
+    if(!Array.isArray(p.planilla.planillasArmadas)) p.planilla.planillasArmadas = [];
+  }
+  window._ensurePlanillasArmadas = _ensurePlanillasArmadas;
+
+  // ─── HELPERS DE LÓGICA ───────────────────────────────────────────────
+  function _pagosDisponiblesParaArmar(p){
+    const pagos = (p && p.planilla && p.planilla.pagos) || [];
+    const planillas = (p && p.planilla && p.planilla.planillasArmadas) || [];
+    return pagos.filter(pg => {
+      if(!pg || !pg.id) return false;
+      if(pg.tipo && pg.tipo !== 'ETAPA') return false;
+      if(pg.planillaId){
+        const pl = planillas.find(x => x.id === pg.planillaId);
+        if(pl && (pl.estado === 'pendiente_pm' || pl.estado === 'aprobada')) return false;
+      }
+      return true;
+    });
+  }
+
+  function _calcTotalesPlanilla(p, pagosIds){
+    const pagos = ((p && p.planilla && p.planilla.pagos) || []).filter(pg => pagosIds.includes(pg.id));
+    let bruto = 0, retencion = 0, neto = 0;
+    pagos.forEach(pg => {
+      bruto += Number(pg.bruto || pg.monto || pg.neto || 0);
+      retencion += Number(pg.retencion || 0);
+      neto += Number(pg.neto || pg.monto || 0);
+    });
+    return { bruto, retencion, neto, count: pagos.length };
+  }
+
+  function _nextPlanillaNumero(p){
+    const arr = (p && p.planilla && p.planilla.planillasArmadas) || [];
+    if(!arr.length) return 1;
+    return Math.max(...arr.map(x => Number(x.numero||0))) + 1;
+  }
+
+  // ─── MODAL DE SELECCIÓN: ARMAR PLANILLA ──────────────────────────────
+  window.abrirModalArmarPlanilla = function(){
+    const isSup = window.isSupervisorPlanilla();
+    const isAdmin = (typeof can === 'function' && can('users.manage'));
+    if(!isSup && !isAdmin){
+      showT('SOLO EL SUPERVISOR PUEDE ARMAR PLANILLAS','red'); return;
+    }
+    const p = _activeProj();
+    if(!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    _ensurePlanillasArmadas(p);
+    const disponibles = _pagosDisponiblesParaArmar(p);
+    if(!disponibles.length){
+      showT('NO HAY PAGOS DISPONIBLES PARA ARMAR PLANILLA','red'); return;
+    }
+    const by = {};
+    disponibles.forEach(pg => {
+      const k = upper(pg.colaborador || 'SIN NOMBRE');
+      (by[k] = by[k] || []).push(pg);
+    });
+    let rowsHtml = '';
+    Object.entries(by).forEach(([name, items]) => {
+      const subtotal = items.reduce((s,x)=>s+Number(x.neto||x.monto||0),0);
+      const role = upper((items.find(x=>x.colaboradorRol)||{}).colaboradorRol || '');
+      rowsHtml += '<div style="margin:10px 0;padding:10px;border:1px solid #ddd;border-radius:6px;background:#FAFAFA">';
+      rowsHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+      rowsHtml += '<strong style="font-size:13px">'+esc(name)+(role?' · '+esc(role):'')+'</strong>';
+      rowsHtml += '<label style="font-size:11px;cursor:pointer"><input type="checkbox" class="v226-grp-chk" data-grp="'+esc(name)+'" checked onchange="window._v226ToggleGroup(this)"> SELECCIONAR TODO</label>';
+      rowsHtml += '</div>';
+      items.forEach(pg => {
+        const idx = Number(pg.stageIdx||0);
+        const stName = upper(pg.stageName||'');
+        rowsHtml += '<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;font-size:12px;cursor:pointer;border-top:1px dashed #e5e5e5">';
+        rowsHtml += '<input type="checkbox" class="v226-pg-chk" data-grp="'+esc(name)+'" value="'+esc(pg.id)+'" checked onchange="window._v226UpdateSummary()">';
+        rowsHtml += '<span style="flex:1">'+esc(pg.towerName||'')+' '+esc(pg.aptoName||'')+' · ETAPA '+(idx+1)+(stName?' '+esc(stName):'')+' · ABONO '+esc(pg.pctDelta||100)+'%</span>';
+        rowsHtml += '<span style="font-weight:600;min-width:90px;text-align:right">'+money(pg.neto||pg.monto||0)+'</span>';
+        rowsHtml += '</label>';
+      });
+      rowsHtml += '<div style="text-align:right;font-weight:600;font-size:12px;color:#555;margin-top:6px">SUBTOTAL: '+money(subtotal)+'</div>';
+      rowsHtml += '</div>';
+    });
+
+    const modalHtml = ''
+      + '<div id="v226ArmarModal" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:15px">'
+      +   '<div style="background:#fff;border-radius:10px;max-width:820px;width:100%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.4)">'
+      +     '<div style="padding:14px 18px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;background:#C62828;color:#fff;border-radius:10px 10px 0 0">'
+      +       '<h3 style="margin:0;font-size:15px;letter-spacing:.5px">ARMAR PLANILLA QUINCENAL · '+esc(p.name||'')+'</h3>'
+      +       '<button onclick="window._v226CerrarModal()" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer;line-height:1">×</button>'
+      +     '</div>'
+      +     '<div style="padding:10px 18px;background:#FFF8E1;border-bottom:1px solid #eee;font-size:12px">'
+      +       'Seleccioná los pagos que querés incluir. Cuando envíes la planilla al Project Manager, esos pagos quedan <strong>pendientes de autorización</strong>.'
+      +     '</div>'
+      +     '<div style="padding:14px 18px;overflow-y:auto;flex:1">'+rowsHtml+'</div>'
+      +     '<div style="padding:14px 18px;border-top:1px solid #eee;background:#F7F7F7;border-radius:0 0 10px 10px">'
+      +       '<div id="v226Summary" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-size:14px">'
+      +         '<span>SELECCIONADOS: <strong id="v226Count">0</strong> PAGOS</span>'
+      +         '<span>TOTAL NETO: <strong id="v226Total">'+money(0)+'</strong></span>'
+      +       '</div>'
+      +       '<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">'
+      +         '<button class="btn ghost" onclick="window._v226CerrarModal()">CANCELAR</button>'
+      +         '<button class="btn" id="v226BtnEnviar" onclick="window._v226Enviar()" style="background:#2E7D32;border-color:#2E7D32;color:#fff">ENVIAR PLANILLA A PROJECT MANAGER</button>'
+      +       '</div>'
+      +     '</div>'
+      +   '</div>'
+      + '</div>';
+
+    const wrap = document.createElement('div');
+    wrap.innerHTML = modalHtml;
+    document.body.appendChild(wrap.firstElementChild);
+    window._v226UpdateSummary();
+  };
+
+  window._v226CerrarModal = function(){
+    const m = document.getElementById('v226ArmarModal');
+    if(m) m.remove();
+  };
+  window._v226ToggleGroup = function(chk){
+    const grp = chk.getAttribute('data-grp') || '';
+    document.querySelectorAll('.v226-pg-chk').forEach(c => {
+      if(c.getAttribute('data-grp') === grp) c.checked = chk.checked;
+    });
+    window._v226UpdateSummary();
+  };
+  window._v226UpdateSummary = function(){
+    const checks = Array.from(document.querySelectorAll('.v226-pg-chk:checked'));
+    const p = _activeProj();
+    if(!p) return;
+    const pagos = (p.planilla && p.planilla.pagos) || [];
+    let total = 0, count = 0;
+    checks.forEach(c => {
+      const pg = pagos.find(x => x.id === c.value);
+      if(pg){ total += Number(pg.neto||pg.monto||0); count++; }
+    });
+    const elC = document.getElementById('v226Count');
+    const elT = document.getElementById('v226Total');
+    const btn = document.getElementById('v226BtnEnviar');
+    if(elC) elC.textContent = count;
+    if(elT) elT.textContent = money(total);
+    if(btn){ btn.disabled = count === 0; btn.style.opacity = count===0?'.5':'1'; }
+  };
+
+  window._v226Enviar = function(){
+    const p = _activeProj();
+    if(!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    _ensurePlanillasArmadas(p);
+    const ids = Array.from(document.querySelectorAll('.v226-pg-chk:checked')).map(c => c.value);
+    if(!ids.length){ showT('SELECCIONÁ AL MENOS UN PAGO','red'); return; }
+    const totales = _calcTotalesPlanilla(p, ids);
+    const numero = _nextPlanillaNumero(p);
+    const ahora = nowStr();
+    const supEmail = _getUserEmail();
+
+    if(!confirm('ENVIAR PLANILLA #'+numero+' AL PROJECT MANAGER\n\n'
+      + totales.count+' PAGOS\n'
+      + 'TOTAL NETO: '+money(totales.neto)+'\n'
+      + 'RETENCIÓN 10%: '+money(totales.retencion)+'\n'
+      + 'BRUTO: '+money(totales.bruto)+'\n\n'
+      + 'Una vez enviada, los pagos quedan PENDIENTES DE AUTORIZACIÓN y no podrás modificarlos hasta que el PM los apruebe o los rechace.\n\n'
+      + '¿Confirmás el envío?')) return;
+
+    const planilla = {
+      id: 'pln-'+uid(),
+      numero: numero,
+      estado: 'pendiente_pm',
+      fechaCreacion: ahora,
+      fechaEnvio: ahora,
+      fechaRespuesta: null,
+      supervisorEmail: supEmail,
+      pmEmail: null,
+      pagosIds: ids,
+      totales: totales,
+      comentariosPm: [],
+      intentos: 1,
+      historial: [
+        { fecha: ahora, evento: 'creada', autor: supEmail, comentario: '' },
+        { fecha: ahora, evento: 'enviada', autor: supEmail, comentario: '' }
+      ]
+    };
+
+    p.planilla.planillasArmadas.push(planilla);
+    (p.planilla.pagos || []).forEach(pg => {
+      if(ids.includes(pg.id)){
+        pg.planillaId = planilla.id;
+        pg.estadoPlanilla = 'pendiente_pm';
+      }
+    });
+
+    try { if(typeof saveState === 'function') saveState(); } catch(e){ console.error('[v226] saveState error:', e); }
+    window._v226CerrarModal();
+    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+    showT('PLANILLA #'+numero+' ENVIADA AL PM','green');
+  };
+
+  // ─── ACCIONES DEL PM ─────────────────────────────────────────────────
+  window.aprobarPlanilla = function(planillaId){
+    const isPM = window.isPMPlanilla();
+    const isAdmin = (typeof can === 'function' && can('users.manage'));
+    if(!isPM && !isAdmin){ showT('SOLO EL PROJECT MANAGER PUEDE APROBAR','red'); return; }
+    const p = _activeProj();
+    if(!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    _ensurePlanillasArmadas(p);
+    const pl = p.planilla.planillasArmadas.find(x => x.id === planillaId);
+    if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
+    if(pl.estado !== 'pendiente_pm'){ showT('SOLO PLANILLAS PENDIENTES SE PUEDEN APROBAR','red'); return; }
+
+    if(!confirm('AUTORIZAR Y PAGAR PLANILLA #'+pl.numero+'\n\n'
+      + pl.totales.count+' PAGOS\n'
+      + 'TOTAL NETO: '+money(pl.totales.neto)+'\n'
+      + 'RETENCIÓN 10%: '+money(pl.totales.retencion)+'\n'
+      + 'BRUTO: '+money(pl.totales.bruto)+'\n\n'
+      + 'Esto autoriza definitivamente todos los pagos.\n'
+      + 'En FASE 2 vas a poder descargar el Excel.\n\n'
+      + '¿Confirmás la autorización?')) return;
+
+    const ahora = nowStr();
+    const pmEmail = _getUserEmail();
+    pl.estado = 'aprobada';
+    pl.fechaRespuesta = ahora;
+    pl.pmEmail = pmEmail;
+    pl.historial.push({ fecha: ahora, evento: 'aprobada', autor: pmEmail, comentario: '' });
+
+    (p.planilla.pagos || []).forEach(pg => {
+      if(pl.pagosIds.includes(pg.id)){
+        pg.autorizado = true;
+        pg.estadoPlanilla = 'aprobada';
+        pg.fechaAutorizado = ahora;
+        pg.autorizadoPor = pmEmail;
+      }
+    });
+
+    try { if(typeof saveState === 'function') saveState(); } catch(e){ console.error('[v226] saveState error:', e); }
+    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+    showT('PLANILLA #'+pl.numero+' APROBADA · DESCARGA DE EXCEL EN FASE 2','green');
+  };
+
+  window.rechazarPlanilla = function(planillaId){
+    const isPM = window.isPMPlanilla();
+    const isAdmin = (typeof can === 'function' && can('users.manage'));
+    if(!isPM && !isAdmin){ showT('SOLO EL PROJECT MANAGER PUEDE RECHAZAR','red'); return; }
+    const p = _activeProj();
+    if(!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    _ensurePlanillasArmadas(p);
+    const pl = p.planilla.planillasArmadas.find(x => x.id === planillaId);
+    if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
+    if(pl.estado !== 'pendiente_pm'){ showT('SOLO PLANILLAS PENDIENTES SE PUEDEN RECHAZAR','red'); return; }
+
+    const comentario = (prompt('RECHAZAR PLANILLA #'+pl.numero+'\n\nIndicá qué necesita corregir el supervisor:\n') || '').trim();
+    if(!comentario){ showT('SE REQUIERE COMENTARIO PARA RECHAZAR','red'); return; }
+
+    const ahora = nowStr();
+    const pmEmail = _getUserEmail();
+    pl.estado = 'rechazada';
+    pl.fechaRespuesta = ahora;
+    pl.pmEmail = pmEmail;
+    pl.comentariosPm.push({ fecha: ahora, texto: comentario, autor: pmEmail });
+    pl.historial.push({ fecha: ahora, evento: 'rechazada', autor: pmEmail, comentario: comentario });
+
+    (p.planilla.pagos || []).forEach(pg => {
+      if(pl.pagosIds.includes(pg.id)) pg.estadoPlanilla = 'rechazada';
+    });
+
+    try { if(typeof saveState === 'function') saveState(); } catch(e){ console.error('[v226] saveState error:', e); }
+    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+    showT('PLANILLA #'+pl.numero+' RECHAZADA','red');
+  };
+
+  window.modificarPlanillaRechazada = function(planillaId){
+    const isSup = window.isSupervisorPlanilla();
+    const isAdmin = (typeof can === 'function' && can('users.manage'));
+    if(!isSup && !isAdmin){ showT('SOLO EL SUPERVISOR PUEDE MODIFICAR PLANILLAS','red'); return; }
+    const p = _activeProj();
+    if(!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    _ensurePlanillasArmadas(p);
+    const pl = p.planilla.planillasArmadas.find(x => x.id === planillaId);
+    if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
+    if(pl.estado !== 'rechazada'){ showT('SOLO PLANILLAS RECHAZADAS SE PUEDEN MODIFICAR','red'); return; }
+
+    if(!confirm('MODIFICAR PLANILLA #'+pl.numero+' RECHAZADA\n\n'
+      + 'Esto LIBERA los pagos para que puedas armar una planilla nueva (agregando o quitando los que necesites).\n\n'
+      + 'La planilla rechazada queda ARCHIVADA en el historial.\n\n'
+      + '¿Continuar?')) return;
+
+    const ahora = nowStr();
+    const supEmail = _getUserEmail();
+    pl.estado = 'archivada';
+    pl.historial.push({ fecha: ahora, evento: 'modificada', autor: supEmail, comentario: 'Liberada para nueva edición' });
+
+    (p.planilla.pagos || []).forEach(pg => {
+      if(pl.pagosIds.includes(pg.id)){
+        delete pg.planillaId;
+        delete pg.estadoPlanilla;
+      }
+    });
+
+    try { if(typeof saveState === 'function') saveState(); } catch(e){ console.error('[v226] saveState error:', e); }
+    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+    setTimeout(() => { try { window.abrirModalArmarPlanilla(); } catch(e){} }, 250);
+  };
+
+  window.verHistorialPlanilla = function(planillaId){
+    const p = _activeProj();
+    if(!p) return;
+    const pl = (p.planilla && p.planilla.planillasArmadas || []).find(x => x.id === planillaId);
+    if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
+    let txt = 'HISTORIAL · PLANILLA #'+pl.numero+'\n';
+    txt += 'ESTADO ACTUAL: '+upper(pl.estado)+'\n\n';
+    (pl.historial || []).forEach(h => {
+      txt += '• '+fmtDate(h.fecha)+' — '+upper(h.evento)+' por '+(h.autor||'?');
+      if(h.comentario) txt += '\n  ' + h.comentario;
+      txt += '\n';
+    });
+    alert(txt);
+  };
+
+  // ─── RENDER DEL BLOQUE "PLANILLAS QUINCENALES" ──────────────────────
+  window.renderPlanillasArmadasBlock = function(){
+    const p = _activeProj();
+    if(!p) return '';
+    _ensurePlanillasArmadas(p);
+    const arr = ((p.planilla && p.planilla.planillasArmadas) || []).slice().sort((a,b)=>(b.numero||0)-(a.numero||0));
+    const isSup = window.isSupervisorPlanilla();
+    const isPM = window.isPMPlanilla();
+    const isAdmin = (typeof can === 'function' && can('users.manage'));
+    if(!isSup && !isPM && !isAdmin) return '';
+
+    const disponibles = _pagosDisponiblesParaArmar(p);
+    const totalDisp = disponibles.reduce((s,x)=>s+Number(x.neto||x.monto||0),0);
+    const yo = _getUserEmail();
+    const rolTxt = isAdmin && !isSup && !isPM ? 'ADMIN (modo prueba)' : (isSup && isPM ? 'SUPERVISOR + PM' : (isSup ? 'SUPERVISOR' : (isPM ? 'PROJECT MANAGER' : 'ADMIN')));
+
+    let html = '<div class="card" style="margin-top:18px;border:2px solid #C62828;border-radius:10px;overflow:hidden">';
+    html += '<div style="padding:12px 16px;background:#C62828;color:#fff;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">';
+    html += '<h3 style="margin:0;font-size:14px;letter-spacing:.5px">PLANILLAS QUINCENALES · FLUJO DE APROBACIÓN</h3>';
+    html += '<span style="font-size:11px;opacity:.95">VOS: '+esc(rolTxt)+(yo?' · '+esc(yo):'')+'</span>';
+    html += '</div>';
+
+    if(isSup || isAdmin){
+      html += '<div style="padding:14px 16px;border-bottom:1px solid #eee;background:#FFF8E1">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">';
+      html += '<div style="font-size:13px"><strong>'+(isSup?'SUPERVISOR':'ADMIN')+'</strong> · '+disponibles.length+' pago'+(disponibles.length!==1?'s':'')+' disponible'+(disponibles.length!==1?'s':'')+' para armar · TOTAL '+money(totalDisp)+'</div>';
+      html += '<button class="btn" '+(disponibles.length===0?'disabled':'')+' onclick="window.abrirModalArmarPlanilla()" style="background:#C62828;border-color:#C62828;color:#fff">ARMAR PLANILLA Y ENVIAR A PM</button>';
+      html += '</div>';
+      html += '<div style="font-size:11px;color:#666;margin-top:6px">Seleccioná los pagos para enviar al PM. Una vez enviada queda pendiente de autorización.</div>';
+      html += '</div>';
+    }
+
+    if(!arr.length){
+      html += '<div style="padding:24px;text-align:center;color:#888;font-size:13px">— SIN PLANILLAS ARMADAS TODAVÍA —</div>';
+    } else {
+      arr.forEach(pl => {
+        const colorBorde = pl.estado==='pendiente_pm' ? '#F57C00' : (pl.estado==='aprobada' ? '#2E7D32' : (pl.estado==='rechazada' ? '#C62828' : '#999'));
+        const colorBg = pl.estado==='pendiente_pm' ? '#FFF3E0' : (pl.estado==='aprobada' ? '#E8F5E9' : (pl.estado==='rechazada' ? '#FFEBEE' : '#F5F5F5'));
+        const labelEstado = ({
+          'pendiente_pm':'PENDIENTE DE AUTORIZACIÓN',
+          'aprobada':'APROBADA Y PAGADA',
+          'rechazada':'RECHAZADA',
+          'archivada':'ARCHIVADA (MODIFICADA)'
+        })[pl.estado] || upper(pl.estado);
+
+        html += '<div style="margin:12px 14px;border:1.5px solid '+colorBorde+';border-radius:8px;background:'+colorBg+';overflow:hidden">';
+        html += '<div style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;background:rgba(255,255,255,.55);flex-wrap:wrap;gap:6px">';
+        html += '<div><strong style="font-size:14px">PLANILLA #'+pl.numero+'</strong> · '+esc(labelEstado)+(pl.intentos>1?' · INTENTO '+pl.intentos:'')+'</div>';
+        html += '<div style="font-size:12px;color:#444">'+pl.totales.count+' PAGOS · '+money(pl.totales.neto)+' NETO</div>';
+        html += '</div>';
+        html += '<div style="padding:10px 14px;font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:6px 16px">';
+        html += '<div><strong>Supervisor:</strong> '+esc(pl.supervisorEmail||'—')+'</div>';
+        html += '<div><strong>Enviada:</strong> '+esc(fmtDate(pl.fechaEnvio))+'</div>';
+        html += '<div><strong>PM:</strong> '+esc(pl.pmEmail||'(pendiente)')+'</div>';
+        html += '<div><strong>Respondida:</strong> '+esc(fmtDate(pl.fechaRespuesta))+'</div>';
+        html += '<div><strong>Bruto:</strong> '+money(pl.totales.bruto)+'</div>';
+        html += '<div><strong>Retención 10%:</strong> '+money(pl.totales.retencion)+'</div>';
+        html += '</div>';
+        if(pl.comentariosPm && pl.comentariosPm.length){
+          html += '<div style="margin:0 14px 10px;padding:8px 10px;background:#fff;border-left:3px solid '+colorBorde+';font-size:12px;border-radius:4px">';
+          html += '<div style="font-weight:600;margin-bottom:4px;color:#C62828">COMENTARIOS DEL PM</div>';
+          pl.comentariosPm.forEach(c => {
+            html += '<div style="margin-bottom:4px"><em>'+esc(fmtDate(c.fecha))+' — '+esc(c.autor||'PM')+':</em><br>'+esc(c.texto)+'</div>';
+          });
+          html += '</div>';
+        }
+        html += '<div style="padding:10px 14px;border-top:1px dashed '+colorBorde+';display:flex;flex-wrap:wrap;gap:8px;background:rgba(255,255,255,.4)">';
+        if(pl.estado === 'pendiente_pm' && (isPM || isAdmin)){
+          html += '<button class="btn" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.aprobarPlanilla(\''+esc(pl.id)+'\')">AUTORIZAR Y PAGAR PLANILLA</button>';
+          html += '<button class="btn ghost" style="border-color:#C62828;color:#C62828" onclick="window.rechazarPlanilla(\''+esc(pl.id)+'\')">RECHAZAR CON COMENTARIO</button>';
+        }
+        if(pl.estado === 'rechazada' && (isSup || isAdmin)){
+          html += '<button class="btn" onclick="window.modificarPlanillaRechazada(\''+esc(pl.id)+'\')">MODIFICAR Y REENVIAR</button>';
+        }
+        html += '<button class="btn ghost sm" onclick="window.verHistorialPlanilla(\''+esc(pl.id)+'\')">VER HISTORIAL</button>';
+        if(pl.estado === 'aprobada'){
+          html += '<button class="btn ghost sm" disabled title="Disponible en FASE 2" style="opacity:.6">DESCARGAR EXCEL (FASE 2)</button>';
+        }
+        html += '</div>';
+        html += '</div>';
+      });
+    }
+
+    html += '</div>';
+    return html;
+  };
+
+  // ─── INTEGRACIÓN: wrap renderPlanillaPagosList ──────────────────────
+  function tryWrap(){
+    if(typeof window.renderPlanillaPagosList !== 'function'){
+      setTimeout(tryWrap, 500);
+      return;
+    }
+    if(window.renderPlanillaPagosList.__v226Wrapped) return;
+    const original = window.renderPlanillaPagosList;
+    window.renderPlanillaPagosList = function(canAuth){
+      let baseHtml = '';
+      try { baseHtml = original.call(this, canAuth) || ''; } catch(e){ console.error('[v226] base render error:', e); }
+      let block = '';
+      try { block = window.renderPlanillasArmadasBlock() || ''; } catch(e){ console.error('[v226] block render error:', e); }
+      return baseHtml + block;
+    };
+    window.renderPlanillaPagosList.__v226Wrapped = true;
+    console.log('[v226] renderPlanillaPagosList wrapped — flujo de planillas activo');
+  }
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', tryWrap);
+  } else {
+    tryWrap();
+  }
 })();
 </script>
