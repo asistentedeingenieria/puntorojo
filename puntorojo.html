@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v236</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v237</span>
   </footer>
 
 </div>
@@ -21160,7 +21160,113 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     if(typeof renderPlanillaRetenciones === 'function') renderPlanillaRetenciones();
   };
 
-  window.pagarRetencion = function(name){ if(!can('planilla.generate')&&!can('users.manage')) return showToast('SIN PERMISO','red'); const p=activeProj(); const pagos=(p.planilla.pagos||[]).filter(x=>x.colaborador===name && x.retencion>0 && !x.retencionPagada); const total=pagos.reduce((s,x)=>s+Number(x.retencion||0),0); if(!confirm(`PAGAR TODAS LAS RETENCIONES A ${name}\n${pagos.length} retencion${pagos.length!==1?'es':''}\nTOTAL: ${fQ(total)}`)) return; pagos.forEach(x=>x.retencionPagada=true); p.planilla.retencionesPagadas.push({id:'ret-'+uid(),name,total,ts:Date.now(),pagosIds:pagos.map(x=>x.id),tipo:'lote'}); logActivity('paid',`Retención pagada a ${name}`,`${p.name} · ${fQ(total)} · ${pagos.length} retencion${pagos.length!==1?'es':''}`); saveState(); renderPlanilla(); showToast('RETENCIONES PAGADAS','green'); };
+  // v237: generador de PDF para el comprobante de pago de retencion.
+  // Se llama tanto desde el pago individual como desde el pago por lote.
+  function _generarPDFRetencionLocal(opts){
+    try {
+      if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) {
+        showToast('LIBRERÍA PDF NO CARGADA','red'); return;
+      }
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+      let y = 38;
+
+      doc.setFont('helvetica','bold');
+      doc.setFontSize(15);
+      doc.text('COMPROBANTE DE PAGO DE RETENCIÓN', 306, y, { align:'center' });
+      y += 18;
+      doc.setFontSize(11);
+      doc.text((opts.proyecto || '').toUpperCase(), 306, y, { align:'center' });
+      y += 20;
+
+      doc.setFontSize(9);
+      doc.setFont('helvetica','normal');
+      doc.text('FECHA: ' + (opts.fecha || ''), 40, y);
+      doc.text('MODO: ' + (opts.modo === 'individual' ? 'INDIVIDUAL' : 'POR LOTE'), 400, y);
+      y += 13;
+      doc.setFont('helvetica','bold');
+      doc.text('TRABAJADOR: ' + (opts.trabajador || ''), 40, y);
+      y += 13;
+      doc.setFont('helvetica','normal');
+      doc.text('PAGADO POR: ' + (opts.pagador || '—'), 40, y);
+      y += 18;
+
+      const body = (opts.retenciones || []).map(r => [
+        String(r.descripcion || ''),
+        { content: 'Q '+(Number(r.bruto)||0).toFixed(2), styles: { halign:'right' } },
+        { content: 'Q '+(Number(r.monto)||0).toFixed(2), styles: { halign:'right', textColor:[200,20,28] } }
+      ]);
+      body.push([
+        { content: 'TOTAL RETENCIÓN', styles: { fontStyle:'bold', halign:'right', fillColor:[255,235,59] } },
+        { content: '', styles: { fillColor:[255,235,59] } },
+        { content: 'Q '+(Number(opts.total)||0).toFixed(2), styles: { fontStyle:'bold', halign:'right', fillColor:[255,235,59] } }
+      ]);
+
+      doc.autoTable({
+        startY: y,
+        head: [[
+          { content: 'CONCEPTO',       styles: { halign:'left',  fillColor:[200,200,200], textColor:[0,0,0], fontStyle:'bold' } },
+          { content: 'BRUTO',          styles: { halign:'right', fillColor:[200,200,200], textColor:[0,0,0], fontStyle:'bold' } },
+          { content: 'RETENCIÓN 10%',  styles: { halign:'right', fillColor:[200,200,200], textColor:[0,0,0], fontStyle:'bold' } }
+        ]],
+        body: body,
+        theme: 'grid',
+        styles: { fontSize: 9, cellPadding: 5, lineColor:[180,180,180], lineWidth:0.3, font:'helvetica' },
+        columnStyles: { 0: { cellWidth: 320 }, 1: { cellWidth: 95, halign:'right' }, 2: { cellWidth: 115, halign:'right' } },
+        margin: { left: 40, right: 40 }
+      });
+
+      const projClean = (opts.proyecto||'PROYECTO').toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/_+$/,'');
+      const trabClean = (opts.trabajador||'TRAB').toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/_+$/,'');
+      const fechaArch = (new Date()).toISOString().slice(0,10).replace(/-/g,'');
+      const filename = 'Retencion_'+projClean+'_'+trabClean+'_'+fechaArch+'.pdf';
+      doc.save(filename);
+    } catch(e){
+      console.error('[v237] Retencion PDF error:', e);
+      showToast('ERROR GENERANDO PDF: '+(e&&e.message?e.message:e),'red');
+    }
+  }
+
+  function _retencionPagadorName(){
+    try {
+      if(typeof getCurrentUser === 'function'){
+        const u = getCurrentUser();
+        return (u && (u.displayName || u.username || u.email)) || '—';
+      }
+    } catch(e){}
+    return '—';
+  }
+
+  window.pagarRetencion = function(name){
+    if(!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
+    const p = activeProj();
+    if(!p) return;
+    const pagos = (p.planilla.pagos||[]).filter(x => x.colaborador === name && Number(x.retencion||0) > 0 && !x.retencionPagada);
+    if(!pagos.length){ showToast('SIN RETENCIONES PENDIENTES','red'); return; }
+    const total = pagos.reduce((s,x) => s + Number(x.retencion||0), 0);
+    if(!confirm(`PAGAR TODAS LAS RETENCIONES A ${name}\n${pagos.length} retencion${pagos.length!==1?'es':''}\nTOTAL: ${fQ(total)}\n\nSe generará un PDF con el comprobante.`)) return;
+    pagos.forEach(x => x.retencionPagada = true);
+    if(!p.planilla.retencionesPagadas) p.planilla.retencionesPagadas = [];
+    p.planilla.retencionesPagadas.push({ id:'ret-'+uid(), name, total, ts:Date.now(), pagosIds:pagos.map(x=>x.id), tipo:'lote' });
+    logActivity('paid', `Retención pagada a ${name}`, `${p.name} · ${fQ(total)} · ${pagos.length} retencion${pagos.length!==1?'es':''}`);
+    saveState();
+    // v237: generar comprobante en PDF
+    _generarPDFRetencionLocal({
+      proyecto: p.name,
+      fecha: new Date().toLocaleDateString('es-GT'),
+      trabajador: name,
+      pagador: _retencionPagadorName(),
+      modo: 'lote',
+      retenciones: pagos.map(pg => {
+        const idx = Number(pg.stageIdx||0);
+        const desc = ((pg.towerName||'').trim()+' '+(pg.aptoName||'').trim()+' ETAPA '+(idx+1)+' ABONO '+(pg.pctDelta||100)+'%').replace(/\s+/g,' ').trim();
+        return { descripcion: desc, bruto: Number(pg.bruto||0), monto: Number(pg.retencion||0) };
+      }),
+      total: total
+    });
+    renderPlanilla();
+    showToast('RETENCIONES PAGADAS · PDF DESCARGADO','green');
+  };
 
   window.pagarRetencionIndividual = function(pagoId){
     if(!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
@@ -21172,15 +21278,25 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     const monto = Number(pago.retencion || 0);
     if(monto <= 0){ showToast('NO HAY RETENCIÓN PARA PAGAR','red'); return; }
     const idx = Number(pago.stageIdx||0);
-    const aptoStr = `${(pago.towerName||'').trim()} ${(pago.aptoName||'').trim()} ETAPA ${idx+1} ABONO ${pago.pctDelta||100}%`;
-    if(!confirm(`PAGAR RETENCIÓN INDIVIDUAL\n\n${pago.colaborador}\n${aptoStr}\nMONTO: ${fQ(monto)}\n\n¿Confirmar?`)) return;
+    const aptoStr = ((pago.towerName||'').trim()+' '+(pago.aptoName||'').trim()+' ETAPA '+(idx+1)+' ABONO '+(pago.pctDelta||100)+'%').replace(/\s+/g,' ').trim();
+    if(!confirm(`PAGAR RETENCIÓN INDIVIDUAL\n\n${pago.colaborador}\n${aptoStr}\nMONTO: ${fQ(monto)}\n\nSe generará un PDF con el comprobante.\n\n¿Confirmar?`)) return;
     pago.retencionPagada = true;
     if(!p.planilla.retencionesPagadas) p.planilla.retencionesPagadas = [];
     p.planilla.retencionesPagadas.push({ id:'ret-'+uid(), name:pago.colaborador, total:monto, ts:Date.now(), pagoId:pago.id, aptoStr:aptoStr, tipo:'individual' });
     logActivity('paid', `Retención individual pagada a ${pago.colaborador}`, `${p.name} · ${fQ(monto)} · ${aptoStr}`);
     saveState();
+    // v237: generar comprobante en PDF
+    _generarPDFRetencionLocal({
+      proyecto: p.name,
+      fecha: new Date().toLocaleDateString('es-GT'),
+      trabajador: pago.colaborador,
+      pagador: _retencionPagadorName(),
+      modo: 'individual',
+      retenciones: [{ descripcion: aptoStr, bruto: Number(pago.bruto||0), monto: monto }],
+      total: monto
+    });
     renderPlanilla();
-    showToast(`RETENCIÓN PAGADA · ${fQ(monto)}`,'green');
+    showToast(`RETENCIÓN PAGADA · ${fQ(monto)} · PDF DESCARGADO`,'green');
   };
 
   /* ════════════════════════════════════════════════════════════════
