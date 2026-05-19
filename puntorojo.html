@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v228</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v229</span>
   </footer>
 
 </div>
@@ -28672,6 +28672,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       +       '</div>'
       +       '<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">'
       +         '<button class="btn ghost" onclick="window._v226CerrarModal()">CANCELAR</button>'
+      +         '<button class="btn ghost" onclick="window.previewPlanillaSeleccion()" style="border-color:#1C1917;color:#1C1917">PREVISUALIZAR EXCEL</button>'
+      +         '<button class="btn ghost" onclick="window.descargarPlanillaSeleccion()" style="border-color:#1C1917;color:#1C1917">DESCARGAR BORRADOR</button>'
       +         '<button class="btn" id="v226BtnEnviar" onclick="window._v226Enviar()" style="background:#2E7D32;border-color:#2E7D32;color:#fff">ENVIAR PLANILLA A PROJECT MANAGER</button>'
       +       '</div>'
       +     '</div>'
@@ -28974,10 +28976,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         if(pl.estado === 'rechazada' && (isSup || isAdmin)){
           html += '<button class="btn" onclick="window.modificarPlanillaRechazada(\''+esc(pl.id)+'\')">MODIFICAR Y REENVIAR</button>';
         }
+        // v229: PREVIEW + DESCARGA disponibles en todos los estados
+        html += '<button class="btn ghost sm" onclick="window.previewPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#1C1917;color:#1C1917">VER PREVIEW EXCEL</button>';
+        html += '<button class="btn ghost sm" onclick="window.descargarPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#2E7D32;color:#2E7D32">DESCARGAR EXCEL</button>';
         html += '<button class="btn ghost sm" onclick="window.verHistorialPlanilla(\''+esc(pl.id)+'\')">VER HISTORIAL</button>';
-        if(pl.estado === 'aprobada'){
-          html += '<button class="btn ghost sm" disabled title="Disponible en FASE 2" style="opacity:.6">DESCARGAR EXCEL (FASE 2)</button>';
-        }
         html += '</div>';
         html += '</div>';
       });
@@ -29010,6 +29012,579 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   } else {
     tryWrap();
   }
+})();
+</script>
+
+<!-- ════════ v229: PREVIEW + DESCARGA DE EXCEL DE PLANILLA QUINCENAL ════════ -->
+<script id="pr-v229-preview-excel-planilla">
+(function(){
+  'use strict';
+
+  // ─── UTILS ─────────────────────────────────────────────────────────
+  function showT(msg, type){ if(typeof showToast === 'function') showToast(msg, type||''); else console.log(msg); }
+  function esc(s){ return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+  function money(n){ try { return typeof fQ === 'function' ? fQ(Number(n)||0) : 'Q ' + (Number(n)||0).toFixed(2); } catch(e){ return 'Q ' + (Number(n)||0).toFixed(2); } }
+  function upper(s){ return String(s||'').trim().toUpperCase(); }
+  function _activeProj(){ try { return typeof activeProj === 'function' ? activeProj() : null; } catch(e){ return null; } }
+  function _fmtFecha(iso){ if(!iso) return ''; try { return new Date(iso).toLocaleDateString('es-GT'); } catch(e){ return ''; } }
+  function _safeSheetName(name){
+    let n = String(name||'').replace(/[\\\/\?\*\[\]:]/g,'').trim();
+    if(!n) n = 'COLAB';
+    if(n.length > 28) n = n.slice(0, 28);
+    return n.toUpperCase();
+  }
+  function _aptoTitulo(pg){
+    const t = (pg.towerName || '').trim();
+    const a = (pg.aptoName || '').trim();
+    return upper(t + (t && a ? ' - ' : '') + a);
+  }
+  function _descPagoLocal(pg, listaApto){
+    // Reusa la global si existe; si no, construye una descripcion equivalente
+    if(typeof _descripcionPagoExcel === 'function'){
+      try { return _descripcionPagoExcel(pg, listaApto); } catch(e){}
+    }
+    const idx = Number(pg.stageIdx||0);
+    const stageName = (pg.stageName || ('ETAPA '+(idx+1))).toLowerCase();
+    const target = Number(pg.targetPct || 100);
+    if(target >= 100) return 'Cierre de '+stageName;
+    return 'Abono - '+stageName;
+  }
+  async function _loadExcelJSv229(){
+    if(window.ExcelJS && window.ExcelJS.Workbook) return window.ExcelJS;
+    if(typeof _loadExcelJS === 'function'){
+      try { return await _loadExcelJS(); } catch(e){}
+    }
+    return new Promise((resolve, reject) => {
+      const start = Date.now();
+      const tick = () => {
+        if(window.ExcelJS && window.ExcelJS.Workbook){ resolve(window.ExcelJS); return; }
+        if(Date.now() - start > 8000){ reject(new Error('ExcelJS no cargó')); return; }
+        setTimeout(tick, 150);
+      };
+      tick();
+    });
+  }
+
+  // ─── CONSTRUCTOR DE DATOS (compartido entre preview y excel) ──────
+  function _construirDatos(p, pagosIds, meta){
+    meta = meta || {};
+    const pagosF = (p && p.planilla && p.planilla.pagos || []).filter(pg => pagosIds.includes(pg.id));
+    const porColab = {};
+    pagosF.forEach(pg => {
+      const k = upper(pg.colaborador || 'SIN NOMBRE');
+      if(!porColab[k]) porColab[k] = {
+        nombre: k,
+        colaboradorId: pg.colaboradorId || '',
+        rol: upper(pg.colaboradorRol || ''),
+        pagos: [],
+        ocs: [],
+        descuentos: [],
+        totalBruto: 0,
+        totalRetencion: 0,
+        totalDescuentosNoRet: 0,
+        totalOCs: 0,
+        totalNeto: 0
+      };
+      porColab[k].pagos.push(pg);
+    });
+    // Anexar ajustes (OC y descuentos) por colaboradorId
+    const colabIds = new Set(pagosF.map(pg => pg.colaboradorId).filter(Boolean));
+    const ajustes = (p && p.planilla && p.planilla.ajustes || []).filter(a => a && a.colaboradorId && colabIds.has(a.colaboradorId));
+    ajustes.forEach(a => {
+      const k = upper(a.colaboradorNombre || '');
+      if(!porColab[k]) return;
+      if(a.tipo === 'ORDEN_CAMBIO' || a.tipo === 'ORDEN DE CAMBIO') porColab[k].ocs.push(a);
+      else porColab[k].descuentos.push(a);
+    });
+    // Calcular totales por colaborador
+    Object.values(porColab).forEach(c => {
+      let bruto = 0, retencion = 0;
+      c.pagos.forEach(pg => {
+        const b = Number(pg.bruto || 0);
+        const r = Number(pg.retencion || (b * 0.10));
+        bruto += b; retencion += r;
+      });
+      let descNoRet = 0;
+      c.descuentos.forEach(d => { descNoRet += Number(d.monto || 0); });
+      let ocsNeto = 0;
+      c.ocs.forEach(o => { ocsNeto += Number(o.neto || o.monto || 0); });
+      c.totalBruto = +bruto.toFixed(2);
+      c.totalRetencion = +retencion.toFixed(2);
+      c.totalDescuentosNoRet = +descNoRet.toFixed(2);
+      c.totalOCs = +ocsNeto.toFixed(2);
+      c.totalNeto = +(bruto - retencion - descNoRet + ocsNeto).toFixed(2);
+    });
+    const colabs = Object.values(porColab).sort((a,b)=>a.nombre.localeCompare(b.nombre));
+    const granTotal = {
+      bruto: +colabs.reduce((s,c)=>s+c.totalBruto,0).toFixed(2),
+      retencion: +colabs.reduce((s,c)=>s+c.totalRetencion,0).toFixed(2),
+      descuentos: +colabs.reduce((s,c)=>s+c.totalDescuentosNoRet,0).toFixed(2),
+      ocs: +colabs.reduce((s,c)=>s+c.totalOCs,0).toFixed(2),
+      neto: +colabs.reduce((s,c)=>s+c.totalNeto,0).toFixed(2),
+      pagosCount: pagosF.length,
+      colabsCount: colabs.length
+    };
+    return {
+      proyecto: (p && p.name) || 'PROYECTO',
+      proyectoId: (p && p.id) || '',
+      torres: ((p && p.towers) || []).map(t => t.name).join(' Y '),
+      numero: meta.numero || 'PREVIEW',
+      fecha: meta.fecha || new Date().toISOString(),
+      planillaId: meta.planillaId || null,
+      estado: meta.estado || 'PREVIEW',
+      supervisorNombre: meta.supervisorNombre || '',
+      pmNombre: meta.pmNombre || '',
+      colabs: colabs,
+      granTotal: granTotal
+    };
+  }
+
+  // ─── ESTILOS PARA EXCEL ────────────────────────────────────────────
+  function _styles(){
+    return {
+      bThin: { style:'thin', color:{argb:'FF888888'} },
+      bMed:  { style:'medium', color:{argb:'FF333333'} },
+      fCream:   { type:'pattern', pattern:'solid', fgColor:{argb:'FFF5F1E8'} },
+      fDark:    { type:'pattern', pattern:'solid', fgColor:{argb:'FF1C1917'} },
+      fAptoHd:  { type:'pattern', pattern:'solid', fgColor:{argb:'FFFFE9A8'} },
+      fTotal:   { type:'pattern', pattern:'solid', fgColor:{argb:'FFE5E5E5'} },
+      fGTotal:  { type:'pattern', pattern:'solid', fgColor:{argb:'FFFFEB3B'} },
+      fGTColab: { type:'pattern', pattern:'solid', fgColor:{argb:'FF16A34A'} },
+      fDescBg:  { type:'pattern', pattern:'solid', fgColor:{argb:'FFFEF3C7'} },
+      fOCBg:    { type:'pattern', pattern:'solid', fgColor:{argb:'FFDCFCE7'} },
+      ftHeader: { bold:true, size:16, color:{argb:'FFFFFFFF'} },
+      ftSubHdr: { bold:true, size:11, color:{argb:'FF333333'} },
+      ftColab:  { bold:true, size:14, color:{argb:'FF1C1917'} },
+      ftApto:   { bold:true, size:11, color:{argb:'FF333333'} },
+      ftTotal:  { bold:true, size:12 },
+      ftGTColab:{ bold:true, size:14, color:{argb:'FFFFFFFF'} },
+      ftGTotal: { bold:true, size:14, color:{argb:'FF1C1917'} },
+      ftDesc:   { italic:true, color:{argb:'FFC8141C'} },
+      ftOC:     { italic:true, color:{argb:'FF166534'} },
+      FMT_Q: (typeof FMT_Q !== 'undefined' && FMT_Q) ? FMT_Q : '"Q "#,##0.00;[Red]"-Q "#,##0.00'
+    };
+  }
+  function _border(row, fromC, toC, b){ for(let c=fromC;c<=toC;c++) row.getCell(c).border = b; }
+
+  function _addColabSheet(ws, c, data, S){
+    ws.columns = [{width:3},{width:10},{width:55},{width:12},{width:12},{width:10},{width:18},{width:18}];
+    const bAll = { top:S.bThin, left:S.bThin, bottom:S.bThin, right:S.bThin };
+    const bBig = { top:S.bMed, left:S.bMed, bottom:S.bMed, right:S.bMed };
+    const headerProy = 'PLANILLA TABLAYESO - ' + upper(data.proyecto) + (data.torres?' - '+upper(data.torres):'');
+    let r = ws.addRow(['','',headerProy]);
+    ws.mergeCells(r.number, 3, r.number, 8);
+    r.getCell(3).font = S.ftHeader;
+    r.getCell(3).alignment = {horizontal:'center',vertical:'middle'};
+    r.getCell(3).fill = S.fDark;
+    r.height = 32;
+    const numTxt = data.numero === 'PREVIEW' ? 'PREVIEW' : 'PLANILLA #'+data.numero;
+    const fechaTxt = _fmtFecha(data.fecha);
+    r = ws.addRow(['','',numTxt+' - LIQUIDACION DEL '+fechaTxt]);
+    ws.mergeCells(r.number, 3, r.number, 8);
+    r.getCell(3).font = S.ftSubHdr;
+    r.getCell(3).alignment = {horizontal:'center',vertical:'middle'};
+    r.getCell(3).fill = S.fCream;
+    r.height = 22;
+    ws.addRow([]);
+    r = ws.addRow(['','',c.nombre+(c.rol?' · '+c.rol:''),'','','','Liquidacion al',fechaTxt]);
+    r.getCell(3).font = S.ftColab;
+    r.getCell(3).fill = S.fCream;
+    r.getCell(7).font = S.ftSubHdr;
+    r.getCell(7).alignment = {horizontal:'right'};
+    r.getCell(8).font = S.ftSubHdr;
+    r.getCell(8).alignment = {horizontal:'center'};
+    _border(r, 3, 8, bAll);
+    r.height = 28;
+    // Pagos por apto
+    const porApto = {};
+    c.pagos.forEach(pg => {
+      const k = _aptoTitulo(pg);
+      if(!porApto[k]) porApto[k] = [];
+      porApto[k].push(pg);
+    });
+    const lineasRet = [];
+    Object.keys(porApto).sort().forEach(aptoT => {
+      const lista = porApto[aptoT];
+      r = ws.addRow(['','',aptoT]);
+      ws.mergeCells(r.number, 3, r.number, 8);
+      r.getCell(3).font = S.ftApto;
+      r.getCell(3).fill = S.fAptoHd;
+      r.getCell(3).alignment = {horizontal:'left',vertical:'middle',indent:1};
+      _border(r, 3, 8, bAll);
+      r.height = 26;
+      lista.forEach(pg => {
+        const desc = _descPagoLocal(pg, lista);
+        const bruto = Number(pg.bruto || 0);
+        r = ws.addRow(['','',desc,'global',1,1,bruto,bruto]);
+        r.getCell(7).numFmt = S.FMT_Q;
+        r.getCell(8).numFmt = S.FMT_Q;
+        _border(r, 3, 8, bAll);
+        r.getCell(3).alignment = {vertical:'middle',wrapText:true,indent:1};
+        r.getCell(4).alignment = {horizontal:'center',vertical:'middle'};
+        r.getCell(5).alignment = {horizontal:'center',vertical:'middle'};
+        r.getCell(6).alignment = {horizontal:'center',vertical:'middle'};
+        r.getCell(7).alignment = {horizontal:'right',vertical:'middle'};
+        r.getCell(8).alignment = {horizontal:'right',vertical:'middle'};
+        r.height = 22;
+        const ret = Number(pg.retencion || (bruto * 0.10));
+        if(ret > 0) lineasRet.push(['(-) Retención 10% - '+aptoT, ret]);
+      });
+    });
+    // TOTAL bruto
+    r = ws.addRow(['','','','','','','TOTAL', c.totalBruto]);
+    r.getCell(7).font = S.ftTotal; r.getCell(8).font = S.ftTotal;
+    r.getCell(7).fill = S.fTotal; r.getCell(8).fill = S.fTotal;
+    r.getCell(7).alignment = {horizontal:'right'}; r.getCell(8).alignment = {horizontal:'right'};
+    r.getCell(8).numFmt = S.FMT_Q;
+    _border(r, 3, 8, bAll);
+    r.height = 26;
+    // Retenciones
+    lineasRet.forEach(([d, m]) => {
+      r = ws.addRow(['','','','','','',d, m]);
+      r.getCell(7).fill = S.fDescBg; r.getCell(8).fill = S.fDescBg;
+      r.getCell(7).font = S.ftDesc;  r.getCell(8).font = S.ftDesc;
+      r.getCell(7).alignment = {horizontal:'right'}; r.getCell(8).alignment = {horizontal:'right'};
+      r.getCell(8).numFmt = S.FMT_Q;
+      _border(r, 3, 8, bAll);
+    });
+    // Descuentos
+    c.descuentos.forEach(d => {
+      const cuotaTxt = (d.cuotasTotales && d.cuotasTotales > 1) ? '('+(d.cuotaActual||1)+'/'+d.cuotasTotales+') ' : '';
+      const lbl = '(-) '+cuotaTxt+(d.desc || d.subtipo || 'DESCUENTO');
+      r = ws.addRow(['','','','','','',lbl, Number(d.monto||0)]);
+      r.getCell(7).fill = S.fDescBg; r.getCell(8).fill = S.fDescBg;
+      r.getCell(7).font = S.ftDesc;  r.getCell(8).font = S.ftDesc;
+      r.getCell(7).alignment = {horizontal:'right'}; r.getCell(8).alignment = {horizontal:'right'};
+      r.getCell(8).numFmt = S.FMT_Q;
+      _border(r, 3, 8, bAll);
+    });
+    // OCs
+    c.ocs.forEach(oc => {
+      const m = Number(oc.neto || oc.monto || 0);
+      r = ws.addRow(['','','','','','','(+) OC: '+(oc.desc||''), m]);
+      r.getCell(7).fill = S.fOCBg; r.getCell(8).fill = S.fOCBg;
+      r.getCell(7).font = S.ftOC;  r.getCell(8).font = S.ftOC;
+      r.getCell(7).alignment = {horizontal:'right'}; r.getCell(8).alignment = {horizontal:'right'};
+      r.getCell(8).numFmt = S.FMT_Q;
+      _border(r, 3, 8, bAll);
+    });
+    // GRAN TOTAL colaborador
+    r = ws.addRow(['','','','','','','GRAN TOTAL '+c.nombre, c.totalNeto]);
+    r.getCell(7).font = S.ftGTColab; r.getCell(8).font = S.ftGTColab;
+    r.getCell(7).fill = S.fGTColab;  r.getCell(8).fill = S.fGTColab;
+    r.getCell(7).alignment = {horizontal:'right'}; r.getCell(8).alignment = {horizontal:'right'};
+    r.getCell(8).numFmt = S.FMT_Q;
+    _border(r, 3, 8, bBig);
+    r.height = 32;
+  }
+
+  function _addResumenSheet(ws, data, S){
+    ws.columns = [{width:3},{width:28},{width:14},{width:8},{width:14},{width:14},{width:14},{width:14},{width:16}];
+    const bAll = { top:S.bThin, left:S.bThin, bottom:S.bThin, right:S.bThin };
+    const bBig = { top:S.bMed, left:S.bMed, bottom:S.bMed, right:S.bMed };
+    const headerTxt = 'RESUMEN PLANILLA - '+upper(data.proyecto)+(data.torres?' - '+upper(data.torres):'');
+    let r = ws.addRow(['', headerTxt]);
+    ws.mergeCells(r.number, 2, r.number, 9);
+    r.getCell(2).font = S.ftHeader;
+    r.getCell(2).alignment = {horizontal:'center',vertical:'middle'};
+    r.getCell(2).fill = S.fDark;
+    r.height = 32;
+    const numTxt = data.numero === 'PREVIEW' ? 'PREVIEW' : 'PLANILLA #'+data.numero;
+    const estadoTxt = data.estado === 'PREVIEW' ? 'PREVIEW · NO ENVIADA' : upper(String(data.estado).replace(/_/g,' '));
+    r = ws.addRow(['', numTxt+' · '+estadoTxt+' · GENERADO '+_fmtFecha(data.fecha)]);
+    ws.mergeCells(r.number, 2, r.number, 9);
+    r.getCell(2).font = S.ftSubHdr;
+    r.getCell(2).alignment = {horizontal:'center',vertical:'middle'};
+    r.getCell(2).fill = S.fCream;
+    r.height = 22;
+    ws.addRow([]);
+    if(data.supervisorNombre){
+      r = ws.addRow(['', 'SUPERVISOR: '+data.supervisorNombre]);
+      r.getCell(2).font = {bold:true,size:11};
+    }
+    if(data.pmNombre){
+      r = ws.addRow(['', 'PROJECT MANAGER: '+data.pmNombre]);
+      r.getCell(2).font = {bold:true,size:11};
+    }
+    ws.addRow([]);
+    r = ws.addRow(['','COLABORADOR','ROL','# PAGOS','BRUTO','RETENCIÓN','DESCUENTOS','OCs','NETO']);
+    for(let cc=2; cc<=9; cc++){
+      r.getCell(cc).font = {bold:true,size:10,color:{argb:'FF666666'}};
+      r.getCell(cc).fill = {type:'pattern',pattern:'solid',fgColor:{argb:'FFE5E5E5'}};
+      r.getCell(cc).alignment = {horizontal:'center',vertical:'middle'};
+    }
+    _border(r, 2, 9, bAll);
+    r.height = 26;
+    data.colabs.forEach(c => {
+      r = ws.addRow(['', c.nombre, c.rol||'—', c.pagos.length, c.totalBruto, c.totalRetencion, c.totalDescuentosNoRet, c.totalOCs, c.totalNeto]);
+      r.getCell(2).font = {bold:true};
+      r.getCell(2).alignment = {vertical:'middle',indent:1};
+      r.getCell(3).alignment = {horizontal:'center',vertical:'middle'};
+      r.getCell(4).alignment = {horizontal:'center',vertical:'middle'};
+      for(let cc=5; cc<=9; cc++){
+        r.getCell(cc).numFmt = S.FMT_Q;
+        r.getCell(cc).alignment = {horizontal:'right',vertical:'middle'};
+      }
+      _border(r, 2, 9, bAll);
+    });
+    const gt = data.granTotal;
+    r = ws.addRow(['','GRAN TOTAL · '+data.colabs.length+' TRABAJADORES','', gt.pagosCount, gt.bruto, gt.retencion, gt.descuentos, gt.ocs, gt.neto]);
+    ws.mergeCells(r.number, 2, r.number, 3);
+    r.getCell(2).font = S.ftGTotal;
+    r.getCell(2).fill = S.fGTotal;
+    r.getCell(2).alignment = {horizontal:'center',vertical:'middle'};
+    r.getCell(4).font = S.ftGTotal;
+    r.getCell(4).fill = S.fGTotal;
+    r.getCell(4).alignment = {horizontal:'center',vertical:'middle'};
+    for(let cc=5; cc<=9; cc++){
+      r.getCell(cc).font = S.ftGTotal;
+      r.getCell(cc).fill = S.fGTotal;
+      r.getCell(cc).numFmt = S.FMT_Q;
+      r.getCell(cc).alignment = {horizontal:'right',vertical:'middle'};
+    }
+    _border(r, 2, 9, bBig);
+    r.height = 32;
+  }
+
+  async function _generarYDescargarExcel(data){
+    try {
+      showT('GENERANDO EXCEL...','');
+      const ExcelJS = await _loadExcelJSv229();
+      const wb = new ExcelJS.Workbook();
+      wb.creator = 'Punto Rojo';
+      wb.created = new Date();
+      const S = _styles();
+      const wsR = wb.addWorksheet('RESUMEN', { pageSetup: { paperSize:9, orientation:'landscape', fitToPage:true } });
+      _addResumenSheet(wsR, data, S);
+      const usados = new Set();
+      data.colabs.forEach(c => {
+        let base = _safeSheetName(c.nombre);
+        let nombre = base, n = 1;
+        while(usados.has(nombre)){ n++; nombre = base.slice(0, 28-String(n).length) + ' ' + n; }
+        usados.add(nombre);
+        const ws = wb.addWorksheet(nombre, {
+          pageSetup: { paperSize:9, orientation:'portrait', fitToPage:true, fitToWidth:1, fitToHeight:0 },
+          properties: { defaultRowHeight:22 }
+        });
+        _addColabSheet(ws, c, data, S);
+      });
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const numeroTxt = data.numero === 'PREVIEW' ? 'PREVIEW' : 'PLN'+data.numero;
+      const projClean = (data.proyecto||'PROYECTO').toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/_+$/,'');
+      const fechaArch = (new Date()).toISOString().slice(0,10).replace(/-/g,'');
+      const filename = 'Planilla_'+projClean+'_'+numeroTxt+'_'+fechaArch+'.xlsx';
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>{ try { URL.revokeObjectURL(a.href); a.remove(); } catch(e){} }, 1500);
+      showT('EXCEL DESCARGADO: '+filename,'green');
+    } catch(e){
+      console.error('[v229] Excel error:', e);
+      showT('ERROR GENERANDO EXCEL: '+e.message,'red');
+    }
+  }
+
+  // ─── HTML PREVIEW ──────────────────────────────────────────────────
+  function _renderPreviewHTML(data){
+    let html = '';
+    html += '<div style="padding:14px 18px;background:#1C1917;color:#fff">';
+    html += '<div style="font-size:16px;font-weight:700">PLANILLA TABLAYESO · '+esc(upper(data.proyecto))+(data.torres?' · '+esc(upper(data.torres)):'')+'</div>';
+    const numTxt = data.numero === 'PREVIEW' ? 'PREVIEW · NO ENVIADA' : 'PLANILLA #'+data.numero+' · '+upper(String(data.estado).replace(/_/g,' '));
+    html += '<div style="font-size:11px;opacity:.85;margin-top:4px">'+esc(numTxt)+' · GENERADO '+esc(_fmtFecha(data.fecha))+(data.supervisorNombre?' · SUPERVISOR: '+esc(data.supervisorNombre):'')+(data.pmNombre?' · PM: '+esc(data.pmNombre):'')+'</div>';
+    html += '</div>';
+    // Tabs
+    html += '<div style="display:flex;gap:0;background:#F5F1E8;border-bottom:1px solid #ddd;overflow-x:auto">';
+    html += '<button class="v229-tab" data-tab="resumen" onclick="window._v229SwitchTab(\'resumen\')" style="padding:10px 16px;border:none;background:#fff;border-bottom:3px solid #C62828;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">RESUMEN</button>';
+    data.colabs.forEach((c, i) => {
+      html += '<button class="v229-tab" data-tab="col'+i+'" onclick="window._v229SwitchTab(\'col'+i+'\')" style="padding:10px 16px;border:none;background:transparent;border-bottom:3px solid transparent;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">'+esc(c.nombre)+'</button>';
+    });
+    html += '</div>';
+    html += '<div style="padding:14px 18px;overflow-y:auto;flex:1;background:#fff">';
+    // RESUMEN
+    html += '<div class="v229-pane" data-pane="resumen">';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead>';
+    html += '<tr style="background:#E5E5E5;color:#666"><th style="padding:8px;text-align:left;border:1px solid #ddd">COLABORADOR</th><th style="padding:8px;border:1px solid #ddd">ROL</th><th style="padding:8px;border:1px solid #ddd"># PAGOS</th><th style="padding:8px;text-align:right;border:1px solid #ddd">BRUTO</th><th style="padding:8px;text-align:right;border:1px solid #ddd">RETENCIÓN</th><th style="padding:8px;text-align:right;border:1px solid #ddd">DESCUENTOS</th><th style="padding:8px;text-align:right;border:1px solid #ddd">OCs</th><th style="padding:8px;text-align:right;border:1px solid #ddd">NETO</th></tr></thead><tbody>';
+    data.colabs.forEach(c => {
+      html += '<tr>';
+      html += '<td style="padding:6px;font-weight:600;border:1px solid #ddd">'+esc(c.nombre)+'</td>';
+      html += '<td style="padding:6px;text-align:center;border:1px solid #ddd">'+esc(c.rol||'—')+'</td>';
+      html += '<td style="padding:6px;text-align:center;border:1px solid #ddd">'+c.pagos.length+'</td>';
+      html += '<td style="padding:6px;text-align:right;border:1px solid #ddd">'+money(c.totalBruto)+'</td>';
+      html += '<td style="padding:6px;text-align:right;border:1px solid #ddd;color:#C62828">'+money(c.totalRetencion)+'</td>';
+      html += '<td style="padding:6px;text-align:right;border:1px solid #ddd;color:#C62828">'+money(c.totalDescuentosNoRet)+'</td>';
+      html += '<td style="padding:6px;text-align:right;border:1px solid #ddd;color:#166534">'+money(c.totalOCs)+'</td>';
+      html += '<td style="padding:6px;text-align:right;border:1px solid #ddd;background:#16A34A;color:#fff;font-weight:700">'+money(c.totalNeto)+'</td>';
+      html += '</tr>';
+    });
+    const gt = data.granTotal;
+    html += '<tr style="background:#FFEB3B;font-weight:700">';
+    html += '<td colspan="2" style="padding:10px;text-align:center;border:1px solid #333">GRAN TOTAL · '+data.colabs.length+' TRABAJADORES</td>';
+    html += '<td style="padding:10px;text-align:center;border:1px solid #333">'+gt.pagosCount+'</td>';
+    html += '<td style="padding:10px;text-align:right;border:1px solid #333">'+money(gt.bruto)+'</td>';
+    html += '<td style="padding:10px;text-align:right;border:1px solid #333">'+money(gt.retencion)+'</td>';
+    html += '<td style="padding:10px;text-align:right;border:1px solid #333">'+money(gt.descuentos)+'</td>';
+    html += '<td style="padding:10px;text-align:right;border:1px solid #333">'+money(gt.ocs)+'</td>';
+    html += '<td style="padding:10px;text-align:right;border:1px solid #333">'+money(gt.neto)+'</td>';
+    html += '</tr></tbody></table>';
+    html += '</div>';
+    // Cada colaborador
+    data.colabs.forEach((c, i) => {
+      html += '<div class="v229-pane" data-pane="col'+i+'" style="display:none">';
+      html += '<div style="background:#F5F1E8;padding:10px 14px;font-weight:700;font-size:14px;border:1px solid #ddd;display:flex;justify-content:space-between;align-items:center"><span>'+esc(c.nombre)+(c.rol?' · '+esc(c.rol):'')+'</span><span style="font-size:11px;color:#666">LIQUIDACION AL '+esc(_fmtFecha(data.fecha))+'</span></div>';
+      const porApto = {};
+      c.pagos.forEach(pg => {
+        const k = _aptoTitulo(pg);
+        if(!porApto[k]) porApto[k] = [];
+        porApto[k].push(pg);
+      });
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px">';
+      Object.keys(porApto).sort().forEach(apto => {
+        const lista = porApto[apto];
+        html += '<tr><td colspan="6" style="padding:8px;background:#FFE9A8;font-weight:700;border:1px solid #ddd">'+esc(apto)+'</td></tr>';
+        lista.forEach(pg => {
+          const bruto = Number(pg.bruto || 0);
+          html += '<tr>';
+          html += '<td style="padding:6px 8px;border:1px solid #eee">'+esc(_descPagoLocal(pg, lista))+'</td>';
+          html += '<td style="padding:6px;border:1px solid #eee;text-align:center;font-size:10px;color:#888">global</td>';
+          html += '<td style="padding:6px;border:1px solid #eee;text-align:center">1</td>';
+          html += '<td style="padding:6px;border:1px solid #eee;text-align:center">1</td>';
+          html += '<td style="padding:6px;border:1px solid #eee;text-align:right">'+money(bruto)+'</td>';
+          html += '<td style="padding:6px;border:1px solid #eee;text-align:right;font-weight:600">'+money(bruto)+'</td>';
+          html += '</tr>';
+        });
+      });
+      html += '<tr style="background:#E5E5E5;font-weight:700"><td colspan="4"></td><td style="padding:8px;text-align:right;border:1px solid #ddd">TOTAL</td><td style="padding:8px;text-align:right;border:1px solid #ddd">'+money(c.totalBruto)+'</td></tr>';
+      c.pagos.forEach(pg => {
+        const ret = Number(pg.retencion || (Number(pg.bruto||0)*0.10));
+        if(ret <= 0) return;
+        html += '<tr style="background:#FEF3C7;color:#C62828;font-style:italic"><td colspan="4"></td><td style="padding:6px;text-align:right;border:1px solid #ddd">(-) Retención 10% - '+esc(_aptoTitulo(pg))+'</td><td style="padding:6px;text-align:right;border:1px solid #ddd">'+money(ret)+'</td></tr>';
+      });
+      c.descuentos.forEach(d => {
+        const cuotaTxt = (d.cuotasTotales && d.cuotasTotales > 1) ? '('+(d.cuotaActual||1)+'/'+d.cuotasTotales+') ' : '';
+        html += '<tr style="background:#FEF3C7;color:#C62828;font-style:italic"><td colspan="4"></td><td style="padding:6px;text-align:right;border:1px solid #ddd">(-) '+esc(cuotaTxt + (d.desc || d.subtipo || 'DESCUENTO'))+'</td><td style="padding:6px;text-align:right;border:1px solid #ddd">'+money(d.monto||0)+'</td></tr>';
+      });
+      c.ocs.forEach(oc => {
+        const m = Number(oc.neto || oc.monto || 0);
+        html += '<tr style="background:#DCFCE7;color:#166534;font-style:italic"><td colspan="4"></td><td style="padding:6px;text-align:right;border:1px solid #ddd">(+) OC: '+esc(oc.desc || '')+'</td><td style="padding:6px;text-align:right;border:1px solid #ddd">'+money(m)+'</td></tr>';
+      });
+      html += '<tr style="background:#16A34A;color:#fff;font-weight:700;font-size:13px"><td colspan="4"></td><td style="padding:10px;text-align:right;border:1px solid #333">GRAN TOTAL '+esc(c.nombre)+'</td><td style="padding:10px;text-align:right;border:1px solid #333">'+money(c.totalNeto)+'</td></tr>';
+      html += '</table>';
+      html += '</div>';
+    });
+    html += '</div>'; // tab content
+    return html;
+  }
+
+  function _abrirPreviewModal(data){
+    const prev = document.getElementById('v229PreviewModal');
+    if(prev) prev.remove();
+    const bodyHtml = _renderPreviewHTML(data);
+    const html = ''
+      + '<div id="v229PreviewModal" style="position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:99999;display:flex;align-items:center;justify-content:center;padding:10px">'
+      +   '<div style="background:#fff;border-radius:10px;max-width:1100px;width:100%;max-height:94vh;display:flex;flex-direction:column;box-shadow:0 16px 50px rgba(0,0,0,.5)">'
+      +     '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#C62828;color:#fff;border-radius:10px 10px 0 0">'
+      +       '<div style="font-size:14px;font-weight:700">PREVIEW EXCEL · PLANILLA QUINCENAL</div>'
+      +       '<button onclick="window._v229CerrarPreview()" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer;line-height:1">×</button>'
+      +     '</div>'
+      +     '<div style="flex:1;overflow:auto;display:flex;flex-direction:column">' + bodyHtml + '</div>'
+      +     '<div style="padding:12px 16px;border-top:1px solid #eee;background:#F7F7F7;display:flex;gap:8px;justify-content:flex-end;border-radius:0 0 10px 10px;flex-wrap:wrap">'
+      +       '<button class="btn ghost" onclick="window._v229CerrarPreview()">CERRAR</button>'
+      +       '<button class="btn" id="v229BtnDescargar" style="background:#2E7D32;border-color:#2E7D32;color:#fff">DESCARGAR EXCEL</button>'
+      +     '</div>'
+      +   '</div>'
+      + '</div>';
+    const wrap = document.createElement('div');
+    wrap.innerHTML = html;
+    const node = wrap.firstElementChild;
+    document.body.appendChild(node);
+    const btnDl = node.querySelector('#v229BtnDescargar');
+    if(btnDl) btnDl.onclick = async () => {
+      btnDl.disabled = true;
+      const orig = btnDl.textContent;
+      btnDl.textContent = 'GENERANDO...';
+      try { await _generarYDescargarExcel(data); }
+      catch(e){ console.error('[v229] download:', e); }
+      btnDl.disabled = false;
+      btnDl.textContent = orig;
+    };
+  }
+
+  window._v229CerrarPreview = function(){
+    const m = document.getElementById('v229PreviewModal');
+    if(m) m.remove();
+  };
+  window._v229SwitchTab = function(tabId){
+    document.querySelectorAll('.v229-tab').forEach(b => {
+      const active = b.getAttribute('data-tab') === tabId;
+      b.style.background = active ? '#fff' : 'transparent';
+      b.style.borderBottom = active ? '3px solid #C62828' : '3px solid transparent';
+    });
+    document.querySelectorAll('.v229-pane').forEach(p => {
+      p.style.display = p.getAttribute('data-pane') === tabId ? 'block' : 'none';
+    });
+  };
+
+  // ─── API PÚBLICA ───────────────────────────────────────────────────
+  window.previewPlanillaArmada = function(planillaId){
+    const p = _activeProj();
+    if(!p) return showT('SIN PROYECTO ACTIVO','red');
+    const pl = ((p.planilla && p.planilla.planillasArmadas) || []).find(x => x.id === planillaId);
+    if(!pl) return showT('PLANILLA NO ENCONTRADA','red');
+    if(!pl.pagosIds || !pl.pagosIds.length) return showT('PLANILLA SIN PAGOS','red');
+    const data = _construirDatos(p, pl.pagosIds, {
+      numero: pl.numero, fecha: pl.fechaEnvio || pl.fechaCreacion,
+      planillaId: pl.id, estado: pl.estado,
+      supervisorNombre: pl.supervisorNombre || '',
+      pmNombre: pl.pmNombre || ''
+    });
+    if(!data.colabs.length) return showT('NO HAY DATOS PARA MOSTRAR','red');
+    _abrirPreviewModal(data);
+  };
+  window.descargarPlanillaArmada = async function(planillaId){
+    const p = _activeProj();
+    if(!p) return showT('SIN PROYECTO ACTIVO','red');
+    const pl = ((p.planilla && p.planilla.planillasArmadas) || []).find(x => x.id === planillaId);
+    if(!pl) return showT('PLANILLA NO ENCONTRADA','red');
+    if(!pl.pagosIds || !pl.pagosIds.length) return showT('PLANILLA SIN PAGOS','red');
+    const data = _construirDatos(p, pl.pagosIds, {
+      numero: pl.numero, fecha: pl.fechaEnvio || pl.fechaCreacion,
+      planillaId: pl.id, estado: pl.estado,
+      supervisorNombre: pl.supervisorNombre || '',
+      pmNombre: pl.pmNombre || ''
+    });
+    if(!data.colabs.length) return showT('NO HAY DATOS PARA MOSTRAR','red');
+    await _generarYDescargarExcel(data);
+  };
+  window.previewPlanillaSeleccion = function(){
+    const p = _activeProj();
+    if(!p) return showT('SIN PROYECTO ACTIVO','red');
+    const ids = Array.from(document.querySelectorAll('.v226-pg-chk:checked')).map(c => c.value);
+    if(!ids.length) return showT('SELECCIONÁ AL MENOS UN PAGO','red');
+    const data = _construirDatos(p, ids, {
+      numero: 'PREVIEW', fecha: new Date().toISOString(),
+      planillaId: null, estado: 'PREVIEW',
+      supervisorNombre: (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '')
+    });
+    if(!data.colabs.length) return showT('NO HAY DATOS PARA MOSTRAR','red');
+    _abrirPreviewModal(data);
+  };
+  window.descargarPlanillaSeleccion = async function(){
+    const p = _activeProj();
+    if(!p) return showT('SIN PROYECTO ACTIVO','red');
+    const ids = Array.from(document.querySelectorAll('.v226-pg-chk:checked')).map(c => c.value);
+    if(!ids.length) return showT('SELECCIONÁ AL MENOS UN PAGO','red');
+    const data = _construirDatos(p, ids, {
+      numero: 'PREVIEW', fecha: new Date().toISOString(),
+      planillaId: null, estado: 'PREVIEW',
+      supervisorNombre: (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '')
+    });
+    if(!data.colabs.length) return showT('NO HAY DATOS PARA MOSTRAR','red');
+    await _generarYDescargarExcel(data);
+  };
+  console.log('[v229] preview/excel API lista');
 })();
 </script>
 
