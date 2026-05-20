@@ -2459,7 +2459,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v256</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v258</span>
   </footer>
 
 </div>
@@ -27552,8 +27552,19 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   function money(n){ try{ return typeof fQ === 'function' ? fQ(Number(n)||0) : 'Q ' + (Number(n)||0).toFixed(2); }catch(e){ return 'Q ' + (Number(n)||0).toFixed(2); } }
   function cleanFile(s){ return upper(s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]+/g,'_').replace(/^_|_$/g,'').slice(0,50) || 'PROYECTO'; }
   function pagosPlanilla(p){
+    // v257: solo mostrar pagos que NO esten en una planilla activa (pendiente_pm,
+    // aprobada_inicial, aprobada, rechazada). Esto evita que el supervisor vea
+    // (y pueda volver a armar) pagos que ya envio a la PM.
+    const planillas = (p && p.planilla && p.planilla.planillasArmadas) || [];
+    const estadosActivos = new Set(['pendiente_pm','aprobada_inicial','aprobada','rechazada']);
     return [...((p && p.planilla && p.planilla.pagos) || [])]
       .filter(pg => pg && (!pg.tipo || pg.tipo === 'ETAPA') && Number(pg.stageIdx) >= 0 && Number(pg.stageIdx) < 5)
+      .filter(pg => {
+        if(!pg.planillaId) return true;
+        const pl = planillas.find(x => x && x.id === pg.planillaId);
+        if(!pl) return true;
+        return !estadosActivos.has(pl.estado);
+      })
       .sort((a,b)=> upper(a.colaborador).localeCompare(upper(b.colaborador)) || upper(a.towerName).localeCompare(upper(b.towerName)) || upper(a.aptoName).localeCompare(upper(b.aptoName)) || Number(a.stageIdx||0)-Number(b.stageIdx||0));
   }
   function group(rows){
@@ -28908,16 +28919,19 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
   // ─── HELPERS DE LÓGICA ───────────────────────────────────────────────
   function _pagosDisponiblesParaArmar(p){
-    // Pagos que NO están en una planilla activa (pendiente o aprobada).
-    // Si la planilla fue rechazada/archivada, el pago queda liberado.
+    // v257: Pagos que NO esten en una planilla activa. Solo si la planilla fue
+    // ARCHIVADA el pago queda liberado para volver a armarse. Una planilla
+    // rechazada se debe re-procesar (no liberar pagos automaticamente) y una
+    // pendiente_pm / aprobada_inicial / aprobada esta en proceso.
     const pagos = (p && p.planilla && p.planilla.pagos) || [];
     const planillas = (p && p.planilla && p.planilla.planillasArmadas) || [];
+    const estadosActivos = new Set(['pendiente_pm','aprobada_inicial','aprobada','rechazada']);
     return pagos.filter(pg => {
       if(!pg || !pg.id) return false;
       if(pg.tipo && pg.tipo !== 'ETAPA') return false;
       if(pg.planillaId){
         const pl = planillas.find(x => x.id === pg.planillaId);
-        if(pl && (pl.estado === 'pendiente_pm' || pl.estado === 'aprobada')) return false;
+        if(pl && estadosActivos.has(pl.estado)) return false;
       }
       return true;
     });
@@ -29445,7 +29459,11 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const isSup = window.isSupervisorPlanilla();
     const isPM = window.isPMPlanilla();
     const isAdmin = (typeof can === 'function' && can('users.manage'));
-    if(!isSup && !isPM && !isAdmin) return '';
+    // v258: la persona con permiso 'planilla.descuentos' tambien debe ver
+    // el bloque FLUJO DE APROBACION para poder agregar descuentos a las
+    // planillas en estado aprobada_inicial.
+    const isDesc = (typeof window.isDescuentosPlanilla === 'function') ? window.isDescuentosPlanilla() : false;
+    if(!isSup && !isPM && !isAdmin && !isDesc) return '';
 
     const disponibles = _pagosDisponiblesParaArmar(p);
     const totalDisp = disponibles.reduce((s,x)=>s+Number(x.neto||x.monto||0),0);
@@ -29461,12 +29479,19 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     // Se muestra al PM (o admin) para que sepa que tiene planillas
     // pendientes en proyectos distintos al activo. Click en el nombre
     // del proyecto cambia el proyecto activo para verlas.
-    if((isPM || isAdmin) && window.state && Array.isArray(window.state.projects)){
+    // v258: tambien para la persona con permiso 'planilla.descuentos' —
+    // necesita ver planillas en estado aprobada_inicial en otros proyectos.
+    if((isPM || isAdmin || isDesc) && window.state && Array.isArray(window.state.projects)){
       const otros = [];
       window.state.projects.forEach(otroP => {
         if(otroP.id === p.id) return;
         const planillasOtro = (otroP.planilla && otroP.planilla.planillasArmadas) || [];
-        const pendOtro = planillasOtro.filter(pl => pl.estado === 'pendiente_pm' || pl.estado === 'aprobada_inicial');
+        // v258: para descuentos solo filtramos aprobada_inicial; PM ve ambas.
+        const pendOtro = planillasOtro.filter(pl => {
+          if(isPM || isAdmin) return pl.estado === 'pendiente_pm' || pl.estado === 'aprobada_inicial';
+          if(isDesc) return pl.estado === 'aprobada_inicial';
+          return false;
+        });
         if(pendOtro.length > 0){
           otros.push({ projectId: otroP.id, projectName: otroP.name || '?', count: pendOtro.length });
         }
