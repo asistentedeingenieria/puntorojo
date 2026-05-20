@@ -2467,7 +2467,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v284</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v285</span>
   </footer>
 
 </div>
@@ -21207,7 +21207,17 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     // v278: PLANILLAS DE RETENCIONES — pendientes + historial.
     // Esto va ARRIBA de "RETENCIONES ACUMULADAS" para que se vea como el
     // flujo normal de planillas (supervisor envia → gerente aprueba).
-    const retplanillas = (p.planilla.retencionesPlanillas || []).slice().sort((a,b)=>(new Date(b.fechaEnvio)).getTime()-(new Date(a.fechaEnvio)).getTime());
+    // v285: filtrar por usuario — el supervisor solo ve sus propias planillas de
+    // retenciones; el gerente/admin ve todas.
+    const _esVisibleRet = (rp) => {
+      if(canApprove || isAdmin) return true;
+      const supEm = String(rp.supervisorEmail || '').toLowerCase();
+      if(supEm && _currentEmail && supEm === _currentEmail) return true;
+      return false;
+    };
+    const retplanillas = (p.planilla.retencionesPlanillas || [])
+      .filter(_esVisibleRet)
+      .slice().sort((a,b)=>(new Date(b.fechaEnvio)).getTime()-(new Date(a.fechaEnvio)).getTime());
     const pendientes = retplanillas.filter(r => r.estado === 'pendiente_pm');
     const aprobadas = retplanillas.filter(r => r.estado === 'aprobada');
     if(retplanillas.length > 0 || canSend){
@@ -30792,9 +30802,27 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     //   aprobada            → lista para pago, gerente cierra tras pagar al banco
     //   rechazada           → supervisor debe modificar y reenviar
     // Cerradas = solo archivada.
-    const activas  = arr.filter(pl => pl.estado === 'pendiente_pm' || pl.estado === 'rechazada' || pl.estado === 'aprobada_inicial' || pl.estado === 'pendiente_pm_final' || pl.estado === 'aprobada');
-    const cerradas = arr.filter(pl => pl.estado === 'archivada');
-    const isDescPerm = (typeof window.isDescuentosPlanilla === 'function') ? window.isDescuentosPlanilla() : false;
+    // v285: visibilidad por usuario. Cada supervisor ve UNICAMENTE las planillas
+    // que el mismo genero. PM/admin ve todas. La persona de descuentos ve las
+    // que estan en aprobada_inicial (necesita actuar) y las que ella misma
+    // proceso antes (donde aplico descuentos).
+    const _userEmailLow = String(_getUserEmail() || '').toLowerCase();
+    const _esVisiblePlanilla = (pl) => {
+      if(isPM || isAdmin) return true;
+      const supEm = String(pl.supervisorEmail || '').toLowerCase();
+      if(supEm && supEm === _userEmailLow) return true;
+      if(isDesc){
+        if(pl.estado === 'aprobada_inicial') return true;
+        // tambien dejar ver historial cuando la persona de descuentos aplico
+        // descuentos a esta planilla (su email aparece como autor en algun descuento).
+        const descArr = pl.descuentosPlanilla || [];
+        if(_userEmailLow && descArr.some(d => String(d.autor||'').toLowerCase() === _userEmailLow)) return true;
+      }
+      return false;
+    };
+    const activas  = arr.filter(pl => (pl.estado === 'pendiente_pm' || pl.estado === 'rechazada' || pl.estado === 'aprobada_inicial' || pl.estado === 'pendiente_pm_final' || pl.estado === 'aprobada') && _esVisiblePlanilla(pl));
+    const cerradas = arr.filter(pl => pl.estado === 'archivada' && _esVisiblePlanilla(pl));
+    const isDescPerm = isDesc;
 
     const renderTarjetaCompleta = (pl) => {
       const colorBorde = pl.estado==='pendiente_pm' ? '#F57C00'
