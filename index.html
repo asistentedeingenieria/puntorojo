@@ -2459,7 +2459,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v265</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v266</span>
   </footer>
 
 </div>
@@ -21150,8 +21150,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     if(typeof renderPlanillaRetenciones === 'function') renderPlanillaRetenciones();
   };
 
-  // v237: generador de PDF para el comprobante de pago de retencion.
-  // Se llama tanto desde el pago individual como desde el pago por lote.
+  // v266: PDF de retenciones con layout LIBERACION DE RETENCIONES estilo Excel.
   function _generarPDFRetencionLocal(opts){
     try {
       if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) {
@@ -21159,62 +21158,94 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       }
       const { jsPDF } = window.jspdf;
       const doc = new jsPDF({ unit: 'pt', format: 'letter' });
-      let y = 38;
+      let y = 36;
 
-      doc.setFont('helvetica','bold');
-      doc.setFontSize(15);
-      doc.text('COMPROBANTE DE PAGO DE RETENCIÓN', 306, y, { align:'center' });
-      y += 18;
-      doc.setFontSize(11);
-      doc.text((opts.proyecto || '').toUpperCase(), 306, y, { align:'center' });
-      y += 20;
-
-      doc.setFontSize(9);
-      doc.setFont('helvetica','normal');
-      doc.text('FECHA: ' + (opts.fecha || ''), 40, y);
-      doc.text('MODO: ' + (opts.modo === 'individual' ? 'INDIVIDUAL' : 'POR LOTE'), 400, y);
-      y += 13;
-      doc.setFont('helvetica','bold');
-      doc.text('TRABAJADOR: ' + (opts.trabajador || ''), 40, y);
-      y += 13;
-      doc.setFont('helvetica','normal');
-      doc.text('PAGADO POR: ' + (opts.pagador || '—'), 40, y);
-      y += 18;
-
-      // v250: helper local con separador de miles
       const fmtN = (n) => (Number(n)||0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      const body = (opts.retenciones || []).map(r => [
-        String(r.descripcion || ''),
-        { content: 'Q '+fmtN(r.bruto), styles: { halign:'right' } },
-        { content: 'Q '+fmtN(r.monto), styles: { halign:'right', textColor:[200,20,28] } }
+      const sabadoSemana = (iso) => {
+        const d = iso ? new Date(iso) : new Date();
+        if(isNaN(d.getTime())) return new Date();
+        const day = d.getDay();
+        const daysUntilSat = (6 - day + 7) % 7;
+        d.setDate(d.getDate() + daysUntilSat);
+        d.setHours(0,0,0,0);
+        return d;
+      };
+      const fmtFechaSab = (iso) => { try { return sabadoSemana(iso).toLocaleDateString('es-GT'); } catch(e){ return ''; } };
+
+      const fechaSabTxt = fmtFechaSab(opts.fechaRef || new Date().toISOString());
+      const trabajador = String(opts.trabajador || '').toUpperCase();
+      const proyectoUp = String(opts.proyecto || '').toUpperCase();
+
+      doc.setFont('helvetica','bold');
+      doc.setFontSize(13);
+      doc.text('PLANILLA TABLAYESO', 306, y, { align:'center' });
+      y += 17;
+      doc.setFontSize(11);
+      doc.text('LIBERACION DE RETENCIONES - TABLAYESO', 306, y, { align:'center' });
+      y += 15;
+      doc.setFontSize(10);
+      doc.text(fechaSabTxt, 306, y, { align:'center' });
+      y += 18;
+
+      const COLS = 4;
+      const body = [];
+
+      body.push([
+        { content: trabajador || '—', colSpan: 2, styles: { fontStyle:'bold', fillColor:[189,215,238], textColor:[0,0,0], halign:'left', fontSize: 10 } },
+        { content: 'Planilla retenciones', styles: { fillColor:[255,255,255], textColor:[0,0,0], halign:'left', fontSize: 9 } },
+        { content: fechaSabTxt, styles: { fillColor:[255,255,255], textColor:[0,0,0], halign:'left', fontSize: 9 } }
       ]);
       body.push([
-        { content: 'TOTAL RETENCIÓN', styles: { fontStyle:'bold', halign:'right', fillColor:[255,235,59] } },
-        { content: '', styles: { fillColor:[255,235,59] } },
-        { content: 'Q '+fmtN(opts.total), styles: { fontStyle:'bold', halign:'right', fillColor:[255,235,59] } }
+        { content: proyectoUp || '—', colSpan: 2, styles: { fontStyle:'bold', fillColor:[189,215,238], textColor:[0,0,0], halign:'left', fontSize: 10 } },
+        { content: 'FECHA', styles: { fontStyle:'bold', fillColor:[217,217,217], textColor:[0,0,0], halign:'center', fontSize: 9 } },
+        { content: 'TOTAL', styles: { fontStyle:'bold', fillColor:[217,217,217], textColor:[0,0,0], halign:'center', fontSize: 9 } }
+      ]);
+
+      (opts.retenciones || []).forEach(r => {
+        body.push([
+          { content: String(r.descripcion || ''), styles: { halign:'left' } },
+          { content: String(r.fecha || ''), styles: { halign:'center' } },
+          { content: 'Q', styles: { halign:'center', textColor:[0,0,0] } },
+          { content: fmtN(r.monto), styles: { halign:'right', textColor:[0,0,0] } }
+        ]);
+      });
+
+      body.push([
+        { content: 'GRAN TOTAL    ' + trabajador, colSpan: 2, styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0] } },
+        { content: 'Q', styles: { fontStyle:'bold', halign:'center', fillColor:[255,255,0], textColor:[0,0,0] } },
+        { content: fmtN(opts.total), styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0] } }
+      ]);
+
+      body.push([
+        { content: '', colSpan: COLS, styles: { fillColor:[255,255,255], lineWidth: 0 } }
+      ]);
+      body.push([
+        { content: 'GRAN TOTAL PLANILLA RETENCIONES', colSpan: 2, styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0] } },
+        { content: 'Q', styles: { fontStyle:'bold', halign:'center', fillColor:[255,255,0], textColor:[0,0,0] } },
+        { content: fmtN(opts.total), styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0] } }
       ]);
 
       doc.autoTable({
         startY: y,
-        head: [[
-          { content: 'CONCEPTO',       styles: { halign:'left',  fillColor:[200,200,200], textColor:[0,0,0], fontStyle:'bold' } },
-          { content: 'BRUTO',          styles: { halign:'right', fillColor:[200,200,200], textColor:[0,0,0], fontStyle:'bold' } },
-          { content: 'RETENCIÓN 10%',  styles: { halign:'right', fillColor:[200,200,200], textColor:[0,0,0], fontStyle:'bold' } }
-        ]],
         body: body,
         theme: 'grid',
-        styles: { fontSize: 9, cellPadding: 5, lineColor:[180,180,180], lineWidth:0.3, font:'helvetica' },
-        columnStyles: { 0: { cellWidth: 320 }, 1: { cellWidth: 95, halign:'right' }, 2: { cellWidth: 115, halign:'right' } },
+        styles: { fontSize: 9, cellPadding: 5, lineColor:[150,150,150], lineWidth:0.3, font:'helvetica', textColor:[0,0,0] },
+        columnStyles: {
+          0: { cellWidth: 270 },
+          1: { cellWidth: 95,  halign:'center' },
+          2: { cellWidth: 25,  halign:'center' },
+          3: { cellWidth: 140, halign:'right' }
+        },
         margin: { left: 40, right: 40 }
       });
 
-      const projClean = (opts.proyecto||'PROYECTO').toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/_+$/,'');
-      const trabClean = (opts.trabajador||'TRAB').toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/_+$/,'');
-      const fechaArch = (new Date()).toISOString().slice(0,10).replace(/-/g,'');
-      const filename = 'Retencion_'+projClean+'_'+trabClean+'_'+fechaArch+'.pdf';
+      const projClean = (opts.proyecto||'Proyecto').replace(/[\\\/\?\*\[\]:"|<>]/g,'').trim();
+      const dSab = sabadoSemana(opts.fechaRef || new Date().toISOString());
+      const ddmm = String(dSab.getDate()).padStart(2,'0') + String(dSab.getMonth()+1).padStart(2,'0') + String(dSab.getFullYear());
+      const filename = 'Retenciones ' + projClean + '_' + ddmm + '.pdf';
       doc.save(filename);
     } catch(e){
-      console.error('[v237] Retencion PDF error:', e);
+      console.error('[v266] Retencion PDF error:', e);
       showToast('ERROR GENERANDO PDF: '+(e&&e.message?e.message:e),'red');
     }
   }
@@ -21229,38 +21260,60 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     return '—';
   }
 
-  window.pagarRetencion = function(name){
+  // v266: helper local para descripcion estilo "(-) Retención 10% - Apto N TX"
+  function _retencionDesc(pg){
+    const torreNum = String(pg.towerName || '').replace(/^TORRE\s+/i, '').trim();
+    const apto = String(pg.aptoName || '').trim();
+    if(apto && torreNum) return '(-) Retención 10% - Apto ' + apto + ' T' + torreNum;
+    if(apto) return '(-) Retención 10% - Apto ' + apto;
+    return '(-) Retención 10% - ' + ((pg.towerName||'')+' '+(pg.aptoName||'')).trim();
+  }
+
+  window.pagarRetencion = async function(name){
     if(!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
     const p = activeProj();
     if(!p) return;
     const pagos = (p.planilla.pagos||[]).filter(x => x.colaborador === name && Number(x.retencion||0) > 0 && !x.retencionPagada);
     if(!pagos.length){ showToast('SIN RETENCIONES PENDIENTES','red'); return; }
     const total = pagos.reduce((s,x) => s + Number(x.retencion||0), 0);
-    if(!confirm(`PAGAR TODAS LAS RETENCIONES A ${name}\n${pagos.length} retencion${pagos.length!==1?'es':''}\nTOTAL: ${fQ(total)}\n\nSe generará un PDF con el comprobante.`)) return;
+    const _escH = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const bodyHTML = ''
+      + '<div style="font-size:12.5px;color:#1a1a1a;margin-bottom:12px;line-height:1.55">Vas a <strong>liberar y pagar todas las retenciones acumuladas</strong> a <strong>'+_escH(String(name).toUpperCase())+'</strong>.</div>'
+      + '<div style="display:grid;grid-template-columns:1fr auto;gap:6px 16px;font-size:12px;color:#444;margin-bottom:12px;padding:10px 12px;background:#FAF8F3;border-radius:4px">'
+      +   '<div>Retenciones</div><div style="text-align:right;font-weight:700">'+pagos.length+'</div>'
+      +   '<div style="padding-top:6px;border-top:1px solid #E5E5E5">Total a liberar</div><div style="text-align:right;font-weight:800;color:#1a1a1a;padding-top:6px;border-top:1px solid #E5E5E5">'+fQ(total)+'</div>'
+      + '</div>'
+      + '<div style="font-size:11px;color:#7C5800;background:#FFF8E1;padding:8px 10px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.45">Se generará automáticamente el PDF <strong>"Liberación de retenciones"</strong> con el desglose por apartamento.</div>';
+    const ok = await window.prConfirm({
+      title: 'Pagar retenciones · ' + String(name),
+      bodyHTML, okText: 'PAGAR Y GENERAR PDF'
+    });
+    if(!ok) return;
+
     pagos.forEach(x => x.retencionPagada = true);
     if(!p.planilla.retencionesPagadas) p.planilla.retencionesPagadas = [];
     p.planilla.retencionesPagadas.push({ id:'ret-'+uid(), name, total, ts:Date.now(), pagosIds:pagos.map(x=>x.id), tipo:'lote' });
     logActivity('paid', `Retención pagada a ${name}`, `${p.name} · ${fQ(total)} · ${pagos.length} retencion${pagos.length!==1?'es':''}`);
     saveState();
-    // v237: generar comprobante en PDF
     _generarPDFRetencionLocal({
       proyecto: p.name,
-      fecha: new Date().toLocaleDateString('es-GT'),
+      fechaRef: new Date().toISOString(),
       trabajador: name,
       pagador: _retencionPagadorName(),
       modo: 'lote',
-      retenciones: pagos.map(pg => {
-        const idx = Number(pg.stageIdx||0);
-        const desc = ((pg.towerName||'').trim()+' '+(pg.aptoName||'').trim()+' ETAPA '+(idx+1)+' ABONO '+(pg.pctDelta||100)+'%').replace(/\s+/g,' ').trim();
-        return { descripcion: desc, bruto: Number(pg.bruto||0), monto: Number(pg.retencion||0) };
-      }),
+      retenciones: pagos.map(pg => ({
+        descripcion: _retencionDesc(pg),
+        bruto: Number(pg.bruto||0),
+        monto: Number(pg.retencion||0),
+        fecha: pg.ts ? new Date(pg.ts).toLocaleDateString('es-GT') : ''
+      })),
       total: total
     });
     renderPlanilla();
     showToast('RETENCIONES PAGADAS · PDF DESCARGADO','green');
   };
 
-  window.pagarRetencionIndividual = function(pagoId){
+  window.pagarRetencionIndividual = async function(pagoId){
     if(!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
     const p = activeProj();
     if(!p) return;
@@ -21270,21 +21323,38 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     const monto = Number(pago.retencion || 0);
     if(monto <= 0){ showToast('NO HAY RETENCIÓN PARA PAGAR','red'); return; }
     const idx = Number(pago.stageIdx||0);
-    const aptoStr = ((pago.towerName||'').trim()+' '+(pago.aptoName||'').trim()+' ETAPA '+(idx+1)+' ABONO '+(pago.pctDelta||100)+'%').replace(/\s+/g,' ').trim();
-    if(!confirm(`PAGAR RETENCIÓN INDIVIDUAL\n\n${pago.colaborador}\n${aptoStr}\nMONTO: ${fQ(monto)}\n\nSe generará un PDF con el comprobante.\n\n¿Confirmar?`)) return;
+    const aptoStr = ((pago.towerName||'').trim()+' '+(pago.aptoName||'').trim()+' · ETAPA '+(idx+1)+' · ABONO '+(pago.pctDelta||100)+'%').replace(/\s+/g,' ').trim();
+    const _escH = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const bodyHTML = ''
+      + '<div style="font-size:12.5px;color:#1a1a1a;margin-bottom:12px;line-height:1.55">Vas a <strong>liberar y pagar</strong> esta retención individual a <strong>'+_escH(String(pago.colaborador).toUpperCase())+'</strong>.</div>'
+      + '<div style="font-size:11.5px;color:#444;margin-bottom:12px;padding:10px 12px;background:#FAF8F3;border-radius:4px;border-left:3px solid #1565C0">'
+      +   '<div style="font-weight:700">'+_escH(aptoStr)+'</div>'
+      +   '<div style="margin-top:6px;display:flex;justify-content:space-between"><span>Monto</span><span style="font-weight:800;color:#1a1a1a">'+fQ(monto)+'</span></div>'
+      + '</div>'
+      + '<div style="font-size:11px;color:#7C5800;background:#FFF8E1;padding:8px 10px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.45">Se generará automáticamente el PDF <strong>"Liberación de retenciones"</strong>.</div>';
+    const ok = await window.prConfirm({
+      title: 'Pagar retención individual',
+      bodyHTML, okText: 'PAGAR Y GENERAR PDF'
+    });
+    if(!ok) return;
+
     pago.retencionPagada = true;
     if(!p.planilla.retencionesPagadas) p.planilla.retencionesPagadas = [];
     p.planilla.retencionesPagadas.push({ id:'ret-'+uid(), name:pago.colaborador, total:monto, ts:Date.now(), pagoId:pago.id, aptoStr:aptoStr, tipo:'individual' });
     logActivity('paid', `Retención individual pagada a ${pago.colaborador}`, `${p.name} · ${fQ(monto)} · ${aptoStr}`);
     saveState();
-    // v237: generar comprobante en PDF
     _generarPDFRetencionLocal({
       proyecto: p.name,
-      fecha: new Date().toLocaleDateString('es-GT'),
+      fechaRef: new Date().toISOString(),
       trabajador: pago.colaborador,
       pagador: _retencionPagadorName(),
       modo: 'individual',
-      retenciones: [{ descripcion: aptoStr, bruto: Number(pago.bruto||0), monto: monto }],
+      retenciones: [{
+        descripcion: _retencionDesc(pago),
+        bruto: Number(pago.bruto||0),
+        monto: monto,
+        fecha: pago.ts ? new Date(pago.ts).toLocaleDateString('es-GT') : ''
+      }],
       total: monto
     });
     renderPlanilla();
