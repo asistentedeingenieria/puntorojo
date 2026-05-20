@@ -2467,7 +2467,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v286</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v287</span>
   </footer>
 
 </div>
@@ -6775,6 +6775,47 @@ function ensureDataV9(data){
       });
     }
   } catch(e){ console.warn('[v276] Vicinia DC migracion estructura:', e); }
+
+  // ──────────────────────────────────────────────────────────────────────
+  // v287: BACKFILL — asignar generadoPorUsername a pagos legacy (pre-v286)
+  // Usa el activity log para detectar quien creo cada pago. El log guarda
+  // type='create' + title='Pago planilla generado' + role=username + desc
+  // con el nombre del colaborador, apto y etapa. Matcheamos por esos campos.
+  // Asi Rony sigue viendo sus pagos viejos y Susana no.
+  // ──────────────────────────────────────────────────────────────────────
+  try {
+    const activity = data.activity || [];
+    (data.projects || []).forEach(p => {
+      if(!p || !p.planilla || !Array.isArray(p.planilla.pagos)) return;
+      // Construir map: username -> [desc UPPERCASE] de "Pago planilla generado"
+      const userDescs = {};
+      activity.forEach(a => {
+        if(!a || a.type !== 'create') return;
+        const t = String(a.title || '').toLowerCase();
+        if(!t.includes('pago planilla')) return;
+        if(a.projectId !== p.id) return;
+        const u = String(a.role || '').trim().toLowerCase();
+        if(!u) return;
+        if(!userDescs[u]) userDescs[u] = [];
+        userDescs[u].push(String(a.desc || '').toUpperCase());
+      });
+      const userKeys = Object.keys(userDescs);
+      if(userKeys.length === 0) return;
+      p.planilla.pagos.forEach(pg => {
+        if(!pg || pg.generadoPor || pg.generadoPorUsername) return;
+        const colab = String(pg.colaborador || '').toUpperCase().trim();
+        const apto  = String(pg.aptoName    || '').toUpperCase().trim();
+        if(!colab) return;
+        const etapaStr = 'ETAPA ' + (Number(pg.stageIdx || 0) + 1);
+        for(const u of userKeys){
+          const hit = userDescs[u].some(d =>
+            d.includes(colab) && (!apto || d.includes(apto)) && d.includes(etapaStr)
+          );
+          if(hit){ pg.generadoPorUsername = u; break; }
+        }
+      });
+    });
+  } catch(e){ console.warn('[v287] backfill legacy pagos:', e && e.message); }
 }
 
 /* Migración progresiva v1 → v9 */
@@ -28557,12 +28598,22 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         return !estadosActivos.has(pl.estado);
       })
       .filter(pg => {
-        // v286: PM/admin ve todo; supervisor solo ve los pagos que el mismo
-        // genero. Pagos LEGACY (sin generadoPor) solo los ve PM/admin para
-        // evitar que un supervisor vea lo que otro genero antes del scoping.
+        // v286/v287: PM/admin ven todo. Supervisor solo ve los pagos que el
+        // mismo genero (campo generadoPor=email para pagos nuevos, o
+        // generadoPorUsername para legacy backfilleados por ensureDataV9).
+        // Si un legacy NO pudo matchearse contra el activity log (muy viejo,
+        // log purgado), se muestra a TODOS los supervisores con planilla.generate
+        // para que no se pierda — Susana podria verlos, pero solo son legacy
+        // sin trazabilidad y se limpian al armarse en una planilla.
         if(_isPM || _isAdmin) return true;
-        if(!pg.generadoPor) return false;
-        return String(pg.generadoPor).toLowerCase() === _userEm;
+        if(pg.generadoPor) return String(pg.generadoPor).toLowerCase() === _userEm;
+        if(pg.generadoPorUsername){
+          const cu = (typeof getCurrentUser === 'function' && getCurrentUser()) || null;
+          const _userUn = String((cu && cu.username) || '').toLowerCase();
+          return String(pg.generadoPorUsername).toLowerCase() === _userUn;
+        }
+        // legacy sin match: visible a quien pueda generar planillas
+        return (typeof can === 'function' && (can('planilla.generate') || can('users.manage')));
       })
       .sort((a,b)=> upper(a.colaborador).localeCompare(upper(b.colaborador)) || upper(a.towerName).localeCompare(upper(b.towerName)) || upper(a.aptoName).localeCompare(upper(b.aptoName)) || Number(a.stageIdx||0)-Number(b.stageIdx||0));
   }
@@ -30000,10 +30051,17 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         const pl = planillas.find(x => x.id === pg.planillaId);
         if(pl && estadosActivos.has(pl.estado)) return false;
       }
-      // v286: scoping por usuario. Legacy (sin generadoPor) solo PM/admin.
+      // v286/v287: scoping por usuario. Para legacy primero intentar match por
+      // username (backfilled desde activity log en ensureDataV9). Si no, mostrar
+      // a todos los supervisores con planilla.generate.
       if(_isPM || _isAdmin) return true;
-      if(!pg.generadoPor) return false;
-      return String(pg.generadoPor).toLowerCase() === _userEm;
+      if(pg.generadoPor) return String(pg.generadoPor).toLowerCase() === _userEm;
+      if(pg.generadoPorUsername){
+        const cu = (typeof getCurrentUser === 'function' && getCurrentUser()) || null;
+        const _userUn = String((cu && cu.username) || '').toLowerCase();
+        return String(pg.generadoPorUsername).toLowerCase() === _userUn;
+      }
+      return (typeof can === 'function' && (can('planilla.generate') || can('users.manage')));
     });
   }
 
