@@ -2459,7 +2459,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v258</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v259</span>
   </footer>
 
 </div>
@@ -29363,6 +29363,43 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     showT('DESCUENTOS FINALIZADOS · PLANILLA APROBADA','green');
   };
 
+  // v259: el PM cierra (archiva) una planilla aprobada una vez que la pago.
+  // Esto la saca de la lista activa y la deja en el HISTORIAL.
+  window.cerrarPlanillaAprobada = async function(planillaId){
+    const isPM = window.isPMPlanilla();
+    const isAdmin = (typeof can === 'function' && can('users.manage'));
+    if(!isPM && !isAdmin){ showT('SOLO EL PM PUEDE CERRAR PLANILLAS','red'); return; }
+    const p = _activeProj();
+    if(!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    _ensurePlanillasArmadas(p);
+    const pl = p.planilla.planillasArmadas.find(x => x.id === planillaId);
+    if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
+    if(pl.estado !== 'aprobada'){ showT('SOLO PLANILLAS APROBADAS SE PUEDEN CERRAR','red'); return; }
+    const bodyHTML = ''
+      + '<div style="font-size:13px;color:#333;margin-bottom:10px">Confirma que ya <strong>pagaste</strong> esta planilla en el banco y querés moverla al <strong>HISTORIAL</strong>.</div>'
+      + '<div style="font-size:11.5px;color:#666;margin-bottom:10px">'+pl.totales.count+' pago'+(pl.totales.count!==1?'s':'')+' · '+money(pl.totales.neto)+' NETO</div>'
+      + '<div style="font-size:11px;color:#7C5800;background:#FFF8E1;padding:8px 10px;border-radius:4px;border-left:3px solid #F4D040">El PDF queda disponible en el historial por si lo necesitás volver a descargar.</div>';
+    const ok = await window.prConfirm({
+      title: 'Cerrar planilla #' + pl.numero,
+      bodyHTML, okText: 'CERRAR Y ARCHIVAR'
+    });
+    if(!ok) return;
+    const ahora = nowStr();
+    const autor = _getUserEmail();
+    const autorNombre = _getUserDisplayName();
+    pl.estado = 'archivada';
+    pl.fechaCierre = ahora;
+    pl.cerradaPorEmail = autor;
+    pl.cerradaPorNombre = autorNombre;
+    pl.historial.push({ fecha: ahora, evento: 'cerrada', autor: autor, autorNombre: autorNombre, comentario: 'Pago confirmado y planilla archivada' });
+    (p.planilla.pagos||[]).forEach(pg => {
+      if(pl.pagosIds.includes(pg.id)) pg.estadoPlanilla = 'archivada';
+    });
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+    showT('PLANILLA #'+pl.numero+' CERRADA Y ARCHIVADA','green');
+  };
+
   window.rechazarPlanilla = function(planillaId){
     const isPM = window.isPMPlanilla();
     const isAdmin = (typeof can === 'function' && can('users.manage'));
@@ -29518,12 +29555,14 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       html += '</div>';
     }
 
-    // ─ LISTA DE PLANILLAS (v248: incluir aprobada_inicial como activa) ─
-    // Activas = pendiente_pm + rechazada + aprobada_inicial (esta nueva en v248,
-    // requiere accion de la persona de DESCUENTOS).
-    // Cerradas = aprobada (fully done) + archivada.
-    const activas  = arr.filter(pl => pl.estado === 'pendiente_pm' || pl.estado === 'rechazada' || pl.estado === 'aprobada_inicial');
-    const cerradas = arr.filter(pl => pl.estado === 'aprobada' || pl.estado === 'archivada');
+    // ─ LISTA DE PLANILLAS (v259: aprobada tambien es ACTIVA) ─
+    // Activas = pendiente_pm + rechazada + aprobada_inicial + aprobada (v259:
+    // ahora aprobada tambien queda visible para que el PM descargue el PDF
+    // final y pueda cerrarla cuando ya este pagada en el banco).
+    // Cerradas = solo archivada (las que el PM cerro tras pagar, o las que
+    // se archivaron despues de ser rechazadas y modificadas).
+    const activas  = arr.filter(pl => pl.estado === 'pendiente_pm' || pl.estado === 'rechazada' || pl.estado === 'aprobada_inicial' || pl.estado === 'aprobada');
+    const cerradas = arr.filter(pl => pl.estado === 'archivada');
     const isDescPerm = (typeof window.isDescuentosPlanilla === 'function') ? window.isDescuentosPlanilla() : false;
 
     const renderTarjetaCompleta = (pl) => {
@@ -29540,9 +29579,9 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       const labelEstado = ({
         'pendiente_pm':'PENDIENTE DE AUTORIZACIÓN',
         'aprobada_inicial':'APROBADA POR PM · PENDIENTE DESCUENTOS',
-        'aprobada':'APROBADA Y PAGADA',
+        'aprobada':'LISTA PARA PAGO · DESCARGAR PDF FINAL',
         'rechazada':'RECHAZADA',
-        'archivada':'ARCHIVADA (MODIFICADA)'
+        'archivada':'ARCHIVADA'
       })[pl.estado] || upper(pl.estado);
       const supDisp = _nameOrEmail(pl.supervisorNombre, pl.supervisorEmail);
       const pmDisp = (pl.pmNombre || pl.pmEmail) ? _nameOrEmail(pl.pmNombre, pl.pmEmail) : '(PENDIENTE)';
@@ -29605,6 +29644,11 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         h2 += '<button class="btn" style="background:#1565C0;border-color:#1565C0;color:#fff" onclick="window.abrirModalAgregarDescuento(\''+esc(pl.id)+'\')">+ AGREGAR DESCUENTO</button>';
         h2 += '<button class="btn" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.finalizarDescuentosPlanilla(\''+esc(pl.id)+'\')">FINALIZAR DESCUENTOS</button>';
       }
+      // v259: el PM cierra la planilla una vez que ya pago al banco. Esto la
+      // archiva y la saca de la lista de activas (queda en HISTORIAL).
+      if(pl.estado === 'aprobada' && (isPM || isAdmin)){
+        h2 += '<button class="btn" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.cerrarPlanillaAprobada(\''+esc(pl.id)+'\')">CERRAR PLANILLA (YA PAGADA)</button>';
+      }
       h2 += '<button class="btn ghost sm" onclick="window.previewPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#1C1917;color:#1C1917">VER PREVIEW PDF</button>';
       h2 += '<button class="btn ghost sm" onclick="window.descargarPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#2E7D32;color:#2E7D32">DESCARGAR PDF</button>';
       h2 += '<button class="btn ghost sm" onclick="window.verHistorialPlanilla(\''+esc(pl.id)+'\')">VER HISTORIAL</button>';
@@ -29614,15 +29658,20 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     };
 
     const renderFilaCompacta = (pl) => {
-      const colorBorde = pl.estado==='aprobada' ? '#2E7D32' : '#999';
-      const labelEstado = pl.estado==='aprobada' ? 'APROBADA Y PAGADA' : 'ARCHIVADA (MODIFICADA)';
-      const fechaResp = fmtDateUp(pl.fechaRespuesta || pl.fechaEnvio);
+      // v259: archivada puede ser dos casos:
+      //  - cerrada por el PM tras pagar (verde, "PAGADA Y ARCHIVADA")
+      //  - modificada tras rechazo (gris, "ARCHIVADA (MODIFICADA)")
+      // Lo distinguimos por la presencia de fechaCierre.
+      const fueCerradaPorPM = !!pl.fechaCierre;
+      const colorBorde = fueCerradaPorPM ? '#2E7D32' : '#999';
+      const labelEstado = fueCerradaPorPM ? 'PAGADA Y ARCHIVADA' : 'ARCHIVADA (MODIFICADA)';
+      const fechaResp = fmtDateUp(pl.fechaCierre || pl.fechaRespuesta || pl.fechaEnvio);
       const supDisp = _nameOrEmail(pl.supervisorNombre, pl.supervisorEmail);
       let h2 = '';
       h2 += '<div style="margin:6px 14px;border-left:3px solid '+colorBorde+';border-radius:4px;background:#fff;padding:8px 12px;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center">';
       h2 += '<div style="font-size:11px;line-height:1.5"><strong>PLANILLA #'+pl.numero+'</strong> · '+esc(labelEstado)+' · '+pl.totales.count+' PAGOS · <strong>'+money(pl.totales.neto)+'</strong> NETO · '+esc(fechaResp)+' · SUP: '+esc(supDisp)+'</div>';
       h2 += '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">';
-      if(pl.estado === 'aprobada'){
+      if(fueCerradaPorPM){
         h2 += '<button class="btn ghost sm" onclick="window.previewPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#1C1917;color:#1C1917;font-size:9px">PREVIEW PDF</button>';
         h2 += '<button class="btn ghost sm" onclick="window.descargarPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#2E7D32;color:#2E7D32;font-size:9px">DESCARGAR PDF</button>';
       }
