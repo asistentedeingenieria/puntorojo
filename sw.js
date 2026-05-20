@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v293-pagos-archivados-no-vuelven-a-estar-disponibles';
+const CACHE_VERSION = 'v294-niveles-planilla-alineados-con-grid';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
