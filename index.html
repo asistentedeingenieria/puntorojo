@@ -2463,7 +2463,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v275</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v276</span>
   </footer>
 
 </div>
@@ -6712,6 +6712,51 @@ function ensureDataV9(data){
       if (oc.ivaMonto === undefined) oc.ivaMonto = Number(oc.total || 0) - Number(oc.subtotal || 0);
     });
   });
+
+  // v276: migracion forzada estructura Vicinia DC (siempre corre, no solo
+  // cuando version < DATA_VERSION).
+  try {
+    const vicMig = (data.projects || []).find(p => p.id === 'vicinia-dc');
+    if(vicMig && Array.isArray(vicMig.towers)){
+      const _mkAptoLimpio = (nm) => ({
+        id: 'apt-' + Math.random().toString(36).slice(2,10),
+        name: String(nm).toUpperCase(),
+        stages: [false,false,false,false,false,false],
+        photos: {},
+        acuseRecepciones: {}
+      });
+      const torreB = vicMig.towers.find(t => t.id === 'vb' || (t.name||'').toUpperCase() === 'TORRE B');
+      if(torreB && Array.isArray(torreB.levels)){
+        const antes = torreB.levels.length;
+        torreB.levels = torreB.levels.filter(l => {
+          const nm = (l.name||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();
+          if(l.id === 'vb-s1' || l.id === 'vb-n1') return false;
+          if(nm === 'SOTANO 1' || nm === 'NIVEL 1') return false;
+          return true;
+        });
+        if(torreB.levels.length !== antes){
+          console.log('[v276] Vicinia Torre B: removidos', antes - torreB.levels.length, 'nivel(es)');
+        }
+      }
+      vicMig.towers.forEach(t => {
+        if(!Array.isArray(t.levels)) return;
+        const n22 = t.levels.find(l => (l.name||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim() === 'NIVEL 22');
+        if(!n22) return;
+        if(!Array.isArray(n22.aptos)) n22.aptos = [];
+        const aptos = n22.aptos;
+        const tienePH1 = () => aptos.some(a => /^PENTHOUSE\s*1$/i.test((a.name||'').trim()));
+        const tienePH2 = () => aptos.some(a => /^PENTHOUSE\s*2$/i.test((a.name||'').trim()));
+        aptos.forEach(a => {
+          if((a.name||'').toUpperCase().trim() === 'PENTHOUSE'){
+            if(!tienePH1()){ a.name = 'PENTHOUSE 1'; console.log('[v276] ' + t.name + ': PENTHOUSE -> PENTHOUSE 1'); }
+            else if(!tienePH2()){ a.name = 'PENTHOUSE 2'; console.log('[v276] ' + t.name + ': PENTHOUSE -> PENTHOUSE 2'); }
+          }
+        });
+        if(!tienePH1()){ aptos.push(_mkAptoLimpio('PENTHOUSE 1')); console.log('[v276] ' + t.name + ': + PENTHOUSE 1'); }
+        if(!tienePH2()){ aptos.push(_mkAptoLimpio('PENTHOUSE 2')); console.log('[v276] ' + t.name + ': + PENTHOUSE 2'); }
+      });
+    }
+  } catch(e){ console.warn('[v276] Vicinia DC migracion estructura:', e); }
 }
 
 /* Migración progresiva v1 → v9 */
@@ -6919,56 +6964,7 @@ function migrateData(data){
     }
   });
 
-  // v275: migracion forzada y idempotente de la estructura de Vicinia DC.
-  try {
-    const vicMig = data.projects.find(p => p.id === 'vicinia-dc');
-    if(vicMig && Array.isArray(vicMig.towers)){
-      const _mkAptoLimpio = (nm) => ({
-        id: 'apt-' + Math.random().toString(36).slice(2,10),
-        name: String(nm).toUpperCase(),
-        stages: [false,false,false,false,false,false],
-        photos: {},
-        acuseRecepciones: {}
-      });
-
-      const torreB = vicMig.towers.find(t => t.id === 'vb' || (t.name||'').toUpperCase() === 'TORRE B');
-      if(torreB && Array.isArray(torreB.levels)){
-        const antes = torreB.levels.length;
-        torreB.levels = torreB.levels.filter(l => {
-          const nm = (l.name||'').toUpperCase().trim();
-          return nm !== 'SÓTANO 1' && nm !== 'SOTANO 1' && nm !== 'NIVEL 1';
-        });
-        if(torreB.levels.length !== antes){
-          console.log('[v275] Vicinia Torre B: removidos SOTANO 1 / NIVEL 1');
-        }
-      }
-
-      vicMig.towers.forEach(t => {
-        if(!Array.isArray(t.levels)) return;
-        const n22 = t.levels.find(l => (l.name||'').toUpperCase().trim() === 'NIVEL 22');
-        if(!n22) return;
-        if(!Array.isArray(n22.aptos)) n22.aptos = [];
-        const aptos = n22.aptos;
-
-        const tienePH1 = () => aptos.some(a => /^PENTHOUSE\s*1$/i.test((a.name||'').trim()));
-        const tienePH2 = () => aptos.some(a => /^PENTHOUSE\s*2$/i.test((a.name||'').trim()));
-        aptos.forEach(a => {
-          if((a.name||'').toUpperCase().trim() === 'PENTHOUSE'){
-            if(!tienePH1()) a.name = 'PENTHOUSE 1';
-            else if(!tienePH2()) a.name = 'PENTHOUSE 2';
-          }
-        });
-        if(!tienePH1()){
-          aptos.push(_mkAptoLimpio('PENTHOUSE 1'));
-          console.log('[v275] Vicinia ' + t.name + ': agregado PENTHOUSE 1');
-        }
-        if(!tienePH2()){
-          aptos.push(_mkAptoLimpio('PENTHOUSE 2'));
-          console.log('[v275] Vicinia ' + t.name + ': agregado PENTHOUSE 2');
-        }
-      });
-    }
-  } catch(e){ console.warn('[v275] Vicinia DC migracion estructura:', e); }
+  // v276: la migracion de estructura de Vicinia DC se movio a ensureDataV9.
 
   // Caso especial Vicinia (primera carga)
   const vic = data.projects.find(p => p.id === 'vicinia-dc');
