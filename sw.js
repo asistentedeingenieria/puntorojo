@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v273-preview-retenciones-rico-y-proyecto-azul';
+const CACHE_VERSION = 'v274-matrix-centrado-vicinia-torreB-2penthouses';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

@@ -1541,6 +1541,12 @@ html,body,.main{background:#FFFFFF!important;}
 .planilla-stage-row{display:grid;grid-template-columns:1.3fr repeat(6, minmax(86px,1fr));gap:6px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line-soft);background:var(--white);}
 .planilla-stage-row:hover{background:var(--cream);}
 .planilla-stage-head{background:var(--ink)!important;color:var(--paper);font-size:8.5px;letter-spacing:1.3px;text-transform:uppercase;font-weight:700;}
+/* v274: headers del matrix de etapas — primera columna izq (APTO/MODELO),
+   las demas centradas para que los nombres de etapa (TABIQUES A UNA CARA,
+   REFUERZOS DE MADERA, etc.) queden alineados verticalmente. */
+.planilla-stage-head > div{text-align:center;line-height:1.3;}
+.planilla-stage-head > div:first-child{text-align:left;}
+.planilla-stage-title{display:block;font-size:7.5px;letter-spacing:.8px;color:rgba(255,255,255,.78);margin-top:2px;font-weight:600;}
 .planilla-stage-row .apt-name{font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--ink);}
 .planilla-stage-row .apt-meta{font-size:8.5px;color:var(--mute);letter-spacing:1px;text-transform:uppercase;margin-top:2px;}
 .planilla-stage-btn{border:1px solid var(--line);background:var(--white);padding:6px 4px;border-radius:2px;font-size:8px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;cursor:pointer;color:var(--red);font-family:inherit;}
@@ -2459,7 +2465,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v273</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v274</span>
   </footer>
 
 </div>
@@ -6495,14 +6501,18 @@ function buildXlsxProjects(){
   };
 
   // ─────── VICINIA DEL CARMEN (Torre A + Torre B) ───────
+  // v274: Torre B NO tiene SOTANO 1 ni NIVEL 1 (esas areas son comunes y
+  // viven solo en Torre A). Ambas torres tienen 2 PENTHOUSES en el nivel 22.
   const mkViciniaCarmen = (tLetter) => {
     const tid = 'v' + tLetter.toLowerCase();
     const levels = [];
-    levels.push(mkLevel(tid, 's1', 'SÓTANO 1', ['Sótano 1']));
-    levels.push(mkLevel(tid, 'n1', 'NIVEL 1', [
-      'Lobby Recepción','Locales comerciales','Gimnasio','Game zone',
-      'Área social (salón social)','Coworking','Cinema'
-    ]));
+    if(tLetter === 'A'){
+      levels.push(mkLevel(tid, 's1', 'SÓTANO 1', ['Sótano 1']));
+      levels.push(mkLevel(tid, 'n1', 'NIVEL 1', [
+        'Lobby Recepción','Locales comerciales','Gimnasio','Game zone',
+        'Área social (salón social)','Coworking','Cinema'
+      ]));
+    }
     // Niveles 2-5: Pasillos + 8 aptos
     for (let n = 2; n <= 5; n++) {
       const a = ['Pasillos'];
@@ -6521,8 +6531,8 @@ function buildXlsxProjects(){
       for (let i = 1; i <= 4; i++) a.push(`Apartamento ${n}0${i}`);
       levels.push(mkLevel(tid, `n${n}`, `NIVEL ${n}`, a));
     }
-    // Nivel 22: Pasillos + Penthouse
-    levels.push(mkLevel(tid, 'n22', 'NIVEL 22', ['Pasillos','Penthouse']));
+    // Nivel 22: Pasillos + 2 Penthouses (1 y 2)
+    levels.push(mkLevel(tid, 'n22', 'NIVEL 22', ['Pasillos','Penthouse 1','Penthouse 2']));
     return { id: tid, name: `TORRE ${tLetter}`, levels };
   };
 
@@ -6911,6 +6921,62 @@ function migrateData(data){
       }
     }
   });
+
+  // v274: migracion idempotente de la estructura de Vicinia DC.
+  // - Torre B no debe tener SOTANO 1 ni NIVEL 1 (areas comunes solo Torre A).
+  // - Nivel 22 de ambas torres debe tener 2 PENTHOUSES (1 y 2), no solo 1.
+  // Solo modifica si la data no fue customizada (no hay apartamentos extras
+  // ni nombres distintos a los esperados).
+  try {
+    const vicMig = data.projects.find(p => p.id === 'vicinia-dc');
+    if(vicMig && Array.isArray(vicMig.towers)){
+      const torreB = vicMig.towers.find(t => t.id === 'vb' || (t.name||'').toUpperCase() === 'TORRE B');
+      if(torreB && Array.isArray(torreB.levels)){
+        // 1) Quitar SOTANO 1 y NIVEL 1 de Torre B si estan vacios / con default.
+        torreB.levels = torreB.levels.filter(l => {
+          const nm = (l.name||'').toUpperCase();
+          if(nm === 'SÓTANO 1' || nm === 'SOTANO 1' || nm === 'NIVEL 1'){
+            // Solo borrar si no tiene apartamentos con avance/data customizada.
+            const aptos = l.aptos || [];
+            const sinAvance = aptos.every(a =>
+              !a.avance || Object.keys(a.avance||{}).length === 0
+            );
+            return !sinAvance; // si tiene avance, conservar (no destruir data)
+          }
+          return true;
+        });
+      }
+      // 2) Para AMBAS torres: nivel 22 debe tener Pasillos + Penthouse 1 + Penthouse 2.
+      vicMig.towers.forEach(t => {
+        if(!Array.isArray(t.levels)) return;
+        const n22 = t.levels.find(l => (l.name||'').toUpperCase() === 'NIVEL 22');
+        if(!n22 || !Array.isArray(n22.aptos)) return;
+        const aptos = n22.aptos;
+        // Buscar el "Penthouse" simple (sin numero) y dividirlo.
+        const phIdx = aptos.findIndex(a => (a.name||'').toUpperCase().trim() === 'PENTHOUSE');
+        const tienePH1 = aptos.some(a => /^PENTHOUSE\s*1$/i.test((a.name||'').trim()));
+        const tienePH2 = aptos.some(a => /^PENTHOUSE\s*2$/i.test((a.name||'').trim()));
+        if(phIdx >= 0 && !tienePH1 && !tienePH2){
+          // Renombrar el unico "Penthouse" a "Penthouse 1" y agregar "Penthouse 2".
+          aptos[phIdx].name = 'Penthouse 1';
+          aptos.push({
+            id: 'apt-' + Math.random().toString(36).slice(2,10),
+            name: 'Penthouse 2',
+            avance: {}
+          });
+        } else if(!tienePH1 && !tienePH2 && phIdx < 0){
+          // No habia ningun Penthouse — agregar ambos.
+          aptos.push({ id: 'apt-' + Math.random().toString(36).slice(2,10), name: 'Penthouse 1', avance: {} });
+          aptos.push({ id: 'apt-' + Math.random().toString(36).slice(2,10), name: 'Penthouse 2', avance: {} });
+        } else if(tienePH1 && !tienePH2){
+          // Hay Penthouse 1 pero falta el 2.
+          aptos.push({ id: 'apt-' + Math.random().toString(36).slice(2,10), name: 'Penthouse 2', avance: {} });
+        } else if(tienePH2 && !tienePH1){
+          aptos.push({ id: 'apt-' + Math.random().toString(36).slice(2,10), name: 'Penthouse 1', avance: {} });
+        }
+      });
+    }
+  } catch(e){ console.warn('[v274] Vicinia DC migracion estructura:', e); }
 
   // Caso especial Vicinia (primera carga)
   const vic = data.projects.find(p => p.id === 'vicinia-dc');
@@ -28836,16 +28902,22 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   }
 
   // Busca un apto del proyecto que coincida con el texto del PDF.
+  // v274: ahora soporta torres con letra (TORRE A, TORRE B) ademas de
+  // numero (TORRE 1, TORRE III), asi el parser distingue correctamente
+  // los aptos de cada torre cuando ambas tienen mismos numeros.
   function _buscarAptoEnProyecto(textoPdf, aptosProyecto){
     const tnorm = _normalizaParaMatch(textoPdf);
     if(!tnorm) return null;
 
-    const torreMatch = tnorm.match(/\bTORRE\s+(\d+)\b/);
+    // Detecta "TORRE A", "TORRE B", "TORRE 1", "TORRE 12", "TORRE III"...
+    const torreMatch = tnorm.match(/\bTORRE\s+([A-Z0-9]+)\b/);
     const torreFiltro = torreMatch ? torreMatch[1] : null;
     let candidatos = aptosProyecto;
     if(torreFiltro){
       const filtrados = aptosProyecto.filter(a =>
-        a.torreNorm.includes('TORRE ' + torreFiltro) ||
+        a.torreNorm === 'TORRE ' + torreFiltro ||
+        a.torreNorm.includes('TORRE ' + torreFiltro + ' ') ||
+        a.torreNorm.endsWith(' TORRE ' + torreFiltro) ||
         a.torreNorm.endsWith(' ' + torreFiltro) ||
         a.torreNorm === 'T' + torreFiltro
       );
