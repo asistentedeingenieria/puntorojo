@@ -2459,7 +2459,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v269</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v271</span>
   </footer>
 
 </div>
@@ -21086,7 +21086,23 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
 
     const escName = s => String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
 
+    // v270: totales del proyecto para el banner superior.
+    const totalRetencionesProyecto = personas.reduce((s, [, info]) => s + Number(info.total||0), 0);
+    const totalPagosCount = personas.reduce((s, [, info]) => s + info.pagos.length, 0);
+
     let html = '<div class="card"><div class="card-hd"><h3>RETENCIONES ACUMULADAS</h3></div>';
+
+    // v270: banner superior para PAGAR PLANILLA DE RETENCIONES DEL PROYECTO
+    if(canPay && personas.length > 0){
+      html += '<div style="padding:14px 16px;border-bottom:1px solid #eee;background:#FFF8E1">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">';
+      html += `<div style="font-size:13px"><strong>${personas.length} TRABAJADOR${personas.length!==1?'ES':''}</strong> · ${totalPagosCount} RETENCIÓN${totalPagosCount!==1?'ES':''} · TOTAL <strong style="color:var(--red)">${fQ(totalRetencionesProyecto)}</strong></div>`;
+      html += '<button class="btn" onclick="pagarPlanillaRetencionesProyecto()" style="background:#2E7D32;border-color:#2E7D32;color:#fff">PAGAR PLANILLA DE RETENCIONES DEL PROYECTO</button>';
+      html += '</div>';
+      html += '<div style="font-size:11px;color:#666;margin-top:6px">GENERA UN SOLO PDF CON TODAS LAS RETENCIONES PENDIENTES DE TODOS LOS TRABAJADORES DEL PROYECTO.</div>';
+      html += '</div>';
+    }
+
     if(personas.length === 0){
       html += '<div class="empty" style="padding:30px">SIN RETENCIONES PENDIENTES</div>';
     } else {
@@ -21170,13 +21186,23 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         d.setHours(0,0,0,0);
         return d;
       };
-      const fmtFechaSab = (iso) => { try { return sabadoSemana(iso).toLocaleDateString('es-GT'); } catch(e){ return ''; } };
+      // v271: formato DD/MM/YYYY consistente.
+      const fmtFechaSab = (iso) => {
+        try {
+          const d = sabadoSemana(iso);
+          return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getFullYear());
+        } catch(e){ return ''; }
+      };
 
       const fechaSabTxt = fmtFechaSab(opts.fechaRef || new Date().toISOString());
-      const trabajador = String(opts.trabajador || '').toUpperCase();
       const proyectoUp = String(opts.proyecto || '').toUpperCase();
+      const trabajadores = Array.isArray(opts.trabajadores) && opts.trabajadores.length
+        ? opts.trabajadores
+        : [{ nombre: opts.trabajador, retenciones: opts.retenciones || [], total: opts.total || 0 }];
+      const granTotal = (typeof opts.granTotal === 'number')
+        ? opts.granTotal
+        : trabajadores.reduce((s,t) => s + Number(t.total||0), 0);
 
-      // Header plano, sin bordes, fuente chica (consistente con planilla principal).
       doc.setFont('helvetica','bold');
       doc.setFontSize(10);
       doc.text('PLANILLA TABLAYESO', 306, y, { align:'center' });
@@ -21189,45 +21215,48 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       doc.text(fechaSabTxt, 306, y, { align:'center' });
       y += 16;
 
-      // 5 columnas: descripcion | spacer | fecha | Q | total
-      const COLS = 5;
+      // 3 columnas: descripcion | fecha | Q+monto inline
+      const COLS = 3;
       const body = [];
 
-      body.push([
-        { content: trabajador || '—', colSpan: 2, styles: { fontStyle:'bold', fillColor:[189,215,238], textColor:[0,0,0], halign:'left', fontSize: 10, cellPadding: { top:5, right:8, bottom:5, left:8 } } },
-        { content: 'Planilla retenciones', styles: { fillColor:[255,255,255], textColor:[0,0,0], halign:'left', fontSize: 8.5, cellPadding: { top:5, right:5, bottom:5, left:5 } } },
-        { content: fechaSabTxt, colSpan: 2, styles: { fillColor:[255,255,255], textColor:[0,0,0], halign:'left', fontSize: 8.5, cellPadding: { top:5, right:5, bottom:5, left:8 } } }
-      ]);
-      body.push([
-        { content: proyectoUp || '—', colSpan: 2, styles: { fontStyle:'bold', fillColor:[189,215,238], textColor:[0,0,0], halign:'left', fontSize: 10, cellPadding: { top:5, right:8, bottom:5, left:8 } } },
-        { content: 'FECHA', styles: { fontStyle:'bold', fillColor:[217,217,217], textColor:[0,0,0], halign:'center', fontSize: 9 } },
-        { content: 'TOTAL', colSpan: 2, styles: { fontStyle:'bold', fillColor:[217,217,217], textColor:[0,0,0], halign:'center', fontSize: 9 } }
-      ]);
-
-      (opts.retenciones || []).forEach(r => {
+      trabajadores.forEach((t, idx) => {
+        const nombreUp = String(t.nombre || '').toUpperCase() || '—';
         body.push([
-          { content: String(r.descripcion || ''), styles: { halign:'left' } },
-          { content: '', styles: { fillColor:[255,255,255] } },
-          { content: String(r.fecha || ''), styles: { halign:'center' } },
-          { content: 'Q', styles: { halign:'center', textColor:[0,0,0] } },
-          { content: fmtN(r.monto), styles: { halign:'right', textColor:[0,0,0] } }
+          { content: nombreUp, colSpan: 2, styles: { fontStyle:'bold', halign:'left', fillColor:[255,255,255], textColor:[0,0,0], fontSize: 10, cellPadding: { top:6, right:6, bottom:6, left:8 } } },
+          { content: 'Planilla retenciones', styles: { halign:'right', fillColor:[255,255,255], textColor:[0,0,0], fontSize: 8.5, cellPadding: { top:6, right:8, bottom:6, left:6 } } }
         ]);
+        body.push([
+          { content: proyectoUp || '—', styles: { fontStyle:'bold', halign:'left', fillColor:[255,255,255], textColor:[0,0,0], fontSize: 10, cellPadding: { top:5, right:6, bottom:5, left:8 } } },
+          { content: 'FECHA', styles: { fontStyle:'bold', halign:'center', fillColor:[255,255,255], textColor:[0,0,0], fontSize: 9 } },
+          { content: 'TOTAL', styles: { fontStyle:'bold', halign:'center', fillColor:[255,255,255], textColor:[0,0,0], fontSize: 9 } }
+        ]);
+        (t.retenciones || []).forEach(r => {
+          body.push([
+            { content: String(r.descripcion || '').toUpperCase(), styles: { halign:'left' } },
+            { content: String(r.fecha || ''), styles: { halign:'center' } },
+            { content: 'Q  ' + fmtN(r.monto), styles: { halign:'right' } }
+          ]);
+        });
+        body.push([
+          { content: 'GRAN TOTAL    ' + nombreUp, colSpan: 2, styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], cellPadding: { top:6, right:10, bottom:6, left:6 } } },
+          { content: 'Q  ' + fmtN(t.total), styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], cellPadding: { top:6, right:8, bottom:6, left:6 } } }
+        ]);
+        if(idx < trabajadores.length - 1){
+          body.push([
+            { content: '', colSpan: COLS, styles: { fillColor:[255,255,255], lineWidth: 0 } }
+          ]);
+        }
       });
 
-      body.push([
-        { content: 'GRAN TOTAL    ' + trabajador, colSpan: 3, styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], cellPadding: { top:6, right:10, bottom:6, left:6 } } },
-        { content: 'Q', styles: { fontStyle:'bold', halign:'center', fillColor:[255,255,0], textColor:[0,0,0] } },
-        { content: fmtN(opts.total), styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0] } }
-      ]);
-
-      body.push([
-        { content: '', colSpan: COLS, styles: { fillColor:[255,255,255], lineWidth: 0 } }
-      ]);
-      body.push([
-        { content: 'GRAN TOTAL PLANILLA RETENCIONES', colSpan: 3, styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], cellPadding: { top:6, right:10, bottom:6, left:6 } } },
-        { content: 'Q', styles: { fontStyle:'bold', halign:'center', fillColor:[255,255,0], textColor:[0,0,0] } },
-        { content: fmtN(opts.total), styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0] } }
-      ]);
+      if(trabajadores.length > 1){
+        body.push([
+          { content: '', colSpan: COLS, styles: { fillColor:[255,255,255], lineWidth: 0 } }
+        ]);
+        body.push([
+          { content: 'GRAN TOTAL PLANILLA RETENCIONES', colSpan: 2, styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], cellPadding: { top:6, right:10, bottom:6, left:6 } } },
+          { content: 'Q  ' + fmtN(granTotal), styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], cellPadding: { top:6, right:8, bottom:6, left:6 } } }
+        ]);
+      }
 
       doc.autoTable({
         startY: y,
@@ -21235,11 +21264,9 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         theme: 'grid',
         styles: { fontSize: 9, cellPadding: 4, lineColor:[150,150,150], lineWidth:0.3, font:'helvetica', textColor:[0,0,0] },
         columnStyles: {
-          0: { cellWidth: 220 },                  // Descripcion
-          1: { cellWidth: 75 },                   // Spacer
-          2: { cellWidth: 95,  halign:'center' }, // Fecha
-          3: { cellWidth: 20,  halign:'center' }, // Q
-          4: { cellWidth: 120, halign:'right' }   // Total
+          0: { cellWidth: 280 },
+          1: { cellWidth: 110, halign:'center' },
+          2: { cellWidth: 140, halign:'right' }
         },
         margin: { left: 40, right: 40 }
       });
@@ -21250,7 +21277,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       const filename = 'Retenciones ' + projClean + '_' + ddmm + '.pdf';
       doc.save(filename);
     } catch(e){
-      console.error('[v268] Retencion PDF error:', e);
+      console.error('[v270] Retencion PDF error:', e);
       showToast('ERROR GENERANDO PDF: '+(e&&e.message?e.message:e),'red');
     }
   }
@@ -21274,6 +21301,40 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     return '(-) Retención 10% - ' + ((pg.towerName||'')+' '+(pg.aptoName||'')).trim();
   }
 
+  // v270: builds resumen modal estilo planilla normal.
+  function _escHtmlRet(s){ return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+  function _buildRetencionResumenHTML(opts){
+    const trabs = opts.trabajadores || [];
+    const granTotal = opts.granTotal || 0;
+    let html = '';
+    html += '<div style="font-size:12px;color:#666;margin-bottom:10px">'+opts.totalCount+' retención'+(opts.totalCount!==1?'es':'')+(opts.multi?' · '+trabs.length+' trabajador'+(trabs.length!==1?'es':''):'')+'</div>';
+    if(opts.multi && trabs.length > 1){
+      html += '<div style="display:grid;grid-template-columns:1fr auto auto;gap:6px 16px;font-size:12px;color:#444;margin-bottom:14px;padding:10px 12px;background:#FAF8F3;border-radius:4px">';
+      html += '<div style="font-size:9.5px;letter-spacing:.5px;color:#888;text-transform:uppercase">Trabajador</div>';
+      html += '<div style="text-align:center;font-size:9.5px;letter-spacing:.5px;color:#888;text-transform:uppercase">Retenc.</div>';
+      html += '<div style="text-align:right;font-size:9.5px;letter-spacing:.5px;color:#888;text-transform:uppercase">Total</div>';
+      trabs.forEach(t => {
+        html += '<div style="font-weight:600;color:#1a1a1a">'+_escHtmlRet(t.nombre)+'</div>';
+        html += '<div style="text-align:center;color:#666">'+t.count+'</div>';
+        html += '<div style="text-align:right;font-weight:600;color:#1a1a1a">'+fQ(t.total)+'</div>';
+      });
+      html += '<div style="padding-top:8px;border-top:1px solid #E5E5E5;font-weight:700;color:#1a1a1a">Gran total</div>';
+      html += '<div style="padding-top:8px;border-top:1px solid #E5E5E5"></div>';
+      html += '<div style="padding-top:8px;border-top:1px solid #E5E5E5;text-align:right;font-weight:800;color:#1a1a1a">'+fQ(granTotal)+'</div>';
+      html += '</div>';
+    } else {
+      html += '<div style="display:grid;grid-template-columns:1fr auto;gap:6px 16px;font-size:12.5px;color:#444;margin-bottom:14px;padding:10px 12px;background:#FAF8F3;border-radius:4px">';
+      html += '<div>Retenciones</div><div style="text-align:right;font-weight:600">'+opts.totalCount+'</div>';
+      html += '<div style="padding-top:6px;border-top:1px solid #E5E5E5">Total a liberar</div>';
+      html += '<div style="text-align:right;font-weight:800;color:#1a1a1a;padding-top:6px;border-top:1px solid #E5E5E5">'+fQ(granTotal)+'</div>';
+      html += '</div>';
+    }
+    html += '<div style="font-size:11.5px;color:#7C5800;background:#FFF8E1;padding:10px 12px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.5">';
+    html += 'Se generará automáticamente el PDF <strong>"Liberación de retenciones"</strong> con el desglose por apartamento.';
+    html += '</div>';
+    return html;
+  }
+
   window.pagarRetencion = async function(name){
     if(!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
     const p = activeProj();
@@ -21281,16 +21342,14 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     const pagos = (p.planilla.pagos||[]).filter(x => x.colaborador === name && Number(x.retencion||0) > 0 && !x.retencionPagada);
     if(!pagos.length){ showToast('SIN RETENCIONES PENDIENTES','red'); return; }
     const total = pagos.reduce((s,x) => s + Number(x.retencion||0), 0);
-    const _escH = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-    const bodyHTML = ''
-      + '<div style="font-size:12.5px;color:#1a1a1a;margin-bottom:12px;line-height:1.55">Vas a <strong>liberar y pagar todas las retenciones acumuladas</strong> a <strong>'+_escH(String(name).toUpperCase())+'</strong>.</div>'
-      + '<div style="display:grid;grid-template-columns:1fr auto;gap:6px 16px;font-size:12px;color:#444;margin-bottom:12px;padding:10px 12px;background:#FAF8F3;border-radius:4px">'
-      +   '<div>Retenciones</div><div style="text-align:right;font-weight:700">'+pagos.length+'</div>'
-      +   '<div style="padding-top:6px;border-top:1px solid #E5E5E5">Total a liberar</div><div style="text-align:right;font-weight:800;color:#1a1a1a;padding-top:6px;border-top:1px solid #E5E5E5">'+fQ(total)+'</div>'
-      + '</div>'
-      + '<div style="font-size:11px;color:#7C5800;background:#FFF8E1;padding:8px 10px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.45">Se generará automáticamente el PDF <strong>"Liberación de retenciones"</strong> con el desglose por apartamento.</div>';
+    const bodyHTML = _buildRetencionResumenHTML({
+      multi: false,
+      trabajadores: [{ nombre: name, count: pagos.length, total }],
+      totalCount: pagos.length,
+      granTotal: total
+    });
     const ok = await window.prConfirm({
-      title: 'Pagar retenciones · ' + String(name),
+      title: 'Pagar retenciones · ' + String(name).toUpperCase(),
       bodyHTML, okText: 'PAGAR Y GENERAR PDF'
     });
     if(!ok) return;
@@ -21303,19 +21362,85 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     _generarPDFRetencionLocal({
       proyecto: p.name,
       fechaRef: new Date().toISOString(),
-      trabajador: name,
       pagador: _retencionPagadorName(),
-      modo: 'lote',
-      retenciones: pagos.map(pg => ({
-        descripcion: _retencionDesc(pg),
-        bruto: Number(pg.bruto||0),
-        monto: Number(pg.retencion||0),
-        fecha: pg.ts ? new Date(pg.ts).toLocaleDateString('es-GT') : ''
-      })),
-      total: total
+      trabajadores: [{
+        nombre: name,
+        retenciones: pagos.map(pg => ({
+          descripcion: _retencionDesc(pg),
+          bruto: Number(pg.bruto||0),
+          monto: Number(pg.retencion||0),
+          fecha: pg.ts ? new Date(pg.ts).toLocaleDateString('es-GT') : ''
+        })),
+        total: total
+      }],
+      granTotal: total
     });
     renderPlanilla();
     showToast('RETENCIONES PAGADAS · PDF DESCARGADO','green');
+  };
+
+  // v270: planilla de retenciones de TODOS los trabajadores del proyecto.
+  window.pagarPlanillaRetencionesProyecto = async function(){
+    if(!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
+    const p = activeProj();
+    if(!p) return;
+    const pendientes = (p.planilla.pagos||[]).filter(x => x && Number(x.retencion||0) > 0 && !x.retencionPagada && (!x.tipo || x.tipo === 'ETAPA'));
+    if(!pendientes.length){ showToast('SIN RETENCIONES PENDIENTES','red'); return; }
+    const byName = {};
+    pendientes.forEach(pg => {
+      const k = pg.colaborador || 'SIN NOMBRE';
+      if(!byName[k]) byName[k] = { pagos: [], total: 0 };
+      byName[k].pagos.push(pg);
+      byName[k].total += Number(pg.retencion||0);
+    });
+    const trabajadores = Object.entries(byName)
+      .sort((a,b)=>a[0].localeCompare(b[0]))
+      .map(([nombre, info]) => ({ nombre, count: info.pagos.length, total: info.total, pagos: info.pagos }));
+    const granTotal = trabajadores.reduce((s,t) => s + t.total, 0);
+    const totalCount = trabajadores.reduce((s,t) => s + t.count, 0);
+
+    const bodyHTML = _buildRetencionResumenHTML({
+      multi: true,
+      trabajadores: trabajadores,
+      totalCount: totalCount,
+      granTotal: granTotal
+    });
+    const ok = await window.prConfirm({
+      title: 'Planilla de retenciones · ' + String(p.name).toUpperCase(),
+      bodyHTML, okText: 'PAGAR Y GENERAR PDF'
+    });
+    if(!ok) return;
+
+    pendientes.forEach(x => x.retencionPagada = true);
+    if(!p.planilla.retencionesPagadas) p.planilla.retencionesPagadas = [];
+    p.planilla.retencionesPagadas.push({
+      id:'ret-'+uid(),
+      ts:Date.now(),
+      pagosIds: pendientes.map(x=>x.id),
+      total: granTotal,
+      tipo: 'planilla_proyecto',
+      trabajadores: trabajadores.map(t => ({ nombre: t.nombre, count: t.count, total: t.total }))
+    });
+    logActivity('paid', `Planilla de retenciones generada`, `${p.name} · ${fQ(granTotal)} · ${totalCount} retenciones · ${trabajadores.length} trabajadores`);
+    saveState();
+    _generarPDFRetencionLocal({
+      proyecto: p.name,
+      fechaRef: new Date().toISOString(),
+      pagador: _retencionPagadorName(),
+      trabajadores: trabajadores.map(t => ({
+        nombre: t.nombre,
+        retenciones: t.pagos.map(pg => ({
+          descripcion: _retencionDesc(pg),
+          bruto: Number(pg.bruto||0),
+          monto: Number(pg.retencion||0),
+          fecha: pg.ts ? new Date(pg.ts).toLocaleDateString('es-GT') : ''
+        })),
+        total: t.total
+      })),
+      granTotal: granTotal
+    });
+    renderPlanilla();
+    showToast('PLANILLA DE RETENCIONES PAGADA · PDF DESCARGADO','green');
   };
 
   window.pagarRetencionIndividual = async function(pagoId){
@@ -21329,16 +21454,14 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     if(monto <= 0){ showToast('NO HAY RETENCIÓN PARA PAGAR','red'); return; }
     const idx = Number(pago.stageIdx||0);
     const aptoStr = ((pago.towerName||'').trim()+' '+(pago.aptoName||'').trim()+' · ETAPA '+(idx+1)+' · ABONO '+(pago.pctDelta||100)+'%').replace(/\s+/g,' ').trim();
-    const _escH = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-    const bodyHTML = ''
-      + '<div style="font-size:12.5px;color:#1a1a1a;margin-bottom:12px;line-height:1.55">Vas a <strong>liberar y pagar</strong> esta retención individual a <strong>'+_escH(String(pago.colaborador).toUpperCase())+'</strong>.</div>'
-      + '<div style="font-size:11.5px;color:#444;margin-bottom:12px;padding:10px 12px;background:#FAF8F3;border-radius:4px;border-left:3px solid #1565C0">'
-      +   '<div style="font-weight:700">'+_escH(aptoStr)+'</div>'
-      +   '<div style="margin-top:6px;display:flex;justify-content:space-between"><span>Monto</span><span style="font-weight:800;color:#1a1a1a">'+fQ(monto)+'</span></div>'
-      + '</div>'
-      + '<div style="font-size:11px;color:#7C5800;background:#FFF8E1;padding:8px 10px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.45">Se generará automáticamente el PDF <strong>"Liberación de retenciones"</strong>.</div>';
+    const bodyHTML = _buildRetencionResumenHTML({
+      multi: false,
+      trabajadores: [{ nombre: pago.colaborador, count: 1, total: monto }],
+      totalCount: 1,
+      granTotal: monto
+    });
     const ok = await window.prConfirm({
-      title: 'Pagar retención individual',
+      title: 'Pagar retención · ' + String(pago.colaborador).toUpperCase(),
       bodyHTML, okText: 'PAGAR Y GENERAR PDF'
     });
     if(!ok) return;
@@ -21351,16 +21474,18 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     _generarPDFRetencionLocal({
       proyecto: p.name,
       fechaRef: new Date().toISOString(),
-      trabajador: pago.colaborador,
       pagador: _retencionPagadorName(),
-      modo: 'individual',
-      retenciones: [{
-        descripcion: _retencionDesc(pago),
-        bruto: Number(pago.bruto||0),
-        monto: monto,
-        fecha: pago.ts ? new Date(pago.ts).toLocaleDateString('es-GT') : ''
+      trabajadores: [{
+        nombre: pago.colaborador,
+        retenciones: [{
+          descripcion: _retencionDesc(pago),
+          bruto: Number(pago.bruto||0),
+          monto: monto,
+          fecha: pago.ts ? new Date(pago.ts).toLocaleDateString('es-GT') : ''
+        }],
+        total: monto
       }],
-      total: monto
+      granTotal: monto
     });
     renderPlanilla();
     showToast(`RETENCIÓN PAGADA · ${fQ(monto)} · PDF DESCARGADO`,'green');
@@ -29856,7 +29981,16 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     d.setHours(0,0,0,0);
     return d;
   }
-  function _fmtFechaSabado(iso){ try { return _sabadoDeSemana(iso).toLocaleDateString('es-GT'); } catch(e){ return ''; } }
+  // v271: formato DD/MM/YYYY consistente con cero a la izquierda.
+  function _fmtFechaSabado(iso){
+    try {
+      const d = _sabadoDeSemana(iso);
+      const dd = String(d.getDate()).padStart(2,'0');
+      const mm = String(d.getMonth()+1).padStart(2,'0');
+      const yyyy = String(d.getFullYear());
+      return dd + '/' + mm + '/' + yyyy;
+    } catch(e){ return ''; }
+  }
   // v262: fecha del sabado en formato compacto DDMMYYYY.
   function _fechaSabadoDDMM(iso){
     const d = _sabadoDeSemana(iso);
@@ -30238,7 +30372,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       data.colabs.forEach((c, idx) => {
         body.push([
           { content: c.nombre, colSpan: 3, styles: { fontStyle:'bold', fillColor:[255,255,255], textColor:[0,0,0] } },
-          { content: 'Liquidacion del ' + _fechaTxt, colSpan: 3, styles: { fillColor:[255,255,255], textColor:[0,0,0], halign:'right' } }
+          { content: 'Liquidación de trabajos del ' + _fechaTxt, colSpan: 3, styles: { fillColor:[255,255,255], textColor:[0,0,0], halign:'right' } }
         ]);
         const aptoGroups = {};
         const aptoOrder = [];
