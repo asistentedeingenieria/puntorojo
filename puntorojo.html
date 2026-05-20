@@ -2465,7 +2465,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v278</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v279</span>
   </footer>
 
 </div>
@@ -21306,7 +21306,10 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
           info.pagos.sort((a,b)=>(b.ts||0)-(a.ts||0)).forEach(pg => {
             const idx = Number(pg.stageIdx||0);
             const aptoStr = `${(pg.towerName||'').trim()} ${(pg.aptoName||'').trim()} · ETAPA ${idx+1} · ABONO ${pg.pctDelta||100}%`;
-            const fecha = pg.ts ? new Date(pg.ts).toLocaleDateString('es-GT') : '—';
+            // v279: la fecha que se muestra es el SABADO de pago de esa retencion
+            // (no la fecha en que se genero), porque las planillas siempre se pagan
+            // los sabados.
+            const fecha = pg.ts ? _retFechaSabadoTxt(pg.ts) : '—';
             html += `<tr style="border-top:1px solid var(--line-soft)">`;
             html += `<td style="padding:8px 10px;font-size:10px">${h(aptoStr)}</td>`;
             html += `<td style="padding:8px 10px;text-align:center;font-size:10px;color:var(--mute);font-variant-numeric:tabular-nums">${fQ(Number(pg.bruto||0))}</td>`;
@@ -27537,6 +27540,78 @@ window.addEventListener('load', () => {
     p.planilla.modelos.push({key:'MOD_'+uid(),nombre:name,costos:[0,0,0,0,0]}); saveState(); renderPlanilla(); showToast('MODELO AGREGADO','green');
   };
 
+  // v279: modal compacto para que cualquier usuario con planilla.generate
+  // pueda dar de alta una persona nueva sin ir a la pestaña Colaboradores.
+  // Cuatro campos: PRIMER NOMBRE, SEGUNDO NOMBRE, PRIMER APELLIDO, SEGUNDO
+  // APELLIDO — todos en mayusculas, segundo nombre/apellido opcionales.
+  window.abrirModalAgregarColaborador = function(){
+    if(!can('planilla.generate') && !can('users.manage')){ showToast('SIN PERMISO','red'); return; }
+    const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const html = ''
+      + '<div id="prAgregarColabModal" style="position:fixed;inset:0;background:rgba(20,20,20,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:14px;font-family:inherit">'
+      +   '<div style="background:#fff;border-radius:10px;max-width:520px;width:100%;display:flex;flex-direction:column;box-shadow:0 16px 50px rgba(0,0,0,.25);overflow:hidden">'
+      +     '<div style="padding:18px 24px 14px;border-bottom:1px solid #EEE">'
+      +       '<div style="font-size:9.5px;color:#888;letter-spacing:.7px;font-weight:700">AGREGAR PERSONA</div>'
+      +       '<div style="font-size:15px;font-weight:800;color:#1a1a1a;margin-top:3px">Nueva persona para generar pagos</div>'
+      +     '</div>'
+      +     '<div style="padding:18px 24px;display:grid;grid-template-columns:1fr 1fr;gap:12px 14px">'
+      +       '<div><label style="display:block;font-size:9.5px;color:#888;letter-spacing:.7px;font-weight:700;margin-bottom:4px">PRIMER NOMBRE *</label><input id="acPrNom" type="text" maxlength="40" placeholder="ej: JUAN" style="width:100%;padding:9px 11px;border:1px solid #DDD;border-radius:4px;font-family:inherit;font-size:12.5px;text-transform:uppercase;box-sizing:border-box"></div>'
+      +       '<div><label style="display:block;font-size:9.5px;color:#888;letter-spacing:.7px;font-weight:700;margin-bottom:4px">SEGUNDO NOMBRE</label><input id="acSeNom" type="text" maxlength="40" placeholder="ej: CARLOS" style="width:100%;padding:9px 11px;border:1px solid #DDD;border-radius:4px;font-family:inherit;font-size:12.5px;text-transform:uppercase;box-sizing:border-box"></div>'
+      +       '<div><label style="display:block;font-size:9.5px;color:#888;letter-spacing:.7px;font-weight:700;margin-bottom:4px">PRIMER APELLIDO *</label><input id="acPrApe" type="text" maxlength="40" placeholder="ej: PÉREZ" style="width:100%;padding:9px 11px;border:1px solid #DDD;border-radius:4px;font-family:inherit;font-size:12.5px;text-transform:uppercase;box-sizing:border-box"></div>'
+      +       '<div><label style="display:block;font-size:9.5px;color:#888;letter-spacing:.7px;font-weight:700;margin-bottom:4px">SEGUNDO APELLIDO</label><input id="acSeApe" type="text" maxlength="40" placeholder="ej: LÓPEZ" style="width:100%;padding:9px 11px;border:1px solid #DDD;border-radius:4px;font-family:inherit;font-size:12.5px;text-transform:uppercase;box-sizing:border-box"></div>'
+      +     '</div>'
+      +     '<div id="acErr" style="display:none;padding:0 24px 8px;font-size:11px;color:#C62828">Faltan campos obligatorios (Primer nombre y Primer apellido).</div>'
+      +     '<div style="padding:14px 22px;border-top:1px solid #EEE;background:#FAFAFA;display:flex;gap:8px;justify-content:flex-end">'
+      +       '<button class="btn ghost" id="acCancel" style="border-color:#CCC;color:#555">CANCELAR</button>'
+      +       '<button class="btn" id="acOk" style="background:#1a1a1a;border-color:#1a1a1a;color:#fff">AGREGAR PERSONA</button>'
+      +     '</div>'
+      +   '</div>'
+      + '</div>';
+    const prev = document.getElementById('prAgregarColabModal');
+    if(prev) prev.remove();
+    const wrap = document.createElement('div');
+    wrap.innerHTML = html;
+    const node = wrap.firstElementChild;
+    document.body.appendChild(node);
+    const close = () => {
+      try { document.removeEventListener('keydown', onKey); } catch(e){}
+      node.remove();
+    };
+    const onKey = (e) => { if(e.key === 'Escape') close(); };
+    node.querySelector('#acCancel').onclick = close;
+    node.onclick = (e) => { if(e.target === node) close(); };
+    document.addEventListener('keydown', onKey);
+    node.querySelector('#acOk').onclick = () => {
+      const pr = (node.querySelector('#acPrNom')?.value || '').trim().toUpperCase();
+      const se = (node.querySelector('#acSeNom')?.value || '').trim().toUpperCase();
+      const pa = (node.querySelector('#acPrApe')?.value || '').trim().toUpperCase();
+      const sa = (node.querySelector('#acSeApe')?.value || '').trim().toUpperCase();
+      if(!pr || !pa){
+        const err = node.querySelector('#acErr');
+        if(err) err.style.display = 'block';
+        return;
+      }
+      const nombreCompleto = [pr, se, pa, sa].filter(Boolean).join(' ');
+      const p = activeProj();
+      if(!p) return;
+      if(!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores = [];
+      // Evitar duplicados (mismo nombre completo)
+      if(p.planilla.colaboradores.some(c => upper(c.nombre) === nombreCompleto)){
+        const err = node.querySelector('#acErr');
+        if(err){ err.textContent = 'Ya existe una persona con ese nombre.'; err.style.display = 'block'; }
+        return;
+      }
+      const newId = 'col-'+uid();
+      p.planilla.colaboradores.push({ id: newId, nombre: nombreCompleto, rol: 'PERSONAL' });
+      window.planillaSelectedColaborador = newId;
+      saveState();
+      renderPlanilla();
+      showToast('PERSONA AGREGADA: ' + nombreCompleto, 'green');
+      close();
+    };
+    setTimeout(() => { try { node.querySelector('#acPrNom').focus(); } catch(e){} }, 30);
+  };
+
   window.renderPlanillaEtapas = function(){
     ensureEnhancedData();
     const p=activeProj(); normalizarPlanilla5(p,true);
@@ -27556,12 +27631,16 @@ window.addEventListener('load', () => {
       ${can('users.manage') ? `<button class="btn ghost sm" onclick="setPlanillaTab('colaboradores')" title="Ir a Colaboradores">COLABORADORES</button>
       <button class="btn ghost sm" onclick="setPlanillaTab('receta')" title="Ir a Modelos y Costos">MODELOS / COSTOS</button>` : ''}
     </div>`;
-    html += `<div style="display:grid;grid-template-columns:140px 1fr;gap:14px;align-items:center;padding:12px 14px;background:var(--cream);border-bottom:1px solid var(--line)">
+    // v279: dropdown solo muestra el nombre (sin "· INSTALADOR/MASILLERO").
+    // Junto al dropdown, un boton discreto "+ AGREGAR PERSONA" para que
+    // cualquier usuario con planilla.generate pueda dar de alta a alguien
+    // sin necesidad de ir a la pestaña Colaboradores (que es admin-only).
+    html += `<div style="display:grid;grid-template-columns:140px 1fr auto;gap:14px;align-items:center;padding:12px 14px;background:var(--cream);border-bottom:1px solid var(--line)">
       <label style="font-size:9.5px;letter-spacing:1.4px;color:var(--mute);font-weight:700;text-transform:uppercase">PERSONA A PAGAR</label>
-      <select id="planillaColaboradorActivo" ${canGen?'':'disabled'} onchange="planillaSelectedColaborador=this.value; renderPlanillaEtapas();" style="padding:9px 12px;border:1px solid var(--line);border-radius:2px;font-family:inherit;font-size:11px;background:#fff;text-transform:uppercase">${(p.planilla.colaboradores||[]).map(c=>{ const r=normalizeRole(c.rol); return `<option value="${h(c.id)}" ${c.id===activeColabId5(p)?'selected':''}>${h(c.nombre)} · ${r==='SIN DEFINIR'?'TIPO PENDIENTE':h(r)}</option>`; }).join('')}</select>
+      <select id="planillaColaboradorActivo" ${canGen?'':'disabled'} onchange="planillaSelectedColaborador=this.value; renderPlanillaEtapas();" style="padding:9px 12px;border:1px solid var(--line);border-radius:2px;font-family:inherit;font-size:11px;background:#fff;text-transform:uppercase">${(p.planilla.colaboradores||[]).map(c=>`<option value="${h(c.id)}" ${c.id===activeColabId5(p)?'selected':''}>${h(c.nombre)}</option>`).join('')}</select>
+      ${canGen?`<button class="btn ghost sm" onclick="abrirModalAgregarColaborador()" title="Agregar nueva persona para generar pagos" style="border-color:var(--mute);color:var(--mute);font-size:10px;letter-spacing:.5px;white-space:nowrap">+ AGREGAR PERSONA</button>`:''}
     </div>`;
-    if(!colab) html += `<div class="receta-intro" style="padding:14px;color:var(--mute)">PRIMERO AGREGAR AL MENOS UN INSTALADOR O MASILLERO EN LA PESTAÑA COLABORADORES.</div>`;
-    else if(colRole==='SIN DEFINIR') html += `<div class="receta-intro" style="padding:14px;background:var(--red-soft);color:var(--amber);font-weight:700">⚠ ANTES DE PAGAR, CLASIFICAR A ${h(colab.nombre)} COMO INSTALADOR O MASILLERO EN LA PESTAÑA COLABORADORES.</div>`;
+    if(!colab) html += `<div class="receta-intro" style="padding:14px;color:var(--mute)">AGREGAR UNA PERSONA CON EL BOTÓN "+ AGREGAR PERSONA" PARA EMPEZAR A GENERAR PAGOS.</div>`;
 
     // Estado expand/collapse por torre (persistente en localStorage)
     const collapsedKey = 'planilla_etapas_torres_colapsadas_' + (p.id || 'def');
@@ -27650,11 +27729,9 @@ window.addEventListener('load', () => {
                 const total=stageTotal5(p,a,i); const paid=paidPct5(p,a.id,i); const opts=pctOptions5(paid); const next=nextPct5(paid);
                 const roleAllowed = !!colab && colRole !== 'SIN DEFINIR';
                 const roleMsg = (colRole === 'SIN DEFINIR') ? 'TIPO PENDIENTE' : '';
-                // v241: forzar orden — solo se puede pagar la etapa N si la
-                // etapa N-1 esta al 100% pagado. La primera etapa siempre se
-                // puede pagar (no tiene anterior).
-                const prevPaid = i > 0 ? paidPct5(p, a.id, i-1) : 100;
-                const requierePrev = (i > 0 && prevPaid < 100);
+                // v279: etapas LIBERADAS — todas se pueden pagar sin esperar
+                // a que la anterior llegue al 100%.
+                const requierePrev = false;
                 const disabled=(!canGen || !colab || colRole==='SIN DEFINIR' || total<=0 || !opts.length || requierePrev);
                 const etapaName = (ETAPAS_PROJ[i] && ETAPAS_PROJ[i].name) || ('ETAPA '+(i+1));
                 // v241: titulo de la etapa visible SIEMPRE en cada celda
@@ -27726,15 +27803,15 @@ window.addEventListener('load', () => {
     const ETAPAS_PROJ = getEtapasP(p);
     const N_ETAPAS = ETAPAS_PROJ.length;
     if(stageIdx<0 || stageIdx>=N_ETAPAS) return showToast('ETAPA NO VÁLIDA PARA PLANILLA','red');
-    // v241: forzar orden — etapa N requiere etapa N-1 al 100%. Esto es la
-    // validacion backend, asi nadie puede saltarse el bloqueo de UI.
-    if (stageIdx > 0 && paidPct5(p, aid, stageIdx - 1) < 100){
-      return showToast(`PRIMERO COMPLETAR LA ETAPA ${stageIdx} AL 100%`,'red');
-    }
+    // v241: forzar orden — etapa N requiere etapa N-1 al 100%.
+    // v279: LIBERADO temporalmente por pedido del usuario. Cualquier etapa
+    // se puede pagar sin importar el avance de las anteriores.
     const t=(p.towers||[]).find(x=>x.id===tid); const l=t&&(t.levels||[]).find(x=>x.id===lid); const a=l&&(l.aptos||[]).find(x=>x.id===aid); if(!a) return;
-    const colab=selectedColab5(p); if(!colab) return showToast('SELECCIONAR UN INSTALADOR O MASILLERO','red');
-    const rol=normalizeRole(colab.rol); if(rol==='SIN DEFINIR') return showToast('PRIMERO CLASIFICAR A LA PERSONA COMO INSTALADOR O MASILLERO','red');
-    // v206: restriccion rol-etapa ELIMINADA. Cualquier rol puede cobrar cualquier etapa.
+    const colab=selectedColab5(p); if(!colab) return showToast('SELECCIONAR UNA PERSONA','red');
+    // v279: ya no se exige clasificar como INSTALADOR/MASILLERO. Cualquier
+    // persona registrada puede recibir pago. El campo rol queda igual por
+    // compat pero no se valida.
+    const rol = normalizeRole(colab.rol) || 'PERSONAL';
     const total=stageTotal5(p,a,stageIdx); if(total<=0) return showToast('ESTE MODELO NO TIENE MONTO PARA ESA ETAPA','red');
     const current=paidPct5(p,aid,stageIdx); const sel=document.getElementById(`pct-${aid}-${stageIdx}`); const target=Number(sel?.value || nextPct5(current) || 0);
     if(!PLANILLA_PCTS_5.includes(target) || target<=current) return showToast('ELEGIR UN PORCENTAJE MAYOR AL PAGADO','red');
@@ -30059,7 +30136,58 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     showT(_planillaTituloUpper(pl) + ' CERRADA Y ARCHIVADA','green');
   };
 
-  window.rechazarPlanilla = function(planillaId){
+  // v279: modal custom para capturar el comentario del rechazo. Reemplaza el
+  // prompt() nativo del browser, que era feo y no respetaba el estilo.
+  function _abrirModalRechazarPlanilla(pl){
+    return new Promise(resolve => {
+      const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+      const title = 'Rechazar ' + _planillaTitulo(pl);
+      const html = ''
+        + '<div id="prRechazarModal" style="position:fixed;inset:0;background:rgba(20,20,20,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:14px;font-family:inherit">'
+        +   '<div style="background:#fff;border-radius:10px;max-width:540px;width:100%;display:flex;flex-direction:column;box-shadow:0 16px 50px rgba(0,0,0,.25);overflow:hidden">'
+        +     '<div style="padding:18px 24px 14px;border-bottom:1px solid #EEE">'
+        +       '<div style="font-size:9.5px;color:#888;letter-spacing:.7px;font-weight:700">RECHAZAR CON COMENTARIO</div>'
+        +       '<div style="font-size:15px;font-weight:800;color:#1a1a1a;margin-top:3px;line-height:1.25">'+escHtml(title)+'</div>'
+        +     '</div>'
+        +     '<div style="padding:18px 24px;font-size:12.5px;color:#333">'
+        +       '<div style="margin-bottom:10px;line-height:1.5">Indicá qué necesita corregir el supervisor para que pueda ajustar y reenviar la planilla.</div>'
+        +       '<textarea id="prRechazarTxt" rows="4" placeholder="Ej: REVISAR EL ABONO DEL APTO 405, NO COINCIDE CON LO ENTREGADO..." style="width:100%;padding:10px 12px;border:1px solid #DDD;border-radius:4px;font-family:inherit;font-size:12.5px;resize:vertical;box-sizing:border-box;line-height:1.5;text-transform:uppercase;color:#1a1a1a"></textarea>'
+        +       '<div id="prRechazarErr" style="display:none;color:#C62828;font-size:11px;margin-top:6px">El comentario es obligatorio para rechazar.</div>'
+        +     '</div>'
+        +     '<div style="padding:14px 22px;border-top:1px solid #EEE;background:#FAFAFA;display:flex;gap:8px;justify-content:flex-end">'
+        +       '<button class="btn ghost" id="prRecCancel" style="border-color:#CCC;color:#555">CANCELAR</button>'
+        +       '<button class="btn" id="prRecOk" style="background:#C62828;border-color:#C62828;color:#fff">RECHAZAR Y ENVIAR COMENTARIO</button>'
+        +     '</div>'
+        +   '</div>'
+        + '</div>';
+      const wrap = document.createElement('div');
+      wrap.innerHTML = html;
+      const node = wrap.firstElementChild;
+      document.body.appendChild(node);
+      const close = (val) => {
+        try { document.removeEventListener('keydown', onKey); } catch(e){}
+        node.remove();
+        resolve(val);
+      };
+      const onKey = (e) => { if(e.key === 'Escape') close(null); };
+      node.querySelector('#prRecOk').onclick = () => {
+        const txt = (node.querySelector('#prRechazarTxt')?.value || '').trim();
+        if(!txt){
+          const err = node.querySelector('#prRechazarErr');
+          if(err) err.style.display = 'block';
+          try { node.querySelector('#prRechazarTxt').focus(); } catch(e){}
+          return;
+        }
+        close(txt);
+      };
+      node.querySelector('#prRecCancel').onclick = () => close(null);
+      node.onclick = (e) => { if(e.target === node) close(null); };
+      document.addEventListener('keydown', onKey);
+      setTimeout(() => { try { node.querySelector('#prRechazarTxt').focus(); } catch(e){} }, 30);
+    });
+  }
+
+  window.rechazarPlanilla = async function(planillaId){
     const isPM = window.isPMPlanilla();
     const isAdmin = (typeof can === 'function' && can('users.manage'));
     if(!isPM && !isAdmin){ showT('SOLO EL GERENTE DE PROYECTOS PUEDE RECHAZAR','red'); return; }
@@ -30070,8 +30198,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
     if(pl.estado !== 'pendiente_pm'){ showT('SOLO PLANILLAS PENDIENTES SE PUEDEN RECHAZAR','red'); return; }
 
-    const comentario = (prompt('RECHAZAR ' + _planillaTituloUpper(pl) + '\n\nIndicá qué necesita corregir el supervisor:\n') || '').trim();
-    if(!comentario){ showT('SE REQUIERE COMENTARIO PARA RECHAZAR','red'); return; }
+    // v279: modal elegante en vez de prompt() nativo. Capturamos el comentario
+    // dentro del modal para evitar el dialog feo del browser.
+    const comentario = await _abrirModalRechazarPlanilla(pl);
+    if(!comentario){ return; }
 
     const ahora = nowStr();
     const pmEmail = _getUserEmail();
