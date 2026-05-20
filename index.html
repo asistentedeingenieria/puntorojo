@@ -2463,7 +2463,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v277</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v278</span>
   </footer>
 
 </div>
@@ -21117,11 +21117,24 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   // Se mantiene "PAGAR TODAS LAS DE X" para procesar todas de una vez.
   // v236: h() definido localmente porque el helper global vive dentro de
   // otro IIFE; antes esto causaba ReferenceError y la pestaña quedaba vacia.
+  // v278: helper — pago "tomado" si esta en una planilla activa.
+  function _retencionPagoEnPlanillaCheck(p, pagoId){
+    const planillas = (p.planilla && p.planilla.retencionesPlanillas) || [];
+    return planillas.some(rp =>
+      (rp.estado === 'pendiente_pm' || rp.estado === 'aprobada') &&
+      Array.isArray(rp.pagosIds) && rp.pagosIds.includes(pagoId)
+    );
+  }
+
   window.renderPlanillaRetenciones = function(){
     const h = s => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
     const p = activeProj();
     if(!p){ const el=document.getElementById('planilla-retenciones'); if(el) el.innerHTML=''; return; }
-    const pagos = (p.planilla.pagos || []).filter(x => x && Number(x.retencion||0) > 0 && !x.retencionPagada && (!x.tipo || x.tipo === 'ETAPA'));
+    const pagos = (p.planilla.pagos || []).filter(x =>
+      x && Number(x.retencion||0) > 0 && !x.retencionPagada &&
+      (!x.tipo || x.tipo === 'ETAPA') &&
+      !_retencionPagoEnPlanillaCheck(p, x.id)
+    );
     const by = {};
     pagos.forEach(pg => {
       const k = pg.colaborador || 'SIN NOMBRE';
@@ -21130,7 +21143,8 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       by[k].total += Number(pg.retencion || 0);
     });
     const personas = Object.entries(by).sort((a,b)=>a[0].localeCompare(b[0]));
-    const canPay = can('planilla.generate') || can('users.manage');
+    const canSend = can('planilla.generate') || can('users.manage');
+    const canApprove = (typeof window.isPMPlanilla === 'function' && window.isPMPlanilla()) || can('users.manage');
 
     const expKey = 'planilla_retenciones_expanded_' + (p.id || 'def');
     let expSet;
@@ -21138,20 +21152,80 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
 
     const escName = s => String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
 
-    // v270: totales del proyecto para el banner superior.
     const totalRetencionesProyecto = personas.reduce((s, [, info]) => s + Number(info.total||0), 0);
     const totalPagosCount = personas.reduce((s, [, info]) => s + info.pagos.length, 0);
 
-    let html = '<div class="card"><div class="card-hd"><h3>RETENCIONES ACUMULADAS</h3></div>';
+    let html = '';
 
-    // v270: banner superior para PAGAR PLANILLA DE RETENCIONES DEL PROYECTO
-    if(canPay && personas.length > 0){
+    // v278: bloque FLUJO DE APROBACION (planillas de retenciones enviadas)
+    const retplanillas = (p.planilla.retencionesPlanillas || []).slice().sort((a,b)=>(new Date(b.fechaEnvio)).getTime()-(new Date(a.fechaEnvio)).getTime());
+    const pendientes = retplanillas.filter(r => r.estado === 'pendiente_pm');
+    const aprobadas = retplanillas.filter(r => r.estado === 'aprobada');
+    if(retplanillas.length > 0 || canSend){
+      html += '<div class="card" style="margin-bottom:14px;border:2px solid #C62828;border-radius:10px;overflow:hidden">';
+      html += '<div style="padding:12px 16px;background:#C62828;color:#fff;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">';
+      html += '<h3 style="margin:0;font-size:14px;letter-spacing:.5px">PLANILLAS DE RETENCIONES · FLUJO DE APROBACIÓN</h3>';
+      html += '</div>';
+      pendientes.forEach(rp => {
+        const supDisp = String(rp.supervisorNombre || rp.supervisorEmail || '—').toUpperCase();
+        const fechaTxt = rp.fechaEnvio ? new Date(rp.fechaEnvio).toLocaleString('es-GT') : '—';
+        html += '<div style="margin:12px 14px;border:1.5px solid #F57C00;border-radius:8px;background:#FFF3E0;overflow:hidden">';
+        html += '<div style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;background:rgba(255,255,255,.55);flex-wrap:wrap;gap:6px">';
+        html += `<div><strong style="font-size:14px">RETENCIONES · ${(rp.trabajadores||[]).length} TRABAJADOR${(rp.trabajadores||[]).length!==1?'ES':''}</strong> · <span style="color:#7C5800">PENDIENTE DE AUTORIZACIÓN</span></div>`;
+        html += `<div style="font-size:12px;color:#444">${(rp.pagosIds||[]).length} RETENCIONES · <strong>${fQ(rp.granTotal||0)}</strong></div>`;
+        html += '</div>';
+        html += '<div style="padding:10px 14px;font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:6px 16px">';
+        html += `<div><strong>ENVIÓ:</strong> ${h(supDisp)}</div>`;
+        html += `<div><strong>FECHA:</strong> ${h(fechaTxt)}</div>`;
+        html += '</div>';
+        html += '<div style="padding:10px 14px;border-top:1px dashed #F57C00;display:flex;flex-wrap:wrap;gap:8px;background:rgba(255,255,255,.4)">';
+        if(canApprove){
+          html += `<button class="btn" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="aprobarPlanillaRetenciones('${h(rp.id)}')">AUTORIZAR Y GENERAR PDF</button>`;
+        } else {
+          html += '<span style="font-size:11px;color:#7C5800;font-style:italic">Esperando autorización del Gerente de Proyectos.</span>';
+        }
+        if(canSend){
+          html += `<button class="btn ghost" onclick="cancelarPlanillaRetenciones('${h(rp.id)}')" style="border-color:#C62828;color:#C62828">CANCELAR ENVÍO</button>`;
+        }
+        html += `<button class="btn ghost sm" onclick="verPreviewPlanillaRetenciones('${h(rp.id)}')" style="border-color:#1C1917;color:#1C1917">VER PREVIEW</button>`;
+        html += '</div>';
+        html += '</div>';
+      });
+      if(aprobadas.length > 0 && (canApprove || canSend)){
+        const histKey = 'retplanillas_historial_visible_' + (p.id || 'def');
+        const histVisible = (() => { try { return localStorage.getItem(histKey) === '1'; } catch(e){ return false; } })();
+        html += '<div style="border-top:2px solid #ddd;margin-top:8px;background:#FAFAFA">';
+        html += `<div onclick="toggleRetencionesHistorial('${p.id||'def'}')" style="padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none;background:#F0F0F0">`;
+        html += `<strong style="font-size:12px;letter-spacing:.4px;color:#444">HISTORIAL DE PLANILLAS DE RETENCIONES · ${aprobadas.length}</strong>`;
+        html += `<span style="font-size:11px;color:#666;font-weight:600">${histVisible ? '▼ OCULTAR' : '▶ MOSTRAR'}</span>`;
+        html += '</div>';
+        if(histVisible){
+          html += '<div style="padding:8px 0 12px">';
+          aprobadas.forEach(rp => {
+            const fechaAprob = rp.fechaAprobacion ? new Date(rp.fechaAprobacion).toLocaleDateString('es-GT') : '—';
+            html += '<div style="margin:6px 14px;border-left:3px solid #2E7D32;border-radius:4px;background:#fff;padding:8px 12px;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center">';
+            html += `<div style="font-size:11px;line-height:1.5"><strong>APROBADA Y PAGADA</strong> · ${(rp.trabajadores||[]).length} TRABAJADOR${(rp.trabajadores||[]).length!==1?'ES':''} · ${(rp.pagosIds||[]).length} RET. · <strong>${fQ(rp.granTotal||0)}</strong> · ${h(fechaAprob)}</div>`;
+            html += '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">';
+            html += `<button class="btn ghost sm" onclick="descargarPDFRetencionesPlanilla('${h(rp.id)}')" style="border-color:#2E7D32;color:#2E7D32;font-size:9px">DESCARGAR PDF</button>`;
+            html += '</div>';
+            html += '</div>';
+          });
+          html += '</div>';
+        }
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    html += '<div class="card"><div class="card-hd"><h3>RETENCIONES ACUMULADAS</h3></div>';
+
+    if(canSend && personas.length > 0){
       html += '<div style="padding:14px 16px;border-bottom:1px solid #eee;background:#FFF8E1">';
       html += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">';
       html += `<div style="font-size:13px"><strong>${personas.length} TRABAJADOR${personas.length!==1?'ES':''}</strong> · ${totalPagosCount} RETENCIÓN${totalPagosCount!==1?'ES':''} · TOTAL <strong style="color:var(--red)">${fQ(totalRetencionesProyecto)}</strong></div>`;
-      html += '<button class="btn" onclick="pagarPlanillaRetencionesProyecto()" style="background:#2E7D32;border-color:#2E7D32;color:#fff">PAGAR PLANILLA DE RETENCIONES DEL PROYECTO</button>';
+      html += '<button class="btn" onclick="enviarPlanillaRetencionesProyecto()" style="background:#C62828;border-color:#C62828;color:#fff">ENVIAR PLANILLA DE RETENCIONES AL GERENTE</button>';
       html += '</div>';
-      html += '<div style="font-size:11px;color:#666;margin-top:6px">GENERA UN SOLO PDF CON TODAS LAS RETENCIONES PENDIENTES DE TODOS LOS TRABAJADORES DEL PROYECTO.</div>';
+      html += '<div style="font-size:11px;color:#666;margin-top:6px">EL GERENTE DE PROYECTOS DEBE AUTORIZAR ANTES DE GENERAR EL PDF Y MARCAR COMO PAGADAS.</div>';
       html += '</div>';
     }
 
@@ -21190,12 +21264,12 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
             html += `<td style="padding:8px 10px;text-align:center;font-size:10px;color:var(--mute);font-variant-numeric:tabular-nums">${fQ(Number(pg.bruto||0))}</td>`;
             html += `<td style="padding:8px 10px;text-align:center;font-size:11px;color:var(--red);font-weight:700;font-variant-numeric:tabular-nums">${fQ(Number(pg.retencion||0))}</td>`;
             html += `<td style="padding:8px 10px;text-align:center;font-size:10px;color:var(--mute)">${h(fecha)}</td>`;
-            html += `<td style="padding:6px 10px;text-align:right">${canPay ? `<button class="btn ghost sm" onclick="pagarRetencionIndividual('${h(pg.id)}')" style="border-color:#2E7D32;color:#2E7D32;font-size:10px">PAGAR ESTA</button>` : ''}</td>`;
+            html += `<td style="padding:6px 10px;text-align:right">${canSend ? `<button class="btn ghost sm" onclick="enviarRetencionIndividual('${h(pg.id)}')" style="border-color:#C62828;color:#C62828;font-size:10px">ENVIAR ESTA</button>` : ''}</td>`;
             html += `</tr>`;
           });
           html += `</tbody></table>`;
-          if(canPay){
-            html += `<div style="text-align:right;margin-top:10px"><button class="btn sm" onclick="pagarRetencion('${nameEsc}')" style="background:#2E7D32;border-color:#2E7D32;color:#fff">PAGAR TODAS DE ${h(name)} · ${fQ(info.total)}</button></div>`;
+          if(canSend){
+            html += `<div style="text-align:right;margin-top:10px"><button class="btn sm" onclick="enviarRetencionPersona('${nameEsc}')" style="background:#C62828;border-color:#C62828;color:#fff">ENVIAR TODAS DE ${h(name)} · ${fQ(info.total)}</button></div>`;
           }
           html += `</div>`;
         }
@@ -21416,6 +21490,8 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       const prev = document.getElementById('prvRetencionesModal');
       if(prev) prev.remove();
       const bodyHtml = _renderPreviewRetencionesHTML(data);
+      const okText = (data.okText || 'PAGAR Y GENERAR PDF');
+      const esSoloLectura = (okText === 'CERRAR');
       const html = ''
         + '<div id="prvRetencionesModal" style="position:fixed;inset:0;background:rgba(20,20,20,.5);z-index:99999;display:flex;align-items:center;justify-content:center;padding:10px;font-family:inherit">'
         +   '<div style="background:#fff;border-radius:10px;max-width:720px;width:100%;max-height:94vh;display:flex;flex-direction:column;box-shadow:0 16px 50px rgba(0,0,0,.25);overflow:hidden">'
@@ -21425,8 +21501,10 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         +     '</div>'
         +     '<div style="flex:1;overflow-y:auto">' + bodyHtml + '</div>'
         +     '<div style="padding:12px 22px;border-top:1px solid #EEE;background:#FAFAFA;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">'
-        +       '<button class="btn ghost" id="prvRetCancel" style="border-color:#CCC;color:#555">CANCELAR</button>'
-        +       '<button class="btn" id="prvRetOk" style="background:#2E7D32;border-color:#2E7D32;color:#fff">PAGAR Y GENERAR PDF</button>'
+        +       (esSoloLectura
+          ? '<button class="btn" id="prvRetOk" style="background:#1a1a1a;border-color:#1a1a1a;color:#fff">CERRAR</button>'
+          : '<button class="btn ghost" id="prvRetCancel" style="border-color:#CCC;color:#555">CANCELAR</button>'
+            + '<button class="btn" id="prvRetOk" style="background:#2E7D32;border-color:#2E7D32;color:#fff">'+okText+'</button>')
         +     '</div>'
         +   '</div>'
         + '</div>';
@@ -21440,8 +21518,9 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         resolve(val);
       };
       const onKey = (e) => { if(e.key === 'Escape') close(false); };
-      node.querySelector('#prvRetOk').onclick = () => close(true);
-      node.querySelector('#prvRetCancel').onclick = () => close(false);
+      node.querySelector('#prvRetOk').onclick = () => close(!esSoloLectura);
+      const _cancelBtn = node.querySelector('#prvRetCancel');
+      if(_cancelBtn) _cancelBtn.onclick = () => close(false);
       node.querySelector('#prvRetX').onclick = () => close(false);
       node.onclick = (e) => { if(e.target === node) close(false); };
       document.addEventListener('keydown', onKey);
@@ -21492,52 +21571,109 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     return html;
   }
 
-  window.pagarRetencion = async function(name){
-    if(!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
+  // v278: helper interno — envia una planilla de retenciones al gerente.
+  function _retencionPagoEnPlanilla(p, pagoId){
+    const planillas = (p.planilla && p.planilla.retencionesPlanillas) || [];
+    return planillas.some(rp =>
+      (rp.estado === 'pendiente_pm' || rp.estado === 'aprobada') &&
+      Array.isArray(rp.pagosIds) && rp.pagosIds.includes(pagoId)
+    );
+  }
+  async function _enviarRetencionesAlGerente(trabajadoresData, granTotal, etiquetaConfirm){
+    if(!can('planilla.generate') && !can('users.manage')){ showToast('SIN PERMISO','red'); return false; }
     const p = activeProj();
-    if(!p) return;
-    const pagos = (p.planilla.pagos||[]).filter(x => x.colaborador === name && Number(x.retencion||0) > 0 && !x.retencionPagada);
-    if(!pagos.length){ showToast('SIN RETENCIONES PENDIENTES','red'); return; }
-    const total = pagos.reduce((s,x) => s + Number(x.retencion||0), 0);
-    // v273: vista previa rica.
+    if(!p) return false;
     const fechaRefIso = new Date().toISOString();
     const fechaSab = _retFechaSabadoTxt(fechaRefIso);
-    const retencionesData = pagos.map(pg => ({
-      descripcion: _retencionDesc(pg),
-      bruto: Number(pg.bruto||0),
-      monto: Number(pg.retencion||0),
-      fecha: pg.ts ? new Date(pg.ts).toLocaleDateString('es-GT') : ''
-    }));
     const ok = await _abrirPreviewRetencionesModal({
       proyecto: p.name,
       fechaSab: fechaSab,
-      trabajadores: [{ nombre: name, retenciones: retencionesData, total: total }],
-      granTotal: total
+      trabajadores: trabajadoresData,
+      granTotal: granTotal,
+      okText: 'ENVIAR AL GERENTE DE PROYECTOS'
     });
-    if(!ok) return;
-
-    pagos.forEach(x => x.retencionPagada = true);
-    if(!p.planilla.retencionesPagadas) p.planilla.retencionesPagadas = [];
-    p.planilla.retencionesPagadas.push({ id:'ret-'+uid(), name, total, ts:Date.now(), pagosIds:pagos.map(x=>x.id), tipo:'lote' });
-    logActivity('paid', `Retención pagada a ${name}`, `${p.name} · ${fQ(total)} · ${pagos.length} retencion${pagos.length!==1?'es':''}`);
-    saveState();
-    _generarPDFRetencionLocal({
+    if(!ok) return false;
+    if(!p.planilla.retencionesPlanillas) p.planilla.retencionesPlanillas = [];
+    const supName = (typeof window._getUserDisplayName === 'function') ? window._getUserDisplayName() : '';
+    const supEmail = (typeof window._getUserEmail === 'function') ? window._getUserEmail() : '';
+    const pagosIds = trabajadoresData.flatMap(t => (t.pagosIds || []));
+    const retpl = {
+      id: 'retpl-'+uid(),
+      estado: 'pendiente_pm',
       proyecto: p.name,
       fechaRef: fechaRefIso,
-      pagador: _retencionPagadorName(),
-      trabajadores: [{ nombre: name, retenciones: retencionesData, total: total }],
-      granTotal: total
-    });
+      fechaEnvio: fechaRefIso,
+      fechaAprobacion: null,
+      supervisorNombre: supName,
+      supervisorEmail: supEmail,
+      pmNombre: null,
+      pmEmail: null,
+      trabajadores: trabajadoresData.map(t => ({ nombre: t.nombre, total: t.total, retenciones: t.retenciones })),
+      pagosIds: pagosIds,
+      granTotal: granTotal,
+      tipo: etiquetaConfirm || 'planilla_proyecto'
+    };
+    p.planilla.retencionesPlanillas.push(retpl);
+    logActivity('send', `Planilla de retenciones enviada al gerente`, `${p.name} · ${fQ(granTotal)} · ${pagosIds.length} retenciones`);
+    saveState();
     renderPlanilla();
-    showToast('RETENCIONES PAGADAS · PDF DESCARGADO','green');
-  };
+    showToast('PLANILLA DE RETENCIONES ENVIADA AL GERENTE','green');
+    return true;
+  }
 
-  // v270: planilla de retenciones de TODOS los trabajadores del proyecto.
-  window.pagarPlanillaRetencionesProyecto = async function(){
+  window.enviarRetencionIndividual = async function(pagoId){
     if(!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
     const p = activeProj();
     if(!p) return;
-    const pendientes = (p.planilla.pagos||[]).filter(x => x && Number(x.retencion||0) > 0 && !x.retencionPagada && (!x.tipo || x.tipo === 'ETAPA'));
+    const pago = (p.planilla.pagos || []).find(x => x.id === pagoId);
+    if(!pago){ showToast('PAGO NO ENCONTRADO','red'); return; }
+    if(pago.retencionPagada){ showToast('ESTA RETENCIÓN YA FUE PAGADA','red'); return; }
+    if(_retencionPagoEnPlanilla(p, pagoId)){ showToast('YA ESTÁ EN UNA PLANILLA EN PROCESO','red'); return; }
+    const monto = Number(pago.retencion || 0);
+    if(monto <= 0){ showToast('NO HAY RETENCIÓN PARA ENVIAR','red'); return; }
+    await _enviarRetencionesAlGerente([{
+      nombre: pago.colaborador,
+      total: monto,
+      pagosIds: [pago.id],
+      retenciones: [{
+        descripcion: _retencionDesc(pago),
+        bruto: Number(pago.bruto||0),
+        monto: monto,
+        fecha: pago.ts ? new Date(pago.ts).toLocaleDateString('es-GT') : ''
+      }]
+    }], monto, 'individual');
+  };
+
+  window.enviarRetencionPersona = async function(name){
+    if(!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
+    const p = activeProj();
+    if(!p) return;
+    const pagos = (p.planilla.pagos||[]).filter(x =>
+      x.colaborador === name && Number(x.retencion||0) > 0 && !x.retencionPagada && !_retencionPagoEnPlanilla(p, x.id)
+    );
+    if(!pagos.length){ showToast('SIN RETENCIONES PENDIENTES','red'); return; }
+    const total = pagos.reduce((s,x) => s + Number(x.retencion||0), 0);
+    await _enviarRetencionesAlGerente([{
+      nombre: name,
+      total: total,
+      pagosIds: pagos.map(x => x.id),
+      retenciones: pagos.map(pg => ({
+        descripcion: _retencionDesc(pg),
+        bruto: Number(pg.bruto||0),
+        monto: Number(pg.retencion||0),
+        fecha: pg.ts ? new Date(pg.ts).toLocaleDateString('es-GT') : ''
+      }))
+    }], total, 'lote');
+  };
+
+  window.enviarPlanillaRetencionesProyecto = async function(){
+    if(!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
+    const p = activeProj();
+    if(!p) return;
+    const pendientes = (p.planilla.pagos||[]).filter(x =>
+      x && Number(x.retencion||0) > 0 && !x.retencionPagada &&
+      (!x.tipo || x.tipo === 'ETAPA') && !_retencionPagoEnPlanilla(p, x.id)
+    );
     if(!pendientes.length){ showToast('SIN RETENCIONES PENDIENTES','red'); return; }
     const byName = {};
     pendientes.forEach(pg => {
@@ -21548,97 +21684,121 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     });
     const trabajadores = Object.entries(byName)
       .sort((a,b)=>a[0].localeCompare(b[0]))
-      .map(([nombre, info]) => ({ nombre, count: info.pagos.length, total: info.total, pagos: info.pagos }));
+      .map(([nombre, info]) => ({
+        nombre,
+        total: info.total,
+        pagosIds: info.pagos.map(pg => pg.id),
+        retenciones: info.pagos.map(pg => ({
+          descripcion: _retencionDesc(pg),
+          bruto: Number(pg.bruto||0),
+          monto: Number(pg.retencion||0),
+          fecha: pg.ts ? new Date(pg.ts).toLocaleDateString('es-GT') : ''
+        }))
+      }));
     const granTotal = trabajadores.reduce((s,t) => s + t.total, 0);
-    const totalCount = trabajadores.reduce((s,t) => s + t.count, 0);
-
-    // v273: vista previa rica.
-    const fechaRefIso = new Date().toISOString();
-    const fechaSab = _retFechaSabadoTxt(fechaRefIso);
-    const trabsConData = trabajadores.map(t => ({
-      nombre: t.nombre,
-      total: t.total,
-      retenciones: t.pagos.map(pg => ({
-        descripcion: _retencionDesc(pg),
-        bruto: Number(pg.bruto||0),
-        monto: Number(pg.retencion||0),
-        fecha: pg.ts ? new Date(pg.ts).toLocaleDateString('es-GT') : ''
-      }))
-    }));
-    const ok = await _abrirPreviewRetencionesModal({
-      proyecto: p.name,
-      fechaSab: fechaSab,
-      trabajadores: trabsConData,
-      granTotal: granTotal
-    });
-    if(!ok) return;
-
-    pendientes.forEach(x => x.retencionPagada = true);
-    if(!p.planilla.retencionesPagadas) p.planilla.retencionesPagadas = [];
-    p.planilla.retencionesPagadas.push({
-      id:'ret-'+uid(),
-      ts:Date.now(),
-      pagosIds: pendientes.map(x=>x.id),
-      total: granTotal,
-      tipo: 'planilla_proyecto',
-      trabajadores: trabajadores.map(t => ({ nombre: t.nombre, count: t.count, total: t.total }))
-    });
-    logActivity('paid', `Planilla de retenciones generada`, `${p.name} · ${fQ(granTotal)} · ${totalCount} retenciones · ${trabajadores.length} trabajadores`);
-    saveState();
-    _generarPDFRetencionLocal({
-      proyecto: p.name,
-      fechaRef: fechaRefIso,
-      pagador: _retencionPagadorName(),
-      trabajadores: trabsConData,
-      granTotal: granTotal
-    });
-    renderPlanilla();
-    showToast('PLANILLA DE RETENCIONES PAGADA · PDF DESCARGADO','green');
+    await _enviarRetencionesAlGerente(trabajadores, granTotal, 'planilla_proyecto');
   };
 
-  window.pagarRetencionIndividual = async function(pagoId){
+  window.aprobarPlanillaRetenciones = async function(retplId){
+    const esGerente = (typeof window.isPMPlanilla === 'function' && window.isPMPlanilla()) || can('users.manage');
+    if(!esGerente){ showToast('SOLO EL GERENTE DE PROYECTOS PUEDE AUTORIZAR','red'); return; }
+    const p = activeProj();
+    if(!p) return;
+    const retpl = (p.planilla.retencionesPlanillas||[]).find(x => x.id === retplId);
+    if(!retpl){ showToast('PLANILLA NO ENCONTRADA','red'); return; }
+    if(retpl.estado !== 'pendiente_pm'){ showToast('YA NO ESTÁ PENDIENTE','red'); return; }
+    const ok = await _abrirPreviewRetencionesModal({
+      proyecto: retpl.proyecto || p.name,
+      fechaSab: _retFechaSabadoTxt(retpl.fechaRef || new Date().toISOString()),
+      trabajadores: retpl.trabajadores || [],
+      granTotal: retpl.granTotal || 0,
+      okText: 'AUTORIZAR Y GENERAR PDF'
+    });
+    if(!ok) return;
+    retpl.estado = 'aprobada';
+    retpl.fechaAprobacion = new Date().toISOString();
+    retpl.pmNombre = (typeof window._getUserDisplayName === 'function') ? window._getUserDisplayName() : '';
+    retpl.pmEmail = (typeof window._getUserEmail === 'function') ? window._getUserEmail() : '';
+    (retpl.pagosIds||[]).forEach(pid => {
+      const pg = (p.planilla.pagos||[]).find(x => x.id === pid);
+      if(pg) pg.retencionPagada = true;
+    });
+    if(!p.planilla.retencionesPagadas) p.planilla.retencionesPagadas = [];
+    p.planilla.retencionesPagadas.push({
+      id: 'ret-' + uid(), ts: Date.now(),
+      pagosIds: retpl.pagosIds || [], total: retpl.granTotal || 0,
+      tipo: retpl.tipo || 'planilla_proyecto', retplId: retpl.id
+    });
+    logActivity('paid', `Planilla de retenciones autorizada`, `${p.name} · ${fQ(retpl.granTotal||0)} · ${(retpl.pagosIds||[]).length} retenciones`);
+    saveState();
+    _generarPDFRetencionLocal({
+      proyecto: retpl.proyecto || p.name,
+      fechaRef: retpl.fechaRef || new Date().toISOString(),
+      pagador: _retencionPagadorName(),
+      trabajadores: retpl.trabajadores || [],
+      granTotal: retpl.granTotal || 0
+    });
+    renderPlanilla();
+    showToast('PLANILLA AUTORIZADA · PDF DESCARGADO','green');
+  };
+
+  window.cancelarPlanillaRetenciones = async function(retplId){
     if(!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
     const p = activeProj();
     if(!p) return;
-    const pago = (p.planilla.pagos || []).find(x => x.id === pagoId);
-    if(!pago){ showToast('PAGO NO ENCONTRADO','red'); return; }
-    if(pago.retencionPagada){ showToast('ESTA RETENCIÓN YA FUE PAGADA','red'); return; }
-    const monto = Number(pago.retencion || 0);
-    if(monto <= 0){ showToast('NO HAY RETENCIÓN PARA PAGAR','red'); return; }
-    const idx = Number(pago.stageIdx||0);
-    const aptoStr = ((pago.towerName||'').trim()+' '+(pago.aptoName||'').trim()+' · ETAPA '+(idx+1)+' · ABONO '+(pago.pctDelta||100)+'%').replace(/\s+/g,' ').trim();
-    // v273: vista previa rica.
-    const fechaRefIso = new Date().toISOString();
-    const fechaSab = _retFechaSabadoTxt(fechaRefIso);
-    const retencionUnica = {
-      descripcion: _retencionDesc(pago),
-      bruto: Number(pago.bruto||0),
-      monto: monto,
-      fecha: pago.ts ? new Date(pago.ts).toLocaleDateString('es-GT') : ''
-    };
-    const ok = await _abrirPreviewRetencionesModal({
-      proyecto: p.name,
-      fechaSab: fechaSab,
-      trabajadores: [{ nombre: pago.colaborador, retenciones: [retencionUnica], total: monto }],
-      granTotal: monto
-    });
+    const retpl = (p.planilla.retencionesPlanillas||[]).find(x => x.id === retplId);
+    if(!retpl){ showToast('PLANILLA NO ENCONTRADA','red'); return; }
+    if(retpl.estado !== 'pendiente_pm'){ showToast('SOLO SE PUEDE CANCELAR UNA PLANILLA PENDIENTE','red'); return; }
+    const bodyHTML = ''
+      + '<div style="font-size:13px;color:#1a1a1a;margin-bottom:10px;line-height:1.55">Vas a <strong>cancelar el envío</strong> de esta planilla de retenciones. Las retenciones volverán a quedar pendientes para enviar de nuevo.</div>'
+      + '<div style="font-size:11.5px;color:#666;margin-bottom:10px">'+(retpl.pagosIds||[]).length+' retenciones · '+fQ(retpl.granTotal||0)+'</div>';
+    const ok = await window.prConfirm({ title: 'Cancelar envío de planilla de retenciones', bodyHTML, okText: 'CANCELAR ENVÍO', cancelText: 'NO HACER NADA', danger: true });
     if(!ok) return;
-
-    pago.retencionPagada = true;
-    if(!p.planilla.retencionesPagadas) p.planilla.retencionesPagadas = [];
-    p.planilla.retencionesPagadas.push({ id:'ret-'+uid(), name:pago.colaborador, total:monto, ts:Date.now(), pagoId:pago.id, aptoStr:aptoStr, tipo:'individual' });
-    logActivity('paid', `Retención individual pagada a ${pago.colaborador}`, `${p.name} · ${fQ(monto)} · ${aptoStr}`);
+    p.planilla.retencionesPlanillas = (p.planilla.retencionesPlanillas||[]).filter(x => x.id !== retplId);
     saveState();
-    _generarPDFRetencionLocal({
-      proyecto: p.name,
-      fechaRef: fechaRefIso,
-      pagador: _retencionPagadorName(),
-      trabajadores: [{ nombre: pago.colaborador, retenciones: [retencionUnica], total: monto }],
-      granTotal: monto
-    });
     renderPlanilla();
-    showToast(`RETENCIÓN PAGADA · ${fQ(monto)} · PDF DESCARGADO`,'green');
+    showToast('ENVÍO CANCELADO · LAS RETENCIONES QUEDAN PENDIENTES','green');
   };
+
+  window.descargarPDFRetencionesPlanilla = function(retplId){
+    const p = activeProj();
+    if(!p) return;
+    const retpl = (p.planilla.retencionesPlanillas||[]).find(x => x.id === retplId);
+    if(!retpl){ showToast('PLANILLA NO ENCONTRADA','red'); return; }
+    _generarPDFRetencionLocal({
+      proyecto: retpl.proyecto || p.name,
+      fechaRef: retpl.fechaRef || retpl.fechaEnvio || new Date().toISOString(),
+      pagador: _retencionPagadorName(),
+      trabajadores: retpl.trabajadores || [],
+      granTotal: retpl.granTotal || 0
+    });
+  };
+
+  window.verPreviewPlanillaRetenciones = async function(retplId){
+    const p = activeProj();
+    if(!p) return;
+    const retpl = (p.planilla.retencionesPlanillas||[]).find(x => x.id === retplId);
+    if(!retpl){ showToast('PLANILLA NO ENCONTRADA','red'); return; }
+    await _abrirPreviewRetencionesModal({
+      proyecto: retpl.proyecto || p.name,
+      fechaSab: _retFechaSabadoTxt(retpl.fechaRef || retpl.fechaEnvio || new Date().toISOString()),
+      trabajadores: retpl.trabajadores || [],
+      granTotal: retpl.granTotal || 0,
+      okText: 'CERRAR'
+    });
+  };
+
+  window.toggleRetencionesHistorial = function(projId){
+    const key = 'retplanillas_historial_visible_' + (projId || 'def');
+    const cur = (() => { try { return localStorage.getItem(key) === '1'; } catch(e){ return false; } })();
+    try { localStorage.setItem(key, cur ? '0' : '1'); } catch(e){}
+    if(typeof renderPlanillaRetenciones === 'function') renderPlanillaRetenciones();
+  };
+
+  // Backward-compat redirects.
+  window.pagarRetencion = function(name){ return window.enviarRetencionPersona(name); };
+  window.pagarRetencionIndividual = function(pagoId){ return window.enviarRetencionIndividual(pagoId); };
+  window.pagarPlanillaRetencionesProyecto = function(){ return window.enviarPlanillaRetencionesProyecto(); };
 
   /* ════════════════════════════════════════════════════════════════
      EXTRAS / DESCUENTOS / OC — versión 2 (líneas con unidad, cuotas, retención toggle)
