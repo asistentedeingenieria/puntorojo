@@ -2459,7 +2459,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v264</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v265</span>
   </footer>
 
 </div>
@@ -29798,6 +29798,18 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   }
   // v262: nombres de las 5 etapas (orden por stageIdx).
   const _ETAPAS_NOMBRES = ['TABIQUES A UNA CARA','REFUERZOS DE MADERA','FORRO 2NDA CARA','ESTRUCTURA CIELO + FORRO CIELO','MASILLA'];
+  // v265: compactar lista de torres. "TORRE 3 Y TORRE 4" -> "TORRE 3 Y 4".
+  function _compactarTorres(torresStr){
+    if(!torresStr) return '';
+    const parts = String(torresStr).split(/\s+Y\s+/i).map(s => s.trim()).filter(Boolean);
+    if(parts.length === 0) return '';
+    const torrePattern = /^TORRE\s+(.+)$/i;
+    if(parts.every(t => torrePattern.test(t))){
+      const tails = parts.map(t => t.match(torrePattern)[1].trim());
+      return 'TORRE ' + tails.join(' Y ');
+    }
+    return parts.join(' Y ');
+  }
   function _safeSheetName(name){
     let n = String(name||'').replace(/[\\\/\?\*\[\]:]/g,'').trim();
     if(!n) n = 'COLAB';
@@ -30123,25 +30135,11 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       const { jsPDF } = window.jspdf;
       const doc = new jsPDF({ unit: 'pt', format: 'letter' });
 
-      let y = 36;
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(13);
-      // v262: titulo principal "Planilla <Proyecto>_<DDMMYYYY>".
-      const titulo = _tituloPlanilla(data) + (data.torres?' · '+data.torres.toUpperCase():'');
-      doc.text(titulo, 306, y, { align:'center' });
-      y += 14;
-      doc.setFont('helvetica','normal');
-      doc.setFontSize(9);
-      const numTxt = data.numero === 'PREVIEW' ? 'PREVIEW · NO ENVIADA' : String(data.estado||'').replace(/_/g,' ').toUpperCase();
-      const subTxt = numTxt + ' · GENERADO ' + _fmtFecha(data.fecha);
-      doc.text(subTxt, 306, y, { align:'center' });
-      y += 12;
-      if(data.supervisorNombre || data.pmNombre){
-        const meta = (data.supervisorNombre?'SUPERVISOR: '+data.supervisorNombre:'') + (data.supervisorNombre && data.pmNombre?'   ·   ':'') + (data.pmNombre?'GERENTE: '+data.pmNombre:'');
-        doc.text(meta, 306, y, { align:'center' });
-        y += 12;
-      }
-      y += 6;
+      // v265: header de 3 lineas en autoTable, sin doc.text.
+      //   1. "PLANILLA TABLAYESO - <PROYECTO> - <TORRES>" (blanco)
+      //   2. NOMBRE DEL SUPERVISOR (gris)
+      //   3. FECHA DEL SABADO DE PAGO (gris)
+      let y = 30;
 
       // v263: layout estilo PRESUPUESTO con 6 columnas (cotizacion).
       //   Col 0: Descripcion | 1: Unidad ("global") | 2: Cant1 ("1.00")
@@ -30149,6 +30147,24 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       const _fechaTxt = _fmtFechaSabado(data.fecha);
       const COLS = 6;
       const body = [];
+
+      // v265: 3 filas de cabecera al tope de la tabla.
+      const _torresTxt = _compactarTorres(data.torres);
+      const _tituloHeader = ('PLANILLA TABLAYESO - ' + (data.proyecto||'') + (_torresTxt?' - '+_torresTxt:'')).toUpperCase();
+      body.push([
+        { content: _tituloHeader, colSpan: COLS, styles: { fontStyle:'bold', halign:'center', fillColor:[255,255,255], textColor:[0,0,0], fontSize: 12, cellPadding: { top:7, right:6, bottom:7, left:6 } } }
+      ]);
+      const _supervisorTxt = String(data.supervisorNombre || '').toUpperCase() || '—';
+      body.push([
+        { content: _supervisorTxt, colSpan: COLS, styles: { fontStyle:'bold', halign:'center', fillColor:[217,217,217], textColor:[0,0,0], fontSize: 11, cellPadding: { top:6, right:6, bottom:6, left:6 } } }
+      ]);
+      body.push([
+        { content: _fechaTxt, colSpan: COLS, styles: { fontStyle:'bold', halign:'center', fillColor:[217,217,217], textColor:[0,0,0], fontSize: 11, cellPadding: { top:6, right:6, bottom:6, left:6 } } }
+      ]);
+      body.push([
+        { content: '', colSpan: COLS, styles: { fillColor:[255,255,255], lineWidth: 0 } }
+      ]);
+
       data.colabs.forEach((c, idx) => {
         body.push([
           { content: c.nombre + (c.rol?'  ('+c.rol+')':''), colSpan: 3, styles: { fontStyle:'bold', fillColor:[255,255,255], textColor:[0,0,0] } },
@@ -30267,17 +30283,16 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   // trabajador es una fila colapsable que al expandir muestra el
   // desglose simple (apto -> etapas -> totales). Diseno tipo recibo.
   function _renderPreviewHTML(data){
-    // v262: titulo principal "Planilla <Proyecto>_<DDMMYYYY>".
-    const tituloPlanilla = _tituloPlanilla(data);
-    const numTxt = data.numero === 'PREVIEW' ? 'BORRADOR · NO ENVIADA' : upper(String(data.estado).replace(/_/g,' '));
+    // v265: cabecera de 3 lineas matchea el PDF: titulo - supervisor - fecha.
     const fechaLiqTxt = _fmtFechaSabado(data.fecha);
+    const torresTxt = _compactarTorres(data.torres);
+    const tituloTop = ('PLANILLA TABLAYESO - ' + (data.proyecto||'') + (torresTxt?' - '+torresTxt:'')).toUpperCase();
+    const supervisorTxt = String(data.supervisorNombre || '').toUpperCase() || '—';
 
     let html = '';
-    html += '<div style="padding:22px 26px 14px;background:#fff">';
-    html += '<div style="font-size:17px;font-weight:700;letter-spacing:.2px;color:#1a1a1a;line-height:1.25">'+esc(tituloPlanilla)+'</div>';
-    html += '<div style="font-size:12.5px;color:#555;margin-top:3px">Planilla de Tablayeso'+(data.torres?' · '+esc(upper(data.torres)):'')+'</div>';
-    html += '<div style="font-size:10.5px;color:#888;margin-top:6px;letter-spacing:.2px">'+esc(numTxt)+' · Liquidación al '+esc(fechaLiqTxt)+(data.supervisorNombre?' · Sup. '+esc(data.supervisorNombre):'')+(data.pmNombre?' · Gte. '+esc(data.pmNombre):'')+'</div>';
-    html += '</div>';
+    html += '<div style="margin:18px 22px 0;border:1px solid #C0C0C0;border-bottom:none;background:#fff;padding:10px 14px;text-align:center;font-weight:700;font-size:13px;color:#1a1a1a;letter-spacing:.3px">'+esc(tituloTop)+'</div>';
+    html += '<div style="margin:0 22px;border:1px solid #C0C0C0;border-bottom:none;background:#D9D9D9;padding:8px 14px;text-align:center;font-weight:700;font-size:12px;color:#1a1a1a;letter-spacing:.3px">'+esc(supervisorTxt)+'</div>';
+    html += '<div style="margin:0 22px 16px;border:1px solid #C0C0C0;background:#D9D9D9;padding:8px 14px;text-align:center;font-weight:700;font-size:12px;color:#1a1a1a;letter-spacing:.3px">'+esc(fechaLiqTxt)+'</div>';
 
     html += '<div style="padding:0 22px 8px">';
     data.colabs.forEach((c, i) => {
