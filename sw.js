@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v289-editor-planilla-rechazada-y-rename-gerente-de-proyectos';
+const CACHE_VERSION = 'v290-planilla-generada-estricta-y-x-eliminar';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
