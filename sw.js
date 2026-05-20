@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v283-resumen-solo-con-actividad-y-titulo-descuentos';
+const CACHE_VERSION = 'v284-mensaje-procesar-planilla-mas-corto';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
