@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v290-planilla-generada-estricta-y-x-eliminar';
+const CACHE_VERSION = 'v291-notifs-fotos-ilimitadas-camara-nativa-etapas-12-libres';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
