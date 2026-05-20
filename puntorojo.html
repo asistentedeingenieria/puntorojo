@@ -2406,6 +2406,7 @@ table{max-width:100%}
         <button class="mat-tab" data-plantab="ajustes" onclick="setPlanillaTab('ajustes')">EXTRAS / DESCUENTOS / OC</button>
         <button class="mat-tab" data-plantab="excepciones" onclick="setPlanillaTab('excepciones')">EXCEPCIONES <span id="planillaExcBadge" style="display:none;background:var(--red);color:#fff;font-size:8px;padding:2px 6px;border-radius:10px;margin-left:4px"></span></button>
         <button class="mat-tab" data-plantab="reporte" onclick="setPlanillaTab('reporte')">REPORTE POR APTO</button>
+        <button class="mat-tab" data-plantab="resumenpersona" onclick="setPlanillaTab('resumenpersona')">RESUMEN POR PERSONA</button>
       </div>
 
       <div id="planilla-etapas"></div>
@@ -2414,6 +2415,7 @@ table{max-width:100%}
       <div id="planilla-ajustes" style="display:none"></div>
       <div id="planilla-excepciones" style="display:none"></div>
       <div id="planilla-reporte" style="display:none"></div>
+      <div id="planilla-resumenpersona" style="display:none"></div>
     </section>
 
     <!-- ── ACTIVIDAD ── -->
@@ -2465,7 +2467,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v280</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v281</span>
   </footer>
 
 </div>
@@ -20708,6 +20710,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     if (currentPlanillaTab === 'ajustes') renderPlanillaAjustes();
     if (currentPlanillaTab === 'excepciones') renderPlanillaExcepciones();
     if (currentPlanillaTab === 'reporte') renderPlanillaReporte();
+    if (currentPlanillaTab === 'resumenpersona' && typeof renderPlanillaResumenPersona === 'function') renderPlanillaResumenPersona();
     // Badge de excepciones pendientes en la pestaña
     try { window.actualizarBadgeExcepciones(); } catch(e){}
     applyPermissions();
@@ -21348,6 +21351,220 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     if(set.has(name)) set.delete(name); else set.add(name);
     try { localStorage.setItem(key, JSON.stringify(Array.from(set))); } catch(e){}
     if(typeof renderPlanillaRetenciones === 'function') renderPlanillaRetenciones();
+  };
+
+  // v281: RESUMEN POR PERSONA — KPI por trabajador. Muestra cuanto ha
+  // generado cada persona desglosado por bruto, retencion, descuentos,
+  // OCs y neto pagado. Ranking por neto descendente. Click en cada
+  // fila para ver el detalle de sus pagos.
+  window.renderPlanillaResumenPersona = function(){
+    const h = s => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const el = document.getElementById('planilla-resumenpersona');
+    if(!el) return;
+    const p = activeProj();
+    if(!p){ el.innerHTML = ''; return; }
+    const pagos = (p.planilla.pagos || []).filter(x => x && (!x.tipo || x.tipo === 'ETAPA'));
+    const ajustes = (p.planilla.ajustes || []);
+    // Agregar trabajadores incluso si solo tienen ajustes (sin pagos).
+    const todasPersonas = new Set();
+    pagos.forEach(pg => { if(pg.colaborador) todasPersonas.add(String(pg.colaborador).toUpperCase()); });
+    ajustes.forEach(a => { if(a.colaboradorNombre) todasPersonas.add(String(a.colaboradorNombre).toUpperCase()); });
+    (p.planilla.colaboradores||[]).forEach(c => { if(c.nombre) todasPersonas.add(String(c.nombre).toUpperCase()); });
+
+    if(todasPersonas.size === 0){
+      el.innerHTML = '<div class="card"><div class="card-hd"><h3>RESUMEN POR PERSONA</h3></div><div class="empty" style="padding:30px">SIN PERSONAS REGISTRADAS TODAVÍA</div></div>';
+      return;
+    }
+
+    // Build stats por persona
+    const stats = {};
+    todasPersonas.forEach(name => {
+      stats[name] = {
+        nombre: name,
+        bruto: 0, retencion: 0, retencionPagada: 0,
+        descuentos: 0, ocs: 0, neto: 0,
+        countPagos: 0, countEtapasCompletas: 0,
+        pagosAutorizados: 0, pagosPendientes: 0
+      };
+    });
+    pagos.forEach(pg => {
+      const k = String(pg.colaborador || '').toUpperCase();
+      if(!stats[k]) return;
+      const bruto = Number(pg.bruto || 0);
+      const ret = Number(pg.retencion || 0);
+      const neto = Number(pg.neto || (bruto - ret));
+      stats[k].bruto += bruto;
+      stats[k].retencion += ret;
+      stats[k].neto += neto;
+      stats[k].countPagos++;
+      if(pg.autorizado) stats[k].pagosAutorizados++;
+      else stats[k].pagosPendientes++;
+      if(pg.retencionPagada) stats[k].retencionPagada += ret;
+      if(Number(pg.targetPct||0) >= 100) stats[k].countEtapasCompletas++;
+    });
+    ajustes.forEach(a => {
+      const k = String(a.colaboradorNombre || '').toUpperCase();
+      if(!stats[k]) return;
+      const monto = Number(a.monto || a.neto || 0);
+      if(a.tipo === 'ORDEN_CAMBIO' || a.tipo === 'ORDEN DE CAMBIO'){
+        stats[k].ocs += monto;
+        stats[k].bruto += monto;
+        stats[k].neto += monto;
+      } else {
+        // Cualquier tipo de descuento
+        stats[k].descuentos += monto;
+        stats[k].neto -= monto;
+      }
+    });
+    // tambien descuentos dentro de planillas armadas (descuentosPlanilla)
+    (p.planilla.planillasArmadas || []).forEach(pl => {
+      (pl.descuentosPlanilla || []).forEach(d => {
+        const k = String(d.colaboradorNombre || '').toUpperCase();
+        if(!stats[k]) return;
+        stats[k].descuentos += Number(d.monto || 0);
+        stats[k].neto -= Number(d.monto || 0);
+      });
+    });
+
+    // Ordenar por bruto generado (descendente).
+    const filas = Object.values(stats).sort((a,b) => b.bruto - a.bruto);
+    const granBruto = filas.reduce((s,x) => s + x.bruto, 0);
+    const granRet = filas.reduce((s,x) => s + x.retencion, 0);
+    const granRetPagada = filas.reduce((s,x) => s + x.retencionPagada, 0);
+    const granDesc = filas.reduce((s,x) => s + x.descuentos, 0);
+    const granOC = filas.reduce((s,x) => s + x.ocs, 0);
+    const granNeto = filas.reduce((s,x) => s + x.neto, 0);
+    // Persona top — la que mas ha generado en BRUTO
+    const top = filas[0];
+
+    const expKey = 'planilla_resumen_persona_expanded_' + (p.id || 'def');
+    let expSet;
+    try { expSet = new Set(JSON.parse(localStorage.getItem(expKey) || '[]')); } catch(e){ expSet = new Set(); }
+
+    let html = '';
+    html += '<div class="card" style="overflow:hidden">';
+    html += '<div class="card-hd"><h3>RESUMEN POR PERSONA · BRUTO GENERADO</h3></div>';
+
+    // Banner top
+    if(top && granBruto > 0){
+      const pctTop = ((top.bruto / granBruto) * 100).toFixed(1);
+      html += '<div style="padding:14px 16px;background:linear-gradient(135deg,#FAF8F3 0%,#F0EBE0 100%);border-bottom:1px solid #E5E5E5;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center">';
+      html += '<div>';
+      html += '<div style="font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700">PERSONA QUE MÁS HA GENERADO</div>';
+      html += `<div style="font-size:18px;font-weight:800;color:#1a1a1a;margin-top:2px;letter-spacing:.3px">${h(top.nombre)}</div>`;
+      html += `<div style="font-size:11px;color:#666;margin-top:3px">${top.countPagos} pago${top.countPagos!==1?'s':''} · ${top.countEtapasCompletas} etapa${top.countEtapasCompletas!==1?'s':''} al 100%</div>`;
+      html += '</div>';
+      html += '<div style="text-align:right">';
+      html += `<div style="font-size:22px;font-weight:800;color:#1a1a1a;letter-spacing:.3px">${fQ(top.bruto)}</div>`;
+      html += `<div style="font-size:10.5px;color:#888;margin-top:2px;letter-spacing:.5px">${pctTop}% DEL TOTAL DEL PROYECTO</div>`;
+      html += '</div>';
+      html += '</div>';
+    }
+
+    // Headers de la tabla
+    html += '<div style="display:grid;grid-template-columns:24px 1.2fr 110px 100px 100px 100px 110px;gap:8px;align-items:center;padding:11px 16px;background:#F5F1E8;border-bottom:1px solid #E5E5E5;font-size:9px;letter-spacing:1.1px;color:#666;font-weight:700;text-transform:uppercase">';
+    html += '<div></div>';
+    html += '<div>TRABAJADOR</div>';
+    html += '<div style="text-align:right">BRUTO</div>';
+    html += '<div style="text-align:right">RETENCIÓN</div>';
+    html += '<div style="text-align:right">DESCUENTOS</div>';
+    html += '<div style="text-align:right">+ OCS</div>';
+    html += '<div style="text-align:right">NETO PAGADO</div>';
+    html += '</div>';
+
+    // Filas
+    filas.forEach((s, idx) => {
+      const isExp = expSet.has(s.nombre);
+      const nameEsc = String(s.nombre||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+      const pctBruto = granBruto > 0 ? ((s.bruto / granBruto) * 100).toFixed(1) : '0.0';
+      // Barra de progreso visual relativa al top
+      const barPct = top && top.bruto > 0 ? Math.round((s.bruto / top.bruto) * 100) : 0;
+      const rank = idx + 1;
+      const colorRank = idx === 0 ? '#C8861C' : idx === 1 ? '#999' : idx === 2 ? '#B07A4A' : '#CCC';
+
+      html += '<div style="border-bottom:1px solid #ECECEC">';
+      html += `<div onclick="window.toggleResumenPersona('${nameEsc}')" style="display:grid;grid-template-columns:24px 1.2fr 110px 100px 100px 100px 110px;gap:8px;align-items:center;padding:12px 16px;cursor:pointer;background:${isExp?'#FAF8F3':'#fff'};transition:background .15s">`;
+      // Rank badge
+      html += `<div style="display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:${colorRank};color:#fff;font-size:10px;font-weight:800">${rank}</div>`;
+      // Nombre + barra de progreso
+      html += '<div>';
+      html += `<div style="font-size:12px;font-weight:700;color:#1a1a1a;letter-spacing:.3px">${h(s.nombre)}</div>`;
+      html += `<div style="display:flex;align-items:center;gap:6px;margin-top:4px">`;
+      html += `<div style="flex:1;height:4px;background:#EEE;border-radius:2px;overflow:hidden;max-width:140px"><div style="height:100%;width:${barPct}%;background:linear-gradient(90deg,#C62828 0%,#8B1F1F 100%);transition:width .3s"></div></div>`;
+      html += `<span style="font-size:9px;color:#888;letter-spacing:.5px;font-weight:600;min-width:38px">${pctBruto}%</span>`;
+      html += `</div>`;
+      html += `<div style="font-size:9.5px;color:#888;margin-top:3px;letter-spacing:.4px">${s.countPagos} PAGO${s.countPagos!==1?'S':''} · ${s.pagosAutorizados} AUT. · ${s.pagosPendientes} PEND.</div>`;
+      html += '</div>';
+      // Montos
+      html += `<div style="text-align:right;font-weight:700;color:#1a1a1a;font-variant-numeric:tabular-nums;font-size:12px">${fQ(s.bruto)}</div>`;
+      html += `<div style="text-align:right;color:#7C5800;font-variant-numeric:tabular-nums;font-size:11px">${s.retencion>0?'-'+fQ(s.retencion):'—'}</div>`;
+      html += `<div style="text-align:right;color:#C62828;font-variant-numeric:tabular-nums;font-size:11px">${s.descuentos>0?'-'+fQ(s.descuentos):'—'}</div>`;
+      html += `<div style="text-align:right;color:#2E7D32;font-variant-numeric:tabular-nums;font-size:11px">${s.ocs>0?'+'+fQ(s.ocs):'—'}</div>`;
+      html += `<div style="text-align:right;font-weight:800;color:#1a1a1a;font-variant-numeric:tabular-nums;font-size:13px">${fQ(s.neto)}</div>`;
+      html += '</div>';
+      // Detalle expandido
+      if(isExp){
+        const pagosPersona = pagos.filter(pg => String(pg.colaborador||'').toUpperCase() === s.nombre)
+                                  .sort((a,b)=>(b.ts||0)-(a.ts||0));
+        html += '<div style="padding:8px 16px 14px 46px;background:#FAFAFA;border-top:1px solid #ECECEC">';
+        html += '<div style="font-size:9px;letter-spacing:1.1px;color:#888;margin-bottom:8px;font-weight:700">DESGLOSE DE PAGOS</div>';
+        if(pagosPersona.length === 0){
+          html += '<div style="font-size:11px;color:#888;font-style:italic;padding:6px 0">Sin pagos registrados todavía.</div>';
+        } else {
+          html += '<table style="width:100%;border-collapse:collapse;font-size:11px;background:#fff;border:1px solid var(--line);border-radius:3px;overflow:hidden">';
+          html += '<thead><tr style="background:#F1F1F1">';
+          html += '<th style="padding:6px 10px;text-align:left;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">APTO · ETAPA · ABONO</th>';
+          html += '<th style="padding:6px 10px;text-align:center;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">BRUTO</th>';
+          html += '<th style="padding:6px 10px;text-align:center;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">NETO</th>';
+          html += '<th style="padding:6px 10px;text-align:center;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">FECHA</th>';
+          html += '<th style="padding:6px 10px;text-align:center;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">ESTADO</th>';
+          html += '</tr></thead><tbody>';
+          pagosPersona.forEach(pg => {
+            const idx = Number(pg.stageIdx||0);
+            const aptoStr = ((pg.towerName||'').trim()+' '+(pg.aptoName||'').trim()+' · ETAPA '+(idx+1)+' · ABONO '+(pg.pctDelta||100)+'%').trim();
+            const fechaTxt = pg.ts ? new Date(pg.ts).toLocaleDateString('es-GT') : '—';
+            const badge = pg.autorizado
+              ? '<span style="display:inline-block;padding:2px 8px;background:#E8F5E9;color:#2E7D32;border-radius:99px;font-size:8.5px;font-weight:700;letter-spacing:.5px">AUTORIZADO</span>'
+              : '<span style="display:inline-block;padding:2px 8px;background:#FFF8E1;color:#7C5800;border-radius:99px;font-size:8.5px;font-weight:700;letter-spacing:.5px">PENDIENTE</span>';
+            html += '<tr style="border-top:1px solid var(--line-soft)">';
+            html += `<td style="padding:6px 10px;font-size:10px">${h(aptoStr)}</td>`;
+            html += `<td style="padding:6px 10px;text-align:center;font-size:10px;color:#666;font-variant-numeric:tabular-nums">${fQ(Number(pg.bruto||0))}</td>`;
+            html += `<td style="padding:6px 10px;text-align:center;font-size:10px;font-weight:700;color:#1a1a1a;font-variant-numeric:tabular-nums">${fQ(Number(pg.neto||0))}</td>`;
+            html += `<td style="padding:6px 10px;text-align:center;font-size:10px;color:#888">${h(fechaTxt)}</td>`;
+            html += `<td style="padding:6px 10px;text-align:center">${badge}</td>`;
+            html += '</tr>';
+          });
+          html += '</tbody></table>';
+        }
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+
+    // Footer: totales del proyecto
+    html += '<div style="display:grid;grid-template-columns:24px 1.2fr 110px 100px 100px 100px 110px;gap:8px;align-items:center;padding:14px 16px;background:#1C1917;color:#fff;font-size:11px;font-weight:700;letter-spacing:.4px">';
+    html += '<div></div>';
+    html += `<div>TOTAL DEL PROYECTO · ${filas.length} PERSONA${filas.length!==1?'S':''}</div>`;
+    html += `<div style="text-align:right;font-variant-numeric:tabular-nums">${fQ(granBruto)}</div>`;
+    html += `<div style="text-align:right;font-variant-numeric:tabular-nums;color:#F4D040">${granRet>0?'-'+fQ(granRet):'—'}</div>`;
+    html += `<div style="text-align:right;font-variant-numeric:tabular-nums;color:#FF8A80">${granDesc>0?'-'+fQ(granDesc):'—'}</div>`;
+    html += `<div style="text-align:right;font-variant-numeric:tabular-nums;color:#A5D6A7">${granOC>0?'+'+fQ(granOC):'—'}</div>`;
+    html += `<div style="text-align:right;font-variant-numeric:tabular-nums;font-size:13px">${fQ(granNeto)}</div>`;
+    html += '</div>';
+
+    html += '</div>';
+    el.innerHTML = html;
+  };
+
+  window.toggleResumenPersona = function(name){
+    const p = activeProj();
+    if(!p) return;
+    const key = 'planilla_resumen_persona_expanded_' + (p.id || 'def');
+    let set;
+    try { set = new Set(JSON.parse(localStorage.getItem(key) || '[]')); } catch(e){ set = new Set(); }
+    if(set.has(name)) set.delete(name); else set.add(name);
+    try { localStorage.setItem(key, JSON.stringify(Array.from(set))); } catch(e){}
+    if(typeof renderPlanillaResumenPersona === 'function') renderPlanillaResumenPersona();
   };
 
   // v270: PDF Liberacion de Retenciones rediseñado. Layout 3 columnas, sin
@@ -26598,7 +26815,7 @@ window.addEventListener('load', () => {
     window.currentPlanillaTab = tab;
     injectPlanillaTabs();
     document.querySelectorAll('[data-plantab]').forEach(b => b.classList.toggle('active', b.dataset.plantab === tab));
-    ['etapas','receta','colaboradores','retenciones','ajustes','reporte'].forEach(k => { const el=document.getElementById('planilla-'+k); if(el) el.style.display = tab === k ? '' : 'none'; });
+    ['etapas','receta','colaboradores','retenciones','ajustes','reporte','excepciones','resumenpersona'].forEach(k => { const el=document.getElementById('planilla-'+k); if(el) el.style.display = tab === k ? '' : 'none'; });
     renderPlanilla();
   };
 
@@ -26632,6 +26849,7 @@ window.addEventListener('load', () => {
     if (currentPlanillaTab === 'retenciones') renderPlanillaRetenciones();
     if (currentPlanillaTab === 'ajustes') renderPlanillaAjustes();
     if (currentPlanillaTab === 'reporte') renderPlanillaReporte();
+    if (currentPlanillaTab === 'resumenpersona' && typeof renderPlanillaResumenPersona === 'function') renderPlanillaResumenPersona();
     applyPermissions();
   };
 
