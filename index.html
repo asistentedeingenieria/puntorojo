@@ -2465,7 +2465,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v281</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v282</span>
   </footer>
 
 </div>
@@ -28354,7 +28354,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     // aprobada_inicial, aprobada, rechazada). Esto evita que el supervisor vea
     // (y pueda volver a armar) pagos que ya envio a la PM.
     const planillas = (p && p.planilla && p.planilla.planillasArmadas) || [];
-    const estadosActivos = new Set(['pendiente_pm','aprobada_inicial','aprobada','rechazada']);
+    const estadosActivos = new Set(['pendiente_pm','aprobada_inicial','pendiente_pm_final','aprobada','rechazada']);
     return [...((p && p.planilla && p.planilla.pagos) || [])]
       .filter(pg => pg && (!pg.tipo || pg.tipo === 'ETAPA') && Number(pg.stageIdx) >= 0 && Number(pg.stageIdx) < 5)
       .filter(pg => {
@@ -29709,7 +29709,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     // pendiente_pm / aprobada_inicial / aprobada esta en proceso.
     const pagos = (p && p.planilla && p.planilla.pagos) || [];
     const planillas = (p && p.planilla && p.planilla.planillasArmadas) || [];
-    const estadosActivos = new Set(['pendiente_pm','aprobada_inicial','aprobada','rechazada']);
+    const estadosActivos = new Set(['pendiente_pm','aprobada_inicial','pendiente_pm_final','aprobada','rechazada']);
     return pagos.filter(pg => {
       if(!pg || !pg.id) return false;
       if(pg.tipo && pg.tipo !== 'ETAPA') return false;
@@ -29923,11 +29923,11 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       +   '<div style="padding-top:6px;border-top:1px solid #EEE">Neto sin descuentos</div><div style="text-align:right;font-weight:700;color:#1a1a1a;padding-top:6px;border-top:1px solid #EEE">'+money(pl.totales.neto)+'</div>'
       + '</div>'
       + '<div style="font-size:11.5px;color:#1565C0;background:#E3F2FD;padding:10px 12px;border-radius:4px;border-left:3px solid #1565C0;line-height:1.5">'
-      +   'Tras tu aprobación, la planilla pasa a estado <strong>PENDIENTE DESCUENTOS</strong> para que la persona encargada agregue préstamos, pólizas, equipos y abonos previos. Cuando esa persona finalice, vas a poder generar el PDF final.'
+      +   'La planilla pasará a la <strong>persona de descuentos</strong> para que agregue préstamos, pólizas, equipos y abonos previos. Cuando termine, te volverá a llegar para aprobación final antes de procesar el pago.'
       + '</div>';
     const ok = await window.prConfirm({
       title: 'Autorizar ' + _planillaTitulo(pl),
-      bodyHTML, okText: 'AUTORIZAR'
+      bodyHTML, okText: 'AUTORIZAR Y ENVIAR A DESCUENTOS'
     });
     if(!ok) return;
 
@@ -29952,7 +29952,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
     try { if(typeof saveState === 'function') saveState(); } catch(e){ console.error('[v226] saveState error:', e); }
     try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
-    showT(_planillaTituloUpper(pl) + ' APROBADA INICIALMENTE · PENDIENTE DESCUENTOS','green');
+    showT(_planillaTituloUpper(pl) + ' · ENVIADA A DESCUENTOS','green');
   };
 
   // v248: agregar/eliminar descuentos a una planilla en estado aprobada_inicial
@@ -30117,29 +30117,77 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       +   '<div>Descuentos</div><div style="text-align:right;font-weight:600">'+desc.length+'</div>'
       +   '<div>Total descontado</div><div style="text-align:right;font-weight:700;color:#C62828">'+money(totalDesc)+'</div>'
       + '</div>'
-      + '<div style="font-size:11.5px;color:#1565C0;background:#E3F2FD;padding:10px 12px;border-radius:4px;border-left:3px solid #1565C0;line-height:1.5">'
-      +   'Tras finalizar, la planilla queda en estado <strong>APROBADA</strong> y el gerente de proyectos podrá generar el PDF final con estos descuentos. Ya no se podrán agregar/quitar descuentos.'
+      + '<div style="font-size:11.5px;color:#7B1FA2;background:#F3E5F5;padding:10px 12px;border-radius:4px;border-left:3px solid #7B1FA2;line-height:1.5">'
+      +   'Se enviará la planilla de vuelta al <strong>Gerente de Proyectos</strong> con todos los descuentos aplicados. El gerente revisará el PDF final y dará la autorización para procesar el pago. Ya no se podrán agregar/quitar descuentos.'
       + '</div>';
     const ok = await window.prConfirm({
-      title: 'Finalizar descuentos · ' + _planillaTitulo(pl),
-      bodyHTML, okText: 'FINALIZAR'
+      title: 'Enviar a gerente · ' + _planillaTitulo(pl),
+      bodyHTML, okText: 'ENVIAR A GERENTE CON DESCUENTOS APLICADOS'
     });
     if(!ok) return;
 
     const ahora = nowStr();
     const autor = _getUserEmail();
     const autorNombre = _getUserDisplayName();
-    pl.estado = 'aprobada';
+    // v282: nuevo estado intermedio. Vuelve al gerente para autorizacion final.
+    pl.estado = 'pendiente_pm_final';
     pl.fechaDescuentosFinalizado = ahora;
     pl.descuentosFinalizadoEmail = autor;
     pl.descuentosFinalizadoNombre = autorNombre;
-    pl.historial.push({ fecha: ahora, evento: 'descuentos_finalizados', autor: autor, autorNombre: autorNombre, comentario: desc.length+' descuento(s) · Total: Q '+totalDesc.toFixed(2) });
+    pl.historial.push({ fecha: ahora, evento: 'descuentos_finalizados', autor: autor, autorNombre: autorNombre, comentario: desc.length+' descuento(s) · Total: Q '+totalDesc.toFixed(2)+' · enviada al gerente para autorizacion final' });
+    (p.planilla.pagos||[]).forEach(pg => {
+      if(pl.pagosIds.includes(pg.id)) pg.estadoPlanilla = 'pendiente_pm_final';
+    });
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+    showT('DESCUENTOS APLICADOS · ENVIADA AL GERENTE','green');
+  };
+
+  // v282: aprobacion FINAL del gerente tras revisar descuentos.
+  window.procesarPlanillaFinal = async function(planillaId){
+    const isPM = window.isPMPlanilla();
+    const isAdmin = (typeof can === 'function' && can('users.manage'));
+    if(!isPM && !isAdmin){ showT('SOLO EL GERENTE DE PROYECTOS PUEDE PROCESAR','red'); return; }
+    const p = _activeProj();
+    if(!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    _ensurePlanillasArmadas(p);
+    const pl = p.planilla.planillasArmadas.find(x => x.id === planillaId);
+    if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
+    if(pl.estado !== 'pendiente_pm_final'){ showT('YA NO ESTÁ EN ESTADO PENDIENTE DE PROCESAMIENTO','red'); return; }
+    const desc = (pl.descuentosPlanilla||[]);
+    const totalDesc = desc.reduce((s,d)=>s+Number(d.monto||0),0);
+    const netoFinal = (Number(pl.totales.neto||0) - totalDesc);
+    const bodyHTML = ''
+      + '<div style="font-size:12px;color:#666;margin-bottom:10px">'+pl.totales.count+' pago'+(pl.totales.count!==1?'s':'')+' · '+desc.length+' descuento'+(desc.length!==1?'s':'')+'</div>'
+      + '<div style="display:grid;grid-template-columns:1fr auto;gap:6px 16px;font-size:12.5px;margin-bottom:14px;color:#444">'
+      +   '<div>Bruto</div><div style="text-align:right;font-weight:600">'+money(pl.totales.bruto)+'</div>'
+      +   '<div>Retención 10%</div><div style="text-align:right;font-weight:600;color:#888">- '+money(pl.totales.retencion)+'</div>'
+      +   (totalDesc > 0 ? '<div>Descuentos aplicados</div><div style="text-align:right;font-weight:600;color:#C62828">- '+money(totalDesc)+'</div>' : '')
+      +   '<div style="padding-top:6px;border-top:1px solid #EEE;font-weight:700">Neto final</div><div style="text-align:right;font-weight:800;color:#1a1a1a;padding-top:6px;border-top:1px solid #EEE">'+money(netoFinal)+'</div>'
+      + '</div>'
+      + '<div style="font-size:11.5px;color:#2E7D32;background:#E8F5E9;padding:10px 12px;border-radius:4px;border-left:3px solid #2E7D32;line-height:1.5">'
+      +   'Al procesar, la planilla queda <strong>LISTA PARA PAGO</strong> con el PDF final. Después de pagar al banco, podrás cerrarla.'
+      + '</div>';
+    const ok = await window.prConfirm({
+      title: 'Procesar ' + _planillaTitulo(pl),
+      bodyHTML, okText: 'AUTORIZAR Y PROCESAR PLANILLA'
+    });
+    if(!ok) return;
+
+    const ahora = nowStr();
+    const pmEmail = _getUserEmail();
+    const pmNombre = _getUserDisplayName();
+    pl.estado = 'aprobada';
+    pl.fechaProcesado = ahora;
+    pl.procesadoEmail = pmEmail;
+    pl.procesadoNombre = pmNombre;
+    pl.historial.push({ fecha: ahora, evento: 'procesada', autor: pmEmail, autorNombre: pmNombre, comentario: 'Autorizacion final del gerente · neto: Q '+netoFinal.toFixed(2) });
     (p.planilla.pagos||[]).forEach(pg => {
       if(pl.pagosIds.includes(pg.id)) pg.estadoPlanilla = 'aprobada';
     });
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
-    showT('DESCUENTOS FINALIZADOS · PLANILLA APROBADA','green');
+    showT(_planillaTituloUpper(pl) + ' PROCESADA · LISTA PARA PAGO','green');
   };
 
   // v259: el PM cierra (archiva) una planilla aprobada una vez que la pago.
@@ -30313,18 +30361,20 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       aprobada_inicial:     { color:'#1565C0', label:'Visto bueno del Gerente de Proyectos' },
       descuento_agregado:   { color:'#1565C0', label:'Descuento agregado' },
       descuento_eliminado:  { color:'#888888', label:'Descuento eliminado' },
-      descuentos_finalizados:{ color:'#2E7D32', label:'Descuentos finalizados' },
+      descuentos_finalizados:{ color:'#7B1FA2', label:'Descuentos aplicados · enviada al gerente' },
+      procesada:            { color:'#2E7D32', label:'Autorización final del Gerente · lista para pago' },
       cerrada:              { color:'#2E7D32', label:'Cerrada y archivada' },
       rechazada:            { color:'#C62828', label:'Rechazada por el Gerente de Proyectos' },
       modificada:           { color:'#888888', label:'Modificada y reabierta' }
     };
 
     const STATE_META = {
-      pendiente_pm:     { color:'#F57C00', bg:'#FFF3E0', label:'PENDIENTE DE AUTORIZACION' },
-      aprobada_inicial: { color:'#1565C0', bg:'#E3F2FD', label:'PENDIENTE DESCUENTOS' },
-      aprobada:         { color:'#2E7D32', bg:'#E8F5E9', label:'LISTA PARA PAGO' },
-      rechazada:        { color:'#C62828', bg:'#FFEBEE', label:'RECHAZADA' },
-      archivada:        { color:'#555555', bg:'#EEEEEE', label:'ARCHIVADA' }
+      pendiente_pm:       { color:'#F57C00', bg:'#FFF3E0', label:'PENDIENTE DE AUTORIZACION' },
+      aprobada_inicial:   { color:'#1565C0', bg:'#E3F2FD', label:'PENDIENTE DESCUENTOS' },
+      pendiente_pm_final: { color:'#7B1FA2', bg:'#F3E5F5', label:'PENDIENTE PROCESAMIENTO FINAL' },
+      aprobada:           { color:'#2E7D32', bg:'#E8F5E9', label:'LISTA PARA PAGO' },
+      rechazada:          { color:'#C62828', bg:'#FFEBEE', label:'RECHAZADA' },
+      archivada:          { color:'#555555', bg:'#EEEEEE', label:'ARCHIVADA' }
     };
     const stMeta = STATE_META[pl.estado] || { color:'#555', bg:'#EEE', label:upper(pl.estado) };
 
@@ -30435,7 +30485,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         const planillasOtro = (otroP.planilla && otroP.planilla.planillasArmadas) || [];
         // v258: descuentos solo ve aprobada_inicial; PM/admin ve ambas.
         const pendOtro = planillasOtro.filter(pl => {
-          if(isPM || isAdmin) return pl.estado === 'pendiente_pm' || pl.estado === 'aprobada_inicial';
+          if(isPM || isAdmin) return pl.estado === 'pendiente_pm' || pl.estado === 'aprobada_inicial' || pl.estado === 'pendiente_pm_final';
           if(isDesc) return pl.estado === 'aprobada_inicial';
           return false;
         });
@@ -30464,27 +30514,28 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       html += '</div>';
     }
 
-    // v248: aprobada_inicial es ACTIVA (requiere accion de DESCUENTOS).
-    // v259: aprobada tambien es ACTIVA para que el PM pueda generar el PDF
-    // final y cerrarla (archivarla) tras pagar. Solo archivada va al historial.
-    const activas  = arr.filter(pl => pl.estado === 'pendiente_pm' || pl.estado === 'rechazada' || pl.estado === 'aprobada_inicial' || pl.estado === 'aprobada');
+    // v282: incluye nuevo estado pendiente_pm_final (gerente revisando descuentos).
+    const activas  = arr.filter(pl => pl.estado === 'pendiente_pm' || pl.estado === 'rechazada' || pl.estado === 'aprobada_inicial' || pl.estado === 'pendiente_pm_final' || pl.estado === 'aprobada');
     const cerradas = arr.filter(pl => pl.estado === 'archivada');
     const isDescPerm = (typeof window.isDescuentosPlanilla === 'function') ? window.isDescuentosPlanilla() : false;
 
     const renderTarjetaCompleta = (pl) => {
       const colorBorde = pl.estado==='pendiente_pm' ? '#F57C00'
                        : pl.estado==='aprobada_inicial' ? '#1565C0'
+                       : pl.estado==='pendiente_pm_final' ? '#7B1FA2'
                        : pl.estado==='aprobada' ? '#2E7D32'
                        : pl.estado==='rechazada' ? '#C62828'
                        : '#999';
       const colorBg = pl.estado==='pendiente_pm' ? '#FFF3E0'
                     : pl.estado==='aprobada_inicial' ? '#E3F2FD'
+                    : pl.estado==='pendiente_pm_final' ? '#F3E5F5'
                     : pl.estado==='aprobada' ? '#E8F5E9'
                     : pl.estado==='rechazada' ? '#FFEBEE'
                     : '#F5F5F5';
       const labelEstado = ({
         'pendiente_pm':'PENDIENTE DE AUTORIZACIÓN',
-        'aprobada_inicial':'APROBADA POR GERENTE · PENDIENTE DESCUENTOS',
+        'aprobada_inicial':'CON DESCUENTOS · EN PROCESO',
+        'pendiente_pm_final':'PENDIENTE DE PROCESAMIENTO FINAL',
         'aprobada':'LISTA PARA PAGO · DESCARGAR PDF FINAL',
         'rechazada':'RECHAZADA',
         'archivada':'ARCHIVADA'
@@ -30516,7 +30567,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       }
       // v248: bloque de DESCUENTOS APLICADOS
       const descuentosPl = pl.descuentosPlanilla || [];
-      if(pl.estado === 'aprobada_inicial' || (pl.estado === 'aprobada' && descuentosPl.length > 0)){
+      if(pl.estado === 'aprobada_inicial' || pl.estado === 'pendiente_pm_final' || (pl.estado === 'aprobada' && descuentosPl.length > 0)){
         const totDesc = descuentosPl.reduce((s,d)=>s+Number(d.monto||0),0);
         h2 += '<div style="margin:0 14px 10px;padding:10px 12px;background:#fff;border-left:3px solid #1565C0;font-size:12px;border-radius:4px">';
         h2 += '<div style="font-weight:600;margin-bottom:6px;color:#1565C0;display:flex;justify-content:space-between"><span>DESCUENTOS APLICADOS · '+descuentosPl.length+'</span>'+(descuentosPl.length>0?'<span style="color:#C62828">-'+money(totDesc)+'</span>':'')+'</div>';
@@ -30537,16 +30588,22 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         h2 += '</div>';
       }
       h2 += '<div style="padding:10px 14px;border-top:1px dashed '+colorBorde+';display:flex;flex-wrap:wrap;gap:8px;background:rgba(255,255,255,.4)">';
+      // v282: primera aprobacion del gerente — envia a descuentos.
       if(pl.estado === 'pendiente_pm' && (isPM || isAdmin)){
-        h2 += '<button class="btn" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.aprobarPlanilla(\''+esc(pl.id)+'\')">AUTORIZAR Y PAGAR PLANILLA</button>';
+        h2 += '<button class="btn" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.aprobarPlanilla(\''+esc(pl.id)+'\')">AUTORIZAR Y ENVIAR A DESCUENTOS</button>';
         h2 += '<button class="btn ghost" style="border-color:#C62828;color:#C62828" onclick="window.rechazarPlanilla(\''+esc(pl.id)+'\')">RECHAZAR CON COMENTARIO</button>';
       }
       if(pl.estado === 'rechazada' && (isSup || isAdmin)){
         h2 += '<button class="btn" onclick="window.modificarPlanillaRechazada(\''+esc(pl.id)+'\')">MODIFICAR Y REENVIAR</button>';
       }
+      // v282: persona de DESCUENTOS — aplica y envia al gerente.
       if(pl.estado === 'aprobada_inicial' && (isDescPerm || isAdmin)){
         h2 += '<button class="btn" style="background:#1565C0;border-color:#1565C0;color:#fff" onclick="window.abrirModalAgregarDescuento(\''+esc(pl.id)+'\')">+ AGREGAR DESCUENTO</button>';
-        h2 += '<button class="btn" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.finalizarDescuentosPlanilla(\''+esc(pl.id)+'\')">FINALIZAR DESCUENTOS</button>';
+        h2 += '<button class="btn" style="background:#7B1FA2;border-color:#7B1FA2;color:#fff" onclick="window.finalizarDescuentosPlanilla(\''+esc(pl.id)+'\')">ENVIAR A GERENTE CON DESCUENTOS APLICADOS</button>';
+      }
+      // v282: autorizacion FINAL del gerente tras revisar descuentos.
+      if(pl.estado === 'pendiente_pm_final' && (isPM || isAdmin)){
+        h2 += '<button class="btn" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.procesarPlanillaFinal(\''+esc(pl.id)+'\')">AUTORIZAR Y PROCESAR PLANILLA</button>';
       }
       // v259: el PM cierra la planilla una vez que ya pago al banco.
       if(pl.estado === 'aprobada' && (isPM || isAdmin)){
