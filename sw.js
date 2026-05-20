@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v262-titulo-planilla-proyecto-fecha-etapas-en-pdf';
+const CACHE_VERSION = 'v263-pdf-presupuesto-6-columnas';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
