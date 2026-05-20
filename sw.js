@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v279-rechazar-modal-agregar-persona-libertad-etapas';
+const CACHE_VERSION = 'v280-retenciones-merge-y-cancelar-solo-supervisor';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

@@ -2465,7 +2465,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v279</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v280</span>
   </footer>
 
 </div>
@@ -21185,6 +21185,9 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     const personas = Object.entries(by).sort((a,b)=>a[0].localeCompare(b[0]));
     const canSend = can('planilla.generate') || can('users.manage');
     const canApprove = (typeof window.isPMPlanilla === 'function' && window.isPMPlanilla()) || can('users.manage');
+    const isAdmin = can('users.manage');
+    // v280: email del usuario actual para mostrar CANCELAR solo a la persona que envio.
+    const _currentEmail = (typeof window._getUserEmail === 'function') ? (window._getUserEmail() || '').toLowerCase() : '';
 
     // Persistir cuales personas estan expandidas
     const expKey = 'planilla_retenciones_expanded_' + (p.id || 'def');
@@ -21228,7 +21231,11 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         } else {
           html += '<span style="font-size:11px;color:#7C5800;font-style:italic">Esperando autorización del Gerente de Proyectos.</span>';
         }
-        if(canSend){
+        // v280: CANCELAR solo lo ve quien envio la planilla originalmente
+        // (o el admin). Si Lessy envio, Rony no ve el boton.
+        const _rpEmail = (rp.supervisorEmail || '').toLowerCase();
+        const esElQueEnvio = _currentEmail && _rpEmail && _currentEmail === _rpEmail;
+        if(esElQueEnvio || isAdmin){
           html += `<button class="btn ghost" onclick="cancelarPlanillaRetenciones('${h(rp.id)}')" style="border-color:#C62828;color:#C62828">CANCELAR ENVÍO</button>`;
         }
         html += `<button class="btn ghost sm" onclick="verPreviewPlanillaRetenciones('${h(rp.id)}')" style="border-color:#1C1917;color:#1C1917">VER PREVIEW</button>`;
@@ -21653,6 +21660,10 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
 
   // v278: helper interno — envia una planilla de retenciones al gerente.
   // No genera PDF aun (eso lo hace el gerente al aprobar).
+  // v280: si ya existe una planilla PENDIENTE del mismo proyecto, las
+  // retenciones nuevas se MERGEAN en esa planilla en vez de crear una nueva.
+  // Asi, si se envia una persona por una sola, se consolida en una sola
+  // planilla por proyecto.
   async function _enviarRetencionesAlGerente(trabajadoresData, granTotal, etiquetaConfirm){
     if(!can('planilla.generate') && !can('users.manage')){ showToast('SIN PERMISO','red'); return false; }
     const p = activeProj();
@@ -21669,9 +21680,64 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     });
     if(!ok) return false;
     if(!p.planilla.retencionesPlanillas) p.planilla.retencionesPlanillas = [];
+
     const supName = (typeof window._getUserDisplayName === 'function') ? window._getUserDisplayName() : '';
     const supEmail = (typeof window._getUserEmail === 'function') ? window._getUserEmail() : '';
-    const pagosIds = trabajadoresData.flatMap(t => (t.pagosIds || []));
+    const nuevosPagosIds = trabajadoresData.flatMap(t => (t.pagosIds || []));
+
+    // v280: buscar planilla pendiente del mismo proyecto para fusionar.
+    const existente = p.planilla.retencionesPlanillas.find(rp =>
+      rp.estado === 'pendiente_pm' && (rp.proyecto === p.name)
+    );
+
+    if(existente){
+      // Mergeamos trabajadores y retenciones en la planilla existente.
+      if(!Array.isArray(existente.trabajadores)) existente.trabajadores = [];
+      trabajadoresData.forEach(newT => {
+        const existingT = existente.trabajadores.find(t => String(t.nombre).toUpperCase() === String(newT.nombre).toUpperCase());
+        if(existingT){
+          // Mismo trabajador: agregamos las retenciones nuevas sin duplicar.
+          if(!Array.isArray(existingT.retenciones)) existingT.retenciones = [];
+          (newT.retenciones || []).forEach(newR => {
+            const yaEsta = existingT.retenciones.some(er =>
+              er.descripcion === newR.descripcion &&
+              Number(er.monto) === Number(newR.monto) &&
+              er.fecha === newR.fecha
+            );
+            if(!yaEsta) existingT.retenciones.push(newR);
+          });
+          existingT.total = (existingT.retenciones || []).reduce((s,r) => s + Number(r.monto||0), 0);
+        } else {
+          existente.trabajadores.push({
+            nombre: newT.nombre,
+            total: newT.total,
+            retenciones: newT.retenciones || []
+          });
+        }
+      });
+      // Agregar nuevos pagosIds sin duplicar.
+      if(!Array.isArray(existente.pagosIds)) existente.pagosIds = [];
+      nuevosPagosIds.forEach(pid => { if(!existente.pagosIds.includes(pid)) existente.pagosIds.push(pid); });
+      // Recalcular gran total.
+      existente.granTotal = existente.trabajadores.reduce((s,t) => s + Number(t.total||0), 0);
+      // Si quien agrega es distinto del supervisor original, dejar log para
+      // saber quien sumo retenciones a la planilla.
+      if(supEmail && existente.supervisorEmail && supEmail.toLowerCase() !== String(existente.supervisorEmail).toLowerCase()){
+        if(!Array.isArray(existente.contribuidores)) existente.contribuidores = [];
+        if(!existente.contribuidores.some(c => String(c.email).toLowerCase() === supEmail.toLowerCase())){
+          existente.contribuidores.push({ email: supEmail, nombre: supName, fecha: fechaRefIso });
+        }
+      }
+      // Ya no es una planilla "individual" si se le agregan cosas — pasa a mixta.
+      existente.tipo = 'planilla_proyecto';
+      logActivity('send', `Retenciones agregadas a planilla pendiente`, `${p.name} · ${fQ(granTotal)} · ${nuevosPagosIds.length} retenciones`);
+      saveState();
+      renderPlanilla();
+      showToast('RETENCIONES AGREGADAS A LA PLANILLA PENDIENTE DEL PROYECTO','green');
+      return true;
+    }
+
+    // No existe planilla pendiente — creamos una nueva.
     const retpl = {
       id: 'retpl-'+uid(),
       estado: 'pendiente_pm',
@@ -21688,12 +21754,12 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         total: t.total,
         retenciones: t.retenciones
       })),
-      pagosIds: pagosIds,
+      pagosIds: nuevosPagosIds,
       granTotal: granTotal,
       tipo: etiquetaConfirm || 'planilla_proyecto'
     };
     p.planilla.retencionesPlanillas.push(retpl);
-    logActivity('send', `Planilla de retenciones enviada al gerente`, `${p.name} · ${fQ(granTotal)} · ${pagosIds.length} retenciones`);
+    logActivity('send', `Planilla de retenciones enviada al gerente`, `${p.name} · ${fQ(granTotal)} · ${nuevosPagosIds.length} retenciones`);
     saveState();
     renderPlanilla();
     showToast('PLANILLA DE RETENCIONES ENVIADA AL GERENTE','green');
@@ -21841,6 +21907,14 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     const retpl = (p.planilla.retencionesPlanillas||[]).find(x => x.id === retplId);
     if(!retpl){ showToast('PLANILLA NO ENCONTRADA','red'); return; }
     if(retpl.estado !== 'pendiente_pm'){ showToast('SOLO SE PUEDE CANCELAR UNA PLANILLA PENDIENTE','red'); return; }
+    // v280: solo el supervisor original (o admin) puede cancelar.
+    const _curEmail = (typeof window._getUserEmail === 'function') ? (window._getUserEmail() || '').toLowerCase() : '';
+    const _rpEmail = (retpl.supervisorEmail || '').toLowerCase();
+    const _esElQueEnvio = _curEmail && _rpEmail && _curEmail === _rpEmail;
+    if(!_esElQueEnvio && !can('users.manage')){
+      showToast('SOLO LA PERSONA QUE ENVIÓ ESTA PLANILLA PUEDE CANCELARLA','red');
+      return;
+    }
     const bodyHTML = ''
       + '<div style="font-size:13px;color:#1a1a1a;margin-bottom:10px;line-height:1.55">Vas a <strong>cancelar el envío</strong> de esta planilla de retenciones. Las retenciones volverán a quedar pendientes para enviar de nuevo.</div>'
       + '<div style="font-size:11.5px;color:#666;margin-bottom:10px">'+(retpl.pagosIds||[]).length+' retenciones · '+fQ(retpl.granTotal||0)+'</div>';
