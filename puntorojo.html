@@ -2628,7 +2628,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v315</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v316</span>
   </footer>
 
 </div>
@@ -22265,6 +22265,18 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     if(!p){ el.innerHTML = ''; return; }
     const pagos = (p.planilla.pagos || []).filter(x => x && (!x.tipo || x.tipo === 'ETAPA'));
     const ajustes = (p.planilla.ajustes || []);
+    // v315: lookup pagoId -> fecha de liberacion de retencion. Para pagos
+    // viejos (anteriores a v315) que no tienen pg.retencionPagadaTs, hacemos
+    // fallback a la fecha del registro de retencionesPagadas que los contiene.
+    const _retLibTsByPagoId = {};
+    (p.planilla.retencionesPagadas || []).forEach(rp => {
+      const ts = Number(rp.ts) || 0;
+      if(ts <= 0) return;
+      (rp.pagosIds || []).forEach(pid => {
+        if(!_retLibTsByPagoId[pid] || _retLibTsByPagoId[pid] < ts) _retLibTsByPagoId[pid] = ts;
+      });
+    });
+    const _getRetLibTs = (pg) => Number(pg.retencionPagadaTs) || _retLibTsByPagoId[pg.id] || 0;
     // Agregar trabajadores incluso si solo tienen ajustes (sin pagos).
     const todasPersonas = new Set();
     pagos.forEach(pg => { if(pg.colaborador) todasPersonas.add(String(pg.colaborador).toUpperCase()); });
@@ -22291,6 +22303,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         retencionPendiente: 0,       // suma Q de retenciones pendientes
         ultimaActividadTs: 0,        // timestamp del ultimo pago/movimiento
         primerPagoTs: 0,             // timestamp del primer pago
+        ultimaRetLiberadaTs: 0,      // v315: timestamp de la ultima liberacion de retencion
         countOcs: 0,                 // # de ordenes de cambio sumadas
         countDescuentos: 0           // # de descuentos aplicados
       };
@@ -22309,8 +22322,15 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       else stats[k].pagosPendientes++;
       // v314: contabilizar retencion liberada vs pendiente
       if(ret > 0){
-        if(pg.retencionPagada){ stats[k].countRetLiberadas++; stats[k].retencionPagada += ret; }
-        else { stats[k].countRetPendientes++; stats[k].retencionPendiente += ret; }
+        if(pg.retencionPagada){
+          stats[k].countRetLiberadas++;
+          stats[k].retencionPagada += ret;
+          // v315: rastrear ultima fecha de liberacion para mostrarla en el resumen
+          const _libTs = _getRetLibTs(pg);
+          if(_libTs > stats[k].ultimaRetLiberadaTs) stats[k].ultimaRetLiberadaTs = _libTs;
+        } else {
+          stats[k].countRetPendientes++; stats[k].retencionPendiente += ret;
+        }
       }
       if(Number(pg.targetPct||0) >= 100) stats[k].countEtapasCompletas++;
       // v314: timestamps de actividad
@@ -22512,10 +22532,11 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
           html += `<div style="font-size:9px;color:#888;margin-top:2px">${totalRet} pago${totalRet!==1?'s':''}</div>`;
           html += '</div>';
           // Liberada
+          const ultLibStr = s.ultimaRetLiberadaTs > 0 ? new Date(s.ultimaRetLiberadaTs).toLocaleDateString('es-GT') : '';
           html += '<div>';
           html += '<div style="font-size:9px;letter-spacing:.8px;color:#2E7D32;font-weight:600;margin-bottom:3px">YA LIBERADA</div>';
           html += `<div style="font-size:13px;font-weight:700;color:#2E7D32;font-variant-numeric:tabular-nums">${fQ(s.retencionPagada)}</div>`;
-          html += `<div style="font-size:9px;color:#888;margin-top:2px">${s.countRetLiberadas} pago${s.countRetLiberadas!==1?'s':''}</div>`;
+          html += `<div style="font-size:9px;color:#888;margin-top:2px">${s.countRetLiberadas} pago${s.countRetLiberadas!==1?'s':''}${ultLibStr ? ` · última ${h(ultLibStr)}` : ''}</div>`;
           html += '</div>';
           // Pendiente
           html += '<div>';
@@ -22552,11 +22573,15 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
               ? '<span style="display:inline-block;padding:2px 8px;background:#E8F5E9;color:#2E7D32;border-radius:99px;font-size:8.5px;font-weight:700;letter-spacing:.5px">AUTORIZADO</span>'
               : '<span style="display:inline-block;padding:2px 8px;background:#FFF8E1;color:#7C5800;border-radius:99px;font-size:8.5px;font-weight:700;letter-spacing:.5px">PENDIENTE</span>';
             // v314: badge separado para retencion (liberada/pendiente)
+            // v315: cuando esta LIBERADA, mostrar la fecha de liberacion debajo del badge
             let badgeRet;
             if(retVal <= 0){
               badgeRet = '<span style="color:#BBB;font-size:9px">—</span>';
             } else if(pg.retencionPagada){
-              badgeRet = '<span style="display:inline-block;padding:2px 8px;background:#E8F5E9;color:#2E7D32;border-radius:99px;font-size:8.5px;font-weight:700;letter-spacing:.5px">LIBERADA</span>';
+              const _libTs = _getRetLibTs(pg);
+              const _libDate = _libTs > 0 ? new Date(_libTs).toLocaleDateString('es-GT') : '';
+              badgeRet = '<span style="display:inline-block;padding:2px 8px;background:#E8F5E9;color:#2E7D32;border-radius:99px;font-size:8.5px;font-weight:700;letter-spacing:.5px">LIBERADA</span>'
+                       + (_libDate ? `<div style="font-size:8.5px;color:#888;margin-top:3px;letter-spacing:.3px">${h(_libDate)}</div>` : '');
             } else {
               badgeRet = '<span style="display:inline-block;padding:2px 8px;background:#FFF8E1;color:#7C5800;border-radius:99px;font-size:8.5px;font-weight:700;letter-spacing:.5px">PENDIENTE</span>';
             }
@@ -23136,9 +23161,19 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     retpl.pmNombre = (typeof window._getUserDisplayName === 'function') ? window._getUserDisplayName() : '';
     retpl.pmEmail = (typeof window._getUserEmail === 'function') ? window._getUserEmail() : '';
     // Marcar pagos como retenciónPagada
+    // v315: tambien guardar la fecha de liberacion + quien la libero, para
+    // que aparezca en el desglose por persona ("LIBERADA · dd/mm/yyyy").
+    const _retLibTs = Date.now();
+    const _retLibPor = (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || retpl.pmNombre || '';
+    const _retLibEmail = (typeof window._getUserEmail === 'function' ? window._getUserEmail() : '') || retpl.pmEmail || '';
     (retpl.pagosIds||[]).forEach(pid => {
       const pg = (p.planilla.pagos||[]).find(x => x.id === pid);
-      if(pg) pg.retencionPagada = true;
+      if(pg){
+        pg.retencionPagada = true;
+        pg.retencionPagadaTs = _retLibTs;
+        pg.retencionPagadaPor = _retLibPor;
+        pg.retencionPagadaPorEmail = _retLibEmail;
+      }
     });
     // Mantener compat: agregar al log retencionesPagadas
     if(!p.planilla.retencionesPagadas) p.planilla.retencionesPagadas = [];
