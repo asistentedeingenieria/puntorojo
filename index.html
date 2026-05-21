@@ -2613,7 +2613,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v316</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v317</span>
   </footer>
 
 </div>
@@ -22034,6 +22034,10 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
             html += `<div style="font-size:11px;line-height:1.5"><strong>APROBADA Y PAGADA</strong> · ${(rp.trabajadores||[]).length} TRABAJADOR${(rp.trabajadores||[]).length!==1?'ES':''} · ${(rp.pagosIds||[]).length} RET. · <strong>${fQ(rp.granTotal||0)}</strong> · ${h(fechaAprob)}</div>`;
             html += '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">';
             html += `<button class="btn ghost sm" onclick="descargarPDFRetencionesPlanilla('${h(rp.id)}')" style="border-color:#2E7D32;color:#2E7D32;font-size:9px">DESCARGAR PDF</button>`;
+            // v316: admin puede eliminar una entrada del historial cuando NO procede.
+            if(isAdmin){
+              html += `<button class="btn ghost sm" onclick="eliminarPlanillaRetencionesAprobada('${h(rp.id)}')" style="border-color:#C62828;color:#C62828;font-size:9px" title="Solo admin · revierte el estado de las retenciones de esta planilla">ELIMINAR</button>`;
+            }
             html += '</div>';
             html += '</div>';
           });
@@ -22998,6 +23002,61 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     saveState();
     renderPlanilla();
     showToast('ENVÍO CANCELADO · LAS RETENCIONES QUEDAN PENDIENTES','green');
+  };
+
+  // v316: eliminar una entrada del HISTORIAL de planillas de retenciones (solo admin).
+  // Revierte el flag retencionPagada de cada pago y limpia el log retencionesPagadas
+  // vinculado, para que las retenciones vuelvan a estar PENDIENTES.
+  window.eliminarPlanillaRetencionesAprobada = async function(retplId){
+    if(!can('users.manage')){ showToast('SOLO EL ADMINISTRADOR PUEDE ELIMINAR DEL HISTORIAL','red'); return; }
+    const p = activeProj();
+    if(!p) return;
+    const idx = (p.planilla.retencionesPlanillas||[]).findIndex(x => x.id === retplId);
+    if(idx < 0){ showToast('PLANILLA NO ENCONTRADA','red'); return; }
+    const retpl = p.planilla.retencionesPlanillas[idx];
+    if(retpl.estado !== 'aprobada'){ showToast('SOLO SE PUEDE ELIMINAR UNA PLANILLA APROBADA','red'); return; }
+    const cantTrabajadores = (retpl.trabajadores||[]).length;
+    const cantRet = (retpl.pagosIds||[]).length;
+    const totalQ = fQ(retpl.granTotal||0);
+    const fechaAprob = retpl.fechaAprobacion ? new Date(retpl.fechaAprobacion).toLocaleDateString('es-GT') : '—';
+    const _okDelRet = await window.prConfirm({
+      title: 'ELIMINAR PLANILLA DE RETENCIONES DEL HISTORIAL',
+      bodyHTML:
+        `<div style="font-size:11.5px;color:#666;margin-bottom:12px;letter-spacing:.4px">PROYECTO: ${String(p.name||'').toUpperCase()}</div>` +
+        `<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12.5px;color:#444;padding:12px 14px;background:#FAF8F3;border-radius:4px">
+           <div style="color:#666">Trabajadores</div><div style="font-weight:700;color:#1a1a1a">${cantTrabajadores}</div>
+           <div style="color:#666">Retenciones</div><div style="font-weight:700;color:#1a1a1a">${cantRet}</div>
+           <div style="color:#666">Total Q</div><div style="font-weight:700;color:#1a1a1a">${totalQ}</div>
+           <div style="color:#666">Fecha de aprobación</div><div style="font-weight:600">${fechaAprob}</div>
+         </div>` +
+        `<div style="margin-top:12px;color:#7C2D12;background:#FEF3C7;border-left:3px solid #F59E0B;padding:10px 12px;border-radius:4px;line-height:1.5"><strong>Las ${cantRet} retención${cantRet!==1?'es':''} vuelven a quedar como PENDIENTES.</strong> Se podrá armar una nueva planilla con esos datos.</div>` +
+        `<div style="margin-top:8px;color:#666;font-size:11.5px;line-height:1.5">Esta acción queda registrada en el log de actividad. Los pagos en sí (bruto/neto) NO se tocan, solo se revierte el estado de la retención.</div>`,
+      okText: 'ELIMINAR DEL HISTORIAL',
+      cancelText: 'CANCELAR',
+      danger: true
+    });
+    if(!_okDelRet) return;
+    let revertidos = 0;
+    (retpl.pagosIds||[]).forEach(pid => {
+      const pg = (p.planilla.pagos||[]).find(x => x.id === pid);
+      if(pg && pg.retencionPagada){
+        pg.retencionPagada = false;
+        delete pg.retencionPagadaTs;
+        delete pg.retencionPagadaPor;
+        delete pg.retencionPagadaPorEmail;
+        revertidos++;
+      }
+    });
+    if(Array.isArray(p.planilla.retencionesPagadas)){
+      p.planilla.retencionesPagadas = p.planilla.retencionesPagadas.filter(rp => rp.retplId !== retpl.id);
+    }
+    p.planilla.retencionesPlanillas.splice(idx, 1);
+    logActivity('delete',
+      `Planilla de retenciones APROBADA eliminada del historial`,
+      `${p.name} · ${cantTrabajadores} trabajador(es) · ${cantRet} ret. · ${totalQ} · ${revertidos} pago(s) revertidos`);
+    saveState();
+    renderPlanilla();
+    showToast(`PLANILLA ELIMINADA · ${revertidos} RETENCIÓN${revertidos!==1?'ES':''} VOLVIERON A PENDIENTE`, 'red');
   };
 
   window.descargarPDFRetencionesPlanilla = function(retplId){
