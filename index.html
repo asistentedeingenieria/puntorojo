@@ -2533,7 +2533,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v302</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v303</span>
   </footer>
 
 </div>
@@ -30998,6 +30998,59 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     showT('DESCUENTOS APLICADOS · ENVIADA AL GERENTE DE PROYECTOS','green');
   };
 
+  // v302-b: el Gerente de Proyectos puede RECHAZAR los descuentos aplicados
+  // y devolver la planilla a la persona de descuentos para corregir.
+  window.rechazarDescuentosPlanilla = async function(planillaId){
+    const isPM = window.isPMPlanilla();
+    const isAdmin = (typeof can === 'function' && can('users.manage'));
+    if(!isPM && !isAdmin){ showT('SOLO EL GERENTE DE PROYECTOS PUEDE RECHAZAR','red'); return; }
+    const p = _activeProj();
+    if(!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    _ensurePlanillasArmadas(p);
+    const pl = p.planilla.planillasArmadas.find(x => x.id === planillaId);
+    if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
+    if(pl.estado !== 'pendiente_pm_final'){ showT('SOLO PLANILLAS EN REVISIÓN FINAL SE PUEDEN RECHAZAR ASÍ','red'); return; }
+
+    const comentario = await _abrirModalRechazarPlanilla(pl);
+    if(!comentario){ return; }
+
+    const ahora = nowStr();
+    const pmEmail = _getUserEmail();
+    const pmNombre = _getUserDisplayName();
+    pl.estado = 'aprobada_inicial';
+    pl.fechaRespuesta = ahora;
+    pl.pmEmail = pmEmail;
+    pl.pmNombre = pmNombre;
+    if(!Array.isArray(pl.comentariosPm)) pl.comentariosPm = [];
+    pl.comentariosPm.push({ fecha: ahora, texto: comentario, autor: pmEmail, autorNombre: pmNombre, tipo: 'rechazo_descuentos' });
+    if(!Array.isArray(pl.historial)) pl.historial = [];
+    pl.historial.push({ fecha: ahora, evento: 'descuentos_rechazados', autor: pmEmail, autorNombre: pmNombre, comentario: comentario });
+
+    (p.planilla.pagos||[]).forEach(pg => {
+      if(pl.pagosIds.includes(pg.id)) pg.estadoPlanilla = 'aprobada_inicial';
+    });
+
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+
+    try {
+      if(typeof window.prAddNotif === 'function'){
+        const descEmails = new Set();
+        (pl.descuentosPlanilla || []).forEach(d => { if(d && d.autor) descEmails.add(String(d.autor).toLowerCase()); });
+        const toEmails = Array.from(descEmails);
+        if(pl.supervisorEmail) toEmails.push(pl.supervisorEmail);
+        window.prAddNotif({
+          toEmails: toEmails.filter(Boolean),
+          toPerms:  ['planilla.descuentos'],
+          title: 'DESCUENTOS RECHAZADOS',
+          body: _planillaTituloUpper(pl) + ' · corregir descuentos y reenviar.',
+          type: 'planilla.rejected'
+        });
+      }
+    } catch(e){ console.warn('[v302-b] notif error:', e); }
+    showT(_planillaTituloUpper(pl) + ' · DESCUENTOS RECHAZADOS','red');
+  };
+
   // v282: aprobacion FINAL del gerente tras revisar descuentos.
   window.procesarPlanillaFinal = async function(planillaId){
     const isPM = window.isPMPlanilla();
@@ -31575,6 +31628,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       procesada:            { color:'#2E7D32', label:'Autorización final del Gerente de Proyectos · lista para pago' },
       cerrada:              { color:'#2E7D32', label:'Cerrada y archivada' },
       rechazada:            { color:'#C62828', label:'Rechazada por el Gerente de Proyectos' },
+      descuentos_rechazados:{ color:'#C62828', label:'Descuentos rechazados por el Gerente de Proyectos' },
       modificada:           { color:'#888888', label:'Modificada y reabierta' },
       pago_editado:         { color:'#1565C0', label:'% de pago modificado' },
       pago_quitado:         { color:'#C62828', label:'Pago quitado de la planilla' },
@@ -31838,8 +31892,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         h2 += '<button class="btn" style="background:#7B1FA2;border-color:#7B1FA2;color:#fff" onclick="window.finalizarDescuentosPlanilla(\''+esc(pl.id)+'\')">ENVIAR AL GERENTE DE PROYECTOS CON DESCUENTOS APLICADOS</button>';
       }
       // v282: autorizacion FINAL del gerente tras revisar descuentos.
+      // v302-b: tambien puede RECHAZAR los descuentos para que se corrijan.
       if(pl.estado === 'pendiente_pm_final' && (isPM || isAdmin)){
         h2 += '<button class="btn" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.procesarPlanillaFinal(\''+esc(pl.id)+'\')">AUTORIZAR Y PROCESAR PLANILLA</button>';
+        h2 += '<button class="btn ghost" style="border-color:#C62828;color:#C62828" onclick="window.rechazarDescuentosPlanilla(\''+esc(pl.id)+'\')">RECHAZAR DESCUENTOS CON COMENTARIO</button>';
       }
       // v259: el PM cierra la planilla una vez que ya pago al banco.
       if(pl.estado === 'aprobada' && (isPM || isAdmin)){
