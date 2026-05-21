@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v309-combobox-buscador-persona-a-pagar';
+const CACHE_VERSION = 'v310-update-banner-no-interrumpe-sesion';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
@@ -45,7 +45,11 @@ self.addEventListener('install', (event) => {
       );
     })
   );
-  self.skipWaiting();
+  // v309-b: NO llamar skipWaiting() automaticamente. Asi el SW nuevo queda
+  // en estado 'waiting' hasta que la app le diga (cuando el usuario clickea
+  // ACTUALIZAR en el banner). Esto evita interrumpir sesiones en vivo
+  // (envios de planilla, modales abiertos, comentarios escritos, etc.).
+  // El cliente envia 'SKIP_WAITING' cuando esta listo para actualizar.
 });
 
 // ── ACTIVATE: limpiar versiones viejas del cache ──
