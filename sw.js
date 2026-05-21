@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v299-confirms-elegantes-en-vez-de-nativos';
+const CACHE_VERSION = 'v300-personal-sin-rol-reporte-apto-nomenclatura-avance';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
