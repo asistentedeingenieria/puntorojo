@@ -2051,11 +2051,8 @@ table{max-width:100%}
       </button>
 
       <div class="kebab-menu" id="kebabMenu">
-        <button class="kebab-item" id="notifBtn" onclick="kebabAction(openNotifications)">
-          <span class="ki-emoji"></span>
-          <span class="ki-label">Notificaciones</span>
-          <span class="kebab-badge notif-badge" id="notifBadge" style="display:none">0</span>
-        </button>
+        <!-- v311: NOTIFICACIONES removida del kebab — la campana de la barra
+             superior ya cumple esa funcion. -->
         <button class="kebab-item" data-perm="receptores.manage" onclick="kebabAction(openReceptoresModal)">
           <span class="ki-emoji"></span>
           <span class="ki-label">Receptores</span>
@@ -2617,7 +2614,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v311</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v312</span>
   </footer>
 
 </div>
@@ -6985,6 +6982,21 @@ function ensureDataV9(data){
       });
     });
   } catch(e){ console.warn('[v287] backfill legacy pagos:', e && e.message); }
+
+  // v311: limpieza one-time de p.solicitudesEliminarFoto. El usuario pidio
+  // empezar de cero esta seccion antes de uso productivo. La bandera
+  // _v311_solicitudesFotoCleaned se setea para que no se repita en proximos loads.
+  try {
+    if (!data._v311_solicitudesFotoCleaned) {
+      (data.projects || []).forEach(p => {
+        if (Array.isArray(p.solicitudesEliminarFoto) && p.solicitudesEliminarFoto.length > 0) {
+          console.log('[v311] limpiando ' + p.solicitudesEliminarFoto.length + ' solicitudes de eliminación de foto en proyecto ' + (p.name||p.id));
+          p.solicitudesEliminarFoto = [];
+        }
+      });
+      data._v311_solicitudesFotoCleaned = true;
+    }
+  } catch(e) { console.warn('[v311] cleanup solicitudes foto:', e && e.message); }
 }
 
 /* Migración progresiva v1 → v9 */
@@ -10991,7 +11003,9 @@ window.rechazarSolicitudEliminarFoto = async function(solicitudId){
   logActivity('reject', 'Eliminación de foto rechazada', `${p.name} · ${sol.aptoNombre} · ${sol.etapaNombre}${nota ? ' · ' + nota : ''}`);
 };
 
-// Render para que el admin vea las solicitudes pendientes
+// Render para que el admin vea las solicitudes pendientes.
+// v311: la seccion es ahora COLAPSABLE — por defecto cerrada. Si hay
+// pendientes mostramos un badge para que no se pierdan visualmente.
 window.renderSolicitudesEliminarFoto = function(){
   const cont = document.getElementById('solicitudesEliminarFotoBox');
   if (!cont) return;
@@ -11005,39 +11019,65 @@ window.renderSolicitudesEliminarFoto = function(){
   });
   if (lista.length === 0) { cont.innerHTML = ''; return; }
   const pendientes = lista.filter(x => x.estado === 'pendiente').length;
+  // Estado expand/collapse persistente.
+  const expKey = 'solicitudes_eliminar_foto_expanded_' + (p.id || 'def');
+  let isExpanded = false;
+  // v311: si hay pendientes, expandir por default — son los que requieren accion.
+  try {
+    const stored = localStorage.getItem(expKey);
+    if (stored === null) isExpanded = (pendientes > 0);
+    else isExpanded = stored === '1';
+  } catch(e) { isExpanded = (pendientes > 0); }
+
+  const tableHTML = `
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>ESTADO</th><th>UBICACIÓN</th><th>ETAPA · FOTO</th><th>SOLICITANTE</th><th>RAZÓN</th><th>FECHA</th><th></th></tr></thead>
+      <tbody>${lista.map(s => {
+        const badge = s.estado === 'pendiente'
+          ? `<span class="planilla-badge" style="background:var(--red-soft-2);color:var(--red-dark);border:1px solid var(--red)">PENDIENTE</span>`
+          : s.estado === 'aprobada'
+            ? `<span class="planilla-badge" style="background:#DCFCE7;color:var(--green-dark);border:1px solid var(--green-dark)">APROBADA</span>`
+            : `<span class="planilla-badge" style="background:#FEE2E2;color:var(--red);border:1px solid var(--red)">RECHAZADA</span>`;
+        const fecha = s.solicitadoEn ? new Date(s.solicitadoEn).toLocaleDateString('es-GT') : '—';
+        const acciones = s.estado === 'pendiente'
+          ? `<button class="btn sm" onclick="aprobarSolicitudEliminarFoto('${s.id}')">APROBAR</button> <button class="btn ghost sm" style="color:var(--red)" onclick="rechazarSolicitudEliminarFoto('${s.id}')">RECHAZAR</button>`
+          : '';
+        const razonShort = (s.razon||'').length > 50 ? s.razon.slice(0,50)+'…' : s.razon;
+        return `<tr>
+          <td>${badge}</td>
+          <td style="font-size:10px"><div style="font-weight:700">${s.aptoNombre}</div><div style="color:var(--mute);font-size:9px">${s.torreNombre} · ${s.nivelNombre}</div></td>
+          <td style="font-size:10px">${s.etapaNombre} · FOTO ${s.slotIdx+1}</td>
+          <td style="font-size:10px">${s.supervisorNombre || s.supervisorEmail || '—'}</td>
+          <td style="font-size:10px" title="${(s.razon||'').replace(/"/g,'&quot;')}">${razonShort}</td>
+          <td style="font-size:10px">${fecha}</td>
+          <td>${acciones}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>
+  `;
+
+  const pendBadge = pendientes > 0
+    ? `<span class="planilla-badge" style="background:var(--red);color:#fff;font-size:9px;letter-spacing:.6px;padding:3px 8px;border-radius:99px;font-weight:800;margin-left:8px">${pendientes} PENDIENTE${pendientes!==1?'S':''}</span>`
+    : '';
 
   cont.innerHTML = `
     <div class="card" style="margin-top:14px">
-      <div class="card-hd">
-        <h3>SOLICITUDES DE ELIMINACIÓN DE FOTO</h3>
+      <div class="card-hd" onclick="window.prToggleSolicitudesEliminar('${p.id||'def'}')" style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:10px">
+        <span style="display:inline-block;font-size:10px;color:var(--mute);transform:${isExpanded?'rotate(90deg)':'rotate(0)'};transition:transform .2s">▶</span>
+        <h3 style="flex:1;margin:0">SOLICITUDES DE ELIMINACIÓN DE FOTO${pendBadge}</h3>
         <span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">${pendientes} PENDIENTE${pendientes!==1?'S':''} · ${lista.length} TOTAL</span>
       </div>
-      <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>ESTADO</th><th>UBICACIÓN</th><th>ETAPA · FOTO</th><th>SOLICITANTE</th><th>RAZÓN</th><th>FECHA</th><th></th></tr></thead>
-        <tbody>${lista.map(s => {
-          const badge = s.estado === 'pendiente'
-            ? `<span class="planilla-badge" style="background:var(--red-soft-2);color:var(--red-dark);border:1px solid var(--red)">PENDIENTE</span>`
-            : s.estado === 'aprobada'
-              ? `<span class="planilla-badge" style="background:#DCFCE7;color:var(--green-dark);border:1px solid var(--green-dark)">APROBADA</span>`
-              : `<span class="planilla-badge" style="background:#FEE2E2;color:var(--red);border:1px solid var(--red)">RECHAZADA</span>`;
-          const fecha = s.solicitadoEn ? new Date(s.solicitadoEn).toLocaleDateString('es-GT') : '—';
-          const acciones = s.estado === 'pendiente'
-            ? `<button class="btn sm" onclick="aprobarSolicitudEliminarFoto('${s.id}')">APROBAR</button> <button class="btn ghost sm" style="color:var(--red)" onclick="rechazarSolicitudEliminarFoto('${s.id}')">RECHAZAR</button>`
-            : '';
-          const razonShort = (s.razon||'').length > 50 ? s.razon.slice(0,50)+'…' : s.razon;
-          return `<tr>
-            <td>${badge}</td>
-            <td style="font-size:10px"><div style="font-weight:700">${s.aptoNombre}</div><div style="color:var(--mute);font-size:9px">${s.torreNombre} · ${s.nivelNombre}</div></td>
-            <td style="font-size:10px">${s.etapaNombre} · FOTO ${s.slotIdx+1}</td>
-            <td style="font-size:10px">${s.supervisorNombre || s.supervisorEmail || '—'}</td>
-            <td style="font-size:10px" title="${(s.razon||'').replace(/"/g,'&quot;')}">${razonShort}</td>
-            <td style="font-size:10px">${fecha}</td>
-            <td>${acciones}</td>
-          </tr>`;
-        }).join('')}</tbody>
-      </table></div>
+      ${isExpanded ? tableHTML : ''}
     </div>
   `;
+};
+
+window.prToggleSolicitudesEliminar = function(projId){
+  const expKey = 'solicitudes_eliminar_foto_expanded_' + (projId || 'def');
+  let isExpanded = false;
+  try { isExpanded = localStorage.getItem(expKey) === '1'; } catch(e){}
+  try { localStorage.setItem(expKey, isExpanded ? '0' : '1'); } catch(e){}
+  if (typeof renderSolicitudesEliminarFoto === 'function') renderSolicitudesEliminarFoto();
 };
 
 /* Subir blob (de la cámara o de un file) con validación de duplicado por hash. */
