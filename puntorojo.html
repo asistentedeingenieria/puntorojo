@@ -2628,7 +2628,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v313</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v314</span>
   </footer>
 
 </div>
@@ -6110,7 +6110,15 @@ function _isDeletionAdmin(){
    Si el usuario NO es admin → abre modal pidiendo justificación. */
 async function requestDeletion({ type, label, payload, onAdminConfirm }){
   if (_isDeletionAdmin()){
-    if (!confirm(`¿ELIMINAR ${String(label||'').toUpperCase()}?`)) return false;
+    // v314: modal elegante (prConfirm) en vez del confirm() nativo "puntorojo.app dice".
+    const _okDel = await window.prConfirm({
+      title: `¿ELIMINAR ${String(label||'').toUpperCase()}?`,
+      bodyHTML: '<div style="color:#7C2D12;background:#FEF3C7;border-left:3px solid #F59E0B;padding:10px 12px;border-radius:4px;line-height:1.5">Esta acción es <strong>irreversible</strong> y eliminará el registro de la nube para todos los usuarios.</div>',
+      okText: 'ELIMINAR',
+      cancelText: 'CANCELAR',
+      danger: true
+    });
+    if (!_okDel) return false;
     if (typeof onAdminConfirm === 'function') {
       try { await onAdminConfirm(); } catch(e){ showToast('Error: ' + e.message, 'red'); }
     }
@@ -6180,7 +6188,15 @@ async function submitDeletionRequest(){
 /* APROBAR una solicitud (solo admin) */
 async function approveDeletionRequest(reqId){
   if (!_isDeletionAdmin()) return showToast('Solo el administrador puede aprobar', 'red');
-  if (!confirm('¿APROBAR Y EJECUTAR LA ELIMINACIÓN?\n\nEsta acción es IRREVERSIBLE.')) return;
+  // v314: modal elegante en vez del confirm() nativo.
+  const _okApr = await window.prConfirm({
+    title: '¿APROBAR Y EJECUTAR LA ELIMINACIÓN?',
+    bodyHTML: '<div style="color:#7C2D12;background:#FEF3C7;border-left:3px solid #F59E0B;padding:10px 12px;border-radius:4px;line-height:1.5">Esta acción es <strong>IRREVERSIBLE</strong>. Se ejecutará la eliminación inmediatamente para todos los usuarios.</div>',
+    okText: 'APROBAR Y EJECUTAR',
+    cancelText: 'CANCELAR',
+    danger: true
+  });
+  if (!_okApr) return;
   try {
     const ref = firebase.firestore().collection('deletionRequests').doc(reqId);
     const snap = await ref.get();
@@ -6217,7 +6233,16 @@ async function approveDeletionRequest(reqId){
 /* RECHAZAR con motivo */
 async function rejectDeletionRequest(reqId){
   if (!_isDeletionAdmin()) return;
-  const reason = prompt('MOTIVO DEL RECHAZO (lo verá el solicitante):', '');
+  // v314: prPrompt elegante en vez del prompt() nativo.
+  const reason = await window.prPrompt({
+    title: 'MOTIVO DEL RECHAZO',
+    body: 'El solicitante verá este mensaje. Sé claro y respetuoso.',
+    placeholder: 'Ej: Falta evidencia, registro vinculado a planilla activa, etc.',
+    multiline: true,
+    minLength: 3,
+    okText: 'RECHAZAR',
+    cancelText: 'CANCELAR'
+  });
   if (reason === null) return;
   const reasonClean = String(reason).trim();
   if (reasonClean.length < 3) return showToast('Motivo muy corto', 'red');
@@ -9077,10 +9102,17 @@ async function limpiarEstimacionesVacias(){
     return;
   }
 
-  const lista = eliminadas.map(r => '• ' + (r.d || r.id)).join('\n');
-  if (!confirm(`ELIMINAR ${eliminadas.length} ESTIMACIÓN${eliminadas.length === 1 ? '' : 'ES'} VACÍA${eliminadas.length === 1 ? '' : 'S'}\n\n${lista}\n\n¿Confirmar? Estas filas no tienen ningún dato y se eliminarán de la nube para todos los dispositivos.`)) {
-    return;
-  }
+  const listaHtml = eliminadas.map(r => '· ' + String(r.d || r.id).replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))).join('<br>');
+  const _okLimpEst = await window.prConfirm({
+    title: `ELIMINAR ${eliminadas.length} ESTIMACIÓN${eliminadas.length === 1 ? '' : 'ES'} VACÍA${eliminadas.length === 1 ? '' : 'S'}`,
+    bodyHTML: `<div style="margin-bottom:10px;font-weight:600;color:#1a1a1a">Filas a eliminar:</div>
+               <div style="background:#FAF8F3;padding:10px 14px;border-radius:4px;font-size:12px;color:#555;max-height:160px;overflow-y:auto">${listaHtml}</div>
+               <div style="margin-top:12px;color:#7C2D12;background:#FEF3C7;border-left:3px solid #F59E0B;padding:10px 12px;border-radius:4px;line-height:1.5">Estas filas no tienen ningún dato y se eliminarán de la nube para <strong>todos los dispositivos</strong>.</div>`,
+    okText: 'ELIMINAR',
+    cancelText: 'CANCELAR',
+    danger: true
+  });
+  if (!_okLimpEst) return;
 
   // Filtrar
   p.cobro.rows = p.cobro.rows.filter(r => {
@@ -9110,12 +9142,14 @@ async function cargarEstimacionOficial(){
   const oficial = ESTIMACIONES_OFICIALES[p.id];
   if (!oficial) {
     showToast('SIN DATA OFICIAL PARA ESTE PROYECTO', 'red');
-    alert(
-      `NO HAY DATA OFICIAL CARGADA PARA "${p.name}".\n\n` +
-      `Los proyectos con datos oficiales son:\n` +
-      Object.keys(ESTIMACIONES_OFICIALES).map(k => '• ' + k).join('\n') +
-      `\n\nPara agregar este proyecto, enviar el Excel con las estimaciones.`
-    );
+    const _projList = Object.keys(ESTIMACIONES_OFICIALES).map(k => '· ' + k).join('<br>');
+    await window.prAlert({
+      title: 'SIN DATA OFICIAL',
+      bodyHTML: `<div>No hay data oficial cargada para <strong>${String(p.name||'').replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))}</strong>.</div>
+                 <div style="margin-top:10px;font-weight:600">Proyectos con datos oficiales:</div>
+                 <div style="background:#FAF8F3;padding:10px 14px;border-radius:4px;font-size:12px;color:#555;margin-top:6px">${_projList}</div>
+                 <div style="margin-top:10px;color:#555">Para agregar este proyecto, enviar el Excel con las estimaciones.</div>`
+    });
     return;
   }
 
@@ -9125,17 +9159,23 @@ async function cargarEstimacionOficial(){
   const pendientes = oficial.rows.length - pagados;
   const sumaTotal = oficial.rows.reduce((s, r) => s + Number(r.vp_ci || 0), 0);
 
-  const aviso =
-    `CARGAR ESTIMACIÓN OFICIAL\n\n` +
-    `Proyecto: ${p.name}\n\n` +
-    `Esto va a REEMPLAZAR las estimaciones actuales con la última versión oficial del Excel:\n\n` +
-    `• Total contrato (con IVA): Q ${oficial.totalConIva.toLocaleString('es-GT', {minimumFractionDigits:2})}\n` +
-    `• 1 anticipo + ${totalEst} estimacion${totalEst === 1 ? '' : 'es'}\n` +
-    `• ${pagados} pagado${pagados === 1 ? '' : 's'}, ${pendientes} pendiente${pendientes === 1 ? '' : 's'}\n` +
-    `• Suma total con IVA: Q ${sumaTotal.toLocaleString('es-GT', {minimumFractionDigits:2})}\n\n` +
-    `El descuento autorizado, % anticipo, % amortización y % retención NO se modifican.\n\n` +
-    `¿Continuar?`;
-  if (!confirm(aviso)) return;
+  const _okEstOf = await window.prConfirm({
+    title: 'CARGAR ESTIMACIÓN OFICIAL',
+    bodyHTML:
+      `<div style="font-size:11.5px;color:#666;margin-bottom:12px;letter-spacing:.4px">${String(p.name||'').toUpperCase()}</div>` +
+      `<div>Esto va a <strong>REEMPLAZAR</strong> las estimaciones actuales con la última versión oficial del Excel:</div>` +
+      `<div style="display:grid;grid-template-columns:1fr auto;gap:6px 16px;font-size:12.5px;color:#444;margin-top:12px;padding:12px 14px;background:#FAF8F3;border-radius:4px">` +
+        `<div>Total contrato (con IVA)</div><div style="text-align:right;font-weight:700;color:#1a1a1a">Q ${oficial.totalConIva.toLocaleString('es-GT', {minimumFractionDigits:2})}</div>` +
+        `<div>Anticipo + estimaciones</div><div style="text-align:right;font-weight:600">1 + ${totalEst}</div>` +
+        `<div>Pagados / pendientes</div><div style="text-align:right;font-weight:600">${pagados} / ${pendientes}</div>` +
+        `<div style="padding-top:6px;border-top:1px solid #E5E5E5;font-weight:700">Suma con IVA</div>` +
+        `<div style="padding-top:6px;border-top:1px solid #E5E5E5;text-align:right;font-weight:800;color:#1a1a1a">Q ${sumaTotal.toLocaleString('es-GT', {minimumFractionDigits:2})}</div>` +
+      `</div>` +
+      `<div style="margin-top:12px;color:#0F5132;background:#D1E7DD;border-left:3px solid #198754;padding:10px 12px;border-radius:4px;line-height:1.5">El descuento autorizado, % anticipo, % amortización y % retención <strong>NO se modifican</strong>.</div>`,
+    okText: 'CONTINUAR',
+    cancelText: 'CANCELAR'
+  });
+  if (!_okEstOf) return;
 
   // Snapshot anterior para log
   const prevCount = (p.cobro?.rows || []).length;
@@ -10998,13 +11038,17 @@ window.rechazarSolicitudEliminarFoto = async function(solicitudId){
   const sol = (p.solicitudesEliminarFoto||[]).find(x => x.id === solicitudId);
   if (!sol || sol.estado !== 'pendiente') return showToast('LA SOLICITUD YA FUE RESPONDIDA', 'red');
 
-  const nota = prompt('NOTA DE RECHAZO (opcional):') || '';
-  const _okRechFoto = await window.prConfirm({
-    title: 'Rechazar eliminación',
-    bodyHTML: '<div style="font-size:12.5px;color:#333;line-height:1.5">¿Rechazar la solicitud? La foto no se borra y el supervisor recibirá tu nota.</div>',
-    okText: 'RECHAZAR SOLICITUD', cancelText: 'CANCELAR'
+  // v314: prPrompt elegante reemplaza al prompt() + confirm() nativos.
+  const nota = await window.prPrompt({
+    title: 'Rechazar eliminación de foto',
+    body: 'La foto no se borra y el supervisor recibirá tu nota como justificación.',
+    placeholder: 'Nota de rechazo (opcional)',
+    multiline: true,
+    required: false,
+    okText: 'RECHAZAR SOLICITUD',
+    cancelText: 'CANCELAR'
   });
-  if (!_okRechFoto) return;
+  if (nota === null) return;
 
   sol.estado = 'rechazada';
   sol.decididoEn = Date.now();
@@ -11124,7 +11168,10 @@ async function _uploadPhotoBlob(blob, etapaIdx, slotIdx){
 
   // Validación 1: Hash byte-exact (mismo archivo subido 2 veces).
   if (hash && otroHash && hash === otroHash) {
-    alert('LAS DOS FOTOS NO PUEDEN SER LA MISMA\n\nDeben ser de áreas DIFERENTES del apartamento.\nTomar una foto distinta.');
+    await window.prAlert({
+      title: 'LAS DOS FOTOS NO PUEDEN SER LA MISMA',
+      bodyHTML: '<div>Deben ser de <strong>áreas diferentes</strong> del apartamento. Tomar una foto distinta.</div>'
+    });
     return showToast('FOTO DUPLICADA — TOMAR UNA DE OTRA ÁREA', 'red');
   }
 
@@ -11134,7 +11181,10 @@ async function _uploadPhotoBlob(blob, etapaIdx, slotIdx){
     const dist = _hammingHex(pHash, otroPHash);
     console.log(`[pHash] distancia entre slots: ${dist}/64`);
     if (dist <= 10) {
-      alert('LAS DOS FOTOS SE VEN MUY SIMILARES\n\nLa app detectó que parecen ser de la misma área del apartamento.\nLas 2 fotos deben mostrar áreas DIFERENTES.\n\nTomar la foto nuevamente desde otro ángulo o de otra zona.');
+      await window.prAlert({
+        title: 'LAS DOS FOTOS SE VEN MUY SIMILARES',
+        bodyHTML: '<div>La app detectó que parecen ser de la <strong>misma área</strong> del apartamento. Las 2 fotos deben mostrar áreas diferentes.</div><div style="margin-top:10px;color:#0F5132;background:#D1E7DD;border-left:3px solid #198754;padding:10px 12px;border-radius:4px;line-height:1.5">Tomar la foto nuevamente desde <strong>otro ángulo</strong> o de otra zona.</div>'
+      });
       return showToast('FOTOS MUY SIMILARES · TOMAR OTRA ÁREA', 'red');
     }
   }
@@ -11376,14 +11426,20 @@ async function _uploadPhotoBlobPush(file, etapaIdx){
   for(let i = 0; i < existHashes.length; i++){
     const oh = existHashes[i];
     if (oh && hash && oh === hash) {
-      alert('ESTA FOTO YA ESTÁ SUBIDA EN ESTA ETAPA\n\nTomar una foto diferente.');
+      await window.prAlert({
+        title: 'ESTA FOTO YA ESTÁ SUBIDA EN ESTA ETAPA',
+        bodyHTML: '<div>Tomar una foto <strong>diferente</strong>.</div>'
+      });
       return showToast('FOTO DUPLICADA','red');
     }
     const oph = existPHashes[i];
     if (pHash && oph) {
       const dist = _hammingHex(pHash, oph);
       if (dist <= 10) {
-        alert('ESTA FOTO SE VE MUY SIMILAR A UNA YA SUBIDA EN ESTA ETAPA\n\nTomar otra área del apartamento.');
+        await window.prAlert({
+          title: 'ESTA FOTO SE VE MUY SIMILAR A UNA YA SUBIDA',
+          bodyHTML: '<div>Tomar otra <strong>área</strong> del apartamento.</div>'
+        });
         return showToast('FOTOS MUY SIMILARES · TOMAR OTRA ÁREA','red');
       }
     }
@@ -11954,13 +12010,17 @@ window.rechazarSaltoAcuse = async function(solicitudId){
   const p = activeProj();
   const sol = (p.acuseSaltosSolicitudes||[]).find(x => x.id === solicitudId);
   if (!sol || sol.estado !== 'pendiente') return showToast('SOLICITUD YA RESUELTA', 'red');
-  const nota = prompt('NOTA DE RECHAZO (opcional):') || '';
-  const _okRechAd = await window.prConfirm({
-    title: 'Rechazar adelanto',
-    bodyHTML: '<div style="font-size:12.5px;color:#333;line-height:1.5">¿Rechazar la solicitud de adelanto? El supervisor tendrá que esperar a que termine la etapa anterior.</div>',
-    okText: 'RECHAZAR', cancelText: 'CANCELAR'
+  // v314: prPrompt elegante reemplaza al prompt() + confirm() nativos.
+  const nota = await window.prPrompt({
+    title: 'Rechazar adelanto de etapa',
+    body: 'El supervisor tendrá que esperar a que termine la etapa anterior. Tu nota se enviará como justificación.',
+    placeholder: 'Nota de rechazo (opcional)',
+    multiline: true,
+    required: false,
+    okText: 'RECHAZAR',
+    cancelText: 'CANCELAR'
   });
-  if (!_okRechAd) return;
+  if (nota === null) return;
   sol.estado = 'rechazada';
   sol.decididoEn = Date.now();
   sol.decididoPor = (currentUser && currentUser.email) || '';
@@ -12039,13 +12099,17 @@ async function openCameraForAcuse(towerId, levelId, aptoId, slotKey, photoIdx){
     if (!check.ok && !can('users.manage')) {
       // Pide solicitud al admin
       const motivo = check.motivoAnt || 'pendiente';
-      const ok = confirm(
-        `BLOQUEO SECUENCIAL\n\n` +
-        `No se puede cargar esta etapa porque la anterior (${check.etapaAnt}) todavía no está firmada por el receptor.\n` +
-        `Estado actual de la etapa anterior: ${motivo}.\n\n` +
-        `¿Enviar una solicitud al administrador para liberar el adelanto de esta etapa?`
-      );
-      if (ok) abrirModalSolicitarSaltoAcuse(towerId, levelId, aptoId, slotKey);
+      const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+      const okSalto = await window.prConfirm({
+        title: 'BLOQUEO SECUENCIAL',
+        bodyHTML:
+          `<div>No se puede cargar esta etapa porque la anterior (<strong>${escHtml(check.etapaAnt)}</strong>) todavía no está firmada por el receptor.</div>` +
+          `<div style="margin-top:10px;padding:10px 14px;background:#FAF8F3;border-radius:4px;font-size:12px"><span style="color:#666">Estado actual:</span> <strong>${escHtml(motivo)}</strong></div>` +
+          `<div style="margin-top:12px">¿Enviar una solicitud al administrador para liberar el adelanto de esta etapa?</div>`,
+        okText: 'ENVIAR SOLICITUD',
+        cancelText: 'CANCELAR'
+      });
+      if (okSalto) abrirModalSolicitarSaltoAcuse(towerId, levelId, aptoId, slotKey);
       return;
     }
   }
@@ -12162,14 +12226,20 @@ async function _uploadAcuseBlob(blob, towerId, levelId, aptoId, slotKey, photoId
   // Validación duplicado byte-exact
   const otroIdx = photoIdx === 0 ? 1 : 0;
   if (hash && slot.photoHashes[otroIdx] && hash === slot.photoHashes[otroIdx]) {
-    alert('LAS DOS FOTOS NO PUEDEN SER LA MISMA\n\nDeben ser de áreas DIFERENTES de la entrega.');
+    await window.prAlert({
+      title: 'LAS DOS FOTOS NO PUEDEN SER LA MISMA',
+      bodyHTML: '<div>Deben ser de <strong>áreas diferentes</strong> de la entrega.</div>'
+    });
     return showToast('FOTO DUPLICADA', 'red');
   }
   // Validación pHash (similitud visual)
   if (pHash && slot.photoPHashes[otroIdx]) {
     const dist = _hammingHex(pHash, slot.photoPHashes[otroIdx]);
     if (dist <= 10) {
-      alert('LAS DOS FOTOS SE VEN MUY SIMILARES\n\nDeben ser de áreas DIFERENTES.\nTomar la foto nuevamente desde otro ángulo o de otra zona.');
+      await window.prAlert({
+        title: 'LAS DOS FOTOS SE VEN MUY SIMILARES',
+        bodyHTML: '<div>Deben ser de <strong>áreas diferentes</strong>.</div><div style="margin-top:10px;color:#0F5132;background:#D1E7DD;border-left:3px solid #198754;padding:10px 12px;border-radius:4px;line-height:1.5">Tomar la foto nuevamente desde <strong>otro ángulo</strong> o de otra zona.</div>'
+      });
       return showToast('FOTOS MUY SIMILARES', 'red');
     }
   }
@@ -12315,30 +12385,39 @@ async function deleteAcuseRecepcion(towerId, levelId, aptoId, slotKey){
   const supervisor = slot.userName || slot.user || '—';
   const tipoFirma = slot.type === 'digital' ? 'FIRMA DIGITAL VÍA QR' : 'FOTO/PAPEL';
 
-  // Primera confirmación con todos los datos
-  const aviso = `ATENCIÓN — ELIMINACIÓN DE EVIDENCIA LEGAL\n\n` +
-    `Estás por eliminar un acuse de recepción FIRMADO. Esto borra evidencia formal de entrega al cliente.\n\n` +
-    `── DATOS DEL ACUSE ──\n` +
-    `Proyecto: ${p.name}\n` +
-    `Ubicación: ${l.name} · ${a.name}\n` +
-    `Etapa: ${slotLabel}\n` +
-    `Tipo: ${tipoFirma}\n` +
-    `Recibido y firmado por: ${receptor}\n` +
-    `Entregado por: ${supervisor}\n` +
-    `Fecha de firma: ${fechaFirma}\n\n` +
-    `Esta acción NO se puede deshacer y queda registrada en el log de actividad.\n\n` +
-    `¿Continuar al siguiente paso?`;
-  if (!confirm(aviso)) return;
+  // v314: Primera confirmación con todos los datos — modal elegante
+  const escAc = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  const _okAcuse1 = await window.prConfirm({
+    title: 'ATENCIÓN — ELIMINACIÓN DE EVIDENCIA LEGAL',
+    bodyHTML:
+      `<div style="color:#7C2D12;background:#FEF3C7;border-left:3px solid #F59E0B;padding:10px 12px;border-radius:4px;line-height:1.5">Estás por eliminar un acuse de recepción <strong>FIRMADO</strong>. Esto borra evidencia formal de entrega al cliente.</div>` +
+      `<div style="margin-top:12px;font-weight:700;color:#1a1a1a;font-size:11px;letter-spacing:1px">DATOS DEL ACUSE</div>` +
+      `<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12px;color:#444;margin-top:8px;padding:12px 14px;background:#FAF8F3;border-radius:4px">` +
+        `<div style="color:#666">Proyecto</div><div style="font-weight:600">${escAc(p.name)}</div>` +
+        `<div style="color:#666">Ubicación</div><div style="font-weight:600">${escAc(l.name)} · ${escAc(a.name)}</div>` +
+        `<div style="color:#666">Etapa</div><div style="font-weight:600">${escAc(slotLabel)}</div>` +
+        `<div style="color:#666">Tipo</div><div style="font-weight:600">${escAc(tipoFirma)}</div>` +
+        `<div style="color:#666">Recibido por</div><div style="font-weight:600">${escAc(receptor)}</div>` +
+        `<div style="color:#666">Entregado por</div><div style="font-weight:600">${escAc(supervisor)}</div>` +
+        `<div style="color:#666">Fecha de firma</div><div style="font-weight:600">${escAc(fechaFirma)}</div>` +
+      `</div>` +
+      `<div style="margin-top:12px;font-size:12px;color:#7C2D12">Esta acción <strong>NO se puede deshacer</strong> y queda registrada en el log de actividad.</div>`,
+    okText: 'CONTINUAR',
+    cancelText: 'CANCELAR',
+    danger: true
+  });
+  if (!_okAcuse1) return;
 
   // Segunda confirmación: escribir "ELIMINAR" exactamente
-  const tipeo = prompt(
-    'CONFIRMACIÓN FINAL\n\n' +
-    'Para confirmar la eliminación, escribir en mayúsculas la palabra:\n\n' +
-    'ELIMINAR\n\n' +
-    'Cualquier otra cosa cancelará la operación.'
-  );
+  const tipeo = await window.prPrompt({
+    title: 'CONFIRMACIÓN FINAL',
+    body: 'Para confirmar la eliminación, escribir en mayúsculas la palabra ELIMINAR. Cualquier otra cosa cancelará la operación.',
+    placeholder: 'ELIMINAR',
+    okText: 'CONFIRMAR ELIMINACIÓN',
+    cancelText: 'CANCELAR'
+  });
   if (tipeo === null) return;
-  if (tipeo.trim() !== 'ELIMINAR') {
+  if (String(tipeo).trim() !== 'ELIMINAR') {
     showToast('ELIMINACIÓN CANCELADA · TEXTO INCORRECTO', 'red');
     return;
   }
@@ -12372,12 +12451,19 @@ async function deleteAcuseRecepcion(towerId, levelId, aptoId, slotKey){
   showToast(`ACUSE ELIMINADO · ${slotLabel}`, 'red');
 }
 
-function loadNotasStructureToCurrentProject(){
+async function loadNotasStructureToCurrentProject(){
   if (!can('users.manage')) return showToast('SOLO ADMINISTRADOR', 'red');
   const p = activeProj();
   if (!p) return;
-  const msg = 'ESTO REEMPLAZARÁ LA ESTRUCTURA ACTUAL DE AVANCE FÍSICO POR: SÓTANOS, NIVELES 01-17, PASILLOS, APARTAMENTOS Y FACHADA.\n\nSI YA HAY AVANCES O FOTOS EN LA ESTRUCTURA ACTUAL, PUEDEN PERDERSE.\n\n¿CONTINUAR?';
-  if (!confirm(msg)) return;
+  const _okStruct = await window.prConfirm({
+    title: 'REEMPLAZAR ESTRUCTURA DE AVANCE FÍSICO',
+    bodyHTML: `<div>Esto va a reemplazar la estructura actual por: <strong>Sótanos, Niveles 01-17, Pasillos, Apartamentos y Fachada</strong>.</div>
+               <div style="margin-top:12px;color:#7C2D12;background:#FEF3C7;border-left:3px solid #F59E0B;padding:10px 12px;border-radius:4px;line-height:1.5">Si ya hay avances o fotos en la estructura actual, <strong>pueden perderse</strong>.</div>`,
+    okText: 'REEMPLAZAR',
+    cancelText: 'CANCELAR',
+    danger: true
+  });
+  if (!_okStruct) return;
   p.towers = buildNotasProjectTowers();
   saveState();
   avanceUIState.openTowers.clear();
@@ -12651,7 +12737,18 @@ async function advancePedido(id){
        (statusInfo.role === 'oficina' && can('pedidos.advance')));
   if (!canAdvance) return showToast('SIN PERMISO PARA ESTA ACCIÓN', 'red');
 
-  if (!confirm(`¿${statusInfo.nextLabel.toUpperCase()}?\n\nPedido ${pd.numero} pasará a: ${statusInfo.next}`)) return;
+  // v314: modal elegante en vez del confirm() nativo.
+  const _okAdvPed = await window.prConfirm({
+    title: `¿${String(statusInfo.nextLabel||'').toUpperCase()}?`,
+    bodyHTML: `<div style="font-size:11.5px;color:#666;margin-bottom:10px;letter-spacing:.4px">PEDIDO ${String(pd.numero||'').toUpperCase()}</div>
+               <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12.5px;color:#444;padding:12px 14px;background:#FAF8F3;border-radius:4px">
+                 <div style="color:#666">Estado actual</div><div style="font-weight:600">${String(pd.status||'').replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))}</div>
+                 <div style="color:#666">Cambiará a</div><div style="font-weight:700;color:#1a1a1a">${String(statusInfo.next||'').replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))}</div>
+               </div>`,
+    okText: 'CONFIRMAR',
+    cancelText: 'CANCELAR'
+  });
+  if (!_okAdvPed) return;
 
   const prevStatus = pd.status;
   pd.status = statusInfo.next;
@@ -13315,7 +13412,10 @@ async function submitPedido(){
   const fechaIso = document.getElementById('pfFechaEntrega').value;
   const fechaEntrega = fechaIso ? inputToDate(fechaIso) : null;
   if (!fechaEntrega) {
-    alert('Selecciona una fecha de entrega');
+    await window.prAlert({
+      title: 'FALTA FECHA DE ENTREGA',
+      bodyHTML: '<div>Seleccionar una fecha de entrega antes de generar el pedido.</div>'
+    });
     document.getElementById('pfFechaEntrega').focus();
     return;
   }
@@ -13655,7 +13755,7 @@ function autoAssignOcProviders(){
   });
 }
 
-function openOrdenCompra(){
+async function openOrdenCompra(){
   // Solo quien tiene 'compras.autorizar' o es admin puede generar OCs
   if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO QUIEN AUTORIZA OC PUEDE GENERARLAS', 'red');
   if (!currentPedidoDetalleId) return;
@@ -13666,8 +13766,15 @@ function openOrdenCompra(){
 
   const existingOcs = getPedidoOrdenes(pd.id);
   if (existingOcs.length > 0) {
-    const ok = confirm(`ESTE PEDIDO YA TIENE ${existingOcs.length} ORDEN(ES) DE COMPRA.\n\nSi generás nuevas órdenes, quedarán como OC adicionales vinculadas al mismo pedido.\n\n¿CONTINUAR?`);
-    if (!ok) return;
+    // v314: modal elegante en vez del confirm() nativo.
+    const _okOcAdd = await window.prConfirm({
+      title: 'PEDIDO YA TIENE ÓRDENES DE COMPRA',
+      bodyHTML: `<div>Este pedido ya tiene <strong>${existingOcs.length}</strong> orden${existingOcs.length===1?'':'es'} de compra.</div>
+                 <div style="margin-top:12px;color:#7C5800;background:#FFF8E1;padding:10px 12px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.5">Si generás nuevas órdenes, quedarán como <strong>OC adicionales</strong> vinculadas al mismo pedido.</div>`,
+      okText: 'CONTINUAR',
+      cancelText: 'CANCELAR'
+    });
+    if (!_okOcAdd) return;
   }
 
   // Mostrar rango estimado de OCs; el número final se asigna por proveedor al generar.
@@ -13988,7 +14095,15 @@ async function generarOrdenCompra(){
 
   const sinPrecio = ocWorkingItems.filter(it => !(Number(it.precio) > 0));
   if (sinPrecio.length > 0) {
-    if (!confirm(`${sinPrecio.length} material(es) no tienen precio unitario.\n\n¿Generar las órdenes de todas formas?`)) return;
+    // v314: modal elegante en vez del confirm() nativo.
+    const _okSinPrec = await window.prConfirm({
+      title: 'MATERIALES SIN PRECIO UNITARIO',
+      bodyHTML: `<div><strong>${sinPrecio.length}</strong> material${sinPrecio.length===1?'':'es'} no ${sinPrecio.length===1?'tiene':'tienen'} precio unitario asignado.</div>
+                 <div style="margin-top:12px">¿Generar las órdenes de todas formas?</div>`,
+      okText: 'GENERAR',
+      cancelText: 'CANCELAR'
+    });
+    if (!_okSinPrec) return;
   }
 
   const fechaOc = inputToDate(document.getElementById('ocFecha').value);
@@ -14521,7 +14636,7 @@ function renderOrdenesList(){
   }).join('');
 }
 
-function autorizarOrden(id){
+async function autorizarOrden(id){
   if (!can('compras.autorizar') && !can('users.manage')) return showToast('SIN PERMISO DE FINANZAS', 'red');
   const p = activeProj();
   const oc = (p.materiales.ordenes || []).find(x => x.id === id);
@@ -14529,18 +14644,47 @@ function autorizarOrden(id){
 
   if (oc.status === 'AUTORIZADA') return showToast('YA ESTÁ AUTORIZADA', 'amber');
 
-  const msg = `AUTORIZAR ORDEN DE COMPRA No. ${oc.numero}\n\n` +
-    `Proveedor: ${oc.proveedorNombre}\n` +
-    `Total: Q ${fmtQ(oc.total)}\n` +
-    `Generada por: ${oc.generadoPor}\n\n` +
-    `Al autorizar, la orden queda lista para imprimir y enviar al proveedor.\n\n` +
-    `¿CONFIRMAR AUTORIZACIÓN?`;
-  if (!confirm(msg)) return;
+  // v314: nombre del autorizador real (admin o Erlin), no hardcoded. Si es Erlin,
+  // se respeta su nombre tal cual; si es admin, se usa el displayName actual.
+  const _u = (typeof getCurrentUser === 'function') ? getCurrentUser() : null;
+  const _nombreReal = (_u && (_u.displayName || _u.username || _u.email)) || '';
+  const _esErlin = (typeof isErlinUser === 'function') && isErlinUser();
+  const _firmaDefault = _esErlin ? 'Erlin Karina Trigueros' : String(_nombreReal || 'Administrador');
+  const _autorizadorDefault = _esErlin ? 'ERLIN KARINA TRIGUEROS' : String(_nombreReal || 'ADMINISTRADOR').toUpperCase();
+
+  const escOc = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  const _okAutOc = await window.prConfirm({
+    title: `AUTORIZAR ORDEN DE COMPRA No. ${escOc(oc.numero)}`,
+    bodyHTML:
+      `<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12.5px;color:#444;padding:12px 14px;background:#FAF8F3;border-radius:4px">
+        <div style="color:#666">Proveedor</div><div style="font-weight:700;color:#1a1a1a">${escOc(oc.proveedorNombre||'—')}</div>
+        <div style="color:#666">Total</div><div style="font-weight:700;color:#1a1a1a">Q ${escOc(fmtQ(oc.total))}</div>
+        <div style="color:#666">Generada por</div><div style="font-weight:600">${escOc(oc.generadoPor||'—')}</div>
+        <div style="padding-top:6px;border-top:1px solid #E5E5E5;color:#666">Autorizada por</div>
+        <div style="padding-top:6px;border-top:1px solid #E5E5E5;font-weight:700;color:#1a1a1a">${escOc(_autorizadorDefault)}</div>
+       </div>
+       <div style="margin-top:12px;font-size:11.5px;color:#7C5800;background:#FFF8E1;padding:10px 12px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.5">Al autorizar, la orden queda lista para <strong>imprimir y enviar al proveedor</strong>.</div>`,
+    okText: 'AUTORIZAR',
+    cancelText: 'CANCELAR'
+  });
+  if (!_okAutOc) return;
+
+  // Firma digital — se sugiere el nombre real del autorizador
+  const _firma = await window.prPrompt({
+    title: 'FIRMA DIGITAL',
+    body: 'Texto que aparecerá como firma en la orden impresa.',
+    defaultValue: _firmaDefault,
+    placeholder: _firmaDefault,
+    okText: 'FIRMAR Y AUTORIZAR',
+    cancelText: 'CANCELAR',
+    required: false
+  });
+  if (_firma === null) return; // canceló el segundo paso
 
   oc.status = 'AUTORIZADA';
-  oc.autorizadoPor = 'ERLIN KARINA TRIGUEROS';
+  oc.autorizadoPor = _autorizadorDefault;
   oc.autorizadoTs = Date.now();
-  oc.firmaDigital = prompt('FIRMA DIGITAL PARA LA ORDEN (TEXTO QUE APARECERÁ COMO FIRMA):', 'Erlin Karina Trigueros') || 'Erlin Karina Trigueros';
+  oc.firmaDigital = String(_firma || _firmaDefault).trim() || _firmaDefault;
 
   // Notificar al solicitante del pedido original. Si todas las OC están autorizadas, ya puede marcar recibido.
   if (oc.pedidoId) {
@@ -17333,24 +17477,31 @@ async function ejecutarLimpiezaSelectiva(){
     planilla:       'Planilla completa',
     items:          'Catálogo de materiales (items)'
   };
-  const seleccionadasTexto = seleccionadas.map(k => '• ' + labels[k]).join('\n');
+  const escLs = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  const seleccionadasHtml = seleccionadas.map(k => '· ' + escLs(labels[k])).join('<br>');
   const projNames = projId === 'all' ? 'TODOS LOS PROYECTOS' : (proyectos[0].name || projId);
 
-  const aviso =
-    `LIMPIEZA SELECTIVA\n\n` +
-    `Proyecto(s): ${projNames}\n\n` +
-    `Se van a borrar permanentemente:\n${seleccionadasTexto}\n\n` +
-    `NO se tocan: torres, niveles, apartamentos, cobro, personal, fotos, acuses, usuarios.\n\n` +
-    `¿Continuar al siguiente paso?`;
-  if (!confirm(aviso)) return;
+  const _okLimp1 = await window.prConfirm({
+    title: 'LIMPIEZA SELECTIVA',
+    bodyHTML:
+      `<div style="font-size:11.5px;color:#666;margin-bottom:12px;letter-spacing:.4px">${escLs(projNames).toUpperCase()}</div>` +
+      `<div>Se van a borrar permanentemente:</div>` +
+      `<div style="margin-top:8px;padding:10px 14px;background:#FAF8F3;border-radius:4px;font-size:12px;color:#444">${seleccionadasHtml}</div>` +
+      `<div style="margin-top:12px;color:#0F5132;background:#D1E7DD;border-left:3px solid #198754;padding:10px 12px;border-radius:4px;line-height:1.5"><strong>NO se tocan:</strong> torres, niveles, apartamentos, cobro, personal, fotos, acuses, usuarios.</div>`,
+    okText: 'CONTINUAR',
+    cancelText: 'CANCELAR',
+    danger: true
+  });
+  if (!_okLimp1) return;
 
-  const tipeo = prompt(
-    'CONFIRMACIÓN FINAL\n\n' +
-    'Para confirmar, escribir en mayúsculas la palabra:\n\n' +
-    'LIMPIAR\n\n' +
-    'Cualquier otra cosa cancelará la operación.'
-  );
-  if (tipeo === null || tipeo.trim() !== 'LIMPIAR') {
+  const tipeo = await window.prPrompt({
+    title: 'CONFIRMACIÓN FINAL',
+    body: 'Para confirmar, escribir en mayúsculas la palabra LIMPIAR. Cualquier otra cosa cancelará la operación.',
+    placeholder: 'LIMPIAR',
+    okText: 'EJECUTAR LIMPIEZA',
+    cancelText: 'CANCELAR'
+  });
+  if (tipeo === null || String(tipeo).trim() !== 'LIMPIAR') {
     showToast('OPERACIÓN CANCELADA', 'red');
     return;
   }
@@ -17459,24 +17610,34 @@ async function ejecutarLimpiezaSelectiva(){
 
 async function resetToFactory(){
   if (!can('users.manage') && !can('data.import')) return showToast('SIN PERMISO', 'red');
-  const msg = `¿RESTABLECER A FÁBRICA?
-
-Esto BORRARÁ ABSOLUTAMENTE TODO de la nube y de este dispositivo:
-  • Estructura de proyectos (se reemplaza por la oficial: 3 proyectos)
-  • Pedidos, órdenes de compra, materiales
-  • Estimaciones de cobro
-  • Personal, asistencia, planillas
-  • Avance físico, fotos, acuses
-  • Receptores y QR
-  • Historial de actividad
-
-Se mantienen: usuarios y permisos, biometría, configuración personal.
-
-RECOMENDACIÓN: Exportar respaldo (botón ↓ EXPORTAR) ANTES de hacer esto.
-
-¿Continuar?`;
-  if (!confirm(msg)) return;
-  if (!confirm('ÚLTIMA CONFIRMACIÓN — esto borra todo en la NUBE para todos los usuarios.')) return;
+  const _okReset1 = await window.prConfirm({
+    title: '¿RESTABLECER A FÁBRICA?',
+    bodyHTML:
+      `<div>Esto <strong>BORRARÁ ABSOLUTAMENTE TODO</strong> de la nube y de este dispositivo:</div>
+       <div style="margin-top:8px;padding:10px 14px;background:#FAF8F3;border-radius:4px;font-size:12px;color:#444;line-height:1.8">
+        · Estructura de proyectos (se reemplaza por la oficial: 3 proyectos)<br>
+        · Pedidos, órdenes de compra, materiales<br>
+        · Estimaciones de cobro<br>
+        · Personal, asistencia, planillas<br>
+        · Avance físico, fotos, acuses<br>
+        · Receptores y QR<br>
+        · Historial de actividad
+       </div>
+       <div style="margin-top:10px;color:#0F5132;background:#D1E7DD;border-left:3px solid #198754;padding:10px 12px;border-radius:4px;line-height:1.5"><strong>Se mantienen:</strong> usuarios y permisos, biometría, configuración personal.</div>
+       <div style="margin-top:10px;color:#7C5800;background:#FFF8E1;padding:10px 12px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.5">RECOMENDACIÓN: Exportar respaldo (botón ↓ EXPORTAR) <strong>ANTES</strong> de hacer esto.</div>`,
+    okText: 'CONTINUAR',
+    cancelText: 'CANCELAR',
+    danger: true
+  });
+  if (!_okReset1) return;
+  const _okReset2 = await window.prConfirm({
+    title: 'ÚLTIMA CONFIRMACIÓN',
+    bodyHTML: `<div style="color:#7C2D12;background:#FEF3C7;border-left:3px solid #F59E0B;padding:10px 12px;border-radius:4px;line-height:1.5">Esto borra <strong>todo en la NUBE</strong> para todos los usuarios. La acción es <strong>irreversible</strong>.</div>`,
+    okText: 'RESETEAR TODO',
+    cancelText: 'CANCELAR',
+    danger: true
+  });
+  if (!_okReset2) return;
 
   showToast('RESETEANDO... NO CERRAR LA APP', '');
   try {
@@ -19385,7 +19546,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   };
 
   // Editor inline para ajustar % de un apto (cuando la data del Excel no es exacta)
-  window.abrirEditorApto = function(aptoId) {
+  window.abrirEditorApto = async function(aptoId) {
     if (!can('cobro.avance') && !can('cobro.edit') && !can('users.manage')) return;
     const p = activeProj();
     let apto = null, torre = null, level = null;
@@ -19395,18 +19556,25 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     if (!apto) return;
     const estimaciones = p.cobro.rows || [];
     const rec = p.cobro.avanceAptos[aptoId]?.porEstimacion || {};
-    let body = estimaciones.map(est => {
-      const v = Number(rec[est.id] ?? rec[est.d] ?? 0) || 0;
-      return `${(est.d || est.id).padEnd(20)} : ${v}%`;
-    }).join('\n');
-    const nuevo = prompt(
-      `${apto.name}  ·  ${torre.name} · ${level.name}\n\n` +
-      `Valores actuales por estimación:\n${body}\n\n` +
-      `Para editar, escribir los % separados por coma en orden de las estimaciones (ej: "0,25,50,25,0,0,0,0").\n` +
-      `Dejar vacío y OK para no cambiar nada.`,
-      estimaciones.map(est => Number(rec[est.id] ?? rec[est.d] ?? 0) || 0).join(',')
-    );
-    if (nuevo === null || nuevo.trim() === '') return;
+    const escEd = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const bodyHtml = `<div style="font-size:11.5px;color:#666;margin-bottom:12px;letter-spacing:.4px">${escEd(torre.name)} · ${escEd(level.name)} · ${escEd(apto.name)}</div>
+      <div style="font-weight:600;color:#1a1a1a;margin-bottom:6px">Valores actuales por estimación:</div>
+      <div style="background:#FAF8F3;padding:10px 14px;border-radius:4px;font-size:12px;color:#444;margin-bottom:10px;font-family:monospace;line-height:1.7">
+        ${estimaciones.map(est => {
+          const v = Number(rec[est.id] ?? rec[est.d] ?? 0) || 0;
+          return `${escEd(est.d || est.id)} : <strong>${v}%</strong>`;
+        }).join('<br>')}
+      </div>
+      <div style="font-size:11.5px;color:#666;line-height:1.5">Escribir los % separados por coma en orden de las estimaciones (ej: <code style="background:#FAF8F3;padding:2px 6px;border-radius:3px">0,25,50,25,0,0,0,0</code>). Dejar vacío para no cambiar nada.</div>`;
+    const nuevo = await window.prPrompt({
+      title: 'AJUSTAR % DE APTO',
+      bodyHTML: bodyHtml,
+      defaultValue: estimaciones.map(est => Number(rec[est.id] ?? rec[est.d] ?? 0) || 0).join(','),
+      okText: 'GUARDAR',
+      cancelText: 'CANCELAR',
+      required: false
+    });
+    if (nuevo === null || String(nuevo).trim() === '') return;
     const valores = nuevo.split(',').map(v => {
       let n = Number(String(v).trim()) || 0;
       if (n > 0 && n <= 1) n *= 100;
@@ -19801,14 +19969,16 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     });
 
     if (etapasOrdenadas.length === 0 || materiasDetectadas === 0) {
-      alert(
-        'NO SE PUDO INTERPRETAR EL PDF\n\n' +
-        'No se detectaron etapas ni materiales válidos. Verificá que el PDF tenga:\n\n' +
-        '• Título por página: "TORRE X -- [PROYECTO] -- NIVEL Y"\n' +
-        '• Headers: "1RA ETAPA", "2NDA ETAPA", etc.\n' +
-        '• Filas: "<material> <unidad U|LB> <num apto1> <num apto2> ... <total nivel>"\n\n' +
-        'Si el formato del PDF es distinto, contactar al desarrollador.'
-      );
+      await window.prAlert({
+        title: 'NO SE PUDO INTERPRETAR EL PDF',
+        bodyHTML: `<div>No se detectaron etapas ni materiales válidos. Verificar que el PDF tenga:</div>
+                   <div style="margin-top:8px;padding:10px 14px;background:#FAF8F3;border-radius:4px;font-size:12px;color:#444;line-height:1.7">
+                     · <strong>Título por página:</strong> "TORRE X -- [PROYECTO] -- NIVEL Y"<br>
+                     · <strong>Headers:</strong> "1RA ETAPA", "2NDA ETAPA", etc.<br>
+                     · <strong>Filas:</strong> "&lt;material&gt; &lt;unidad U|LB&gt; &lt;num apto1&gt; &lt;num apto2&gt; … &lt;total nivel&gt;"
+                   </div>
+                   <div style="margin-top:10px;font-size:11.5px;color:#666">Si el formato del PDF es distinto, contactar al desarrollador.</div>`
+      });
       event.target.value = '';
       return;
     }
@@ -19830,29 +20000,35 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     const recetaActualTieneDatos = Array.isArray(p.materiales.receta)
       && p.materiales.receta.some(et => et && Object.keys(et).length > 0);
 
+    const escPdf = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const resumenHtml = `<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:12.5px;color:#444;padding:12px 14px;background:#FAF8F3;border-radius:4px">
+      <div style="color:#666">Torre(s)</div><div style="font-weight:700;color:#1a1a1a">${escPdf(torresDetectadas.join(', '))}</div>
+      <div style="color:#666">Niveles</div><div style="font-weight:600">${niveles.size}</div>
+      <div style="color:#666">Etapas</div><div style="font-weight:600">${etapasOrdenadas.length} (${escPdf(etapasOrdenadas.join(', '))})</div>
+      <div style="color:#666">Materiales únicos</div><div style="font-weight:600">${matCount}</div>
+    </div>`;
     let modo = 'reemplazar'; // por default
     if (recetaActualTieneDatos) {
-      const respuesta = confirm(
-        `PDF PROCESADO:\n\n` +
-        `• Torre(s): ${torresDetectadas.join(', ')}\n` +
-        `• Niveles: ${niveles.size}\n` +
-        `• Etapas: ${etapasOrdenadas.length} (${etapasOrdenadas.join(', ')})\n` +
-        `• Materiales únicos detectados: ${matCount}\n\n` +
-        `LA RECETA ACTUAL YA TIENE DATOS.\n\n` +
-        `OK = SUMAR esta nueva data a la receta existente (recomendado si subiste otra torre)\n` +
-        `Cancelar = REEMPLAZAR la receta entera con los datos del PDF (borra lo anterior)`
-      );
+      const respuesta = await window.prConfirm({
+        title: 'PDF PROCESADO',
+        bodyHTML: resumenHtml +
+          `<div style="margin-top:12px;color:#7C5800;background:#FFF8E1;padding:10px 12px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.5">La receta actual <strong>ya tiene datos</strong>. Elegí qué hacer:</div>
+           <div style="margin-top:10px;font-size:11.5px;color:#444;line-height:1.6">
+             <div><strong>SUMAR:</strong> agrega esta data a la receta existente (recomendado si subiste otra torre)</div>
+             <div style="margin-top:4px"><strong>REEMPLAZAR:</strong> borra todo lo anterior y deja solo los datos del PDF</div>
+           </div>`,
+        okText: 'SUMAR',
+        cancelText: 'REEMPLAZAR'
+      });
       modo = respuesta ? 'sumar' : 'reemplazar';
     } else {
       // Receta vacía → simplemente reemplazar (idéntico a sumar a vacío)
-      const ok = confirm(
-        `PDF PROCESADO:\n\n` +
-        `• Torre(s): ${torresDetectadas.join(', ')}\n` +
-        `• Niveles: ${niveles.size}\n` +
-        `• Etapas: ${etapasOrdenadas.length} (${etapasOrdenadas.join(', ')})\n` +
-        `• Materiales únicos detectados: ${matCount}\n\n` +
-        `¿Cargar estos datos en la receta?`
-      );
+      const ok = await window.prConfirm({
+        title: 'PDF PROCESADO',
+        bodyHTML: resumenHtml + `<div style="margin-top:12px">¿Cargar estos datos en la receta?</div>`,
+        okText: 'CARGAR',
+        cancelText: 'CANCELAR'
+      });
       if (!ok) { event.target.value = ''; return; }
     }
 
@@ -20136,14 +20312,16 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
 
     let modo = 'crear';
     if (tieneEstructura) {
-      const choice = confirm(
-        `EL PROYECTO YA TIENE ${(p.towers || []).length} TORRE(S).\n\n` +
-        `Detectado en PDF: ${totalNiveles} niveles, ${totalAptos} apartamentos.\n\n` +
-        `¿Querés AGREGAR los niveles/aptos del PDF a una torre nueva?\n` +
-        `(Los datos existentes se conservan intactos)\n\n` +
-        `OK = Agregar como torre nueva\n` +
-        `Cancelar = NO importar`
-      );
+      const choice = await window.prConfirm({
+        title: 'EL PROYECTO YA TIENE ESTRUCTURA',
+        bodyHTML: `<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:12.5px;color:#444;padding:12px 14px;background:#FAF8F3;border-radius:4px">
+                     <div style="color:#666">Torres existentes</div><div style="font-weight:700;color:#1a1a1a">${(p.towers || []).length}</div>
+                     <div style="color:#666">Detectado en PDF</div><div style="font-weight:600">${totalNiveles} niveles, ${totalAptos} apartamentos</div>
+                   </div>
+                   <div style="margin-top:12px">¿Agregar los niveles/aptos del PDF como una <strong>torre nueva</strong>? Los datos existentes se conservan intactos.</div>`,
+        okText: 'AGREGAR COMO TORRE NUEVA',
+        cancelText: 'NO IMPORTAR'
+      });
       if (!choice) { event.target.value = ''; return; }
       modo = 'agregar';
     }
@@ -20463,7 +20641,10 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     if (!file) return;
     const lname = file.name.toLowerCase();
     if (!lname.endsWith('.xlsx') && !lname.endsWith('.xls')) {
-      alert('FORMATO NO VÁLIDO\n\nSubir un archivo Excel (.xlsx o .xls).');
+      await window.prAlert({
+        title: 'FORMATO NO VÁLIDO',
+        bodyHTML: '<div>Subir un archivo Excel (<strong>.xlsx</strong> o <strong>.xls</strong>).</div>'
+      });
       event.target.value = '';
       return;
     }
@@ -20475,7 +20656,10 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     if (!file) return;
     const lname = file.name.toLowerCase();
     if (!lname.endsWith('.pdf')) {
-      alert('FORMATO NO VÁLIDO\n\nSubir un archivo PDF (.pdf) con el resumen de avance.');
+      await window.prAlert({
+        title: 'FORMATO NO VÁLIDO',
+        bodyHTML: '<div>Subir un archivo PDF (<strong>.pdf</strong>) con el resumen de avance.</div>'
+      });
       event.target.value = '';
       return;
     }
@@ -20617,12 +20801,16 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         logActivity('update', 'PDF de estimación cargado', `${p.name} · ${file.name} · ${updatedPDF} aptos actualizados`);
 
         if (sinMatchPDF.length > 0) {
-          setTimeout(() => alert(
-            `APTOS QUE NO SE PUDIERON MAPEAR (${sinMatchPDF.length})\n\n` +
-            sinMatchPDF.slice(0, 30).join('\n') +
-            (sinMatchPDF.length > 30 ? `\n...y ${sinMatchPDF.length - 30} más` : '') +
-            `\n\nVerificar los nombres en el PDF vs los aptos del proyecto.`
-          ), 800);
+          setTimeout(() => {
+            const escSm = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+            const lista = sinMatchPDF.slice(0, 30).map(s => '· ' + escSm(s)).join('<br>');
+            const masTxt = sinMatchPDF.length > 30 ? `<div style="margin-top:6px;font-size:11px;color:#888">… y ${sinMatchPDF.length - 30} más</div>` : '';
+            window.prAlert({
+              title: `APTOS SIN MAPEAR (${sinMatchPDF.length})`,
+              bodyHTML: `<div style="background:#FAF8F3;padding:10px 14px;border-radius:4px;font-size:12px;color:#444;max-height:220px;overflow-y:auto">${lista}${masTxt}</div>
+                         <div style="margin-top:12px;font-size:11.5px;color:#666;line-height:1.5">Verificar los nombres en el PDF vs los aptos del proyecto.</div>`
+            });
+          }, 800);
         }
         event.target.value = '';
         return;
@@ -21240,27 +21428,34 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         `${p.name} · ${file.name} · ${updated} actualizados${sinMatch.length > 0 ? ' · ' + sinMatch.length + ' sin match' : ''}`);
 
       if (sinMatch.length > 0) {
-        setTimeout(() => alert(
-          `APTOS QUE NO SE PUDIERON MAPEAR (${sinMatch.length})\n\n` +
-          sinMatch.slice(0, 30).join('\n') +
-          (sinMatch.length > 30 ? `\n...y ${sinMatch.length - 30} más` : '') +
-          `\n\nVerificar los nombres en el Excel vs los aptos del proyecto.`
-        ), 1000);
+        setTimeout(() => {
+          const escSm2 = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+          const lista2 = sinMatch.slice(0, 30).map(s => '· ' + escSm2(s)).join('<br>');
+          const masTxt2 = sinMatch.length > 30 ? `<div style="margin-top:6px;font-size:11px;color:#888">… y ${sinMatch.length - 30} más</div>` : '';
+          window.prAlert({
+            title: `APTOS SIN MAPEAR (${sinMatch.length})`,
+            bodyHTML: `<div style="background:#FAF8F3;padding:10px 14px;border-radius:4px;font-size:12px;color:#444;max-height:220px;overflow-y:auto">${lista2}${masTxt2}</div>
+                       <div style="margin-top:12px;font-size:11.5px;color:#666;line-height:1.5">Verificar los nombres en el Excel vs los aptos del proyecto.</div>`
+          });
+        }, 1000);
       }
     } catch (err) {
       console.error('[Estimación] Error al subir:', err);
       const detalle = err && err.message ? err.message : String(err);
       showToast('ERROR: ' + detalle, 'red');
       // Alert visible con detalle para que el usuario pueda copiarlo si necesita ayuda.
-      alert(
-        'NO SE PUDO CARGAR EL ARCHIVO\n\n' +
-        'Detalle: ' + detalle + '\n\n' +
-        'POSIBLES CAUSAS:\n' +
-        '• El archivo no es un Excel válido (.xlsx o .xls)\n' +
-        '• El Excel no tiene los headers esperados ("ESTIMACIÓN NO.X" + "% EJECUTADO A LA FECHA"), o columna "APTO" + columnas por estimación.\n' +
-        '• El archivo está protegido o corrupto.\n\n' +
-        'Si se requiere ayuda, abrir la consola (F12) y enviar un screenshot.'
-      );
+      await window.prAlert({
+        title: 'NO SE PUDO CARGAR EL ARCHIVO',
+        bodyHTML: `<div style="padding:10px 14px;background:#FAF8F3;border-radius:4px;font-size:12px;color:#444"><strong>Detalle:</strong> ${String(detalle).replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))}</div>
+                   <div style="margin-top:12px;font-weight:600;color:#1a1a1a">Posibles causas:</div>
+                   <div style="margin-top:6px;padding:10px 14px;background:#FAF8F3;border-radius:4px;font-size:12px;color:#444;line-height:1.7">
+                     · El archivo no es un Excel válido (<strong>.xlsx</strong> o <strong>.xls</strong>)<br>
+                     · El Excel no tiene los headers esperados<br>
+                     · El archivo está protegido o corrupto
+                   </div>
+                   <div style="margin-top:10px;font-size:11.5px;color:#666;line-height:1.5">Si se requiere ayuda, abrir la consola (F12) y enviar un screenshot.</div>`,
+        danger: true
+      });
     }
     event.target.value = '';
   };
@@ -21448,38 +21643,44 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     const esAdmin = can('users.manage');
     const etapaNombreCorto = (ETAPAS_INFO[stageIdx] && ETAPAS_INFO[stageIdx].name) || ('ETAPA ' + (stageIdx+1));
 
+    const escPag = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
     if (!tieneAcuse && !excAprobada) {
       if (esAdmin) {
         // Admin puede saltar el bloqueo con confirmación doble
-        const ok = confirm(
-          `ATENCIÓN — SIN ACUSE FIRMADO\n\n` +
-          `${a.name} · ${etapaNombreCorto}\n\n` +
-          `Esta etapa NO tiene acuse de recepción firmado por el cliente. ` +
-          `Como administrador, se puede pagar igual, pero el pago va a quedar marcado como "PAGADO SIN ACUSE" hasta que el receptor firme.\n\n` +
-          `¿CONFIRMAR PAGAR SIN ACUSE?`
-        );
+        const ok = await window.prConfirm({
+          title: 'ATENCIÓN — SIN ACUSE FIRMADO',
+          bodyHTML:
+            `<div style="font-size:11.5px;color:#666;margin-bottom:12px;letter-spacing:.4px">${escPag(a.name)} · ${escPag(etapaNombreCorto)}</div>` +
+            `<div style="color:#7C2D12;background:#FEF3C7;border-left:3px solid #F59E0B;padding:10px 12px;border-radius:4px;line-height:1.5">Esta etapa <strong>NO tiene acuse</strong> de recepción firmado por el cliente. Como administrador, se puede pagar igual, pero el pago va a quedar marcado como <strong>"PAGADO SIN ACUSE"</strong> hasta que el receptor firme.</div>`,
+          okText: 'PAGAR SIN ACUSE',
+          cancelText: 'CANCELAR',
+          danger: true
+        });
         if (!ok) return;
       } else {
         // Supervisor: bloqueado. Ofrecer solicitar excepción.
         const estadoActual = window.estadoExcepcionPago(a, stageIdx);
         if (estadoActual === 'pendiente') {
-          alert(
-            `ESPERANDO RESPUESTA DEL ADMINISTRADOR\n\n` +
-            `${a.name} · ${etapaNombreCorto}\n\n` +
-            `Ya hay una solicitud de excepción pendiente para esta etapa. ` +
-            `El administrador todavía no la respondió.`
-          );
+          await window.prAlert({
+            title: 'ESPERANDO RESPUESTA DEL ADMINISTRADOR',
+            bodyHTML:
+              `<div style="font-size:11.5px;color:#666;margin-bottom:12px;letter-spacing:.4px">${escPag(a.name)} · ${escPag(etapaNombreCorto)}</div>` +
+              `<div>Ya hay una solicitud de excepción <strong>pendiente</strong> para esta etapa. El administrador todavía no la respondió.</div>`
+          });
           return;
         }
         if (estadoActual === 'rechazada') {
           const exc = a.pagoExcepciones[String(stageIdx)];
-          const nota = (exc && exc.notaDecision) ? ('\n\nNOTA DEL ADMIN: ' + exc.notaDecision) : '';
-          alert(
-            `EXCEPCIÓN RECHAZADA\n\n` +
-            `${a.name} · ${etapaNombreCorto}\n\n` +
-            `El administrador rechazó la solicitud de pagar sin acuse.${nota}\n\n` +
-            `Para pagar esta etapa: entregar la etapa al cliente y que firme su acuse.`
-          );
+          const notaHtml = (exc && exc.notaDecision)
+            ? `<div style="margin-top:10px;padding:10px 14px;background:#FAF8F3;border-radius:4px;font-size:12px"><span style="color:#666">NOTA DEL ADMIN:</span> <strong>${escPag(exc.notaDecision)}</strong></div>`
+            : '';
+          await window.prAlert({
+            title: 'EXCEPCIÓN RECHAZADA',
+            bodyHTML:
+              `<div style="font-size:11.5px;color:#666;margin-bottom:12px;letter-spacing:.4px">${escPag(a.name)} · ${escPag(etapaNombreCorto)}</div>` +
+              `<div>El administrador rechazó la solicitud de pagar sin acuse.</div>${notaHtml}` +
+              `<div style="margin-top:12px;color:#0F5132;background:#D1E7DD;border-left:3px solid #198754;padding:10px 12px;border-radius:4px;line-height:1.5">Para pagar esta etapa: entregar la etapa al cliente y que firme su acuse.</div>`
+          });
           return;
         }
         // Sin pedido previo (o usada antes pero ese registro ya se movió a pagos): abrir modal
@@ -21488,10 +21689,34 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       }
     }
 
-    const colaborador = prompt('INSTALADOR O MASILLERO A PAGAR:'); if (!colaborador) return;
+    const colaborador = await window.prPrompt({
+      title: 'INSTALADOR O MASILLERO A PAGAR',
+      body: 'Escribir el nombre completo del colaborador.',
+      placeholder: 'Nombre y apellido',
+      okText: 'CONTINUAR',
+      cancelText: 'CANCELAR'
+    });
+    if (!colaborador) return;
     const retencion = bruto * 0.10; const neto = bruto - retencion;
-    const sinAcuseTexto = (!tieneAcuse) ? '\n\n⚠ ESTE PAGO SE VA A REGISTRAR SIN ACUSE FIRMADO.' : '';
-    if (!confirm(`GENERAR PAGO\n${a.name} · ETAPA ${stageIdx+1}\nBRUTO: ${fQ(bruto)}\nRETENCIÓN 10%: ${fQ(retencion)}\nNETO: ${fQ(neto)}${sinAcuseTexto}`)) return;
+    const sinAcuseHtml = (!tieneAcuse)
+      ? `<div style="margin-top:12px;color:#7C2D12;background:#FEF3C7;border-left:3px solid #F59E0B;padding:10px 12px;border-radius:4px;line-height:1.5">⚠ Este pago se va a registrar <strong>SIN ACUSE FIRMADO</strong>.</div>`
+      : '';
+    const _okGenPagoEt = await window.prConfirm({
+      title: 'GENERAR PAGO',
+      bodyHTML:
+        `<div style="font-size:11.5px;color:#666;margin-bottom:12px;letter-spacing:.4px">${escPag(a.name)} · ETAPA ${stageIdx+1}</div>` +
+        `<div style="display:grid;grid-template-columns:1fr auto;gap:6px 16px;font-size:12.5px;color:#444;padding:12px 14px;background:#FAF8F3;border-radius:4px">` +
+          `<div>Trabajador</div><div style="text-align:right;font-weight:700;color:#1a1a1a">${escPag(colaborador)}</div>` +
+          `<div style="margin-top:4px;padding-top:8px;border-top:1px solid #E5E5E5">Bruto</div>` +
+          `<div style="margin-top:4px;padding-top:8px;border-top:1px solid #E5E5E5;text-align:right;font-weight:600">${escPag(fQ(bruto))}</div>` +
+          `<div style="color:#888">Retención 10%</div><div style="text-align:right;font-weight:600;color:#888">- ${escPag(fQ(retencion))}</div>` +
+          `<div style="padding-top:6px;border-top:1px solid #E5E5E5;font-weight:700">Neto</div>` +
+          `<div style="padding-top:6px;border-top:1px solid #E5E5E5;text-align:right;font-weight:800;color:#1a1a1a">${escPag(fQ(neto))}</div>` +
+        `</div>` + sinAcuseHtml,
+      okText: 'GENERAR PAGO',
+      cancelText: 'CANCELAR'
+    });
+    if (!_okGenPagoEt) return;
 
     const pagoId = 'plp-'+uid();
     const pagoSinAcuse = !tieneAcuse;
@@ -21772,13 +21997,19 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     if (typeof window.renderEstimacionListaBanner === 'function') window.renderEstimacionListaBanner();
   };
 
-  window.marcarTodasComoFacturadas = function(){
+  window.marcarTodasComoFacturadas = async function(){
     if (!can('cobro.edit') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
     const p = activeProj();
     if (!p) return;
     const { total, porApto } = window.contarEtapasListasParaEstimacion(p);
     if (total === 0) { showToast('NADA QUE MARCAR', ''); return; }
-    if (!confirm(`¿MARCAR LAS ${total} ETAPAS COMO FACTURADAS?\n\nDistribuidas en ${porApto.length} apto(s). Después de esto, el counter del banner vuelve a empezar.`)) return;
+    const _okMrc = await window.prConfirm({
+      title: `¿MARCAR LAS ${total} ETAPAS COMO FACTURADAS?`,
+      bodyHTML: `<div>Distribuidas en <strong>${porApto.length}</strong> apto(s). Después de esto, el counter del banner vuelve a empezar.</div>`,
+      okText: 'MARCAR TODAS',
+      cancelText: 'CANCELAR'
+    });
+    if (!_okMrc) return;
     const pagos = (p.planilla && p.planilla.pagos) || [];
     let marcadasTotal = 0;
     (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
@@ -23276,18 +23507,30 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   };
 
   /* ─── Acciones comunes ─── */
-  window.verLineasOC = function(id){
+  window.verLineasOC = async function(id){
     const p = activeProj();
     const oc = (p.planilla.ajustes || []).find(x => x.id === id);
     if (!oc) return;
-    let txt = `OC: ${oc.desc}\nObrero: ${oc.colaboradorNombre || _colabName(p, oc.colaboradorId)}\n\nLÍNEAS:\n`;
-    (oc.lineas || []).forEach((ln, i) => {
-      txt += `${i+1}. ${ln.descripcion}\n   ${ln.cantidad} ${ln.unidad} × ${fQ(ln.precioUnit)} = ${fQ(ln.total)}\n`;
+    const escOl = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const lineasHtml = (oc.lineas || []).map((ln, i) =>
+      `<div style="padding:8px 0;border-bottom:1px solid #EEE">
+         <div style="font-weight:600;color:#1a1a1a;font-size:12.5px">${i+1}. ${escOl(ln.descripcion)}</div>
+         <div style="font-size:11.5px;color:#666;margin-top:2px">${escOl(ln.cantidad)} ${escOl(ln.unidad)} × ${escOl(fQ(ln.precioUnit))} = <strong>${escOl(fQ(ln.total))}</strong></div>
+       </div>`
+    ).join('');
+    await window.prAlert({
+      title: `OC: ${escOl(oc.desc)}`,
+      bodyHTML:
+        `<div style="font-size:11.5px;color:#666;margin-bottom:12px;letter-spacing:.4px">OBRERO: ${escOl(oc.colaboradorNombre || _colabName(p, oc.colaboradorId))}</div>` +
+        `<div style="font-weight:700;color:#1a1a1a;margin-bottom:6px;font-size:11px;letter-spacing:1px">LÍNEAS</div>` +
+        `<div style="background:#FAF8F3;padding:4px 14px;border-radius:4px;max-height:240px;overflow-y:auto">${lineasHtml}</div>` +
+        `<div style="margin-top:12px;display:grid;grid-template-columns:1fr auto;gap:6px 16px;font-size:12.5px;color:#444;padding:12px 14px;background:#FAF8F3;border-radius:4px">` +
+          `<div>Subtotal</div><div style="text-align:right;font-weight:600">${escOl(fQ(oc.subtotal||0))}</div>` +
+          (oc.retencion ? `<div style="color:#888">Retención 10%</div><div style="text-align:right;font-weight:600;color:#888">- ${escOl(fQ(oc.retencionMonto||0))}</div>` : '') +
+          `<div style="padding-top:6px;border-top:1px solid #E5E5E5;font-weight:700">Neto</div>` +
+          `<div style="padding-top:6px;border-top:1px solid #E5E5E5;text-align:right;font-weight:800;color:#1a1a1a">${escOl(fQ(oc.neto||oc.monto||0))}</div>` +
+        `</div>`
     });
-    txt += `\nSUBTOTAL: ${fQ(oc.subtotal||0)}`;
-    if (oc.retencion) txt += `\nRETENCIÓN 10%: -${fQ(oc.retencionMonto||0)}`;
-    txt += `\nNETO: ${fQ(oc.neto||oc.monto||0)}`;
-    alert(txt);
   };
 
   window.eliminarAjuste = async function(id){
@@ -23554,9 +23797,13 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   };
 
   const _autorizarOrdenBase = autorizarOrden;
-  window.autorizarOrden = autorizarOrden = function(id){
-    if (!isErlinUser()) return showToast('SOLO ERLIN KARINA TRIGUEROS PUEDE AUTORIZAR OC', 'red');
-    _autorizarOrdenBase(id);
+  window.autorizarOrden = autorizarOrden = async function(id){
+    // v314: admin (can('users.manage')) tambien puede autorizar OC. Erlin Karina
+    // sigue siendo la firmante por defecto, pero el admin tiene control total.
+    if (!isErlinUser() && !(typeof can === 'function' && can('users.manage'))){
+      return showToast('SOLO ERLIN KARINA TRIGUEROS O EL ADMIN PUEDEN AUTORIZAR OC', 'red');
+    }
+    return await _autorizarOrdenBase(id);
   };
 
   const _renderOrdenesListBase = renderOrdenesList;
@@ -24887,7 +25134,13 @@ window.exportarPlanillaExcel = async function(fechaInicio, fechaFin){
   } catch(err) {
     console.error('exportarPlanillaExcel falló:', err);
     showToast('ERROR GENERANDO EXCEL: ' + (err && err.message ? err.message : 'desconocido'), 'red');
-    alert('ERROR AL GENERAR EXCEL\n\n' + (err && err.message ? err.message : err) + '\n\nAbrir la consola (F12) para ver el detalle.');
+    const _detalle = (err && err.message ? err.message : String(err)).replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));
+    window.prAlert({
+      title: 'ERROR AL GENERAR EXCEL',
+      bodyHTML: `<div style="padding:10px 14px;background:#FAF8F3;border-radius:4px;font-size:12px;color:#444">${_detalle}</div>
+                 <div style="margin-top:10px;font-size:11.5px;color:#666;line-height:1.5">Abrir la consola (F12) para ver el detalle.</div>`,
+      danger: true
+    });
   }
 };
 
@@ -25009,13 +25262,13 @@ window._doExportExcel = function(){
     console.log('[Excel] Fechas:', { ini, fin });
     closeModal('exportarPlanilla');
     if (typeof window.exportarPlanillaExcel !== 'function') {
-      alert('ERROR: exportarPlanillaExcel no está definida. Recargar la app.');
+      window.prAlert({ title:'ERROR', bodyHTML:'<div>exportarPlanillaExcel no está definida. <strong>Recargar la app</strong>.</div>', danger:true });
       return;
     }
     window.exportarPlanillaExcel(ini, fin);
   } catch(err) {
     console.error('[Excel] Error en _doExportExcel:', err);
-    alert('Error: ' + (err.message || err));
+    window.prAlert({ title:'ERROR', bodyHTML:'<div style="padding:10px 14px;background:#FAF8F3;border-radius:4px;font-size:12px;color:#444">' + String(err.message || err).replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m])) + '</div>', danger:true });
   }
 };
 
@@ -25031,13 +25284,13 @@ window._doExportPDF = function(){
     const fin = finEl ? finEl.value : '';
     closeModal('exportarPlanilla');
     if (typeof window.exportarPlanillaPDFObrero !== 'function') {
-      alert('ERROR: exportarPlanillaPDFObrero no está definida.');
+      window.prAlert({ title:'ERROR', bodyHTML:'<div>exportarPlanillaPDFObrero no está definida.</div>', danger:true });
       return;
     }
     window.exportarPlanillaPDFObrero(c, ini, fin);
   } catch(err) {
     console.error('[PDF] Error en _doExportPDF:', err);
-    alert('Error: ' + (err.message || err));
+    window.prAlert({ title:'ERROR', bodyHTML:'<div style="padding:10px 14px;background:#FAF8F3;border-radius:4px;font-size:12px;color:#444">' + String(err.message || err).replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m])) + '</div>', danger:true });
   }
 };
 
@@ -26170,7 +26423,7 @@ function _isReceptorRotatingMode(){
 let _qrScanCtx = null;        // { towerId, levelId, aptoId, slotKey }
 let _html5Qr = null;          // Instancia de Html5Qrcode
 
-function openQRScanForAcuse(towerId, levelId, aptoId, slotKey){
+async function openQRScanForAcuse(towerId, levelId, aptoId, slotKey){
   if (!can('avance.edit')) return showToast('SIN PERMISO', 'red');
   if (!Array.isArray(state.receptores) || state.receptores.filter(r => !r.deleted).length === 0) {
     showToast('PRIMERO AGREGAR RECEPTORES (BOTÓN "RECEPTORES" EN TOPBAR)', 'red');
@@ -26200,12 +26453,12 @@ function openQRScanForAcuse(towerId, levelId, aptoId, slotKey){
       const _slotInfo0 = ACUSE_SLOTS.find(s => s.key === String(slotKey));
       const _slotLabel0 = _slotInfo0 ? _slotInfo0.label : ('ETAPA ' + slotKey);
       const cuantas = acuseSlotPhotoCount(_slot0);
-      alert(
-        `NO SE PUEDE FIRMAR TODAVÍA\n\n` +
-        `Para firmar el acuse de "${_slotLabel0}" se requiere tener LAS 2 FOTOS subidas. ` +
-        `Lleva ${cuantas} de 2.\n\n` +
-        `Pulsar los botones FOTO 1 y FOTO 2 para tomar ambas con la cámara, y después aparece el botón QR para firmar.`
-      );
+      await window.prAlert({
+        title: 'NO SE PUEDE FIRMAR TODAVÍA',
+        bodyHTML: `<div>Para firmar el acuse de <strong>"${String(_slotLabel0).replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))}"</strong> se requiere tener las 2 fotos subidas.</div>
+                   <div style="margin-top:10px;padding:10px 14px;background:#FAF8F3;border-radius:4px;font-size:13px;text-align:center"><strong>${cuantas}</strong> de <strong>2</strong> fotos subidas</div>
+                   <div style="margin-top:12px;color:#0F5132;background:#D1E7DD;border-left:3px solid #198754;padding:10px 12px;border-radius:4px;line-height:1.5">Pulsar <strong>FOTO 1</strong> y <strong>FOTO 2</strong> para tomar ambas con la cámara. Después aparece el botón <strong>QR</strong> para firmar.</div>`
+      });
       return;
     }
   } catch(e) { /* si falla la verificación, seguimos — no bloqueamos */ }
@@ -26226,26 +26479,38 @@ function openQRScanForAcuse(towerId, levelId, aptoId, slotKey){
         if (!tieneAcuse) sinFirmar.push(i);
       }
       if (sinFirmar.length > 0) {
-        const labelsPendientes = sinFirmar.map(i => ACUSE_SLOTS[i].label).join('\n• ');
+        const escSk = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+        const labelsPendientesHtml = sinFirmar.map(i => '· ' + escSk(ACUSE_SLOTS[i].label)).join('<br>');
         if (can('users.manage')) {
           // Admin puede saltar el orden con doble confirmación
-          const ok = confirm(
-            `ATENCIÓN — ENTREGA FUERA DE ORDEN\n\n` +
-            `Las siguientes etapas anteriores NO están firmadas:\n• ${labelsPendientes}\n\n` +
-            `Lo recomendado es entregar las etapas en orden (1 → 2 → 3 → ...).\n\n` +
-            `Como administrador, se puede saltar el orden si hubo una excepción real en obra.\n\n` +
-            `¿CONFIRMAR SALTAR EL ORDEN?`
-          );
+          const ok = await window.prConfirm({
+            title: 'ATENCIÓN — ENTREGA FUERA DE ORDEN',
+            bodyHTML:
+              `<div>Las siguientes etapas anteriores <strong>NO están firmadas</strong>:</div>
+               <div style="margin-top:8px;padding:10px 14px;background:#FAF8F3;border-radius:4px;font-size:12.5px;color:#444">${labelsPendientesHtml}</div>
+               <div style="margin-top:12px;color:#7C5800;background:#FFF8E1;padding:10px 12px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.5">Lo recomendado es entregar las etapas en orden (1 → 2 → 3 → ...). Como administrador, se puede saltar el orden si hubo una excepción real en obra.</div>`,
+            okText: 'SALTAR ORDEN',
+            cancelText: 'CANCELAR',
+            danger: true
+          });
           if (!ok) return;
-          const ok2 = confirm('ÚLTIMA CONFIRMACIÓN — ¿Saltar el orden y firmar igual?');
+          const ok2 = await window.prConfirm({
+            title: 'ÚLTIMA CONFIRMACIÓN',
+            bodyHTML: `<div style="color:#7C2D12;background:#FEF3C7;border-left:3px solid #F59E0B;padding:10px 12px;border-radius:4px;line-height:1.5">¿Saltar el orden y firmar igual? Esto quedará registrado en el log.</div>`,
+            okText: 'FIRMAR IGUAL',
+            cancelText: 'CANCELAR',
+            danger: true
+          });
           if (!ok2) return;
         } else {
           showToast(`PRIMERO ENTREGAR: ${ACUSE_SLOTS[sinFirmar[0]].label}`, 'red');
-          alert(
-            `NO SE PUEDE FIRMAR ESTA ETAPA TODAVÍA\n\n` +
-            `Faltan firmar las etapas anteriores:\n• ${labelsPendientes}\n\n` +
-            `Las etapas se deben entregar en orden. Si se requiere saltar el orden por una excepción, solicitar al administrador que haga la firma.`
-          );
+          await window.prAlert({
+            title: 'NO SE PUEDE FIRMAR ESTA ETAPA TODAVÍA',
+            bodyHTML:
+              `<div>Faltan firmar las etapas anteriores:</div>
+               <div style="margin-top:8px;padding:10px 14px;background:#FAF8F3;border-radius:4px;font-size:12.5px;color:#444">${labelsPendientesHtml}</div>
+               <div style="margin-top:12px;color:#0F5132;background:#D1E7DD;border-left:3px solid #198754;padding:10px 12px;border-radius:4px;line-height:1.5">Las etapas se deben entregar en orden. Si se requiere saltar el orden por una excepción, solicitar al <strong>administrador</strong> que haga la firma.</div>`
+          });
           return;
         }
       }
@@ -27627,7 +27892,13 @@ window.addEventListener('load', () => {
     const current=getPaidPct(p,aid,stageIdx); const sel=document.getElementById(`pct-${aid}-${stageIdx}`); const target=Number(sel?.value || nextPctFor(current) || 0);
     if (!PLANILLA_PCTS.includes(target) || target<=current) return showToast('ELEGIR UN PORCENTAJE MAYOR AL PAGADO','red');
     const pctDelta=target-current; const bruto=+(total*pctDelta/100).toFixed(2); const retencion=+(bruto*0.10).toFixed(2); const neto=+(bruto-retencion).toFixed(2); const mo=modeloObj(p,p.planilla.aptoModelMap?.[aid]||'GENERAL');
-    if (!confirm(`GENERAR PAGO\n${colab.nombre}\n${a.name} · ETAPA ${stageIdx+1}\nABONO: ${current}% → ${target}%\nBRUTO: ${fQ(bruto)}\nRETENCIÓN 10%: ${fQ(retencion)}\nNETO: ${fQ(neto)}`)) return;
+    const _okPagoEt = await window.prConfirm({
+      title: 'GENERAR PAGO',
+      bodyHTML: window._buildGenerarPagoBodyHTML({ trabajador: colab.nombre, apto: a.name, etapaIdx: stageIdx, current, target, bruto, retencion, neto }),
+      okText: 'GENERAR PAGO',
+      cancelText: 'CANCELAR'
+    });
+    if (!_okPagoEt) return;
     p.planilla.pagos.push({id:'plp-'+uid(),tipo:'ETAPA',ts:Date.now(),towerId:tid,levelId:lid,aptoId:aid,aptoName:a.name,towerName:t.name,levelName:l.name,stageIdx,detalle:`${t.name} · ${a.name} · ETAPA ${stageIdx+1}`,bruto,retencion,neto,colaborador:upper(colab.nombre),colaboradorId:colab.id,autorizado:false,retencionPagada:false,targetPct:target,pctDelta,stageTotal:total,modelKey:mo?.key||'GENERAL',modelName:mo?.nombre||'GENERAL',generadoPor:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''),generadoPorNombre:(typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):'')});
     logActivity('create','Pago planilla generado',`${p.name} · ${a.name} · ETAPA ${stageIdx+1} · ${target}% · ${upper(colab.nombre)} · ${fQ(neto)}`);
     saveState(); renderPlanilla(); showToast('PAGO GENERADO · PENDIENTE AUTORIZACIÓN','green');
@@ -27653,7 +27924,16 @@ window.addEventListener('load', () => {
   window.updatePlanillaModeloNombre=function(key,val){ if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR','red'); const p=activeProj(); const m=(p.planilla.modelos||[]).find(x=>x.key===key); if(m){m.nombre=upper(val)||m.nombre; saveState(); renderPlanilla();} };
   window.updatePlanillaModeloCosto=function(key,idx,val){ if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE MODIFICAR COSTOS','red'); const p=activeProj(); const m=(p.planilla.modelos||[]).find(x=>x.key===key); if(m){ if(!Array.isArray(m.costos)) m.costos=[0,0,0,0,0,0]; m.costos[idx]=Number(val)||0; saveState(); renderPlanilla();} };
   window.updateAptoModelo=function(aid,key){ if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR','red'); const p=activeProj(); p.planilla.aptoModelMap[aid]=key; saveState(); renderPlanilla(); };
-  window.addPlanillaModelo=function(){ if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE AGREGAR MODELOS','red'); const p=activeProj(); const name=upper(prompt('NOMBRE DEL NUEVO MODELO:')||''); if(!name) return; const key='MOD_'+uid(); p.planilla.modelos.push({key,nombre:name,costos:[0,0,0,0,0,0]}); saveState(); renderPlanilla(); showToast('MODELO AGREGADO','green'); };
+  window.addPlanillaModelo=async function(){
+    if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE AGREGAR MODELOS','red');
+    const p=activeProj();
+    const raw = await window.prPrompt({ title:'NUEVO MODELO', body:'Nombre del nuevo modelo de apto.', placeholder:'Ej: 2 AL 6 - 01', okText:'AGREGAR', cancelText:'CANCELAR' });
+    if(raw===null) return;
+    const name=upper(String(raw||'')); if(!name) return;
+    const key='MOD_'+uid();
+    p.planilla.modelos.push({key,nombre:name,costos:[0,0,0,0,0,0]});
+    saveState(); renderPlanilla(); showToast('MODELO AGREGADO','green');
+  };
 
   window.renderPlanillaColaboradores=function(){
     const p=activeProj(); const canEdit=can('planilla.generate')||can('users.manage'); const list=p.planilla.colaboradores||[];
@@ -27818,18 +28098,19 @@ window.addEventListener('load', () => {
   const prevEnsure = window.ensureEnhancedData;
   window.ensureEnhancedData = function(){ if(prevEnsure) prevEnsure(); normalizeAllPlanillaData(); };
 
-  window.cargarCostosEssenzaPlanilla = function(){
+  window.cargarCostosEssenzaPlanilla = async function(){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE CARGAR COSTOS','red');
     const p=activeProj();
     // Advertir si se está cargando data Essenza en un proyecto que NO es Essenza
     if (p.id !== 'essenza-f2') {
-      const ok = confirm(
-        `ATENCIÓN\n\n` +
-        `Estás por cargar los modelos y costos de ESSENZA FASE 2 en el proyecto:\n\n` +
-        `${p.name}\n\n` +
-        `Esto solo tiene sentido para Essenza. Cada proyecto debe tener sus propios modelos con sus propios precios.\n\n` +
-        `¿Continuar de todos modos?`
-      );
+      const ok = await window.prConfirm({
+        title: 'ATENCIÓN — CARGA CROSS-PROYECTO',
+        bodyHTML: `<div>Estás por cargar los modelos y costos de <strong>ESSENZA FASE 2</strong> en el proyecto:</div>
+                   <div style="margin-top:10px;padding:10px 14px;background:#FAF8F3;border-radius:4px;font-weight:700;color:#1a1a1a;font-size:13px">${String(p.name||'').replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))}</div>
+                   <div style="margin-top:12px;color:#7C5800;background:#FFF8E1;padding:10px 12px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.5">Esto solo tiene sentido para Essenza. Cada proyecto debe tener <strong>sus propios modelos</strong> con sus propios precios.</div>`,
+        okText: 'CARGAR DE TODOS MODOS',
+        cancelText: 'CANCELAR'
+      });
       if (!ok) return;
     }
     applyEssenzaCosts(p,true); saveState(); renderPlanilla(); showToast('COSTOS Y MODELOS ESSENZA CARGADOS','green');
@@ -27973,7 +28254,13 @@ window.addEventListener('load', () => {
     const current=paidPct(p,aid,stageIdx); const sel=document.getElementById(`pct-${aid}-${stageIdx}`); const target=Number(sel?.value || nextPct(current) || 0);
     if(!PLANILLA_PCTS2.includes(target) || target<=current) return showToast('ELEGIR UN PORCENTAJE MAYOR AL PAGADO','red');
     const pctDelta=target-current; const bruto=+(total*pctDelta/100).toFixed(2); const retencion=+(bruto*0.10).toFixed(2); const neto=+(bruto-retencion).toFixed(2); const mo=modelObj(p,p.planilla.aptoModelMap?.[aid]||'GENERAL');
-    if(!confirm(`GENERAR PAGO\n${colab.nombre} · ${rol}\n${a.name} · ETAPA ${stageIdx+1}\nABONO: ${current}% → ${target}%\nBRUTO: ${fQ(bruto)}\nRETENCIÓN 10%: ${fQ(retencion)}\nNETO: ${fQ(neto)}`)) return;
+    const _okPagoEt2 = await window.prConfirm({
+      title: 'GENERAR PAGO',
+      bodyHTML: window._buildGenerarPagoBodyHTML({ trabajador: `${colab.nombre} · ${rol}`, apto: a.name, etapaIdx: stageIdx, current, target, bruto, retencion, neto }),
+      okText: 'GENERAR PAGO',
+      cancelText: 'CANCELAR'
+    });
+    if(!_okPagoEt2) return;
     p.planilla.pagos.push({id:'plp-'+uid(),tipo:'ETAPA',ts:Date.now(),towerId:tid,levelId:lid,aptoId:aid,aptoName:a.name,towerName:t.name,levelName:l.name,stageIdx,detalle:`${t.name} · ${a.name} · ETAPA ${stageIdx+1}`,bruto,retencion,neto,colaborador:upper(colab.nombre),colaboradorId:colab.id,colaboradorRol:rol,autorizado:false,retencionPagada:false,targetPct:target,pctDelta,stageTotal:total,modelKey:mo?.key||'GENERAL',modelName:mo?.nombre||'GENERAL',generadoPor:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''),generadoPorNombre:(typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):'')});
     logActivity('create','Pago planilla generado',`${p.name} · ${a.name} · ETAPA ${stageIdx+1} · ${target}% · ${upper(colab.nombre)} · ${fQ(neto)}`);
     saveState(); renderPlanilla(); showToast('PAGO GENERADO · PENDIENTE AUTORIZACIÓN','green');
@@ -28060,7 +28347,13 @@ window.addEventListener('load', () => {
     const current=paidPct(p,aid,stageIdx); const sel=document.getElementById(`pct-${aid}-${stageIdx}`); const target=Number(sel?.value || nextPct(current) || 0);
     if(!PLANILLA_PCTS_EXPORT.includes(target) || target<=current) return showToast('ELEGIR UN PORCENTAJE MAYOR AL PAGADO','red');
     const pctDelta=target-current; const bruto=+(total*pctDelta/100).toFixed(2); const retencion=+(bruto*0.10).toFixed(2); const neto=+(bruto-retencion).toFixed(2); const mo=modelObj(p,p.planilla?.aptoModelMap?.[aid]||'GENERAL'); const etapa=PLANILLA_ETAPAS_EXPORT[stageIdx];
-    if(!confirm(`GENERAR PAGO\n${colab.nombre} · ${rol}\n${a.name} · ETAPA ${stageIdx+1} · ${etapa.name}\nABONO: ${current}% → ${target}%\nMONTO A PAGAR: ${fQ(neto)}`)) return;
+    const _okPagoEt3 = await window.prConfirm({
+      title: 'GENERAR PAGO',
+      bodyHTML: window._buildGenerarPagoBodyHTML({ trabajador: `${colab.nombre} · ${rol}`, apto: a.name, etapaIdx: stageIdx, etapaName: etapa.name, current, target, bruto, retencion, neto }),
+      okText: 'GENERAR PAGO',
+      cancelText: 'CANCELAR'
+    });
+    if(!_okPagoEt3) return;
     if(!p.planilla) p.planilla={pagos:[]}; if(!Array.isArray(p.planilla.pagos)) p.planilla.pagos=[];
     p.planilla.pagos.push({id:'plp-'+uid(),tipo:'ETAPA',ts:Date.now(),towerId:tid,levelId:lid,aptoId:aid,aptoName:a.name,towerName:t.name,levelName:l.name,stageIdx,stageName:etapa.name,detalle:`${t.name} · ${a.name} · ETAPA ${stageIdx+1} · ${etapa.name}`,bruto,retencion,neto,colaborador:upper(colab.nombre),colaboradorId:colab.id,colaboradorRol:rol,autorizado:false,retencionPagada:false,targetPct:target,pctDelta,stageTotal:total,modelKey:mo?.key||'GENERAL',modelName:mo?.nombre||'GENERAL',generadoPor:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''),generadoPorNombre:(typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):'')});
     logActivity('create','Pago planilla generado',`${p.name} · ${a.name} · ETAPA ${stageIdx+1} · ${target}% · ${upper(colab.nombre)} · ${fQ(neto)}`);
@@ -28510,15 +28803,15 @@ window.addEventListener('load', () => {
   }
 
   // v201: CRUD de etapas (admin only). La regla rol↔etapa siempre es: ÚLTIMA = MASILLERO.
-  window.addEtapaPlanilla = function(){
+  window.addEtapaPlanilla = async function(){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE AGREGAR ETAPAS','red');
     const p = activeProj(); if(!p) return;
     if(!p.planilla) p.planilla={pagos:[],retencionesPagadas:[],ajustes:[],modelos:[],aptoModelMap:{},etapas:[]};
     if(!Array.isArray(p.planilla.etapas)) p.planilla.etapas = [];
     if(p.planilla.etapas.length >= 10) return showToast('MÁXIMO 10 ETAPAS POR PROYECTO','red');
-    const raw = prompt('NOMBRE DE LA NUEVA ETAPA:');
+    const raw = await window.prPrompt({ title:'NUEVA ETAPA', body:'Nombre de la etapa que se insertará antes de la última (masilla).', placeholder:'Ej: FORRO, MUDFOR, etc.', okText:'AGREGAR', cancelText:'CANCELAR' });
     if(!raw) return;
-    const name = upper(raw); if(!name) return;
+    const name = upper(String(raw||'')); if(!name) return;
     // Insertar la nueva etapa ANTES de la última (la última siempre es masilla = masillero).
     // Si no hay etapas todavía, simplemente push.
     if(p.planilla.etapas.length === 0){
@@ -28537,14 +28830,21 @@ window.addEventListener('load', () => {
     showToast('ETAPA AGREGADA · DEFINIR COSTOS POR MODELO','green');
   };
 
-  window.removeEtapaPlanilla = function(idx){
+  window.removeEtapaPlanilla = async function(idx){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE QUITAR ETAPAS','red');
     const p = activeProj(); if(!p || !p.planilla || !Array.isArray(p.planilla.etapas)) return;
     if(p.planilla.etapas.length <= 2) return showToast('MÍNIMO 2 ETAPAS POR PROYECTO','red');
     const usada = (p.planilla.pagos||[]).some(pg => Number(pg.stageIdx) === Number(idx));
     if(usada) return showToast('NO SE PUEDE QUITAR: YA HAY PAGOS EN ESTA ETAPA','red');
     const nombre = p.planilla.etapas[idx]?.name || '';
-    if(!confirm(`ELIMINAR ETAPA ${idx+1}: ${nombre}?\n\nSE PERDERÁN LOS COSTOS DE ESTA ETAPA EN TODOS LOS MODELOS.`)) return;
+    const _okDelEt = await window.prConfirm({
+      title: `ELIMINAR ETAPA ${idx+1}: ${String(nombre).toUpperCase()}`,
+      bodyHTML: `<div style="color:#7C2D12;background:#FEF3C7;border-left:3px solid #F59E0B;padding:10px 12px;border-radius:4px;line-height:1.5">Se perderán los <strong>costos</strong> de esta etapa en todos los modelos.</div>`,
+      okText: 'ELIMINAR ETAPA',
+      cancelText: 'CANCELAR',
+      danger: true
+    });
+    if(!_okDelEt) return;
     p.planilla.etapas.splice(idx, 1);
     (p.planilla.modelos||[]).forEach(m => {
       if(Array.isArray(m.costos) && m.costos.length > idx) m.costos.splice(idx, 1);
@@ -28584,17 +28884,19 @@ window.addEventListener('load', () => {
     }catch(e){ console.warn('ensureEnhancedData error:', e); }
   };
 
-  window.cargarCostosEssenzaPlanilla = function(){
+  window.cargarCostosEssenzaPlanilla = async function(){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE CARGAR COSTOS','red');
     const p = activeProj();
     // Advertencia cross-project: cargar Essenza en otro proyecto solo si el usuario lo confirma
     if (p.id !== 'essenza-f2') {
-      const ok = confirm(
-        `ATENCIÓN\n\n` +
-        `Estás por cargar los modelos y costos de ESSENZA en el proyecto:\n\n${p.name}\n\n` +
-        `Esto solo tiene sentido para Essenza. Cada proyecto debe tener sus propios modelos.\n\n` +
-        `¿Continuar de todos modos?`
-      );
+      const ok = await window.prConfirm({
+        title: 'ATENCIÓN — CARGA CROSS-PROYECTO',
+        bodyHTML: `<div>Estás por cargar los modelos y costos de <strong>ESSENZA</strong> en el proyecto:</div>
+                   <div style="margin-top:10px;padding:10px 14px;background:#FAF8F3;border-radius:4px;font-weight:700;color:#1a1a1a;font-size:13px">${String(p.name||'').replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))}</div>
+                   <div style="margin-top:12px;color:#7C5800;background:#FFF8E1;padding:10px 12px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.5">Esto solo tiene sentido para Essenza. Cada proyecto debe tener <strong>sus propios modelos</strong>.</div>`,
+        okText: 'CARGAR DE TODOS MODOS',
+        cancelText: 'CANCELAR'
+      });
       if (!ok) return;
     }
     normalizarPlanilla5(p, false);
@@ -28607,9 +28909,12 @@ window.addEventListener('load', () => {
     const p=activeProj(); normalizarPlanilla5(p,true); const m=(p.planilla.modelos||[]).find(x=>x.key===key);
     if(m && idx>=0 && idx<5){ m.costos[idx]=Number(val)||0; saveState(); renderPlanilla(); }
   };
-  window.addPlanillaModelo=function(){
+  window.addPlanillaModelo=async function(){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE AGREGAR MODELOS','red');
-    const p=activeProj(); normalizarPlanilla5(p,true); const name=upper(prompt('NOMBRE DEL NUEVO MODELO:')||''); if(!name) return;
+    const p=activeProj(); normalizarPlanilla5(p,true);
+    const raw = await window.prPrompt({ title:'NUEVO MODELO', body:'Nombre del nuevo modelo de apto.', placeholder:'Ej: 2 AL 6 - 01', okText:'AGREGAR', cancelText:'CANCELAR' });
+    if(raw===null) return;
+    const name=upper(String(raw||'')); if(!name) return;
     p.planilla.modelos.push({key:'MOD_'+uid(),nombre:name,costos:[0,0,0,0,0]}); saveState(); renderPlanilla(); showToast('MODELO AGREGADO','green');
   };
 
@@ -30451,14 +30756,18 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     console.log('[Modelos PDF] Formato usado:', formatoUsado, '· Modelos:', modelos.length);
     const maxEtapas = Math.max(...modelos.map(m => m.costos.length));
     const preview = modelos.slice(0, 6).map(m => `• ${m.nombre}: [${m.costos.map(n=>n.toFixed(2)).join(', ')}]`).join('\n');
-    const masTexto = modelos.length > 6 ? `\n... y ${modelos.length - 6} más` : '';
-    const ok = confirm(
-      `IMPORTAR ${modelos.length} MODELOS DETECTADOS (${maxEtapas} columnas)\n\n` +
-      `${preview}${masTexto}\n\n` +
-      `Esto AGREGA los modelos al proyecto activo (si ya existe un nombre, ACTUALIZA sus costos).\n` +
-      `Si las etapas del proyecto difieren de ${maxEtapas}, se ajustan al máximo.\n\n` +
-      `¿Continuar?`
-    );
+    const escMd = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const masTextoHtml = modelos.length > 6 ? `<div style="margin-top:6px;font-size:11px;color:#888">… y ${modelos.length - 6} más</div>` : '';
+    const previewHtml = String(preview||'').split('\n').filter(Boolean).map(s => '· ' + escMd(s)).join('<br>');
+    const ok = await window.prConfirm({
+      title: `IMPORTAR ${modelos.length} MODELOS DETECTADOS`,
+      bodyHTML:
+        `<div style="font-size:11.5px;color:#666;margin-bottom:12px;letter-spacing:.4px">${maxEtapas} COLUMNAS</div>` +
+        `<div style="background:#FAF8F3;padding:10px 14px;border-radius:4px;font-size:12px;color:#444;max-height:200px;overflow-y:auto">${previewHtml}${masTextoHtml}</div>` +
+        `<div style="margin-top:12px;font-size:12px;line-height:1.5">Esto <strong>agrega</strong> los modelos al proyecto activo (si ya existe un nombre, <strong>actualiza</strong> sus costos). Si las etapas del proyecto difieren de ${maxEtapas}, se ajustan al máximo.</div>`,
+      okText: 'IMPORTAR',
+      cancelText: 'CANCELAR'
+    });
     if(!ok){ event.target.value = ''; return; }
     const p = (typeof activeProj === 'function') ? activeProj() : null;
     if(!p){ showT('SIN PROYECTO ACTIVO','red'); event.target.value = ''; return; }
@@ -30550,16 +30859,19 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       console.warn('Líneas del PDF (no detectado ningún colaborador):', lines);
       event.target.value = ''; return;
     }
-    const preview = colabs.slice(0, 10).map(c => `• ${c.nombre}${c.rol!=='SIN DEFINIR' ? ' ('+c.rol+')' : ' (sin definir)'}`).join('\n');
-    const masTexto = colabs.length > 10 ? `\n... y ${colabs.length - 10} más` : '';
+    const escCo = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const previewHtmlC = colabs.slice(0, 10).map(c => `· ${escCo(c.nombre)}${c.rol!=='SIN DEFINIR' ? ' <span style="color:#888">('+escCo(c.rol)+')</span>' : ' <span style="color:#888">(sin definir)</span>'}`).join('<br>');
+    const masTextoHtmlC = colabs.length > 10 ? `<div style="margin-top:6px;font-size:11px;color:#888">… y ${colabs.length - 10} más</div>` : '';
     const sinRol = colabs.filter(c => c.rol === 'SIN DEFINIR').length;
-    const ok = confirm(
-      `IMPORTAR ${colabs.length} COLABORADORES DETECTADOS\n\n` +
-      `${preview}${masTexto}\n\n` +
-      (sinRol > 0 ? `${sinRol} sin rol asignado (editar después en la lista)\n\n` : '') +
-      `AGREGA al listado compartido entre todos los proyectos. No duplica si el nombre ya existe.\n\n` +
-      `¿Continuar?`
-    );
+    const ok = await window.prConfirm({
+      title: `IMPORTAR ${colabs.length} COLABORADORES DETECTADOS`,
+      bodyHTML:
+        `<div style="background:#FAF8F3;padding:10px 14px;border-radius:4px;font-size:12px;color:#444;max-height:220px;overflow-y:auto">${previewHtmlC}${masTextoHtmlC}</div>` +
+        (sinRol > 0 ? `<div style="margin-top:10px;color:#7C5800;background:#FFF8E1;padding:10px 12px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.5">${sinRol} sin rol asignado (editar después en la lista).</div>` : '') +
+        `<div style="margin-top:12px;font-size:12px;line-height:1.5"><strong>Agrega</strong> al listado compartido entre todos los proyectos. No duplica si el nombre ya existe.</div>`,
+      okText: 'IMPORTAR',
+      cancelText: 'CANCELAR'
+    });
     if(!ok){ event.target.value = ''; return; }
     let agregados = 0, omitidos = 0;
     colabs.forEach(c => {
@@ -31024,13 +31336,26 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       ? `\n\n${aptosSinMatch.length} APTOS DEL PDF SIN MATCH EN EL PROYECTO:\n${aptosSinMatch.slice(0,5).map(s => `• ${s.texto} → ${s.modelo}`).join('\n')}${aptosSinMatch.length>5 ? `\n... y ${aptosSinMatch.length-5} más` : ''}`
       : '';
 
-    const ok = confirm(
-      `IMPORTAR ASIGNACIÓN APTO → MODELO\n\n` +
-      `${detecciones.length} APTOS ASIGNADOS A ${Object.keys(porModelo).length} MODELOS:\n\n` +
-      `${lineasPv.join('\n')}${masMod}` +
-      `${sinMatchTxt}\n\n` +
-      `Esto REEMPLAZA las asignaciones actuales de cada apto detectado.\n¿Aplicar?`
-    );
+    const escAm = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const lineasPvHtml = lineasPv.map(s => escAm(String(s).replace(/^•\s*/, ''))).map(s => '· ' + s).join('<br>');
+    const masModHtml = Object.keys(porModelo).length > 8 ? `<div style="margin-top:6px;font-size:11px;color:#888">… y ${Object.keys(porModelo).length - 8} modelos más</div>` : '';
+    const sinMatchHtml = aptosSinMatch.length > 0
+      ? `<div style="margin-top:12px;color:#7C5800;background:#FFF8E1;padding:10px 12px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.5">
+           <strong>${aptosSinMatch.length} APTOS DEL PDF SIN MATCH</strong>:<br>
+           ${aptosSinMatch.slice(0,5).map(s => `· ${escAm(s.texto)} → ${escAm(s.modelo)}`).join('<br>')}
+           ${aptosSinMatch.length>5 ? `<br><span style="color:#888;font-size:11px">… y ${aptosSinMatch.length-5} más</span>` : ''}
+         </div>`
+      : '';
+    const ok = await window.prConfirm({
+      title: 'IMPORTAR ASIGNACIÓN APTO → MODELO',
+      bodyHTML:
+        `<div style="font-size:11.5px;color:#666;margin-bottom:12px;letter-spacing:.4px">${detecciones.length} APTOS ASIGNADOS A ${Object.keys(porModelo).length} MODELOS</div>` +
+        `<div style="background:#FAF8F3;padding:10px 14px;border-radius:4px;font-size:12px;color:#444;max-height:220px;overflow-y:auto">${lineasPvHtml}${masModHtml}</div>` +
+        sinMatchHtml +
+        `<div style="margin-top:12px;color:#7C2D12;background:#FEF3C7;border-left:3px solid #F59E0B;padding:10px 12px;border-radius:4px;line-height:1.5">Esto <strong>reemplaza</strong> las asignaciones actuales de cada apto detectado.</div>`,
+      okText: 'APLICAR',
+      cancelText: 'CANCELAR'
+    });
     if(!ok){ event.target.value = ''; return; }
 
     if(!p.planilla.aptoModelMap) p.planilla.aptoModelMap = {};
@@ -31051,7 +31376,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   // v253: ahora limpia TODO el historial de planilla del proyecto:
   // pagos + retenciones pagadas + planillasArmadas + ajustes (OCs y
   // descuentos viejos). Util para arrancar pruebas en limpio.
-  window.limpiarPagosPlanilla = function(){
+  window.limpiarPagosPlanilla = async function(){
     if(typeof can === 'function' && !can('users.manage')){
       showT('SOLO EL ADMINISTRADOR PUEDE LIMPIAR','red'); return;
     }
@@ -31075,21 +31400,30 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const totalRet = pagos.reduce((s,pg) => s + Number(pg.retencion||0), 0);
     const fmtQ = (typeof fQ === 'function') ? fQ : (n => 'Q '+Number(n).toFixed(2));
 
-    const ok = confirm(
-      `LIMPIAR PLANILLA COMPLETA DEL PROYECTO\n\n` +
-      `${p.name}\n\n` +
-      `Esto va a BORRAR:\n` +
-      `• ${pagos.length} pago${pagos.length!==1?'s':''} generado${pagos.length!==1?'s':''}\n` +
-      `• ${retsPag.length} retención${retsPag.length!==1?'es':''} pagada${retsPag.length!==1?'s':''}\n` +
-      `• ${planillas.length} planilla${planillas.length!==1?'s':''} quincenal${planillas.length!==1?'es':''} armada${planillas.length!==1?'s':''}\n` +
-      `• ${ajustes.length} ajuste${ajustes.length!==1?'s':''} (OCs y descuentos viejos)\n\n` +
-      `Totales que se van a borrar:\n` +
-      `• Bruto: ${fmtQ(totalBruto)}\n` +
-      `• Retención 10%: ${fmtQ(totalRet)}\n` +
-      `• Neto: ${fmtQ(totalNeto)}\n\n` +
-      `NO se tocan: modelos, costos, etapas ni colaboradores.\n\n` +
-      `Esta acción NO se puede deshacer. ¿Continuar?`
-    );
+    const escLp = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const ok = await window.prConfirm({
+      title: 'LIMPIAR PLANILLA COMPLETA DEL PROYECTO',
+      bodyHTML:
+        `<div style="font-size:11.5px;color:#666;margin-bottom:12px;letter-spacing:.4px">${escLp(String(p.name||'').toUpperCase())}</div>` +
+        `<div style="font-weight:600;color:#1a1a1a;margin-bottom:6px">Esto va a borrar:</div>` +
+        `<div style="background:#FAF8F3;padding:10px 14px;border-radius:4px;font-size:12px;color:#444;line-height:1.7">
+          · <strong>${pagos.length}</strong> pago${pagos.length!==1?'s':''} generado${pagos.length!==1?'s':''}<br>
+          · <strong>${retsPag.length}</strong> retención${retsPag.length!==1?'es':''} pagada${retsPag.length!==1?'s':''}<br>
+          · <strong>${planillas.length}</strong> planilla${planillas.length!==1?'s':''} quincenal${planillas.length!==1?'es':''} armada${planillas.length!==1?'s':''}<br>
+          · <strong>${ajustes.length}</strong> ajuste${ajustes.length!==1?'s':''} (OCs y descuentos viejos)
+        </div>` +
+        `<div style="margin-top:10px;display:grid;grid-template-columns:1fr auto;gap:6px 16px;font-size:12.5px;color:#444;padding:12px 14px;background:#FAF8F3;border-radius:4px">
+          <div>Bruto</div><div style="text-align:right;font-weight:600">${escLp(fmtQ(totalBruto))}</div>
+          <div>Retención 10%</div><div style="text-align:right;font-weight:600;color:#888">${escLp(fmtQ(totalRet))}</div>
+          <div style="padding-top:6px;border-top:1px solid #E5E5E5;font-weight:700">Neto</div>
+          <div style="padding-top:6px;border-top:1px solid #E5E5E5;text-align:right;font-weight:800;color:#1a1a1a">${escLp(fmtQ(totalNeto))}</div>
+        </div>` +
+        `<div style="margin-top:10px;color:#0F5132;background:#D1E7DD;border-left:3px solid #198754;padding:10px 12px;border-radius:4px;line-height:1.5"><strong>NO se tocan:</strong> modelos, costos, etapas ni colaboradores.</div>` +
+        `<div style="margin-top:10px;color:#7C2D12;background:#FEF3C7;border-left:3px solid #F59E0B;padding:10px 12px;border-radius:4px;line-height:1.5">Esta acción <strong>NO se puede deshacer</strong>.</div>`,
+      okText: 'LIMPIAR PLANILLA',
+      cancelText: 'CANCELAR',
+      danger: true
+    });
     if(!ok) return;
 
     p.planilla.pagos = [];
@@ -31159,6 +31493,118 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         document.addEventListener('keydown', onKey);
         // foco al boton OK para que ENTER confirme
         setTimeout(() => { try { node.querySelector('#prConfOk').focus(); } catch(e){} }, 30);
+      });
+    };
+  }
+
+  // v314: prAlert — reemplaza al alert() nativo "puntorojo.app dice". Mismo
+  // estilo que prConfirm pero solo con boton ACEPTAR. Devuelve Promise<void>.
+  if(typeof window.prAlert !== 'function'){
+    window.prAlert = function(opts){
+      // Permite llamarse como prAlert("mensaje") o prAlert({title, body|bodyHTML, okText})
+      if (typeof opts === 'string') opts = { body: opts };
+      opts = opts || {};
+      return new Promise(resolve => {
+        const prev = document.getElementById('prAlertModal');
+        if(prev) prev.remove();
+        const title = opts.title || 'AVISO';
+        const okText = opts.okText || 'ACEPTAR';
+        const danger = !!opts.danger;
+        const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+        const bodyHTML = opts.bodyHTML || (opts.body ? escHtml(opts.body).replace(/\n/g,'<br>') : '');
+        const html = ''
+          + '<div id="prAlertModal" style="position:fixed;inset:0;background:rgba(20,20,20,.5);z-index:99999;display:flex;align-items:center;justify-content:center;padding:14px;font-family:inherit">'
+          +   '<div style="background:#fff;border-radius:10px;max-width:520px;width:100%;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 16px 50px rgba(0,0,0,.25);overflow:hidden">'
+          +     '<div style="padding:18px 24px 14px;border-bottom:1px solid #EEE">'
+          +       '<div style="font-size:14.5px;font-weight:700;color:#1a1a1a;letter-spacing:.2px;line-height:1.3">'+escHtml(title)+'</div>'
+          +     '</div>'
+          +     '<div style="padding:18px 24px;font-size:12.5px;line-height:1.55;color:#333;overflow-y:auto;flex:1">'+bodyHTML+'</div>'
+          +     '<div style="padding:14px 22px;border-top:1px solid #EEE;background:#FAFAFA;display:flex;gap:8px;justify-content:flex-end">'
+          +       '<button class="btn" id="prAlertOk" style="background:'+(danger?'#C62828':'#1a1a1a')+';border-color:'+(danger?'#C62828':'#1a1a1a')+';color:#fff">'+escHtml(okText)+'</button>'
+          +     '</div>'
+          +   '</div>'
+          + '</div>';
+        const wrap = document.createElement('div');
+        wrap.innerHTML = html;
+        const node = wrap.firstElementChild;
+        document.body.appendChild(node);
+        const onKey = (e) => { if(e.key === 'Escape' || e.key === 'Enter'){ close(); } };
+        const close = () => {
+          try { document.removeEventListener('keydown', onKey); } catch(e){}
+          node.remove(); resolve();
+        };
+        node.querySelector('#prAlertOk').onclick = close;
+        node.onclick = (e) => { if(e.target === node) close(); };
+        document.addEventListener('keydown', onKey);
+        setTimeout(() => { try { node.querySelector('#prAlertOk').focus(); } catch(e){} }, 30);
+      });
+    };
+  }
+
+  // v314: prPrompt — reemplaza al prompt() nativo "puntorojo.app dice".
+  // Soporta input de una linea o textarea (multiline:true). Devuelve
+  // Promise<string|null> (null si el usuario canceló).
+  if(typeof window.prPrompt !== 'function'){
+    window.prPrompt = function(opts){
+      opts = opts || {};
+      return new Promise(resolve => {
+        const prev = document.getElementById('prPromptModal');
+        if(prev) prev.remove();
+        const title = opts.title || 'INGRESAR DATO';
+        const okText = opts.okText || 'ACEPTAR';
+        const cancelText = opts.cancelText || 'CANCELAR';
+        const placeholder = opts.placeholder || '';
+        const defaultValue = opts.defaultValue != null ? String(opts.defaultValue) : '';
+        const multiline = !!opts.multiline;
+        const required = opts.required !== false; // por defecto, requerido
+        const minLength = Number(opts.minLength) || 0;
+        const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+        const bodyHTML = opts.bodyHTML || (opts.body ? escHtml(opts.body).replace(/\n/g,'<br>') : '');
+        const inputEl = multiline
+          ? '<textarea id="prPromptInput" rows="4" placeholder="'+escHtml(placeholder)+'" style="width:100%;padding:10px 12px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:13px;color:#1a1a1a;resize:vertical;min-height:90px;box-sizing:border-box">'+escHtml(defaultValue)+'</textarea>'
+          : '<input id="prPromptInput" type="text" placeholder="'+escHtml(placeholder)+'" value="'+escHtml(defaultValue)+'" style="width:100%;padding:10px 12px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:13px;color:#1a1a1a;box-sizing:border-box" />';
+        const html = ''
+          + '<div id="prPromptModal" style="position:fixed;inset:0;background:rgba(20,20,20,.5);z-index:99999;display:flex;align-items:center;justify-content:center;padding:14px;font-family:inherit">'
+          +   '<div style="background:#fff;border-radius:10px;max-width:520px;width:100%;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 16px 50px rgba(0,0,0,.25);overflow:hidden">'
+          +     '<div style="padding:18px 24px 14px;border-bottom:1px solid #EEE">'
+          +       '<div style="font-size:14.5px;font-weight:700;color:#1a1a1a;letter-spacing:.2px;line-height:1.3">'+escHtml(title)+'</div>'
+          +     '</div>'
+          +     '<div style="padding:18px 24px;font-size:12.5px;line-height:1.55;color:#333;overflow-y:auto;flex:1">'
+          +       (bodyHTML ? '<div style="margin-bottom:12px">'+bodyHTML+'</div>' : '')
+          +       inputEl
+          +       '<div id="prPromptError" style="margin-top:8px;font-size:11px;color:#C62828;display:none"></div>'
+          +     '</div>'
+          +     '<div style="padding:14px 22px;border-top:1px solid #EEE;background:#FAFAFA;display:flex;gap:8px;justify-content:flex-end">'
+          +       '<button class="btn ghost" id="prPromptCancel" style="border-color:#CCC;color:#555">'+escHtml(cancelText)+'</button>'
+          +       '<button class="btn" id="prPromptOk" style="background:#1a1a1a;border-color:#1a1a1a;color:#fff">'+escHtml(okText)+'</button>'
+          +     '</div>'
+          +   '</div>'
+          + '</div>';
+        const wrap = document.createElement('div');
+        wrap.innerHTML = html;
+        const node = wrap.firstElementChild;
+        document.body.appendChild(node);
+        const input = node.querySelector('#prPromptInput');
+        const errBox = node.querySelector('#prPromptError');
+        const onKey = (e) => {
+          if(e.key === 'Escape'){ close(null); }
+          else if(e.key === 'Enter' && !multiline){ e.preventDefault(); submit(); }
+        };
+        const close = (val) => {
+          try { document.removeEventListener('keydown', onKey); } catch(e){}
+          node.remove(); resolve(val);
+        };
+        const submit = () => {
+          const val = String(input.value || '').trim();
+          if (required && !val){ errBox.textContent = 'Campo obligatorio'; errBox.style.display = 'block'; input.focus(); return; }
+          if (minLength && val.length < minLength){ errBox.textContent = 'Mínimo ' + minLength + ' caracteres'; errBox.style.display = 'block'; input.focus(); return; }
+          close(val);
+        };
+        node.querySelector('#prPromptOk').onclick = submit;
+        node.querySelector('#prPromptCancel').onclick = () => close(null);
+        node.onclick = (e) => { if(e.target === node) close(null); };
+        document.addEventListener('keydown', onKey);
+        setTimeout(() => { try { input.focus(); if(!multiline) input.select(); } catch(e){} }, 30);
       });
     };
   }

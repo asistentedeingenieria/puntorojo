@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v313-pedidos-form-elegante-manual-sin-torre-nivel';
+const CACHE_VERSION = 'v314-modales-elegantes-admin-autoriza-oc';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
