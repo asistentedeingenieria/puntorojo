@@ -2537,7 +2537,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v305</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v306</span>
   </footer>
 
 </div>
@@ -7216,13 +7216,37 @@ const CloudSync = {
     if (this.pendingWrite) clearTimeout(this.pendingWrite);
     this.pendingWrite = setTimeout(() => {
       this.pendingWrite = null;
+      this.uploadingNow = true;
       this.uploadCurrent().then(() => {
         try { setSyncStatus('synced'); } catch(e){}
       }).catch((e) => {
         console.error('CloudSync auto-save error:', e);
         try { setSyncStatus('error'); } catch(err){}
-      });
+      }).finally(() => { this.uploadingNow = false; });
     }, 1200);
+  },
+
+  /* v305-b: fuerza la subida inmediata (sin debounce). Lo usan funciones criticas
+     como enviar planilla, autorizar, rechazar, etc. para garantizar que la mutacion
+     local quede en la nube ANTES de mostrar el toast de exito al usuario.
+     Marca uploadingNow=true durante la subida, asi applyRemote la ignora. */
+  async forceUploadNow(){
+    if (!this.enabled || !this.ref) return;
+    if (this.pendingWrite) {
+      clearTimeout(this.pendingWrite);
+      this.pendingWrite = null;
+    }
+    this.uploadingNow = true;
+    try {
+      await this.uploadCurrent();
+      try { setSyncStatus('synced'); } catch(e){}
+    } catch(e) {
+      console.error('CloudSync forceUploadNow error:', e);
+      try { setSyncStatus('error'); } catch(err){}
+      throw e;
+    } finally {
+      this.uploadingNow = false;
+    }
   },
 
   async uploadCurrent(){
@@ -7251,6 +7275,16 @@ const CloudSync = {
     delete merged._lastUpdate;
     delete merged.activeProjectId;  // v235: nunca aceptar el activeProjectId del remoto
     this.injectPhotos(merged, localPhotos);
+
+    // v305-b: CRITICO — si tenemos una escritura local pendiente al cloud
+    // (debounce activo o upload en curso), NO aplicar el remote. Si lo
+    // aplicamos, sobrescribimos cambios locales que aun no se subieron y se
+    // pierden (bug "envio planilla y desaparece"). El remote sera reemitido
+    // por Firestore cuando nuestro upload sobreviva o se mergee.
+    if (!opts.initial && (this.pendingWrite || this.uploadingNow)) {
+      console.warn('[CloudSync] ignorando remote — hay escritura local pendiente al cloud.');
+      return;
+    }
 
     // Si el usuario está ocupado editando, no destruimos su input.
     if (!opts.initial && this.isUserBusy()) {
@@ -31075,9 +31109,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     });
 
     try { if(typeof saveState === 'function') saveState(); } catch(e){ console.error('[v226] saveState error:', e); }
-    window._v226CerrarModal();
-    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
-    // v291/v296: notif al Gerente de Proyectos (minimalista).
+    // v291/v296: notif al Gerente de Proyectos ANTES de subir (para que vaya en el mismo upload).
     try {
       if(typeof window.prAddNotif === 'function'){
         window.prAddNotif({
@@ -31088,6 +31120,20 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         });
       }
     } catch(e){ console.warn('[v291] notif error:', e); }
+    // v305-b: FORZAR upload inmediato a la nube ANTES de mostrar exito.
+    // Esto garantiza que la planilla queda en Firestore antes de que aplique
+    // cualquier remote, evitando el bug "envie y se elimino todo".
+    try {
+      if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) {
+        await CloudSync.forceUploadNow();
+      }
+    } catch(e){
+      console.error('[v305] CloudSync upload error:', e);
+      showT('ERROR AL SINCRONIZAR · INTENTAR DE NUEVO','red');
+      return;
+    }
+    window._v226CerrarModal();
+    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
     showT(_planillaTituloUpper({ fechaEnvio: ahora, fechaCreacion: ahora }) + ' ENVIADA AL GERENTE DE PROYECTOS','green');
   };
 
