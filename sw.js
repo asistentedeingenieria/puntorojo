@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v323-reporte-cuadros-igual-que-avance-cobro';
+const CACHE_VERSION = 'v324-persona-a-pagar-en-blanco-por-default';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
