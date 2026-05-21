@@ -2613,7 +2613,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v314</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v315</span>
   </footer>
 
 </div>
@@ -22141,7 +22141,20 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
 
     const stats = {};
     todasPersonas.forEach(name => {
-      stats[name] = { nombre: name, bruto: 0, retencion: 0, retencionPagada: 0, descuentos: 0, ocs: 0, neto: 0, countPagos: 0, countEtapasCompletas: 0, pagosAutorizados: 0, pagosPendientes: 0 };
+      stats[name] = {
+        nombre: name, bruto: 0, retencion: 0, retencionPagada: 0,
+        descuentos: 0, ocs: 0, neto: 0,
+        countPagos: 0, countEtapasCompletas: 0,
+        pagosAutorizados: 0, pagosPendientes: 0,
+        // v314: tracking de retenciones liberadas vs pendientes
+        countRetLiberadas: 0,
+        countRetPendientes: 0,
+        retencionPendiente: 0,
+        ultimaActividadTs: 0,
+        primerPagoTs: 0,
+        countOcs: 0,
+        countDescuentos: 0
+      };
     });
     pagos.forEach(pg => {
       const k = String(pg.colaborador || '').toUpperCase();
@@ -22155,8 +22168,18 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       stats[k].countPagos++;
       if(pg.autorizado) stats[k].pagosAutorizados++;
       else stats[k].pagosPendientes++;
-      if(pg.retencionPagada) stats[k].retencionPagada += ret;
+      // v314: contabilizar retencion liberada vs pendiente
+      if(ret > 0){
+        if(pg.retencionPagada){ stats[k].countRetLiberadas++; stats[k].retencionPagada += ret; }
+        else { stats[k].countRetPendientes++; stats[k].retencionPendiente += ret; }
+      }
       if(Number(pg.targetPct||0) >= 100) stats[k].countEtapasCompletas++;
+      // v314: timestamps de actividad
+      const t = Number(pg.ts) || 0;
+      if(t > 0){
+        if(t > stats[k].ultimaActividadTs) stats[k].ultimaActividadTs = t;
+        if(stats[k].primerPagoTs === 0 || t < stats[k].primerPagoTs) stats[k].primerPagoTs = t;
+      }
     });
     ajustes.forEach(a => {
       const k = String(a.colaboradorNombre || '').toUpperCase();
@@ -22166,10 +22189,14 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         stats[k].ocs += monto;
         stats[k].bruto += monto;
         stats[k].neto += monto;
+        stats[k].countOcs++;
       } else {
         stats[k].descuentos += monto;
         stats[k].neto -= monto;
+        stats[k].countDescuentos++;
       }
+      const t = Number(a.ts) || 0;
+      if(t > 0 && t > stats[k].ultimaActividadTs) stats[k].ultimaActividadTs = t;
     });
     (p.planilla.planillasArmadas || []).forEach(pl => {
       (pl.descuentosPlanilla || []).forEach(d => {
@@ -22177,6 +22204,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         if(!stats[k]) return;
         stats[k].descuentos += Number(d.monto || 0);
         stats[k].neto -= Number(d.monto || 0);
+        stats[k].countDescuentos++;
       });
     });
 
@@ -22238,6 +22266,15 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       html += `<span style="font-size:9px;color:#888;letter-spacing:.5px;font-weight:600;min-width:38px">${pctBruto}%</span>`;
       html += '</div>';
       html += `<div style="font-size:9.5px;color:#888;margin-top:3px;letter-spacing:.4px">${s.countPagos} PAGO${s.countPagos!==1?'S':''} · ${s.pagosAutorizados} AUT. · ${s.pagosPendientes} PEND.</div>`;
+      // v314: linea adicional con resumen de retenciones (solo si hay retenciones)
+      if(s.retencion > 0){
+        const totalRetMeta = s.countRetLiberadas + s.countRetPendientes;
+        const colorPend = s.countRetPendientes > 0 ? '#7C5800' : '#2E7D32';
+        const textoEstado = s.countRetPendientes > 0
+          ? `<span style="color:${colorPend};font-weight:700">${fQ(s.retencionPendiente)} POR LIBERAR</span>`
+          : `<span style="color:${colorPend};font-weight:700">TODAS LIBERADAS</span>`;
+        html += `<div style="font-size:9.5px;color:#888;margin-top:2px;letter-spacing:.4px">${s.countRetLiberadas}/${totalRetMeta} RET. LIBERADAS · ${textoEstado}</div>`;
+      }
       html += '</div>';
       html += `<div style="text-align:right;font-weight:700;color:#1a1a1a;font-variant-numeric:tabular-nums;font-size:12px">${fQ(s.bruto)}</div>`;
       html += `<div style="text-align:right;color:#7C5800;font-variant-numeric:tabular-nums;font-size:11px">${s.retencion>0?'-'+fQ(s.retencion):'—'}</div>`;
@@ -22248,26 +22285,114 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       if(isExp){
         const pagosPersona = pagos.filter(pg => String(pg.colaborador||'').toUpperCase() === s.nombre)
                                   .sort((a,b)=>(b.ts||0)-(a.ts||0));
-        html += '<div style="padding:8px 16px 14px 46px;background:#FAFAFA;border-top:1px solid #ECECEC">';
+        // v314: tarjeta de resumen del trabajador antes de la tabla
+        const totalRet = s.countRetLiberadas + s.countRetPendientes;
+        const ultActStr = s.ultimaActividadTs > 0 ? new Date(s.ultimaActividadTs).toLocaleDateString('es-GT') : '—';
+        const primPagStr = s.primerPagoTs > 0 ? new Date(s.primerPagoTs).toLocaleDateString('es-GT') : '—';
+        const promedioPago = s.countPagos > 0 ? s.bruto / s.countPagos : 0;
+        const pctAutorizado = s.countPagos > 0 ? Math.round((s.pagosAutorizados / s.countPagos) * 100) : 0;
+        const pctRetLib = totalRet > 0 ? Math.round((s.countRetLiberadas / totalRet) * 100) : 0;
+
+        html += '<div style="padding:14px 16px 16px 46px;background:#FAFAFA;border-top:1px solid #ECECEC">';
+        // ───── Tarjeta RESUMEN DEL TRABAJADOR ─────
+        html += '<div style="background:#fff;border:1px solid #E5E5E5;border-radius:6px;padding:14px 16px;margin-bottom:14px">';
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">';
+        html += `<div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">RESUMEN DEL TRABAJADOR</div>`;
+        html += `<div style="font-size:9.5px;color:#888;letter-spacing:.5px">DESDE ${h(primPagStr)} · ÚLTIMA ACTIVIDAD ${h(ultActStr)}</div>`;
+        html += '</div>';
+        html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px 18px">';
+        // Bruto total
+        html += '<div>';
+        html += '<div style="font-size:9px;letter-spacing:1px;color:#888;font-weight:600;margin-bottom:4px">BRUTO GENERADO</div>';
+        html += `<div style="font-size:14.5px;font-weight:800;color:#1a1a1a;font-variant-numeric:tabular-nums">${fQ(s.bruto)}</div>`;
+        html += `<div style="font-size:9.5px;color:#888;margin-top:2px">${s.countPagos} pago${s.countPagos!==1?'s':''} · prom. ${fQ(promedioPago)}</div>`;
+        html += '</div>';
+        // Neto pagado
+        html += '<div>';
+        html += '<div style="font-size:9px;letter-spacing:1px;color:#888;font-weight:600;margin-bottom:4px">NETO PAGADO</div>';
+        html += `<div style="font-size:14.5px;font-weight:800;color:#2E7D32;font-variant-numeric:tabular-nums">${fQ(s.neto)}</div>`;
+        html += `<div style="font-size:9.5px;color:#888;margin-top:2px">${pctAutorizado}% pagos autorizados</div>`;
+        html += '</div>';
+        // Etapas completadas + OCs/Descuentos counter
+        html += '<div>';
+        html += '<div style="font-size:9px;letter-spacing:1px;color:#888;font-weight:600;margin-bottom:4px">ETAPAS · OCS · DESC.</div>';
+        html += `<div style="font-size:14.5px;font-weight:800;color:#1a1a1a">${s.countEtapasCompletas} <span style="font-size:10px;color:#888;font-weight:600">al 100%</span></div>`;
+        html += `<div style="font-size:9.5px;color:#888;margin-top:2px">${s.countOcs} OC · ${s.countDescuentos} descuento${s.countDescuentos!==1?'s':''}</div>`;
+        html += '</div>';
+        // Estado de pagos: aut/pend
+        html += '<div>';
+        html += '<div style="font-size:9px;letter-spacing:1px;color:#888;font-weight:600;margin-bottom:4px">ESTADO DE PAGOS</div>';
+        html += `<div style="display:flex;gap:6px;flex-wrap:wrap">`;
+        html += `<span style="display:inline-block;padding:3px 8px;background:#E8F5E9;color:#2E7D32;border-radius:99px;font-size:9.5px;font-weight:700;letter-spacing:.4px">${s.pagosAutorizados} AUT.</span>`;
+        if(s.pagosPendientes > 0){
+          html += `<span style="display:inline-block;padding:3px 8px;background:#FFF8E1;color:#7C5800;border-radius:99px;font-size:9.5px;font-weight:700;letter-spacing:.4px">${s.pagosPendientes} PEND.</span>`;
+        }
+        html += `</div>`;
+        html += `<div style="font-size:9.5px;color:#888;margin-top:4px">${s.countPagos} pago${s.countPagos!==1?'s':''} en total</div>`;
+        html += '</div>';
+        html += '</div>'; // /grid
+
+        // ───── Sub-bloque de RETENCIONES ─────
+        if(s.retencion > 0){
+          html += '<div style="margin-top:14px;padding-top:12px;border-top:1px solid #F0F0F0">';
+          html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">';
+          html += `<div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">RETENCIONES (10%)</div>`;
+          html += `<div style="font-size:9.5px;color:#888;letter-spacing:.5px">${s.countRetLiberadas}/${totalRet} liberadas (${pctRetLib}%)</div>`;
+          html += '</div>';
+          html += '<div style="height:6px;background:#F0F0F0;border-radius:3px;overflow:hidden;margin-bottom:10px">';
+          html += `<div style="height:100%;width:${pctRetLib}%;background:linear-gradient(90deg,#2E7D32 0%,#43A047 100%);transition:width .3s"></div>`;
+          html += '</div>';
+          html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">';
+          html += '<div>';
+          html += '<div style="font-size:9px;letter-spacing:.8px;color:#888;font-weight:600;margin-bottom:3px">RETENCIÓN TOTAL</div>';
+          html += `<div style="font-size:13px;font-weight:700;color:#1a1a1a;font-variant-numeric:tabular-nums">${fQ(s.retencion)}</div>`;
+          html += `<div style="font-size:9px;color:#888;margin-top:2px">${totalRet} pago${totalRet!==1?'s':''}</div>`;
+          html += '</div>';
+          html += '<div>';
+          html += '<div style="font-size:9px;letter-spacing:.8px;color:#2E7D32;font-weight:600;margin-bottom:3px">YA LIBERADA</div>';
+          html += `<div style="font-size:13px;font-weight:700;color:#2E7D32;font-variant-numeric:tabular-nums">${fQ(s.retencionPagada)}</div>`;
+          html += `<div style="font-size:9px;color:#888;margin-top:2px">${s.countRetLiberadas} pago${s.countRetLiberadas!==1?'s':''}</div>`;
+          html += '</div>';
+          html += '<div>';
+          html += `<div style="font-size:9px;letter-spacing:.8px;color:${s.retencionPendiente>0?'#7C5800':'#888'};font-weight:600;margin-bottom:3px">POR LIBERAR</div>`;
+          html += `<div style="font-size:13px;font-weight:700;color:${s.retencionPendiente>0?'#7C5800':'#888'};font-variant-numeric:tabular-nums">${s.retencionPendiente>0?fQ(s.retencionPendiente):'—'}</div>`;
+          html += `<div style="font-size:9px;color:#888;margin-top:2px">${s.countRetPendientes} pago${s.countRetPendientes!==1?'s':''}</div>`;
+          html += '</div>';
+          html += '</div>';
+          html += '</div>';
+        }
+        html += '</div>'; // /tarjeta resumen
+
         html += '<div style="font-size:9px;letter-spacing:1.1px;color:#888;margin-bottom:8px;font-weight:700">DESGLOSE DE PAGOS</div>';
         if(pagosPersona.length === 0){
           html += '<div style="font-size:11px;color:#888;font-style:italic;padding:6px 0">Sin pagos registrados todavía.</div>';
         } else {
           html += '<table style="width:100%;border-collapse:collapse;font-size:11px;background:#fff;border:1px solid var(--line);border-radius:3px;overflow:hidden">';
-          html += '<thead><tr style="background:#F1F1F1"><th style="padding:6px 10px;text-align:left;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">APTO · ETAPA · ABONO</th><th style="padding:6px 10px;text-align:center;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">BRUTO</th><th style="padding:6px 10px;text-align:center;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">NETO</th><th style="padding:6px 10px;text-align:center;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">FECHA</th><th style="padding:6px 10px;text-align:center;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">ESTADO</th></tr></thead><tbody>';
+          html += '<thead><tr style="background:#F1F1F1"><th style="padding:6px 10px;text-align:left;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">APTO · ETAPA · ABONO</th><th style="padding:6px 10px;text-align:center;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">BRUTO</th><th style="padding:6px 10px;text-align:center;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">RETENCIÓN</th><th style="padding:6px 10px;text-align:center;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">NETO</th><th style="padding:6px 10px;text-align:center;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">FECHA</th><th style="padding:6px 10px;text-align:center;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">PAGO</th><th style="padding:6px 10px;text-align:center;font-size:9px;color:#666;font-weight:700;letter-spacing:.6px">RET.</th></tr></thead><tbody>';
           pagosPersona.forEach(pg => {
             const idx = Number(pg.stageIdx||0);
             const aptoStr = ((pg.towerName||'').trim()+' '+(pg.aptoName||'').trim()+' · ETAPA '+(idx+1)+' · ABONO '+(pg.pctDelta||100)+'%').trim();
             const fechaTxt = pg.ts ? new Date(pg.ts).toLocaleDateString('es-GT') : '—';
-            const badge = pg.autorizado
+            const retVal = Number(pg.retencion||0);
+            const badgePago = pg.autorizado
               ? '<span style="display:inline-block;padding:2px 8px;background:#E8F5E9;color:#2E7D32;border-radius:99px;font-size:8.5px;font-weight:700;letter-spacing:.5px">AUTORIZADO</span>'
               : '<span style="display:inline-block;padding:2px 8px;background:#FFF8E1;color:#7C5800;border-radius:99px;font-size:8.5px;font-weight:700;letter-spacing:.5px">PENDIENTE</span>';
+            let badgeRet;
+            if(retVal <= 0){
+              badgeRet = '<span style="color:#BBB;font-size:9px">—</span>';
+            } else if(pg.retencionPagada){
+              badgeRet = '<span style="display:inline-block;padding:2px 8px;background:#E8F5E9;color:#2E7D32;border-radius:99px;font-size:8.5px;font-weight:700;letter-spacing:.5px">LIBERADA</span>';
+            } else {
+              badgeRet = '<span style="display:inline-block;padding:2px 8px;background:#FFF8E1;color:#7C5800;border-radius:99px;font-size:8.5px;font-weight:700;letter-spacing:.5px">PENDIENTE</span>';
+            }
             html += '<tr style="border-top:1px solid var(--line-soft)">';
             html += `<td style="padding:6px 10px;font-size:10px">${h(aptoStr)}</td>`;
             html += `<td style="padding:6px 10px;text-align:center;font-size:10px;color:#666;font-variant-numeric:tabular-nums">${fQ(Number(pg.bruto||0))}</td>`;
+            html += `<td style="padding:6px 10px;text-align:center;font-size:10px;color:#7C5800;font-variant-numeric:tabular-nums">${retVal>0?'-'+fQ(retVal):'—'}</td>`;
             html += `<td style="padding:6px 10px;text-align:center;font-size:10px;font-weight:700;color:#1a1a1a;font-variant-numeric:tabular-nums">${fQ(Number(pg.neto||0))}</td>`;
             html += `<td style="padding:6px 10px;text-align:center;font-size:10px;color:#888">${h(fechaTxt)}</td>`;
-            html += `<td style="padding:6px 10px;text-align:center">${badge}</td>`;
+            html += `<td style="padding:6px 10px;text-align:center">${badgePago}</td>`;
+            html += `<td style="padding:6px 10px;text-align:center">${badgeRet}</td>`;
             html += '</tr>';
           });
           html += '</tbody></table>';
