@@ -2740,7 +2740,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v328</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v329</span>
   </footer>
 
 </div>
@@ -32996,6 +32996,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       +       '<div id="v289TotalesBar" style="margin-top:14px;padding:12px 14px;background:#1C1917;color:#fff;border-radius:6px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;letter-spacing:.4px"></div>'
       +       '<div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-start;align-items:center">'
       +         '<button class="btn ghost" onclick="window._v289AgregarPagosDisponibles(\''+esc(pl.id)+'\')" style="border-color:#1565C0;color:#1565C0">+ AGREGAR PAGOS DISPONIBLES</button>'
+      +         '<button class="btn ghost" onclick="window._v328GenerarPagoNuevoYAgregar(\''+esc(pl.id)+'\')" style="border-color:#2E7D32;color:#2E7D32" title="Crear un pago nuevo (otra persona, etapa, etc.) y agregarlo directamente a esta planilla">+ GENERAR PAGO NUEVO</button>'
       +       '</div>'
       +     '</div>'
       +     '<div style="padding:14px 22px;border-top:1px solid #EEE;background:#FFF;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">'
@@ -33232,6 +33233,265 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       // Reabrir el editor
       setTimeout(() => window._v289AbrirEditorPlanilla(planillaId), 200);
     });
+  };
+
+  // v328: GENERAR PAGO NUEVO Y AGREGAR — el supervisor puede crear un pago
+  // nuevo (otra persona, otro apto, otra etapa, otro %) directamente desde
+  // el editor de planilla rechazada, sin tener que ir a PAGOS POR ETAPA y
+  // arriesgarse a perder el contexto de la planilla. El pago se crea y se
+  // agrega inmediatamente a esta planilla. Caso de uso tipico: la planilla
+  // fue rechazada porque le faltaba el masillero — el supervisor lo agrega
+  // aqui mismo en 4 clicks.
+  window._v328GenerarPagoNuevoYAgregar = async function(planillaId){
+    const p = _activeProj();
+    if(!p) return;
+    const pl = (p.planilla.planillasArmadas || []).find(x => x.id === planillaId);
+    if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
+    if(pl.estado !== 'rechazada'){
+      showT('SOLO PODES AGREGAR PAGOS NUEVOS A UNA PLANILLA RECHAZADA','red');
+      return;
+    }
+    // Solo el creador o el admin
+    const _userEm = (typeof window._getUserEmail === 'function' ? (window._getUserEmail()||'').toLowerCase() : '');
+    const _isAdmin = (typeof can === 'function' && can('users.manage'));
+    if(!_isAdmin && (pl.supervisorEmail||'').toLowerCase() !== _userEm){
+      showT('SOLO EL CREADOR DE LA PLANILLA PUEDE AGREGAR PAGOS','red');
+      return;
+    }
+
+    // Colaboradores ordenados alfabeticamente
+    const colabs = ((p.planilla?.colaboradores||[]).slice())
+      .sort((a,b) => String(a.nombre||'').localeCompare(String(b.nombre||''),'es',{sensitivity:'base'}));
+    if(!colabs.length){
+      showT('PRIMERO AGREGÁ COLABORADORES EN LA PESTAÑA COLABORADORES','red');
+      return;
+    }
+
+    // Lista plana de aptos del proyecto
+    const aptosList = [];
+    (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
+      aptosList.push({ id:a.id, name:a.name, towerId:t.id, levelId:l.id, towerName:t.name, levelName:l.name });
+    })));
+    if(!aptosList.length){
+      showT('EL PROYECTO NO TIENE APARTAMENTOS','red');
+      return;
+    }
+
+    const ETAPAS = [
+      {idx:0, name:'TABIQUES A UNA CARA'},
+      {idx:1, name:'REFUERZOS DE MADERA'},
+      {idx:2, name:'FORRO 2NDA CARA'},
+      {idx:3, name:'ESTRUCTURA CIELO + FORRO CIELO'},
+      {idx:4, name:'MASILLA'}
+    ];
+    const PCTS = [30, 50, 70, 100];
+
+    // Helpers locales que NO dependen de la otra IIFE
+    const _modelObj = (key) => (p.planilla?.modelos||[]).find(m => m.key===key)
+                           || (p.planilla?.modelos||[]).find(m => m.key==='GENERAL');
+    const _stageTotal = (aptoId, idx) => {
+      const mk = p.planilla?.aptoModelMap?.[aptoId] || 'GENERAL';
+      const mo = _modelObj(mk);
+      return Number(mo?.costos?.[idx] || 0);
+    };
+    const _paidPct = (aptoId, idx) => {
+      const list = (p.planilla?.pagos||[]).filter(x =>
+        x.tipo==='ETAPA' && x.aptoId===aptoId && Number(x.stageIdx)===Number(idx));
+      return list.length ? Math.max(...list.map(x => Number(x.targetPct||100))) : 0;
+    };
+    const _moneda = (n) => (typeof money === 'function') ? money(n) : ('Q '+Number(n||0).toFixed(2));
+
+    // HTML del formulario
+    const colabOpts = colabs.map(c => `<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join('');
+    const aptoOpts  = aptosList.map(a => `<option value="${esc(a.id)}">${esc(a.towerName)} · ${esc(a.levelName)} · ${esc(a.name)}</option>`).join('');
+    const etapaOpts = ETAPAS.map(e => `<option value="${e.idx}">ETAPA ${e.idx+1} · ${esc(e.name)}</option>`).join('');
+
+    const formHTML = ''
+      + '<div style="font-size:11.5px;color:#555;line-height:1.5;margin-bottom:14px">El pago nuevo se va a crear y se agregará automáticamente a esta planilla rechazada.</div>'
+      + '<div style="display:grid;grid-template-columns:1fr;gap:12px">'
+      +   '<label style="display:block">'
+      +     '<span style="font-size:10px;letter-spacing:1.4px;color:#666;font-weight:700;text-transform:uppercase">Persona a pagar</span>'
+      +     '<select id="v328Colab" onchange="window._v328Recalc()" style="width:100%;padding:9px 12px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;margin-top:5px"><option value="">— SELECCIONAR —</option>' + colabOpts + '</select>'
+      +   '</label>'
+      +   '<label style="display:block">'
+      +     '<span style="font-size:10px;letter-spacing:1.4px;color:#666;font-weight:700;text-transform:uppercase">Apartamento</span>'
+      +     '<select id="v328Apto" onchange="window._v328Recalc()" style="width:100%;padding:9px 12px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;margin-top:5px"><option value="">— SELECCIONAR —</option>' + aptoOpts + '</select>'
+      +   '</label>'
+      +   '<label style="display:block">'
+      +     '<span style="font-size:10px;letter-spacing:1.4px;color:#666;font-weight:700;text-transform:uppercase">Etapa</span>'
+      +     '<select id="v328Etapa" onchange="window._v328Recalc()" style="width:100%;padding:9px 12px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;margin-top:5px"><option value="">— SELECCIONAR —</option>' + etapaOpts + '</select>'
+      +   '</label>'
+      +   '<label style="display:block">'
+      +     '<span style="font-size:10px;letter-spacing:1.4px;color:#666;font-weight:700;text-transform:uppercase">% a pagar</span>'
+      +     '<select id="v328Pct" onchange="window._v328Recalc()" style="width:100%;padding:9px 12px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;margin-top:5px"><option value="">— SELECCIONAR ETAPA PRIMERO —</option></select>'
+      +   '</label>'
+      + '</div>'
+      + '<div id="v328Preview" style="margin-top:14px;padding:12px 14px;background:#FAF8F3;border-radius:6px;font-size:12px;color:#888;text-align:center">Completá los campos para ver el cálculo del pago.</div>';
+
+    // Recalc helper: actualiza opciones de % y el preview
+    window._v328Recalc = function(){
+      const colabSel = document.getElementById('v328Colab');
+      const aptoSel  = document.getElementById('v328Apto');
+      const etapaSel = document.getElementById('v328Etapa');
+      const pctSel   = document.getElementById('v328Pct');
+      const previewEl= document.getElementById('v328Preview');
+      if(!colabSel || !aptoSel || !etapaSel || !pctSel || !previewEl) return;
+
+      const colabId = colabSel.value;
+      const aptoId  = aptoSel.value;
+      const idxStr  = etapaSel.value;
+      const colab = colabs.find(c => c.id === colabId);
+      const apto  = aptosList.find(a => a.id === aptoId);
+      const idx   = idxStr === '' ? -1 : Number(idxStr);
+
+      // Refrescar opciones de %
+      if(aptoId && idx >= 0){
+        const current = _paidPct(aptoId, idx);
+        const opts = PCTS.filter(x => x > current);
+        if(opts.length === 0){
+          pctSel.innerHTML = '<option value="">ETAPA YA AL 100% — NADA QUE PAGAR</option>';
+          pctSel.disabled = true;
+        } else {
+          pctSel.innerHTML = opts.map(x => `<option value="${x}">${x}% (delta ${x - current}%)</option>`).join('');
+          pctSel.disabled = false;
+        }
+      } else {
+        pctSel.innerHTML = '<option value="">— SELECCIONAR ETAPA PRIMERO —</option>';
+        pctSel.disabled = true;
+      }
+
+      // Preview de cálculo
+      if(!colab || !apto || idx < 0){
+        previewEl.innerHTML = 'Completá los campos para ver el cálculo del pago.';
+        return;
+      }
+      const total = _stageTotal(aptoId, idx);
+      const current = _paidPct(aptoId, idx);
+      const target = Number(pctSel.value) || 0;
+      if(total <= 0){
+        previewEl.innerHTML = '<span style="color:#C62828;font-weight:700">El apto no tiene modelo asignado o el costo de esta etapa es 0.</span>';
+        return;
+      }
+      if(target <= current){
+        previewEl.innerHTML = '<span style="color:#C62828;font-weight:700">Elegí un porcentaje mayor al pagado.</span>';
+        return;
+      }
+      const pctDelta = target - current;
+      const bruto = +(total * pctDelta / 100).toFixed(2);
+      const retencion = +(bruto * 0.10).toFixed(2);
+      const neto = +(bruto - retencion).toFixed(2);
+      previewEl.innerHTML =
+        '<div style="font-size:10.5px;color:#666;letter-spacing:.5px;margin-bottom:8px">CÁLCULO DEL PAGO</div>'
+      + '<div style="display:grid;grid-template-columns:1fr auto;gap:4px 14px;font-size:12px;color:#444">'
+      +   '<div>Trabajador</div><div style="text-align:right;font-weight:700;color:#1a1a1a">'+esc(colab.nombre)+'</div>'
+      +   '<div>Apto · Etapa</div><div style="text-align:right;font-weight:600">'+esc(apto.name)+' · ETAPA '+(idx+1)+'</div>'
+      +   '<div>Abono</div><div style="text-align:right;font-weight:600">'+current+'% → '+target+'%</div>'
+      +   '<div style="margin-top:4px;padding-top:8px;border-top:1px solid #E5E5E5">Bruto</div>'
+      +   '<div style="margin-top:4px;padding-top:8px;border-top:1px solid #E5E5E5;text-align:right;font-weight:600">'+_moneda(bruto)+'</div>'
+      +   '<div style="color:#888">Retención 10%</div>'
+      +   '<div style="text-align:right;font-weight:600;color:#888">- '+_moneda(retencion)+'</div>'
+      +   '<div style="padding-top:6px;border-top:1px solid #E5E5E5;font-weight:700">Neto</div>'
+      +   '<div style="padding-top:6px;border-top:1px solid #E5E5E5;text-align:right;font-weight:800;color:#1a1a1a">'+_moneda(neto)+'</div>'
+      + '</div>';
+    };
+
+    const ok = await window.prConfirm({
+      title: 'Generar pago nuevo · '+_planillaTituloUpper(pl),
+      bodyHTML: formHTML,
+      okText: 'GENERAR Y AGREGAR',
+      cancelText: 'CANCELAR'
+    });
+    // Limpiar listener
+    try { delete window._v328Recalc; } catch(e){}
+    if(!ok) return;
+
+    // Recolectar y validar
+    const colabSel = document.getElementById('v328Colab');
+    const aptoSel  = document.getElementById('v328Apto');
+    const etapaSel = document.getElementById('v328Etapa');
+    const pctSel   = document.getElementById('v328Pct');
+    const colabId = colabSel ? colabSel.value : '';
+    const aptoId  = aptoSel  ? aptoSel.value  : '';
+    const idxStr  = etapaSel ? etapaSel.value : '';
+    const target  = pctSel   ? Number(pctSel.value) : 0;
+    const colab   = colabs.find(c => c.id === colabId);
+    const apto    = aptosList.find(a => a.id === aptoId);
+    const idx     = idxStr === '' ? -1 : Number(idxStr);
+
+    if(!colab){ showT('SELECCIONÁ A LA PERSONA','red'); return; }
+    if(!apto){ showT('SELECCIONÁ EL APARTAMENTO','red'); return; }
+    if(idx < 0){ showT('SELECCIONÁ LA ETAPA','red'); return; }
+    if(!PCTS.includes(target)){ showT('SELECCIONÁ EL %','red'); return; }
+    const total = _stageTotal(aptoId, idx);
+    if(total <= 0){ showT('ESTA ETAPA NO TIENE MONTO EN EL MODELO DEL APTO','red'); return; }
+    const current = _paidPct(aptoId, idx);
+    if(target <= current){ showT('ELEGÍ UN PORCENTAJE MAYOR AL PAGADO','red'); return; }
+
+    const pctDelta  = target - current;
+    const bruto     = +(total * pctDelta / 100).toFixed(2);
+    const retencion = +(bruto * 0.10).toFixed(2);
+    const neto      = +(bruto - retencion).toFixed(2);
+    const mo        = _modelObj(p.planilla?.aptoModelMap?.[aptoId] || 'GENERAL');
+    const etapaName = ETAPAS[idx] ? ETAPAS[idx].name : ('ETAPA '+(idx+1));
+    const colabRol  = String(colab.rol||'PERSONAL').toUpperCase();
+
+    // Crear el pago con todos los campos estandar
+    const pagoId = 'plp-'+uid();
+    if(!p.planilla) p.planilla = {pagos:[]};
+    if(!Array.isArray(p.planilla.pagos)) p.planilla.pagos = [];
+    const generadoPor = (typeof window._getUserEmail === 'function') ? (window._getUserEmail()||'') : '';
+    const generadoPorNombre = (typeof window._getUserDisplayName === 'function') ? (window._getUserDisplayName()||'') : '';
+    p.planilla.pagos.push({
+      id: pagoId,
+      tipo: 'ETAPA',
+      ts: Date.now(),
+      towerId: apto.towerId,
+      levelId: apto.levelId,
+      aptoId: apto.id,
+      aptoName: apto.name,
+      towerName: apto.towerName,
+      levelName: apto.levelName,
+      stageIdx: idx,
+      stageName: etapaName,
+      detalle: apto.towerName+' · '+apto.name+' · ETAPA '+(idx+1)+' · '+etapaName,
+      bruto, retencion, neto,
+      colaborador: String(colab.nombre||'').toUpperCase(),
+      colaboradorId: colab.id,
+      colaboradorRol: colabRol,
+      autorizado: false,
+      retencionPagada: false,
+      targetPct: target,
+      pctDelta,
+      stageTotal: total,
+      modelKey: mo?.key || 'GENERAL',
+      modelName: mo?.nombre || 'GENERAL',
+      generadoPor,
+      generadoPorNombre,
+      // ATAR INMEDIATAMENTE A ESTA PLANILLA — no queda libre en PLANILLA GENERADA
+      planillaId: pl.id,
+      estadoPlanilla: pl.estado
+    });
+
+    // Agregar a la lista de la planilla
+    pl.pagosIds = Array.from(new Set([...(pl.pagosIds||[]), pagoId]));
+    // Log al historial de la planilla
+    pl.historial = pl.historial || [];
+    pl.historial.push({
+      fecha: nowStr(),
+      evento: 'pagos_agregados',
+      autor: generadoPor,
+      autorNombre: generadoPorNombre,
+      comentario: 'Pago NUEVO generado y agregado: '+colab.nombre+' · '+apto.name+' · ETAPA '+(idx+1)+' · '+target+'% · '+_moneda(neto)
+    });
+
+    if(typeof logActivity === 'function'){
+      try { logActivity('create', 'Pago nuevo agregado a planilla rechazada',
+        p.name+' · '+_planillaTituloUpper(pl)+' · '+colab.nombre+' · '+apto.name+' · ETAPA '+(idx+1)+' · '+target+'% · '+_moneda(neto)); } catch(e){}
+    }
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    showT('PAGO NUEVO AGREGADO · '+_moneda(neto)+' NETO', 'green');
+    // Reabrir el editor para que el supervisor vea el pago recien agregado
+    setTimeout(() => window._v289AbrirEditorPlanilla(planillaId), 200);
   };
 
   window._v289ReenviarPlanilla = function(planillaId){
