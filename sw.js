@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v331-fix-sync-pago-nuevo-en-planilla';
+const CACHE_VERSION = 'v332-fix-modal-state-pago-nuevo-no-se-guardaba';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

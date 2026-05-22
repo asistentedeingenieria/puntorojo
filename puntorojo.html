@@ -2740,7 +2740,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v331</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v332</span>
   </footer>
 
 </div>
@@ -33313,8 +33313,39 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const etapaOpts = ETAPAS.map(e => `<option value="${e.idx}">ETAPA ${e.idx+1} · ${esc(e.name)}</option>`).join('');
 
     // Estado interno: array de IDs de filas (la fuente de verdad es el DOM)
+    // v332 — BUG FIX CRITICO: prConfirm REMUEVE el modal del DOM antes de
+    // que el await resuelva. Eso significaba que cuando hacia
+    // `document.getElementById('v328Persona').value` despues del await, el
+    // elemento ya no existia → null → '' → falla la validacion silenciosa
+    // ("SELECCIONÁ A LA PERSONA") y NUNCA se creaban los pagos.
+    // SOLUCION: mantener un objeto de estado actualizado en cada onchange,
+    // y leer de ese estado (no del DOM) cuando el modal cierra. Tambien
+    // se captura todo justo antes de cerrar (interceptando el OK).
+    const formState = {
+      personaId: '',
+      rows: [{ id: 'r1', aptoId: '', etapaStr: '', pctStr: '' }]
+    };
     let rowIds = ['r1'];
     let nextRowId = 2;
+
+    function _v328CaptureRow(rowId){
+      const rowEl = document.querySelector('[data-row="'+rowId+'"]');
+      if(!rowEl) return;
+      let r = formState.rows.find(x => x.id === rowId);
+      if(!r){ r = { id: rowId, aptoId:'', etapaStr:'', pctStr:'' }; formState.rows.push(r); }
+      const aSel = rowEl.querySelector('[data-field="apto"]');
+      const eSel = rowEl.querySelector('[data-field="etapa"]');
+      const pSel = rowEl.querySelector('[data-field="pct"]');
+      r.aptoId   = aSel ? (aSel.value || '') : '';
+      r.etapaStr = eSel ? (eSel.value || '') : '';
+      r.pctStr   = pSel ? (pSel.value || '') : '';
+    }
+
+    function _v328CaptureAll(){
+      const personaSel = document.getElementById('v328Persona');
+      formState.personaId = personaSel ? (personaSel.value || '') : '';
+      for(const rid of rowIds) _v328CaptureRow(rid);
+    }
 
     // HTML de UNA fila (apto / etapa / % / preview / boton quitar)
     const rowHTML = (rowId, isFirst) => ''
@@ -33460,6 +33491,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
     // ── Handler: cambio en cualquier campo de una fila ──
     window._v328OnRowChange = function(rowId, field){
+      // v332: capturar al state ANTES de actualizar DOM
+      _v328CaptureRow(rowId);
       // Cuando cambia apto o etapa, hay que rearmar las opciones de % de
       // esta fila Y de cualquier otra fila que apunte al mismo apto+etapa.
       if(field === 'apto' || field === 'etapa'){
@@ -33471,13 +33504,21 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       // Actualizar preview de TODAS las filas (porque el batch cambio)
       for(const rid of rowIds) _v328UpdateRowPreview(rid);
       _v328UpdateTotals();
+      // v332: re-capturar todas las filas porque _v328UpdateRowPctOptions
+      // puede haber limpiado el % de algunas filas que ya no son validas.
+      for(const rid of rowIds) _v328CaptureRow(rid);
     };
 
-    window._v328OnPersonaChange = function(){ /* persona es sticky, no afecta calculos */ };
+    window._v328OnPersonaChange = function(){
+      // v332: persistir la seleccion al state
+      const sel = document.getElementById('v328Persona');
+      formState.personaId = sel ? (sel.value || '') : '';
+    };
 
     window._v328AddRow = function(){
       const newId = 'r'+(nextRowId++);
       rowIds.push(newId);
+      formState.rows.push({ id:newId, aptoId:'', etapaStr:'', pctStr:'' });
       const container = document.getElementById('v328Rows');
       if(container){
         container.insertAdjacentHTML('beforeend', rowHTML(newId, false));
@@ -33487,12 +33528,35 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     window._v328RemoveRow = function(rowId){
       if(rowIds.length <= 1){ showT('NO PODES QUITAR LA UNICA FILA','red'); return; }
       rowIds = rowIds.filter(id => id !== rowId);
+      formState.rows = formState.rows.filter(r => r.id !== rowId);
       const el = document.querySelector('[data-row="'+rowId+'"]');
       if(el) el.remove();
       // Actualizar otras filas y totales por si liberaron un slot
       for(const rid of rowIds){ _v328UpdateRowPctOptions(rid); _v328UpdateRowPreview(rid); }
       _v328UpdateTotals();
+      for(const rid of rowIds) _v328CaptureRow(rid);
     };
+
+    // v332: prConfirm devuelve una Promise. Vamos a interceptar el click
+    // del boton OK ANTES de que cierre el modal, para capturar todo lo
+    // que esta en el DOM (porque despues del await, el DOM ya no existe).
+    // Hacemos esto con un setTimeout porque el modal recien existira en
+    // el DOM despues del primer paint.
+    const _interceptOk = () => {
+      const okBtn = document.getElementById('prConfOk');
+      if(!okBtn){ setTimeout(_interceptOk, 50); return; }
+      // Evitar doble enganche
+      if(okBtn.dataset._v328Hooked === '1') return;
+      okBtn.dataset._v328Hooked = '1';
+      const prevOnClick = okBtn.onclick;
+      okBtn.onclick = function(ev){
+        // Capturar TODO el state desde el DOM antes de cerrar
+        try { _v328CaptureAll(); } catch(e){ console.warn('[v332] capture fallo:', e); }
+        // Llamar al handler original que cierra el modal y resuelve la promise
+        if(typeof prevOnClick === 'function') prevOnClick.call(this, ev);
+      };
+    };
+    setTimeout(_interceptOk, 80);
 
     const ok = await window.prConfirm({
       title: 'Generar pagos nuevos · '+_planillaTituloUpper(pl),
@@ -33509,19 +33573,17 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     } catch(e){}
     if(!ok) return;
 
-    // ── Recolectar y validar ──
-    const personaSel = document.getElementById('v328Persona');
-    const personaId = personaSel ? personaSel.value : '';
+    // ── v332: Recolectar y validar — leer SIEMPRE de formState (no del DOM,
+    // porque el modal ya fue destruido por prConfirm).
+    const personaId = formState.personaId;
     const colab = colabs.find(c => c.id === personaId);
     if(!colab){ showT('SELECCIONÁ A LA PERSONA','red'); return; }
 
     const pagosACrear = []; // {aptoId, etapaIdx, target, total, currentPaid, bruto, retencion, neto, apto, etapaName}
-    for(const rid of rowIds){
-      const rowEl = document.querySelector('[data-row="'+rid+'"]');
-      if(!rowEl) continue;
-      const aptoId = rowEl.querySelector('[data-field="apto"]').value;
-      const etapaStr = rowEl.querySelector('[data-field="etapa"]').value;
-      const target = Number(rowEl.querySelector('[data-field="pct"]').value || 0);
+    for(const r of formState.rows){
+      const aptoId = r.aptoId || '';
+      const etapaStr = r.etapaStr || '';
+      const target = Number(r.pctStr || 0);
       const etapaIdx = etapaStr === '' ? -1 : Number(etapaStr);
       if(!aptoId || etapaIdx < 0 || !target) continue; // fila incompleta
       const apto = aptosList.find(a => a.id === aptoId);

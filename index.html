@@ -2708,7 +2708,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v331</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v332</span>
   </footer>
 
 </div>
@@ -32779,8 +32779,34 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const aptoOpts  = aptosList.map(a => `<option value="${esc(a.id)}">${esc(a.towerName)} · ${esc(a.levelName)} · ${esc(a.name)}</option>`).join('');
     const etapaOpts = ETAPAS.map(e => `<option value="${e.idx}">ETAPA ${e.idx+1} · ${esc(e.name)}</option>`).join('');
 
+    // v332 — BUG FIX: prConfirm destruye el modal antes del await, los
+    // document.getElementById despues del await devuelven null. Solucion:
+    // capturar a un state object en cada onchange + justo antes de cerrar.
+    const formState = {
+      personaId: '',
+      rows: [{ id: 'r1', aptoId: '', etapaStr: '', pctStr: '' }]
+    };
     let rowIds = ['r1'];
     let nextRowId = 2;
+
+    function _v328CaptureRow(rowId){
+      const rowEl = document.querySelector('[data-row="'+rowId+'"]');
+      if(!rowEl) return;
+      let r = formState.rows.find(x => x.id === rowId);
+      if(!r){ r = { id: rowId, aptoId:'', etapaStr:'', pctStr:'' }; formState.rows.push(r); }
+      const aSel = rowEl.querySelector('[data-field="apto"]');
+      const eSel = rowEl.querySelector('[data-field="etapa"]');
+      const pSel = rowEl.querySelector('[data-field="pct"]');
+      r.aptoId   = aSel ? (aSel.value || '') : '';
+      r.etapaStr = eSel ? (eSel.value || '') : '';
+      r.pctStr   = pSel ? (pSel.value || '') : '';
+    }
+
+    function _v328CaptureAll(){
+      const personaSel = document.getElementById('v328Persona');
+      formState.personaId = personaSel ? (personaSel.value || '') : '';
+      for(const rid of rowIds) _v328CaptureRow(rid);
+    }
 
     const rowHTML = (rowId, isFirst) => ''
       + '<div data-row="'+rowId+'" style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:end;padding:10px;background:#FFF;border:1px solid #E5E5E5;border-radius:6px;margin-bottom:8px">'
@@ -32904,19 +32930,25 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     }
 
     window._v328OnRowChange = function(rowId, field){
+      _v328CaptureRow(rowId); // v332: persistir al state
       if(field === 'apto' || field === 'etapa'){
         _v328UpdateRowPctOptions(rowId);
         for(const rid of rowIds){ if(rid !== rowId) _v328UpdateRowPctOptions(rid); }
       }
       for(const rid of rowIds) _v328UpdateRowPreview(rid);
       _v328UpdateTotals();
+      for(const rid of rowIds) _v328CaptureRow(rid);
     };
 
-    window._v328OnPersonaChange = function(){};
+    window._v328OnPersonaChange = function(){
+      const sel = document.getElementById('v328Persona');
+      formState.personaId = sel ? (sel.value || '') : '';
+    };
 
     window._v328AddRow = function(){
       const newId = 'r'+(nextRowId++);
       rowIds.push(newId);
+      formState.rows.push({ id:newId, aptoId:'', etapaStr:'', pctStr:'' });
       const container = document.getElementById('v328Rows');
       if(container){
         container.insertAdjacentHTML('beforeend', rowHTML(newId, false));
@@ -32926,11 +32958,28 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     window._v328RemoveRow = function(rowId){
       if(rowIds.length <= 1){ showT('NO PODES QUITAR LA UNICA FILA','red'); return; }
       rowIds = rowIds.filter(id => id !== rowId);
+      formState.rows = formState.rows.filter(r => r.id !== rowId);
       const el = document.querySelector('[data-row="'+rowId+'"]');
       if(el) el.remove();
       for(const rid of rowIds){ _v328UpdateRowPctOptions(rid); _v328UpdateRowPreview(rid); }
       _v328UpdateTotals();
+      for(const rid of rowIds) _v328CaptureRow(rid);
     };
+
+    // v332: interceptar el OK para capturar el state ANTES de que prConfirm
+    // destruya el modal.
+    const _interceptOk = () => {
+      const okBtn = document.getElementById('prConfOk');
+      if(!okBtn){ setTimeout(_interceptOk, 50); return; }
+      if(okBtn.dataset._v328Hooked === '1') return;
+      okBtn.dataset._v328Hooked = '1';
+      const prevOnClick = okBtn.onclick;
+      okBtn.onclick = function(ev){
+        try { _v328CaptureAll(); } catch(e){ console.warn('[v332] capture fallo:', e); }
+        if(typeof prevOnClick === 'function') prevOnClick.call(this, ev);
+      };
+    };
+    setTimeout(_interceptOk, 80);
 
     const ok = await window.prConfirm({
       title: 'Generar pagos nuevos · '+_planillaTituloUpper(pl),
@@ -32946,18 +32995,16 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     } catch(e){}
     if(!ok) return;
 
-    const personaSel = document.getElementById('v328Persona');
-    const personaId = personaSel ? personaSel.value : '';
+    // v332: leer SIEMPRE de formState
+    const personaId = formState.personaId;
     const colab = colabs.find(c => c.id === personaId);
     if(!colab){ showT('SELECCIONÁ A LA PERSONA','red'); return; }
 
     const pagosACrear = [];
-    for(const rid of rowIds){
-      const rowEl = document.querySelector('[data-row="'+rid+'"]');
-      if(!rowEl) continue;
-      const aptoId = rowEl.querySelector('[data-field="apto"]').value;
-      const etapaStr = rowEl.querySelector('[data-field="etapa"]').value;
-      const target = Number(rowEl.querySelector('[data-field="pct"]').value || 0);
+    for(const r of formState.rows){
+      const aptoId = r.aptoId || '';
+      const etapaStr = r.etapaStr || '';
+      const target = Number(r.pctStr || 0);
       const etapaIdx = etapaStr === '' ? -1 : Number(etapaStr);
       if(!aptoId || etapaIdx < 0 || !target) continue;
       const apto = aptosList.find(a => a.id === aptoId);
