@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v326-historial-planilla-iniciada-y-creada';
+const CACHE_VERSION = 'v327-reporte-apto-cuadros-por-etapa-pagada';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
