@@ -2708,7 +2708,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v332</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v333</span>
   </footer>
 
 </div>
@@ -32476,11 +32476,40 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     pl.totales = { bruto, retencion, neto, count: pagos.length };
   }
 
+  // v333: Registrar quien y cuando abre una planilla a revisarla.
+  // Dedup de 30 min para no inundar el historial si el mismo usuario abre
+  // varias veces.
+  window._logPlanillaViewed = function(pl, source){
+    if(!pl) return;
+    const email = (typeof window._getUserEmail === 'function' ? (window._getUserEmail()||'').toLowerCase() : '');
+    if(!email) return;
+    const nombre = (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || email || 'USUARIO';
+    pl.historial = pl.historial || [];
+    const cutoff = Date.now() - 30 * 60 * 1000;
+    const hasRecent = pl.historial.some(h => {
+      if(h.evento !== 'visualizada') return false;
+      if(String(h.autor||'').toLowerCase() !== email) return false;
+      const t = h.fecha ? Date.parse(h.fecha) : 0;
+      return t >= cutoff;
+    });
+    if(hasRecent) return;
+    pl.historial.push({
+      fecha: new Date().toISOString(),
+      evento: 'visualizada',
+      autor: email,
+      autorNombre: nombre,
+      comentario: 'Abrio la planilla a revisar' + (source ? ' ('+source+')' : '')
+    });
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+  };
+
   window._v289AbrirEditorPlanilla = function(planillaId){
     const p = _activeProj();
     if(!p) return;
     const pl = (p.planilla.planillasArmadas || []).find(x => x.id === planillaId);
     if(!pl) return;
+    // v333: registrar visualizacion al abrir el editor
+    try { window._logPlanillaViewed(pl, 'editor'); } catch(e){}
     const prev = document.getElementById('v289EditorModal');
     if(prev) prev.remove();
 
@@ -33206,7 +33235,9 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       pago_editado:         { color:'#1565C0', label:'% de pago modificado' },
       pago_quitado:         { color:'#C62828', label:'Pago quitado de la planilla' },
       pagos_agregados:      { color:'#1565C0', label:'Pagos agregados a la planilla' },
-      reenviada:            { color:'#F57C00', label:'Reenviada al Gerente de Proyectos' }
+      reenviada:            { color:'#F57C00', label:'Reenviada al Gerente de Proyectos' },
+      // v333: 'visualizada' = alguien abrio la planilla a revisarla
+      visualizada:          { color:'#4A90E2', label:'Revisó la planilla' }
     };
 
     const STATE_META = {
@@ -34250,12 +34281,14 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const pl = ((p.planilla && p.planilla.planillasArmadas) || []).find(x => x.id === planillaId);
     if(!pl) return showT('PLANILLA NO ENCONTRADA','red');
     if(!pl.pagosIds || !pl.pagosIds.length) return showT('PLANILLA SIN PAGOS','red');
+    // v333: registrar visualizacion del PDF preview
+    try { if(typeof window._logPlanillaViewed === 'function') window._logPlanillaViewed(pl, 'preview pdf'); } catch(e){}
     const data = _construirDatos(p, pl.pagosIds, {
       numero: pl.numero, fecha: pl.fechaEnvio || pl.fechaCreacion,
       planillaId: pl.id, estado: pl.estado,
       supervisorNombre: pl.supervisorNombre || '',
       pmNombre: pl.pmNombre || '',
-      planilla: pl  // v248: para que _construirDatos lea pl.descuentosPlanilla
+      planilla: pl
     });
     if(!data.colabs.length) return showT('NO HAY DATOS PARA MOSTRAR','red');
     _abrirPreviewModal(data);
