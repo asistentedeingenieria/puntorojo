@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v329-generar-pago-nuevo-en-planilla-rechazada';
+const CACHE_VERSION = 'v330-pagos-multiples-misma-persona-fix-100pct';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
