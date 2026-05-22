@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v325-colaboradores-orden-alfabetico-y-dark-mode-pulido';
+const CACHE_VERSION = 'v326-historial-planilla-iniciada-y-creada';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
