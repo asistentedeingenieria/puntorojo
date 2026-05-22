@@ -2740,7 +2740,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v333</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v334</span>
   </footer>
 
 </div>
@@ -7489,6 +7489,33 @@ const CloudSync = {
       throw e;
     } finally {
       this.uploadingNow = false;
+    }
+  },
+
+  /* v334: refresca el state desde la nube ANTES de operaciones de solo lectura
+     criticas (descargar PDF, ver preview de planilla). Esto cierra la ventana
+     en que el gerente podia ver una planilla VIEJA si:
+       - El supervisor reenvio la planilla modificada hace muy poco
+       - El onSnapshot del gerente no termino de propagar
+       - O applyRemote fue postergada porque el gerente tenia un modal abierto
+     Aplica primero los datos pendientes (flushPendingRender), y como red de
+     seguridad hace un .get() fresco contra Firestore.
+     No-op si hay escrituras locales pendientes (preservamos lo del usuario). */
+  async refreshFromCloud(){
+    if (!this.enabled || !this.ref) return;
+    // Si tenemos escritura local pendiente, no traer remoto (podriamos pisar
+    // cambios del usuario aun sin subir).
+    if (this.pendingWrite || this.uploadingNow) return;
+    // Aplicar datos remotos que pudieron quedar diferidos por isUserBusy.
+    try { this.flushPendingRender(); } catch(e){}
+    // Pull fresco contra Firestore por si el onSnapshot aun no propago.
+    try {
+      const snap = await this.ref.get();
+      if (snap && snap.exists) {
+        this.applyRemote(snap.data(), { initial: false });
+      }
+    } catch(e) {
+      console.warn('[v334] CloudSync.refreshFromCloud:', e);
     }
   },
 
@@ -33748,7 +33775,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     setTimeout(() => window._v289AbrirEditorPlanilla(planillaId), 200);
   };
 
-  window._v289ReenviarPlanilla = function(planillaId){
+  window._v289ReenviarPlanilla = async function(planillaId){
     const p = _activeProj();
     if(!p) return;
     const pl = (p.planilla.planillasArmadas || []).find(x => x.id === planillaId);
@@ -33778,6 +33805,15 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     });
 
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    // v334: forzar subida inmediata a la nube para que el gerente reciba
+    // los cambios SIN debounce. Sin esto, los nuevos pagos podian quedarse
+    // 1200ms en local antes de subir, y si el gerente descargaba en esa
+    // ventana, veia el PDF con la planilla VIEJA (pre-modificacion).
+    try {
+      if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow){
+        await CloudSync.forceUploadNow();
+      }
+    } catch(e){ console.warn('[v334] forceUploadNow en reenviar fallo:', e); }
     try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
     showT(_planillaTituloUpper(pl)+' REENVIADA AL GERENTE DE PROYECTOS','green');
   };
@@ -34940,7 +34976,15 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   };
 
   // ─── API PÚBLICA ───────────────────────────────────────────────────
-  window.previewPlanillaArmada = function(planillaId){
+  window.previewPlanillaArmada = async function(planillaId){
+    // v334: refrescar desde la nube ANTES de leer la planilla. Asi cerramos la
+    // ventana en que el gerente podia abrir un preview con la version VIEJA
+    // de una planilla que el supervisor ya modifico y reenvio.
+    try {
+      if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.refreshFromCloud){
+        await CloudSync.refreshFromCloud();
+      }
+    } catch(e){ console.warn('[v334] refreshFromCloud en preview fallo:', e); }
     const p = _activeProj();
     if(!p) return showT('SIN PROYECTO ACTIVO','red');
     const pl = ((p.planilla && p.planilla.planillasArmadas) || []).find(x => x.id === planillaId);
@@ -34959,6 +35003,14 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     _abrirPreviewModal(data);
   };
   window.descargarPlanillaArmada = async function(planillaId){
+    // v334: refrescar desde la nube ANTES de generar el PDF, para no descargar
+    // la planilla VIEJA cuando el supervisor ya reenvio una modificacion y la
+    // sincronizacion local del gerente aun no la habia recibido.
+    try {
+      if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.refreshFromCloud){
+        await CloudSync.refreshFromCloud();
+      }
+    } catch(e){ console.warn('[v334] refreshFromCloud en descargar fallo:', e); }
     const p = _activeProj();
     if(!p) return showT('SIN PROYECTO ACTIVO','red');
     const pl = ((p.planilla && p.planilla.planillasArmadas) || []).find(x => x.id === planillaId);
