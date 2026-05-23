@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v334-fix-pdf-stale-tras-reenviar-planilla-rechazada';
+const CACHE_VERSION = 'v335-pdf-descuentos-largos-envuelven-y-total-individual-sin-gris';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
