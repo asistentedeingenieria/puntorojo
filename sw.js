@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v348-polizas-solo-manual-sin-importador-excel';
+const CACHE_VERSION = 'v349-anticipos-5-tipos-de-prestamo-especificos';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
