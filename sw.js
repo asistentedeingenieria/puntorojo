@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v343-descuentos-de-planilla-aparecen-en-kpi-y-pestana';
+const CACHE_VERSION = 'v344-celdas-sin-monto-blancas-y-altura-uniforme';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
