@@ -2748,7 +2748,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v357</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v358</span>
   </footer>
 
 </div>
@@ -36077,6 +36077,37 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   }
 
   function _puedeEditar(){ try { return typeof can === 'function' && (can('users.manage') || can('planilla.descuentos')); } catch(e){ return false; } }
+  // v358: detectar admin (puede aprobar/editar directo) vs solicitante (debe pedir aprobación)
+  function _esAdminAnt(){ try { return typeof can === 'function' && can('users.manage'); } catch(e){ return false; } }
+  function _puedeSolicitarAnt(){ try { return typeof can === 'function' && can('planilla.descuentos') && !can('users.manage'); } catch(e){ return false; } }
+  function _getSolicitudes(){
+    try {
+      if (typeof state !== 'undefined' && state){
+        if (!Array.isArray(state.solicitudesAnticipos)) state.solicitudesAnticipos = [];
+        return state.solicitudesAnticipos;
+      }
+    } catch(e){}
+    return [];
+  }
+  function _solicitudesPendientes(){ return _getSolicitudes().filter(s => s.estado === 'PENDIENTE'); }
+  function _crearSolicitud(tipo, anticipo, cambios){
+    const sol = {
+      id: 'solant-' + Date.now() + '-' + Math.random().toString(36).slice(2,8),
+      tipo: tipo,
+      anticipoId: anticipo.id,
+      anticipoSnapshot: JSON.parse(JSON.stringify(anticipo)),
+      cambios: cambios || null,
+      solicitadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''),
+      solicitadoNombre: (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || '',
+      ts: Date.now(),
+      estado: 'PENDIENTE',
+      procesadoPor: null, procesadoNombre: null, fechaProceso: null, motivoRechazo: null
+    };
+    _getSolicitudes().push(sol);
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    return sol;
+  }
 
   // ── RENDER ────────────────────────────────────────────────────
   window.renderPlanillaAnticipos = function(){
@@ -36103,8 +36134,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         if (filtroEstado === 'cancelado' && a.estado !== 'CANCELADO') return false;
         return true;
       })
+      // v358: orden alfabético por NOMBRE; tie-breaker por fecha descendente.
       .sort((a,b) => {
-        if (a.estado !== b.estado) return a.estado === 'PENDIENTE' ? -1 : 1;
+        const cmp = String(a.colaboradorNombre||'').localeCompare(String(b.colaboradorNombre||''), 'es', {sensitivity:'base'});
+        if (cmp !== 0) return cmp;
         return (new Date(b.fecha||0)) - (new Date(a.fecha||0));
       });
 
@@ -36117,8 +36150,24 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     html += '<div class="card-hd">';
     html += '<h3>CATÁLOGO DE ANTICIPOS</h3>';
     html += '<span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Préstamos, equipos, pólizas, abonos previos — base de datos centralizada</span>';
+    // v358: botón de SOLICITUDES (admin ve todas, solicitante ve las propias)
+    const solPend = _solicitudesPendientes();
+    const esAdmin358 = _esAdminAnt();
+    const solCount = esAdmin358 ? solPend.length : solPend.filter(s => s.solicitadoPor === (typeof window._getUserEmail === 'function' ? window._getUserEmail() : '')).length;
+    if (solCount > 0 || esAdmin358){
+      const badge = solCount > 0 ? ' <span style="background:#DC2626;color:#fff;border-radius:10px;padding:1px 7px;font-size:9.5px;font-weight:800;margin-left:4px">'+solCount+'</span>' : '';
+      const colorBtn = solCount > 0 ? 'color:#9A3412;border-color:#FDBA74;background:#FFFBEB' : 'color:#475569;border-color:#CBD5E1';
+      html += '<button class="btn ghost sm" style="margin-right:6px;'+colorBtn+'" onclick="window.verSolicitudesAnticipos()" title="Ver solicitudes de edición/eliminación">📋 SOLICITUDES'+badge+'</button>';
+    }
     if (puedeEditar) html += '<button class="btn sm" style="background:#1565C0;border-color:#1565C0;color:#fff" onclick="window.agregarAnticipo()">+ AGREGAR ANTICIPO</button>';
     html += '</div>';
+    // v358: banner amarillo para admin si hay pendientes
+    if (esAdmin358 && solPend.length > 0){
+      html += '<div style="margin:10px 16px;padding:12px 14px;background:#FFFBEB;border:1px solid #FCD34D;border-radius:8px;color:#92400E;font-size:11.5px;line-height:1.4;display:flex;justify-content:space-between;align-items:center;gap:10px">';
+      html += '<div>📋 Hay <strong>'+solPend.length+' solicitud(es)</strong> pendiente(s) de aprobación por parte del admin.</div>';
+      html += '<button class="btn sm" style="background:#92400E;border-color:#92400E;color:#fff;font-size:10.5px" onclick="window.verSolicitudesAnticipos()">REVISAR AHORA</button>';
+      html += '</div>';
+    }
 
     // Mini KPIs
     html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:14px 16px;background:var(--cream);border-bottom:1px solid var(--line)">';
@@ -36146,14 +36195,15 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     // Tabla
     html += '<div class="tbl-wrap"><table class="tbl">';
     html += '<thead><tr>';
+    html += '<th style="width:40px;text-align:center">#</th>'; // v358: orden
     html += '<th>STATUS</th><th>NOMBRE DEL COLABORADOR</th><th>FECHA</th><th>TIPO</th><th>DETALLE</th>';
     html += '<th class="num">MONTO TOTAL</th><th>CUOTAS</th><th class="num">MONTO POR CUOTA</th><th>PAGADAS</th>';
     if (puedeEditar) html += '<th></th>';
     html += '</tr></thead><tbody>';
     if (filas.length === 0) {
-      html += '<tr><td colspan="'+(puedeEditar?10:9)+'" style="text-align:center;padding:30px;color:var(--mute);font-size:11px;letter-spacing:1px">SIN ANTICIPOS REGISTRADOS</td></tr>';
+      html += '<tr><td colspan="'+(puedeEditar?11:10)+'" style="text-align:center;padding:30px;color:var(--mute);font-size:11px;letter-spacing:1px">SIN ANTICIPOS REGISTRADOS</td></tr>';
     } else {
-      filas.forEach(a => {
+      filas.forEach((a, idx) => {
         const colorTipo = COLOR_SUBTIPO[a.subtipo] || '#616161';
         const estadoBadge = a.estado === 'PENDIENTE'
           ? '<span class="planilla-badge" style="background:#E8F5E9;color:#2E7D32;border:1px solid #2E7D32">PENDIENTE</span>'
@@ -36162,6 +36212,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         const progreso = a.cuotasPagadas + '/' + totalP;
         const filaStyle = a.estado === 'CANCELADO' ? 'opacity:.7' : '';
         html += '<tr style="'+filaStyle+'">';
+        html += '<td style="text-align:center;font-size:10px;font-weight:700;color:#94A3B8">'+(idx+1)+'</td>'; // v358: # de orden
         html += '<td>'+estadoBadge+'</td>';
         html += '<td style="font-size:10px;font-weight:700">'+_h(a.colaboradorNombre||'—')+'</td>';
         html += '<td style="font-size:10px">'+_h(_fmtFecha(a.fecha))+'</td>';
@@ -36286,16 +36337,44 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     // v355: anticipos globales — no requiere proyecto activo.
     const ant = _getAnticipos().find(a => a.id === id);
     if (!ant) { showT('ANTICIPO NO ENCONTRADO','red'); return; }
+    // v358: si ya hay solicitud PENDIENTE para este anticipo, avisar
+    const yaPend = _solicitudesPendientes().find(s => s.anticipoId === id);
+    const esAdmin = _esAdminAnt();
+    if (yaPend && !esAdmin){
+      await window.prAlert({ title:'YA HAY UNA SOLICITUD PENDIENTE', body:'Este anticipo tiene una solicitud de '+yaPend.tipo+' esperando aprobación del admin.' });
+      return;
+    }
     window._antCapturedForm = null;
     setTimeout(_hookCaptureForm, 80);
+    const isPending = !esAdmin && _puedeSolicitarAnt();
+    const titleTxt = isPending ? 'EDITAR ANTICIPO (ENVÍA SOLICITUD AL ADMIN)' : 'EDITAR ANTICIPO';
+    const okTxt = isPending ? 'ENVIAR SOLICITUD' : 'GUARDAR CAMBIOS';
+    const hintHTML = isPending ? '<div style="margin-bottom:12px;padding:10px 12px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:6px;color:#9A3412;font-size:11.5px;line-height:1.5">📋 Los cambios <strong>NO se aplican inmediatamente</strong>. Se envía una solicitud al admin para que la apruebe.</div>' : '';
     const ok = await window.prConfirm({
-      title: 'EDITAR ANTICIPO',
-      bodyHTML: _formHTML(ant, null),
-      okText: 'GUARDAR CAMBIOS',
+      title: titleTxt,
+      bodyHTML: hintHTML + _formHTML(ant, null),
+      okText: okTxt,
       wide: true
     });
     if (!ok) { window._antCapturedForm = null; return; }
-    _guardarDesdeCaptura(window._antCapturedForm || {}, ant);
+    const form = window._antCapturedForm || {};
+    if (isPending){
+      // Crear solicitud en lugar de aplicar
+      if (!form.colaboradorNombre){ showT('INGRESÁ UNA PERSONA','red'); return; }
+      if (!form.desc){ showT('INGRESÁ UN DETALLE','red'); return; }
+      if (form.montoTotal <= 0){ showT('MONTO INVÁLIDO','red'); return; }
+      if (form.cantidadCuotas < 1){ showT('CANTIDAD DE CUOTAS INVÁLIDA','red'); return; }
+      _crearSolicitud('EDITAR', ant, {
+        colaboradorNombre: form.colaboradorNombre,
+        fecha: form.fecha, subtipo: form.subtipo, desc: form.desc,
+        montoTotal: form.montoTotal, cantidadCuotas: form.cantidadCuotas
+      });
+      window._antCapturedForm = null;
+      window.renderPlanillaAnticipos();
+      showT('SOLICITUD DE EDICIÓN ENVIADA · ESPERANDO ADMIN','green');
+      return;
+    }
+    _guardarDesdeCaptura(form, ant);
   };
 
   function _guardarDesdeCaptura(form, existente){
@@ -36338,27 +36417,158 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if (idx < 0) return;
     const a = ants[idx];
     const est = _estadoAnticipo(null, a);
+    // v358: ¿ya hay solicitud PENDIENTE para este anticipo?
+    const esAdmin = _esAdminAnt();
+    const yaPend = _solicitudesPendientes().find(s => s.anticipoId === id);
+    if (yaPend && !esAdmin){
+      await window.prAlert({ title:'YA HAY UNA SOLICITUD PENDIENTE', body:'Este anticipo tiene una solicitud de '+yaPend.tipo+' esperando aprobación del admin.' });
+      return;
+    }
+    const isPending = !esAdmin && _puedeSolicitarAnt();
     let warning = '';
     if (est.cuotasPagadas > 0) {
       warning = '<div style="margin-top:12px;padding:10px 12px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:6px;color:#9A3412;font-size:11px"><strong>ATENCIÓN:</strong> Este anticipo tiene ' + est.cuotasPagadas + ' cuota(s) ya aplicada(s) en planillas. Eliminarlo NO eliminará esos descuentos de las planillas, pero perderás la referencia al anticipo original.</div>';
     }
+    const hintHTML = isPending ? '<div style="margin-bottom:12px;padding:10px 12px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:6px;color:#9A3412;font-size:11.5px;line-height:1.5">📋 La eliminación <strong>NO se aplica inmediatamente</strong>. Se envía una solicitud al admin para que la apruebe.</div>' : '';
     const ok = await window.prConfirm({
-      title: 'Eliminar anticipo',
-      bodyHTML: ''
+      title: isPending ? 'ELIMINAR ANTICIPO (ENVÍA SOLICITUD AL ADMIN)' : 'Eliminar anticipo',
+      bodyHTML: hintHTML
         + '<div style="font-size:12.5px;color:#333;line-height:1.5">'
         +   '<div><strong>'+_h(a.colaboradorNombre)+'</strong></div>'
         +   '<div style="color:var(--mute);margin-top:4px">'+_h(_subtipoLabel(a.subtipo))+' · '+_h(a.desc)+'</div>'
         +   '<div style="margin-top:4px"><strong>'+_money(a.montoTotal)+'</strong> en '+a.cantidadCuotas+' cuotas</div>'
         + '</div>' + warning,
-      okText: 'ELIMINAR', danger: true
+      okText: isPending ? 'ENVIAR SOLICITUD' : 'ELIMINAR',
+      danger: !isPending
     });
     if (!ok) return;
+    if (isPending){
+      _crearSolicitud('ELIMINAR', a, null);
+      window.renderPlanillaAnticipos();
+      showT('SOLICITUD DE ELIMINACIÓN ENVIADA · ESPERANDO ADMIN','green');
+      return;
+    }
     ants.splice(idx, 1);
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow){ CloudSync.forceUploadNow().catch(()=>{}); } } catch(e){}
     window.renderPlanillaAnticipos();
     showT('ANTICIPO ELIMINADO','green');
   };
+
+  // v358: APROBAR / RECHAZAR / VER SOLICITUDES
+  window.aprobarSolicitudAnticipo = async function(solId){
+    if (!_esAdminAnt()){ showT('SOLO EL ADMIN PUEDE APROBAR','red'); return; }
+    const sol = _getSolicitudes().find(s => s.id === solId);
+    if (!sol || sol.estado !== 'PENDIENTE'){ showT('SOLICITUD NO ENCONTRADA O YA PROCESADA','red'); return; }
+    const ants = _getAnticipos();
+    const idx = ants.findIndex(a => a.id === sol.anticipoId);
+    if (idx < 0){ showT('EL ANTICIPO DE LA SOLICITUD YA NO EXISTE','red'); _marcarProcesada(sol, 'APROBADA', null); return; }
+    if (sol.tipo === 'ELIMINAR'){
+      ants.splice(idx, 1);
+    } else if (sol.tipo === 'EDITAR' && sol.cambios){
+      Object.assign(ants[idx], { colaboradorId:'', ...sol.cambios });
+    }
+    _marcarProcesada(sol, 'APROBADA', null);
+    showT('SOLICITUD APROBADA · CAMBIO APLICADO','green');
+  };
+  window.rechazarSolicitudAnticipo = async function(solId){
+    if (!_esAdminAnt()){ showT('SOLO EL ADMIN PUEDE RECHAZAR','red'); return; }
+    const sol = _getSolicitudes().find(s => s.id === solId);
+    if (!sol || sol.estado !== 'PENDIENTE'){ showT('SOLICITUD NO ENCONTRADA O YA PROCESADA','red'); return; }
+    const motivo = await window.prPrompt({ title:'RECHAZAR SOLICITUD', body:'Motivo del rechazo (opcional)', placeholder:'ej: La información no es correcta', required:false });
+    if (motivo === null) return;
+    _marcarProcesada(sol, 'RECHAZADA', motivo || '');
+    showT('SOLICITUD RECHAZADA','green');
+  };
+  function _marcarProcesada(sol, estado, motivo){
+    sol.estado = estado;
+    sol.procesadoPor = (typeof window._getUserEmail === 'function' ? window._getUserEmail() : '');
+    sol.procesadoNombre = (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || '';
+    sol.fechaProceso = new Date().toISOString();
+    if (estado === 'RECHAZADA') sol.motivoRechazo = motivo || '';
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    try { window.renderPlanillaAnticipos(); } catch(e){}
+  }
+  window.verSolicitudesAnticipos = async function(){
+    const sols = _getSolicitudes();
+    const pendientes = sols.filter(s => s.estado === 'PENDIENTE');
+    const procesadas = sols.filter(s => s.estado !== 'PENDIENTE').sort((a,b) => (b.ts||0) - (a.ts||0)).slice(0, 20);
+    const esAdmin = _esAdminAnt();
+    const escHtml = (s) => _h(s);
+    let body = '';
+    body += '<div style="font-size:12px;color:#1F2937;line-height:1.5;margin-bottom:14px">';
+    body += esAdmin ? 'Solicitudes de los supervisores para editar o eliminar anticipos. Revisá cada una y aprobá o rechazá.' : 'Estas son tus solicitudes pendientes y tu historial reciente.';
+    body += '</div>';
+    if (pendientes.length === 0){
+      body += '<div style="padding:20px;text-align:center;background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;color:#15803D;font-weight:700;margin-bottom:14px">✅ NO HAY SOLICITUDES PENDIENTES</div>';
+    } else {
+      body += '<div style="border:1px solid #FCD34D;border-radius:8px;margin-bottom:14px;background:#FFFBEB">';
+      body += '<div style="padding:10px 14px;font-size:11px;font-weight:700;color:#92400E;background:#FEF3C7;border-bottom:1px solid #FCD34D;letter-spacing:.6px;border-radius:8px 8px 0 0">PENDIENTES · '+pendientes.length+'</div>';
+      body += '<div style="padding:10px 14px">';
+      pendientes.forEach(s => {
+        const a = s.anticipoSnapshot || {};
+        const tipoBadge = s.tipo === 'ELIMINAR'
+          ? '<span class="planilla-badge" style="background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;font-size:9px">🗑 ELIMINAR</span>'
+          : '<span class="planilla-badge" style="background:#E0F2FE;color:#075985;border:1px solid #7DD3FC;font-size:9px">✏ EDITAR</span>';
+        body += '<div data-sol-id="'+escHtml(s.id)+'" style="background:#fff;border:1px solid #FCD34D;border-radius:6px;padding:10px 12px;margin-bottom:8px">';
+        body += '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px">'+tipoBadge+'<div style="font-size:9.5px;color:#64748B">Solicitado por <strong>'+escHtml(s.solicitadoNombre || s.solicitadoPor || '—')+'</strong> · '+escHtml(_fmtFecha(new Date(s.ts).toISOString()))+'</div></div>';
+        body += '<div style="font-size:11px;color:#0F172A;font-weight:700;margin-bottom:4px">'+escHtml(a.colaboradorNombre||'—')+'</div>';
+        body += '<div style="font-size:10.5px;color:#475569;margin-bottom:4px">'+escHtml(_subtipoLabel(a.subtipo))+' · '+escHtml(a.desc||'')+'</div>';
+        body += '<div style="font-size:10.5px;color:#475569">Q '+(Number(a.montoTotal)||0).toFixed(2)+' en '+(a.cantidadCuotas||0)+' cuotas</div>';
+        if (s.tipo === 'EDITAR' && s.cambios){
+          body += '<div style="margin-top:8px;padding:8px 10px;background:#F8FAFC;border-radius:6px;font-size:10.5px;color:#0F172A">';
+          body += '<div style="font-size:9px;color:#94A3B8;font-weight:700;letter-spacing:.6px;margin-bottom:4px">CAMBIOS PROPUESTOS</div>';
+          const c = s.cambios;
+          const diffs = [];
+          if (c.colaboradorNombre && c.colaboradorNombre !== a.colaboradorNombre) diffs.push('Persona: <strong>'+escHtml(c.colaboradorNombre)+'</strong>');
+          if (c.fecha && c.fecha !== a.fecha) diffs.push('Fecha: <strong>'+escHtml(_fmtFecha(c.fecha))+'</strong>');
+          if (c.subtipo && c.subtipo !== a.subtipo) diffs.push('Tipo: <strong>'+escHtml(_subtipoLabel(c.subtipo))+'</strong>');
+          if (c.desc && c.desc !== a.desc) diffs.push('Detalle: <strong>'+escHtml(c.desc)+'</strong>');
+          if (Number(c.montoTotal) !== Number(a.montoTotal)) diffs.push('Monto: <strong>Q '+(Number(c.montoTotal)||0).toFixed(2)+'</strong>');
+          if (Number(c.cantidadCuotas) !== Number(a.cantidadCuotas)) diffs.push('Cuotas: <strong>'+c.cantidadCuotas+'</strong>');
+          body += diffs.length ? diffs.join(' · ') : '<em style="color:#94A3B8">Sin diferencias detectadas</em>';
+          body += '</div>';
+        }
+        if (esAdmin){
+          body += '<div style="display:flex;gap:8px;margin-top:10px;justify-content:flex-end">';
+          body += '<button class="btn ghost sm" data-action="rechazarSol" data-id="'+escHtml(s.id)+'" style="color:#DC2626;border-color:#FCA5A5;font-size:10px">✗ RECHAZAR</button>';
+          body += '<button class="btn sm" data-action="aprobarSol" data-id="'+escHtml(s.id)+'" style="background:#15803D;border-color:#15803D;color:#fff;font-size:10px">✓ APROBAR</button>';
+          body += '</div>';
+        }
+        body += '</div>';
+      });
+      body += '</div></div>';
+    }
+    if (procesadas.length > 0){
+      body += '<div style="border:1px solid #E2E8F0;border-radius:8px;background:#F8FAFC">';
+      body += '<div style="padding:10px 14px;font-size:11px;font-weight:700;color:#475569;background:#F1F5F9;border-bottom:1px solid #E2E8F0;letter-spacing:.6px;border-radius:8px 8px 0 0">HISTORIAL · ÚLTIMAS '+procesadas.length+'</div>';
+      body += '<div style="padding:8px 14px">';
+      procesadas.forEach(s => {
+        const a = s.anticipoSnapshot || {};
+        const estBadge = s.estado === 'APROBADA'
+          ? '<span class="planilla-badge" style="background:#DCFCE7;color:#15803D;border:1px solid #86EFAC;font-size:8.5px">✓ APROBADA</span>'
+          : '<span class="planilla-badge" style="background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;font-size:8.5px">✗ RECHAZADA</span>';
+        body += '<div style="padding:6px 0;border-bottom:1px solid #E2E8F0;font-size:10.5px;color:#475569;display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center">';
+        body += '<div>'+estBadge+'</div>';
+        body += '<div>'+(s.tipo)+' · <strong>'+escHtml(a.colaboradorNombre||'')+'</strong> · '+escHtml(a.desc||'')+'</div>';
+        body += '<div style="font-size:9.5px;color:#94A3B8">'+escHtml(s.procesadoNombre||s.procesadoPor||'—')+(s.motivoRechazo?' · "'+escHtml(s.motivoRechazo)+'"':'')+'</div>';
+        body += '</div>';
+      });
+      body += '</div></div>';
+    }
+    await window.prConfirm({ title:'📋 SOLICITUDES DE ANTICIPOS', bodyHTML:body, okText:'CERRAR', cancelText:'', wide:true });
+  };
+  // Handler delegado para APROBAR/RECHAZAR
+  if (!window._solAntDelegateInstalled){
+    document.body.addEventListener('click', function(ev){
+      const aprBtn = ev.target.closest && ev.target.closest('button[data-action="aprobarSol"]');
+      const rejBtn = ev.target.closest && ev.target.closest('button[data-action="rechazarSol"]');
+      if (aprBtn){ const id = aprBtn.getAttribute('data-id'); if (id){ aprBtn.disabled = true; aprBtn.textContent = 'Aprobando...'; window.aprobarSolicitudAnticipo(id).catch(()=>{}); const card = aprBtn.closest('[data-sol-id]'); if (card){ card.style.opacity = '.5'; setTimeout(() => { card.remove(); }, 300); } } }
+      if (rejBtn){ const id = rejBtn.getAttribute('data-id'); if (id) window.rechazarSolicitudAnticipo(id).catch(()=>{}); }
+    });
+    window._solAntDelegateInstalled = true;
+  }
 
   // API para Fase 2: obtener anticipos pendientes de una persona.
   // v355: matchea por NOMBRE normalizado primero (texto libre global) y por

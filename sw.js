@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v357-polizas-normalizar-nombres-mas-auditar';
+const CACHE_VERSION = 'v358-anticipos-num-orden-mas-aprobacion-admin';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
