@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v338-descargar-planilla-en-excel-formato-vicinia';
+const CACHE_VERSION = 'v339-excel-usa-fecha-sabado-de-la-semana';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
