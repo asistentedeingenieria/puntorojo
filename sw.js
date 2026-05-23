@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v341-pagar-dropdown-no-se-bloquea-por-falta-de-persona';
+const CACHE_VERSION = 'v342-banner-actualizacion-rediseno-moderno';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
