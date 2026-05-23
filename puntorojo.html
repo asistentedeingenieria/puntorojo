@@ -2740,7 +2740,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v337</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v338</span>
   </footer>
 
 </div>
@@ -32258,6 +32258,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       +         '<button class="btn ghost" onclick="window._v226CerrarModal()">CANCELAR</button>'
       +         '<button class="btn ghost" onclick="window.previewPlanillaSeleccion()" style="border-color:#1C1917;color:#1C1917">PREVISUALIZAR PDF</button>'
       +         '<button class="btn ghost" onclick="window.descargarPlanillaSeleccion()" style="border-color:#1C1917;color:#1C1917">DESCARGAR PDF (BORRADOR)</button>'
+      +         '<button class="btn ghost" onclick="window.descargarPlanillaSeleccionXLSX()" style="border-color:#1565C0;color:#1565C0">DESCARGAR EXCEL (BORRADOR)</button>'
       +         '<button class="btn" id="v226BtnEnviar" onclick="window._v226Enviar()" style="background:#2E7D32;border-color:#2E7D32;color:#fff">ENVIAR PLANILLA A GERENTE DE PROYECTOS</button>'
       +       '</div>'
       +     '</div>'
@@ -34161,6 +34162,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       }
       h2 += '<button class="btn ghost sm" onclick="window.previewPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#1C1917;color:#1C1917">VER PREVIEW PDF</button>';
       h2 += '<button class="btn ghost sm" onclick="window.descargarPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#2E7D32;color:#2E7D32">DESCARGAR PDF</button>';
+      // v338: DESCARGAR EXCEL al lado del PDF
+      h2 += '<button class="btn ghost sm" onclick="window.descargarPlanillaArmadaXLSX(\''+esc(pl.id)+'\')" style="border-color:#1565C0;color:#1565C0">DESCARGAR EXCEL</button>';
       h2 += '<button class="btn ghost sm" onclick="window.verHistorialPlanilla(\''+esc(pl.id)+'\')">VER HISTORIAL</button>';
       h2 += '</div>';
       h2 += '</div>';
@@ -34184,6 +34187,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       if(fueCerradaPorPM){
         h2 += '<button class="btn ghost sm" onclick="window.previewPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#1C1917;color:#1C1917;font-size:9px">PREVIEW PDF</button>';
         h2 += '<button class="btn ghost sm" onclick="window.descargarPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#2E7D32;color:#2E7D32;font-size:9px">DESCARGAR PDF</button>';
+        // v338: DESCARGAR EXCEL al lado del PDF
+        h2 += '<button class="btn ghost sm" onclick="window.descargarPlanillaArmadaXLSX(\''+esc(pl.id)+'\')" style="border-color:#1565C0;color:#1565C0;font-size:9px">DESCARGAR EXCEL</button>';
       }
       h2 += '<button class="btn ghost sm" onclick="window.verHistorialPlanilla(\''+esc(pl.id)+'\')" style="font-size:9px">HISTORIAL</button>';
       h2 += '</div>';
@@ -34886,6 +34891,426 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     }
   }
 
+  // ─── EXCEL XLSX (v338) ─────────────────────────────────────────────
+  // Genera el archivo .xlsx con el formato aprobado por el usuario (clon del
+  // VICINIA + tweaks). Usa ExcelJS para construir el workbook y JSZip para
+  // post-procesar el XML (arreglar dyDescent="55" bug de exceljs + agregar
+  // outline grouping por trabajador + showGridLines off + zoom 70).
+  async function _generarYDescargarXLSX(data){
+    try {
+      if(typeof ExcelJS === 'undefined'){
+        return showT('LIBRERÍA EXCELJS NO CARGADA — RECARGAR LA APP','red');
+      }
+      if(typeof JSZip === 'undefined'){
+        return showT('LIBRERÍA JSZIP NO CARGADA — RECARGAR LA APP','red');
+      }
+      showT('GENERANDO EXCEL...','');
+
+      const wb = new ExcelJS.Workbook();
+      wb.creator = 'Punto Rojo';
+
+      // Sheet name: PLANILLA DDMMYYYY (igual al VICINIA)
+      const dt = data.fecha ? new Date(data.fecha) : new Date();
+      const pad = n => String(n).padStart(2,'0');
+      const ddmmyyyy = pad(dt.getDate()) + pad(dt.getMonth()+1) + dt.getFullYear();
+      const ws = wb.addWorksheet('PLANILLA ' + ddmmyyyy);
+
+      // Anchos exactos del VICINIA
+      ws.getColumn('A').width = 3.66;
+      ws.getColumn('B').width = 10;
+      ws.getColumn('C').width = 113.44;
+      ws.getColumn('D').width = 17.55;
+      ws.getColumn('E').width = 20.55;
+      ws.getColumn('F').width = 13.44;
+      ws.getColumn('G').width = 24;
+      ws.getColumn('H').width = 27.11;
+
+      // Helpers de estilo
+      const FNT = (sz, bold=false) => ({ name:'Arial', family:2, size:sz, bold });
+      const FILL = (argb) => ({ type:'pattern', pattern:'solid', fgColor:{argb}, bgColor:{indexed:64} });
+      const C_AZUL = 'FFD9E1F2', C_GRIS = 'FFBFBFBF', C_AMA = 'FFFFFF00';
+      const BORD_THIN_ALL = { left:{style:'thin'}, right:{style:'thin'}, top:{style:'thin'}, bottom:{style:'thin'} };
+      const BORD_MED_ALL  = { left:{style:'medium'}, right:{style:'medium'}, top:{style:'medium'}, bottom:{style:'medium'} };
+      const BORD_THIN_TB  = { top:{style:'thin'}, bottom:{style:'thin'} };
+      const BORD_MED_TB   = { top:{style:'medium'}, bottom:{style:'medium'} };
+      const FMT_Q        = '_-[$Q-100A]* #,##0.00_-;-[$Q-100A]* #,##0.00_-;_-[$Q-100A]* "-"??_-;_-@_-';
+      const FMT_Q_CENTER = '_([$Q-100A]* #,##0.00_);_([$Q-100A]* (#,##0.00);_([$Q-100A]* "-"??_);_(@_)';
+      const FMT_DATE = 'dd/mm/yyyy';
+
+      // Cabecera (filas 1-3)
+      const torres = _compactarTorres(data.torres);
+      const tituloHd = (' PLANILLA TABLAYESO - ' + (data.proyecto||'') + (torres?' - '+torres:'')).toUpperCase();
+      const supHd = String(data.supervisorNombre||'').toUpperCase() || '—';
+
+      ws.mergeCells('C1:H1');
+      { const c = ws.getCell('C1'); c.value = tituloHd; c.font = FNT(18, true); c.alignment = { horizontal:'center', vertical:'middle' }; }
+      ws.getRow(1).height = 25.5;
+      ws.mergeCells('C2:H2');
+      { const c = ws.getCell('C2'); c.value = supHd; c.font = FNT(18, true); c.alignment = { horizontal:'center', vertical:'middle' }; }
+      ws.getRow(2).height = 25.5;
+      ws.mergeCells('C3:H3');
+      { const c = ws.getCell('C3'); c.value = new Date(dt.getTime()); c.numFmt = FMT_DATE; c.font = FNT(18, true); c.alignment = { horizontal:'center', vertical:'middle' }; }
+      ws.getRow(3).height = 25.5;
+      ws.getRow(4).height = 35.25;
+
+      let r = 5;
+      const granTotalRows = [];
+      const groupRanges = [];
+
+      data.colabs.forEach((w) => {
+        // FILA NOMBRE TRABAJADOR
+        const rowN = r;
+        const cN = ws.getCell(r, 3);
+        cN.value = w.nombre;
+        cN.fill = FILL('FFFFFFFF');
+        cN.font = FNT(20, true);
+        cN.alignment = { horizontal:'left', vertical:'middle' };
+        cN.border = BORD_MED_ALL;
+        // D vacío con border left medium + top/bottom thin
+        const cD = ws.getCell(r, 4);
+        cD.font = FNT(14);
+        cD.alignment = { horizontal:'right', vertical:'middle', wrapText:true };
+        cD.border = { left:{style:'medium'}, top:{style:'thin'}, bottom:{style:'thin'} };
+        // E, F vacíos
+        for(let col=5; col<=6; col++){
+          const cc = ws.getCell(r, col);
+          cc.font = FNT(14);
+          cc.alignment = { horizontal:'right', vertical:'middle', wrapText:true };
+          cc.border = BORD_THIN_TB;
+        }
+        const cL = ws.getCell(r, 7);
+        cL.value = 'Liquidacion de trabajos del';
+        cL.font = FNT(14);
+        cL.alignment = { horizontal:'right', vertical:'middle' };
+        cL.border = BORD_THIN_TB;
+        const cF = ws.getCell(r, 8);
+        cF.value = { formula: '$C$3' };
+        cF.font = FNT(14);
+        cF.alignment = { horizontal:'left', vertical:'middle', wrapText:true };
+        cF.border = { right:{style:'thin'}, top:{style:'thin'}, bottom:{style:'thin'} };
+        cF.numFmt = FMT_DATE;
+        ws.getRow(r).height = 35.25;
+        r++;
+
+        const groupStart = r;
+
+        // Agrupar pagos por apto
+        const aptoGroups = {};
+        const aptoOrder = [];
+        (w.pagos || []).forEach(pg => {
+          const partes = [];
+          if(pg.towerName) partes.push(String(pg.towerName).trim());
+          if(pg.levelName) partes.push(String(pg.levelName).trim());
+          if(pg.aptoName)  partes.push(String(pg.aptoName).trim());
+          const k = partes.join(' - ').toUpperCase() || 'SIN APTO';
+          if(!aptoGroups[k]){ aptoGroups[k] = []; aptoOrder.push(k); }
+          aptoGroups[k].push(pg);
+        });
+
+        const filasDetalle = []; // {row, pg} para formulas de retención
+        aptoOrder.forEach(aptoKey => {
+          // FILA APTO (azul en C, thin borders alrededor)
+          const aC = ws.getCell(r, 3);
+          aC.value = aptoKey;
+          aC.fill = FILL(C_AZUL);
+          aC.font = FNT(16, true);
+          aC.alignment = { horizontal:'left', vertical:'middle', wrapText:true };
+          aC.border = BORD_THIN_ALL;
+          // D, E, F con borders thin + alineamiento ad hoc del VICINIA
+          for(let col=4; col<=6; col++){
+            const cc = ws.getCell(r, col);
+            cc.font = FNT(16, true);
+            cc.alignment = { horizontal:'left', vertical:'middle', wrapText:true };
+            cc.border = (col===4) ? { left:{style:'thin'}, top:{style:'thin'}, bottom:{style:'thin'} } : BORD_THIN_TB;
+          }
+          const aG = ws.getCell(r, 7);
+          aG.font = FNT(16, true);
+          aG.alignment = { horizontal:'right', vertical:'middle' };
+          aG.border = { right:{style:'thin'}, top:{style:'thin'}, bottom:{style:'thin'} };
+          const aH = ws.getCell(r, 8);
+          aH.font = FNT(14);
+          aH.alignment = { horizontal:'center', vertical:'middle' };
+          aH.border = BORD_THIN_ALL;
+          aH.numFmt = FMT_Q;
+          ws.getRow(r).height = 35.25;
+          r++;
+
+          // POR CADA PAGO del apto
+          aptoGroups[aptoKey].forEach(pg => {
+            const sIdx = Number(pg.stageIdx||0);
+            const stName = String(pg.stageName || _ETAPAS_NOMBRES[sIdx] || '').toUpperCase();
+            const lbl = ('ETAPA ' + (sIdx+1) + ' - ' + stName + ' - ABONO ' + (pg.pctDelta||100) + '%').toUpperCase();
+            const monto = Number(pg.bruto||0);
+
+            const dC = ws.getCell(r, 3); dC.value = lbl;     dC.font=FNT(14); dC.alignment={horizontal:'left',vertical:'middle',wrapText:true};   dC.border=BORD_THIN_ALL;
+            const dD = ws.getCell(r, 4); dD.value = 'global'; dD.font=FNT(14); dD.alignment={horizontal:'center',vertical:'middle',wrapText:true}; dD.border=BORD_THIN_ALL;
+            const dE = ws.getCell(r, 5); dE.value = 1;        dE.font=FNT(14); dE.alignment={horizontal:'center',vertical:'middle',wrapText:true}; dE.numFmt='0.00'; dE.border=BORD_THIN_ALL;
+            const dF = ws.getCell(r, 6); dF.value = 1;        dF.font=FNT(14); dF.alignment={horizontal:'center',vertical:'middle',wrapText:true}; dF.numFmt='0.00'; dF.border=BORD_THIN_ALL;
+            const dG = ws.getCell(r, 7); dG.value = monto;    dG.font=FNT(14); dG.alignment={horizontal:'center',vertical:'middle',wrapText:true}; dG.numFmt=FMT_Q_CENTER; dG.border=BORD_THIN_ALL;
+            const dH = ws.getCell(r, 8); dH.value = { formula: '+E'+r+'*G'+r }; dH.font=FNT(14); dH.alignment={horizontal:'center',vertical:'middle'}; dH.numFmt=FMT_Q; dH.border=BORD_THIN_ALL;
+            ws.getRow(r).height = 35.25;
+            filasDetalle.push({ row: r, pg: pg });
+            r++;
+          });
+        });
+
+        // FILA TOTAL (gris)
+        const rowTotal = r;
+        const tD = ws.getCell(r, 4);
+        tD.fill = FILL(C_GRIS);
+        tD.font = FNT(16, true);
+        tD.alignment = { vertical:'middle' };
+        tD.border = { left:{style:'medium'}, top:{style:'medium'}, bottom:{style:'medium'} };
+        const tE = ws.getCell(r, 5);
+        tE.value = 'TOTAL ';
+        tE.fill = FILL(C_GRIS);
+        tE.font = FNT(16, true);
+        tE.alignment = { horizontal:'right', vertical:'middle' };
+        tE.border = BORD_MED_TB;
+        ws.mergeCells(r, 6, r, 7);
+        const tFG = ws.getCell(r, 6);
+        tFG.fill = FILL(C_GRIS);
+        tFG.font = FNT(16, true);
+        tFG.alignment = { horizontal:'left', vertical:'middle' };
+        tFG.border = { right:{style:'medium'}, top:{style:'medium'}, bottom:{style:'medium'} };
+        const firstDet = filasDetalle[0].row;
+        const lastDet  = filasDetalle[filasDetalle.length-1].row;
+        const tH = ws.getCell(r, 8);
+        tH.value = { formula: 'SUM(H'+firstDet+':H'+lastDet+')' };
+        tH.fill = FILL(C_GRIS);
+        tH.font = FNT(18, true);
+        tH.alignment = { horizontal:'center', vertical:'middle' };
+        tH.numFmt = FMT_Q;
+        tH.border = BORD_MED_ALL;
+        ws.getRow(r).height = 35.25;
+        r++;
+
+        const filasDeduc = []; // {row, tipo} para formula GRAN TOTAL + barra MED
+
+        // RETENCIONES (una por pago, layout VICINIA: G texto + H monto)
+        filasDetalle.forEach(({row: detRow, pg}) => {
+          const ret = Number(pg.retencion || (Number(pg.bruto||0)*0.10));
+          if(ret <= 0) return;
+          const aptoT = ((pg.towerName||'').trim() + ' - ' + (pg.aptoName||'').trim()).replace(/^ - | - $/g,'').toUpperCase();
+          const rD = ws.getCell(r, 4);
+          rD.font = FNT(16, true);
+          rD.alignment = { vertical:'middle' };
+          rD.border = { left:{style:'thin'}, top:{style:'thin'}, bottom:{style:'thin'} };
+          const rE = ws.getCell(r, 5);
+          rE.font = FNT(16, true);
+          rE.alignment = { horizontal:'right', vertical:'middle' };
+          rE.border = BORD_THIN_TB;
+          const rF = ws.getCell(r, 6);
+          rF.font = FNT(16, true);
+          rF.alignment = { horizontal:'left', vertical:'middle' };
+          rF.border = BORD_THIN_TB;
+          const rG = ws.getCell(r, 7);
+          rG.value = '(-) Retención 10% - '+aptoT;
+          rG.font = FNT(16);
+          rG.alignment = { horizontal:'right', vertical:'middle' };
+          rG.border = { right:{style:'thin'}, bottom:{style:'thin'} };
+          const rH = ws.getCell(r, 8);
+          rH.value = { formula: '+H'+detRow+'*0.1' };
+          rH.font = FNT(16);
+          rH.alignment = { horizontal:'center', vertical:'middle' };
+          rH.numFmt = FMT_Q;
+          rH.border = BORD_THIN_ALL;
+          ws.getRow(r).height = 35.25;
+          filasDeduc.push({ row: r, tipo:'retencion' });
+          r++;
+        });
+
+        // DESCUENTOS (v10: merge D:G, sin bold, font 14 si muy largo)
+        (w.descuentos || []).forEach(d => {
+          const cuotaTxt = (d.cuotasTotales && d.cuotasTotales > 1) ? '('+(d.cuotaActual||1)+'/'+d.cuotasTotales+') ' : '';
+          const etiqueta = '(-) '+cuotaTxt+(d.desc || d.subtipo || 'Descuento');
+          const sz = etiqueta.length > 40 ? 14 : 16;
+          ws.mergeCells(r, 4, r, 7);
+          const cTxt = ws.getCell(r, 4);
+          cTxt.value = etiqueta;
+          cTxt.font = FNT(sz);
+          cTxt.alignment = { horizontal:'right', vertical:'middle', wrapText:true };
+          cTxt.border = BORD_THIN_ALL;
+          const cMonto = ws.getCell(r, 8);
+          cMonto.value = Number(d.monto || 0);
+          cMonto.font = FNT(16);
+          cMonto.alignment = { horizontal:'center', vertical:'middle' };
+          cMonto.numFmt = FMT_Q;
+          cMonto.border = BORD_THIN_ALL;
+          ws.getRow(r).height = 35.25;
+          filasDeduc.push({ row: r, tipo:'descuento' });
+          r++;
+        });
+
+        // OCs (suman, mismo layout que descuentos pero "+")
+        const filasSuma = [];
+        (w.ocs || []).forEach(oc => {
+          const etiqueta = '(+) OC: ' + (oc.desc || '');
+          const sz = etiqueta.length > 40 ? 14 : 16;
+          const monto = Number(oc.neto || oc.monto || 0);
+          ws.mergeCells(r, 4, r, 7);
+          const cTxt = ws.getCell(r, 4);
+          cTxt.value = etiqueta;
+          cTxt.font = FNT(sz);
+          cTxt.alignment = { horizontal:'right', vertical:'middle', wrapText:true };
+          cTxt.border = BORD_THIN_ALL;
+          const cMonto = ws.getCell(r, 8);
+          cMonto.value = monto;
+          cMonto.font = FNT(16);
+          cMonto.alignment = { horizontal:'center', vertical:'middle' };
+          cMonto.numFmt = FMT_Q;
+          cMonto.border = BORD_THIN_ALL;
+          ws.getRow(r).height = 35.25;
+          filasSuma.push(r);
+          r++;
+        });
+
+        // Border bottom MEDIUM al final del bloque (solo si último ítem es descuento)
+        if(filasDeduc.length > 0){
+          const ult = filasDeduc[filasDeduc.length-1];
+          if(ult.tipo === 'descuento' && filasSuma.length === 0){
+            const ultR = ult.row;
+            const dCell = ws.getCell(ultR, 4);
+            dCell.border = { left:{style:'thin'}, right:{style:'thin'}, top:{style:'thin'}, bottom:{style:'medium'} };
+          }
+        }
+
+        const groupEnd = r - 1;
+        groupRanges.push({ start: groupStart, end: groupEnd });
+
+        // GRAN TOTAL TRABAJADOR (amarillo)
+        const gC = ws.getCell(r, 3);
+        gC.fill = FILL(C_AMA);
+        gC.font = FNT(16, true);
+        gC.alignment = { horizontal:'right', vertical:'middle' };
+        gC.border = { left:{style:'medium'}, top:{style:'medium'}, bottom:{style:'medium'} };
+        const gD = ws.getCell(r, 4);
+        gD.value = 'GRAN TOTAL';
+        gD.fill = FILL(C_AMA);
+        gD.font = FNT(16, true);
+        gD.alignment = { horizontal:'right', vertical:'middle' };
+        gD.border = BORD_MED_TB;
+        const gE = ws.getCell(r, 5);
+        gE.fill = FILL(C_AMA);
+        gE.font = FNT(16, true);
+        gE.alignment = { horizontal:'right', vertical:'middle' };
+        gE.border = BORD_MED_TB;
+        const gF = ws.getCell(r, 6);
+        gF.fill = FILL(C_AMA);
+        gF.font = FNT(16, true);
+        gF.alignment = { vertical:'middle' };
+        gF.border = BORD_MED_TB;
+        const gG = ws.getCell(r, 7);
+        gG.value = { formula: '+C'+rowN };
+        gG.fill = FILL(C_AMA);
+        gG.font = FNT(16, true);
+        gG.alignment = { horizontal:'right', vertical:'middle' };
+        gG.border = { right:{style:'medium'}, top:{style:'medium'}, bottom:{style:'medium'} };
+        // Formula: TOTAL - SUM(deduc) + SUM(sumas)
+        let formulaGT = 'H' + rowTotal;
+        if(filasDeduc.length > 0){
+          formulaGT += '-SUM(H'+filasDeduc[0].row+':H'+filasDeduc[filasDeduc.length-1].row+')';
+        }
+        if(filasSuma.length > 0){
+          formulaGT += '+SUM(H'+filasSuma[0]+':H'+filasSuma[filasSuma.length-1]+')';
+        }
+        const gH = ws.getCell(r, 8);
+        gH.value = { formula: formulaGT };
+        gH.fill = FILL(C_AMA);
+        gH.font = FNT(16, true);
+        gH.alignment = { horizontal:'center', vertical:'middle' };
+        gH.numFmt = FMT_Q_CENTER;
+        gH.border = BORD_MED_ALL;
+        ws.getRow(r).height = 35.25;
+        granTotalRows.push(r);
+        r++;
+
+        // 2 filas separadoras
+        ws.getRow(r).height = 21.6; r++;
+        ws.getRow(r).height = 35.25; r++;
+      });
+
+      // GRAN TOTAL PLANILLA FINAL (solo si > 1 trabajador)
+      if(data.colabs.length > 1){
+        ws.mergeCells(r, 3, r, 6);
+        const fC = ws.getCell(r, 3);
+        fC.value = 'GRAN TOTAL PLANILLA DE TABLAYESO';
+        fC.fill = FILL(C_AMA);
+        fC.font = FNT(16, true);
+        fC.alignment = { horizontal:'right', vertical:'middle' };
+        fC.border = { left:{style:'medium'}, top:{style:'medium'}, bottom:{style:'medium'} };
+        const fG = ws.getCell(r, 7);
+        fG.value = { formula: '+C3' };
+        fG.fill = FILL(C_AMA);
+        fG.font = FNT(16, true);
+        fG.alignment = { horizontal:'center', vertical:'middle' };
+        fG.numFmt = FMT_DATE;
+        fG.border = BORD_MED_TB;
+        const fH = ws.getCell(r, 8);
+        const sumGT = granTotalRows.map(rr => 'H'+rr).join('+');
+        fH.value = { formula: sumGT };
+        fH.fill = FILL(C_AMA);
+        fH.font = FNT(16, true);
+        fH.alignment = { horizontal:'center', vertical:'middle' };
+        fH.numFmt = FMT_Q_CENTER;
+        fH.border = { right:{style:'medium'}, top:{style:'medium'}, bottom:{style:'medium'} };
+        ws.getRow(r).height = 39;
+      }
+
+      // POST-PROCESO XML: arregla bug exceljs dyDescent + outline + gridlines + zoom
+      const buffer = await wb.xlsx.writeBuffer();
+      const zip = await JSZip.loadAsync(buffer);
+      let xml = await zip.file('xl/worksheets/sheet1.xml').async('string');
+
+      // Fix dyDescent="55" (bug exceljs que rompe Excel)
+      xml = xml.replace(/x14ac:dyDescent="55"/g, 'x14ac:dyDescent="0.25"');
+
+      // Outline level 1 en filas dentro de cada bloque (entre nombre y GRAN TOTAL)
+      for(const g of groupRanges){
+        for(let row = g.start; row <= g.end; row++){
+          const re = new RegExp('<row r="'+row+'"([^>]*?)>');
+          xml = xml.replace(re, function(match, attrs){
+            if(attrs.indexOf('outlineLevel=') >= 0) return match;
+            return '<row r="'+row+'"'+attrs+' outlineLevel="1">';
+          });
+        }
+      }
+      // outlineLevelRow=1 para mostrar botones outline en sidebar
+      xml = xml.replace(/outlineLevelRow="0"/, 'outlineLevelRow="1"');
+      // sheetPr/outlinePr summaryBelow=0 (botón +/- arriba del grupo)
+      if(xml.indexOf('<sheetPr>') < 0 && xml.indexOf('<sheetPr ') < 0){
+        xml = xml.replace(/(<dimension)/, '<sheetPr><outlinePr summaryBelow="0"/></sheetPr>$1');
+      } else if(xml.indexOf('<outlinePr') < 0){
+        xml = xml.replace(/(<sheetPr[^>]*>)/, '$1<outlinePr summaryBelow="0"/>');
+      }
+      // sheetViews: gridlines off + zoom 70
+      if(xml.indexOf('<sheetViews>') < 0){
+        const sv = '<sheetViews><sheetView showGridLines="0" tabSelected="1" zoomScale="70" zoomScaleNormal="70" workbookViewId="0"/></sheetViews>';
+        xml = xml.replace(/(<dimension[^>]*\/>)/, '$1'+sv);
+      }
+
+      zip.file('xl/worksheets/sheet1.xml', xml);
+      const finalBlob = await zip.generateAsync({ type:'blob', compression:'DEFLATE' });
+
+      // Descargar
+      const projClean = (data.proyecto||'Proyecto').replace(/[\\\/\?\*\[\]:"|<>]/g,'').trim();
+      const filename = 'Planilla ' + projClean + '_' + _fechaSabadoDDMM(data.fecha) + '.xlsx';
+      const url = URL.createObjectURL(finalBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+      showT('EXCEL DESCARGADO: '+filename,'green');
+    } catch(e){
+      console.error('[v338] XLSX error:', e);
+      showT('ERROR GENERANDO EXCEL: '+(e&&e.message?e.message:e),'red');
+    }
+  }
+
   // ─── HTML PREVIEW ──────────────────────────────────────────────────
   // v254: preview MINIMALISTA. Sin tabs, sin colores fuertes. Cada
   // trabajador es una fila colapsable que al expandir muestra el
@@ -34996,6 +35421,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       +     '<div style="flex:1;overflow-y:auto">' + bodyHtml + '</div>'
       +     '<div style="padding:12px 22px;border-top:1px solid #EEE;background:#FAFAFA;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">'
       +       '<button class="btn ghost" onclick="window._v229CerrarPreview()" style="border-color:#CCC;color:#555">CERRAR</button>'
+      +       '<button class="btn" id="v229BtnDescargarXLSX" style="background:#1565C0;border-color:#1565C0;color:#fff">DESCARGAR EXCEL</button>'
       +       '<button class="btn" id="v229BtnDescargar" style="background:#1a1a1a;border-color:#1a1a1a;color:#fff">DESCARGAR PDF</button>'
       +     '</div>'
       +   '</div>'
@@ -35013,6 +35439,17 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       catch(e){ console.error('[v254] download:', e); }
       btnDl.disabled = false;
       btnDl.textContent = orig;
+    };
+    // v338: descargar tambien en Excel desde el preview
+    const btnXl = node.querySelector('#v229BtnDescargarXLSX');
+    if(btnXl) btnXl.onclick = async () => {
+      btnXl.disabled = true;
+      const orig = btnXl.textContent;
+      btnXl.textContent = 'GENERANDO EXCEL...';
+      try { await _generarYDescargarXLSX(data); }
+      catch(e){ console.error('[v338] download xlsx:', e); }
+      btnXl.disabled = false;
+      btnXl.textContent = orig;
     };
   }
 
@@ -35107,7 +35544,46 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(!data.colabs.length) return showT('NO HAY DATOS PARA MOSTRAR','red');
     await _generarYDescargarExcel(data);
   };
-  console.log('[v229] preview/excel API lista');
+
+  // ─── v338: DESCARGAR EN EXCEL (.xlsx) ─────────────────────────────
+  window.descargarPlanillaArmadaXLSX = async function(planillaId){
+    // v334: refrescar desde la nube antes de generar, para no descargar version vieja
+    try {
+      if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.refreshFromCloud){
+        await CloudSync.refreshFromCloud();
+      }
+    } catch(e){ console.warn('[v338] refreshFromCloud en descargar XLSX fallo:', e); }
+    const p = _activeProj();
+    if(!p) return showT('SIN PROYECTO ACTIVO','red');
+    const pl = ((p.planilla && p.planilla.planillasArmadas) || []).find(x => x.id === planillaId);
+    if(!pl) return showT('PLANILLA NO ENCONTRADA','red');
+    if(!pl.pagosIds || !pl.pagosIds.length) return showT('PLANILLA SIN PAGOS','red');
+    const data = _construirDatos(p, pl.pagosIds, {
+      numero: pl.numero, fecha: pl.fechaEnvio || pl.fechaCreacion,
+      planillaId: pl.id, estado: pl.estado,
+      supervisorNombre: pl.supervisorNombre || '',
+      pmNombre: pl.pmNombre || '',
+      planilla: pl
+    });
+    if(!data.colabs.length) return showT('NO HAY DATOS PARA MOSTRAR','red');
+    await _generarYDescargarXLSX(data);
+  };
+
+  window.descargarPlanillaSeleccionXLSX = async function(){
+    const p = _activeProj();
+    if(!p) return showT('SIN PROYECTO ACTIVO','red');
+    const ids = Array.from(document.querySelectorAll('.v226-pg-chk:checked')).map(c => c.value);
+    if(!ids.length) return showT('SELECCIONÁ AL MENOS UN PAGO','red');
+    const data = _construirDatos(p, ids, {
+      numero: 'PREVIEW', fecha: new Date().toISOString(),
+      planillaId: null, estado: 'PREVIEW',
+      supervisorNombre: (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '')
+    });
+    if(!data.colabs.length) return showT('NO HAY DATOS PARA MOSTRAR','red');
+    await _generarYDescargarXLSX(data);
+  };
+
+  console.log('[v229] preview/excel API lista · [v338] XLSX API lista');
 })();
 </script>
 

@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v337-fix-eliminar-descuento-robusto-con-force-upload';
+const CACHE_VERSION = 'v338-descargar-planilla-en-excel-formato-vicinia';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
