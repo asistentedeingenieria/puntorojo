@@ -2648,6 +2648,7 @@ table{max-width:100%}
         <button class="mat-tab" data-plantab="reporte" onclick="setPlanillaTab('reporte')">REPORTE POR APTO</button>
         <button class="mat-tab" data-plantab="resumenpersona" onclick="setPlanillaTab('resumenpersona')">RESUMEN POR PERSONA</button>
         <button class="mat-tab" data-plantab="anticipos" onclick="setPlanillaTab('anticipos')">ANTICIPOS</button>
+        <button class="mat-tab" data-plantab="polizas" onclick="setPlanillaTab('polizas')">PÓLIZAS</button>
         <button class="mat-tab" data-plantab="receta" onclick="setPlanillaTab('receta')" data-perm="users.manage">MODELOS Y COSTOS</button>
         <!-- COLABORADORES se inyecta al FINAL por injectPlanillaTabs -->
       </div>
@@ -2660,6 +2661,7 @@ table{max-width:100%}
       <div id="planilla-reporte" style="display:none"></div>
       <div id="planilla-resumenpersona" style="display:none"></div>
       <div id="planilla-anticipos" style="display:none"></div>
+      <div id="planilla-polizas" style="display:none"></div>
     </section>
 
     <!-- ── ACTIVIDAD ── -->
@@ -2711,7 +2713,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v346</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v347</span>
   </footer>
 
 </div>
@@ -27958,7 +27960,7 @@ window.addEventListener('load', () => {
     window.currentPlanillaTab = tab;
     injectPlanillaTabs();
     document.querySelectorAll('[data-plantab]').forEach(b => b.classList.toggle('active', b.dataset.plantab === tab));
-    ['etapas','receta','colaboradores','retenciones','ajustes','reporte','excepciones','resumenpersona','anticipos'].forEach(k => { const el=document.getElementById('planilla-'+k); if(el) el.style.display = tab === k ? '' : 'none'; });
+    ['etapas','receta','colaboradores','retenciones','ajustes','reporte','excepciones','resumenpersona','anticipos','polizas'].forEach(k => { const el=document.getElementById('planilla-'+k); if(el) el.style.display = tab === k ? '' : 'none'; });
     renderPlanilla();
   };
 
@@ -28003,6 +28005,8 @@ window.addEventListener('load', () => {
     if (currentPlanillaTab === 'resumenpersona' && typeof renderPlanillaResumenPersona === 'function') renderPlanillaResumenPersona();
     // v346: catálogo de anticipos
     if (currentPlanillaTab === 'anticipos' && typeof window.renderPlanillaAnticipos === 'function') window.renderPlanillaAnticipos();
+    // v347: catálogo de pólizas
+    if (currentPlanillaTab === 'polizas' && typeof window.renderPlanillaPolizas === 'function') window.renderPlanillaPolizas();
     applyPermissions();
   };
 
@@ -35177,5 +35181,203 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     return _getAnticipos(p).filter(a => a.colaboradorId === colabId).map(a => Object.assign({}, a, _estadoAnticipo(p, a))).filter(a => a.estado === 'PENDIENTE');
   };
   console.log('[v346] Catálogo de Anticipos cargado · Fase 1 lista');
+})();
+</script>
+
+<!-- v347 · CATÁLOGO DE PÓLIZAS DE SEGURO — ver doc completa en puntorojo.html -->
+<script id="pr-polizas-module">
+(function(){
+  'use strict';
+  const ESTATUS_OPTS = ['ACTIVA', 'EN PROCESO', 'CANCELADA'];
+  const PUESTOS = ['INSTALADOR', 'MASILLERO', 'AYUDANTE', 'OTRO'];
+  function _h(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function _money(n){ const v = Number(n)||0; return 'Q ' + v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+  function _fmtFecha(iso){ if(!iso) return '—'; try{ const d=new Date(iso); return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear(); }catch(e){ return iso; } }
+  function _activeProj(){ return (typeof activeProj === 'function') ? activeProj() : null; }
+  function _getPolizas(p){ if(!p || !p.planilla) return []; p.planilla.polizas = p.planilla.polizas || []; return p.planilla.polizas; }
+  function _getConfig(p){ if(!p || !p.planilla) return { montoDefault: 44.95 }; p.planilla.polizaConfig = p.planilla.polizaConfig || { montoDefault: 44.95 }; return p.planilla.polizaConfig; }
+  function _puedeEditar(){ try { return typeof can === 'function' && (can('users.manage') || can('planilla.descuentos')); } catch(e){ return false; } }
+  function _diasHastaVencer(iso){ if(!iso) return null; const d = new Date(iso); if(isNaN(d.getTime())) return null; const hoy = new Date(); hoy.setHours(0,0,0,0); return Math.round((d.getTime() - hoy.getTime()) / 86400000); }
+
+  window.renderPlanillaPolizas = function(){
+    const p = _activeProj();
+    const cont = document.getElementById('planilla-polizas');
+    if (!cont) return;
+    if (!p || !p.planilla) { cont.innerHTML = '<div class="card"><div class="empty" style="padding:30px">SIN PROYECTO ACTIVO</div></div>'; return; }
+    const polizas = _getPolizas(p);
+    const cfg = _getConfig(p);
+    const colabs = (p.planilla.colaboradores || []);
+    const puedeEditar = _puedeEditar();
+    const filtroEstatus = window._polFiltroEstatus || 'todas';
+    const filtroAseg = window._polFiltroAseg || '';
+    const filtroACargo = window._polFiltroACargo || '';
+    const aseguradoras = Array.from(new Set(polizas.map(x => x.aseguradora).filter(Boolean))).sort();
+    const filas = polizas.filter(po => { if (filtroEstatus !== 'todas' && po.estatus !== filtroEstatus) return false; if (filtroAseg && po.aseguradora !== filtroAseg) return false; if (filtroACargo && po.aCargoDeColabId !== filtroACargo) return false; return true; }).sort((a,b) => (a.aCargoDeNombre||'').localeCompare(b.aCargoDeNombre||'') || (a.aseguradoNombre||'').localeCompare(b.aseguradoNombre||''));
+    const totalActivas = polizas.filter(po => po.estatus === 'ACTIVA').length;
+    const totalEnProceso = polizas.filter(po => po.estatus === 'EN PROCESO').length;
+    const totalCanceladas = polizas.filter(po => po.estatus === 'CANCELADA').length;
+    const montoMensualTotal = polizas.filter(po => po.estatus === 'ACTIVA').reduce((s,po) => s + (Number(po.monto)||cfg.montoDefault), 0);
+    const porPersona = {};
+    polizas.forEach(po => { if (po.estatus !== 'ACTIVA') return; const k = po.aCargoDeColabId || ('_'+(po.aCargoDeNombre||'?').toUpperCase()); if(!porPersona[k]) porPersona[k] = { colabId: po.aCargoDeColabId, nombre: po.aCargoDeNombre, count: 0, monto: 0 }; porPersona[k].count++; porPersona[k].monto += (Number(po.monto)||cfg.montoDefault); });
+    const personasResumen = Object.values(porPersona).sort((a,b) => b.count - a.count);
+
+    let html = '';
+    html += '<div class="card"><div class="card-hd"><h3>CATÁLOGO DE PÓLIZAS DE SEGURO</h3><span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Pólizas activas + descuento mensual auto-calculado por persona a cargo</span>';
+    if (puedeEditar) { html += '<button class="btn ghost sm" onclick="window.importarPolizasDesdeExcel()" style="margin-right:6px">📂 IMPORTAR EXCEL</button>'; html += '<button class="btn sm" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.agregarPoliza()">+ AGREGAR PÓLIZA</button>'; }
+    html += '</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:14px 16px;background:var(--cream);border-bottom:1px solid var(--line)">';
+    html += '<div style="background:#fff;border:1px solid #C8E6C9;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">ACTIVAS</div><div style="font-size:18px;font-weight:800;color:#2E7D32;margin-top:3px">' + totalActivas + '</div></div>';
+    html += '<div style="background:#fff;border:1px solid #FFE082;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">EN PROCESO</div><div style="font-size:18px;font-weight:800;color:#F57C00;margin-top:3px">' + totalEnProceso + '</div></div>';
+    html += '<div style="background:#fff;border:1px solid #BDBDBD;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">CANCELADAS</div><div style="font-size:18px;font-weight:800;color:#616161;margin-top:3px">' + totalCanceladas + '</div></div>';
+    html += '<div style="background:#fff;border:1px solid #EF9A9A;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">MONTO MENSUAL TOTAL</div><div style="font-size:16px;font-weight:800;color:#C62828;margin-top:3px">' + _money(montoMensualTotal) + '</div></div>';
+    html += '</div>';
+    if (puedeEditar) { html += '<div style="padding:10px 16px;border-bottom:1px solid var(--line);background:#FAFAFA;display:flex;align-items:center;gap:10px"><label style="font-size:10px;letter-spacing:1.2px;color:#475569;font-weight:700;text-transform:uppercase">MONTO POR PÓLIZA (DEFAULT)</label><input type="number" step="0.01" min="0" value="' + cfg.montoDefault + '" onchange="window.setPolizaMontoDefault(this.value)" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;width:100px"><span style="font-size:10px;color:var(--mute)">Se aplica a pólizas nuevas.</span></div>'; }
+    if (personasResumen.length > 0) {
+      html += '<div style="padding:14px 16px;border-bottom:1px solid var(--line);background:#F8FAFC"><div style="font-size:10px;letter-spacing:1.4px;color:#475569;font-weight:700;text-transform:uppercase;margin-bottom:8px">DESCUENTO MENSUAL POR PERSONA A CARGO (PÓLIZAS ACTIVAS)</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px">';
+      personasResumen.forEach(per => { html += '<div style="background:#fff;border:1px solid #E2E8F0;border-radius:6px;padding:8px 12px;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center"><div><div style="font-size:11px;font-weight:700;color:#1a1a1a">'+_h(per.nombre||'—')+'</div><div style="font-size:9.5px;color:var(--mute);letter-spacing:.3px">'+per.count+' póliza'+(per.count!==1?'s':'')+'</div></div><div style="font-size:14px;font-weight:800;color:#C62828">-' + _money(per.monto) + '</div></div>'; });
+      html += '</div></div>';
+    }
+    html += '<div style="display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap">';
+    html += '<label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700">ESTATUS</label><select onchange="window._polFiltroEstatus=this.value; window.renderPlanillaPolizas()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"><option value="todas"'+(filtroEstatus==='todas'?' selected':'')+'>TODAS</option>';
+    ESTATUS_OPTS.forEach(s => { html += '<option value="'+s+'"'+(s===filtroEstatus?' selected':'')+'>'+s+'</option>'; });
+    html += '</select><label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700;margin-left:10px">ASEGURADORA</label><select onchange="window._polFiltroAseg=this.value; window.renderPlanillaPolizas()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"><option value="">TODAS</option>';
+    aseguradoras.forEach(a => { html += '<option value="'+_h(a)+'"'+(a===filtroAseg?' selected':'')+'>'+_h(a)+'</option>'; });
+    html += '</select><label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700;margin-left:10px">A CARGO DE</label><select onchange="window._polFiltroACargo=this.value; window.renderPlanillaPolizas()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"><option value="">TODOS</option>';
+    colabs.forEach(c => { html += '<option value="'+_h(c.id)+'"'+(c.id===filtroACargo?' selected':'')+'>'+_h(c.nombre)+'</option>'; });
+    html += '</select></div>';
+    html += '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>ESTATUS</th><th>ASEGURADO</th><th>PUESTO</th><th>A CARGO DE</th><th>NO. CERTIFICADO</th><th>ASEGURADORA</th><th>INICIO</th><th>VENCE</th><th>DÍAS</th><th class="num">MONTO</th>';
+    if (puedeEditar) html += '<th></th>';
+    html += '</tr></thead><tbody>';
+    if (filas.length === 0) {
+      html += '<tr><td colspan="'+(puedeEditar?11:10)+'" style="text-align:center;padding:30px;color:var(--mute);font-size:11px;letter-spacing:1px">SIN PÓLIZAS REGISTRADAS · IMPORTÁ DESDE EXCEL O AGREGÁ MANUALMENTE</td></tr>';
+    } else {
+      filas.forEach(po => {
+        const dias = _diasHastaVencer(po.fechaVencimiento);
+        const diasBadge = dias === null ? '—' : (dias < 0 ? '<span style="color:#C62828;font-weight:700">VENCIDA</span>' : dias < 30 ? '<span style="color:#F57C00;font-weight:700">'+dias+' d</span>' : dias+' d');
+        const estatusBadge = po.estatus === 'ACTIVA' ? '<span class="planilla-badge" style="background:#E8F5E9;color:#2E7D32;border:1px solid #2E7D32">ACTIVA</span>' : po.estatus === 'EN PROCESO' ? '<span class="planilla-badge" style="background:#FFF3E0;color:#F57C00;border:1px solid #F57C00">EN PROCESO</span>' : '<span class="planilla-badge" style="background:#EEE;color:#616161;border:1px solid #BDBDBD">CANCELADA</span>';
+        const filaStyle = po.estatus === 'CANCELADA' ? 'opacity:.6' : '';
+        html += '<tr style="'+filaStyle+'"><td>'+estatusBadge+'</td><td style="font-size:10px;font-weight:700">'+_h(po.aseguradoNombre||'—')+'</td><td style="font-size:9.5px;color:var(--mute)">'+_h(po.aseguradoPuesto||'—')+'</td><td style="font-size:10px;font-weight:600;color:#1565C0">'+_h(po.aCargoDeNombre||'—')+'</td><td style="font-size:9.5px">'+_h(po.noCertificado||po.noPoliza||'—')+'</td><td style="font-size:9.5px">'+_h(po.aseguradora||'—')+'</td><td style="font-size:9.5px">'+_h(_fmtFecha(po.fechaInicio))+'</td><td style="font-size:9.5px">'+_h(_fmtFecha(po.fechaVencimiento))+'</td><td style="font-size:9.5px;text-align:center">'+diasBadge+'</td><td class="num"><strong>'+_money(po.monto || cfg.montoDefault)+'</strong></td>';
+        if (puedeEditar) html += '<td><button class="btn ghost sm" onclick="window.editarPoliza(\''+_h(po.id)+'\')" style="font-size:9px">EDITAR</button> <button class="btn ghost sm" style="color:var(--red);font-size:9px" onclick="window.eliminarPoliza(\''+_h(po.id)+'\')" title="Eliminar">✕</button></td>';
+        html += '</tr>';
+      });
+    }
+    html += '</tbody></table></div></div>';
+    cont.innerHTML = html;
+  };
+
+  window.setPolizaMontoDefault = function(val){ if (!_puedeEditar()) return; const p = _activeProj(); if (!p) return; const cfg = _getConfig(p); cfg.montoDefault = Number(val) || 44.95; try { if(typeof saveState === 'function') saveState(); } catch(e){} try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} window.renderPlanillaPolizas(); showT('MONTO POR PÓLIZA ACTUALIZADO','green'); };
+
+  function _formHTML(po, p){
+    po = po || {};
+    const colabs = (p.planilla.colaboradores || []);
+    const cfg = _getConfig(p);
+    const fInicio = po.fechaInicio ? String(po.fechaInicio).slice(0,10) : new Date().toISOString().slice(0,10);
+    const fVence = po.fechaVencimiento ? String(po.fechaVencimiento).slice(0,10) : '';
+    return ''
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;font-size:12px">'
+      +   '<div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">NOMBRE DEL ASEGURADO</label><input id="polAseg" type="text" value="'+_h(po.aseguradoNombre||'')+'" placeholder="ej: CARLOS AROLDO SICAJAU CHACON" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">PUESTO</label><select id="polPuesto" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'+PUESTOS.map(x=>'<option value="'+x+'"'+(x===po.aseguradoPuesto?' selected':'')+'>'+x+'</option>').join('')+'</select></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">A CARGO DE (DESCUENTO EN PLANILLA)</label><select id="polACargo" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"><option value="">— SELECCIONÁ —</option>'+colabs.map(c=>'<option value="'+_h(c.id)+'"'+(c.id===po.aCargoDeColabId?' selected':'')+'>'+_h(c.nombre)+'</option>').join('')+'</select></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">NO. CERTIFICADO</label><input id="polCert" type="text" value="'+_h(po.noCertificado||'')+'" placeholder="ej: 68" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">NO. PÓLIZA</label><input id="polNo" type="text" value="'+_h(po.noPoliza||'GTAP-16134')+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
+      +   '<div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">ASEGURADORA</label><input id="polAseguradora" type="text" value="'+_h(po.aseguradora||'')+'" placeholder="ej: ASEGURADORA RURAL · SEGUROS G&T" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">FECHA INICIO</label><input id="polFInicio" type="date" value="'+_h(fInicio)+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">FECHA VENCIMIENTO</label><input id="polFVence" type="date" value="'+_h(fVence)+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">MONTO (Q)</label><input id="polMonto" type="number" step="0.01" min="0" value="'+(po.monto||cfg.montoDefault)+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">ESTATUS</label><select id="polEstatus" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'+ESTATUS_OPTS.map(x=>'<option value="'+x+'"'+(x===(po.estatus||'ACTIVA')?' selected':'')+'>'+x+'</option>').join('')+'</select></div>'
+      + '</div>';
+  }
+  function _hookCaptureForm(){ const okBtn = document.getElementById('prConfOk'); if (!okBtn) { setTimeout(_hookCaptureForm, 50); return; } if (okBtn.dataset._polHooked === '1') return; okBtn.dataset._polHooked = '1'; const prev = okBtn.onclick; okBtn.onclick = function(ev){ try { window._polCapturedForm = { aseguradoNombre: (document.getElementById('polAseg')?.value || '').trim().toUpperCase(), aseguradoPuesto: document.getElementById('polPuesto')?.value || 'OTRO', aCargoDeColabId: document.getElementById('polACargo')?.value || '', noCertificado: (document.getElementById('polCert')?.value || '').trim(), noPoliza: (document.getElementById('polNo')?.value || '').trim(), aseguradora: (document.getElementById('polAseguradora')?.value || '').trim().toUpperCase(), fechaInicio: document.getElementById('polFInicio')?.value || '', fechaVencimiento: document.getElementById('polFVence')?.value || '', monto: Number(document.getElementById('polMonto')?.value) || 0, estatus: document.getElementById('polEstatus')?.value || 'ACTIVA' }; } catch(e){ console.warn('[v347] captura form póliza:', e); } if (typeof prev === 'function') prev.call(this, ev); }; }
+  window.agregarPoliza = async function(){ if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; } const p = _activeProj(); if (!p) return; const colabs = p.planilla.colaboradores || []; if (colabs.length === 0) { showT('AGREGÁ AL MENOS UNA PERSONA EN COLABORADORES','red'); return; } window._polCapturedForm = null; setTimeout(_hookCaptureForm, 80); const ok = await window.prConfirm({ title:'AGREGAR PÓLIZA DE SEGURO', bodyHTML:_formHTML(null, p), okText:'GUARDAR PÓLIZA' }); if (!ok) { window._polCapturedForm = null; return; } _guardarDesdeCaptura(window._polCapturedForm || {}, null); };
+  window.editarPoliza = async function(id){ if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; } const p = _activeProj(); if (!p) return; const po = _getPolizas(p).find(x => x.id === id); if (!po) { showT('PÓLIZA NO ENCONTRADA','red'); return; } window._polCapturedForm = null; setTimeout(_hookCaptureForm, 80); const ok = await window.prConfirm({ title:'EDITAR PÓLIZA', bodyHTML:_formHTML(po, p), okText:'GUARDAR CAMBIOS' }); if (!ok) { window._polCapturedForm = null; return; } _guardarDesdeCaptura(window._polCapturedForm || {}, po); };
+  function _guardarDesdeCaptura(form, existente){ const p = _activeProj(); if (!p) return; if (!form.aseguradoNombre) { showT('INGRESÁ EL NOMBRE DEL ASEGURADO','red'); return; } if (!form.aCargoDeColabId) { showT('SELECCIONÁ A QUIÉN SE LE DESCUENTA','red'); return; } const colab = (p.planilla.colaboradores||[]).find(c => c.id === form.aCargoDeColabId); if (!colab) { showT('PERSONA A CARGO NO ENCONTRADA','red'); return; } const polizas = _getPolizas(p); const data = { aseguradoNombre: form.aseguradoNombre, aseguradoPuesto: form.aseguradoPuesto, aCargoDeColabId: form.aCargoDeColabId, aCargoDeNombre: colab.nombre, noCertificado: form.noCertificado, noPoliza: form.noPoliza, aseguradora: form.aseguradora, fechaInicio: form.fechaInicio, fechaVencimiento: form.fechaVencimiento, monto: form.monto || _getConfig(p).montoDefault, estatus: form.estatus }; if (existente) Object.assign(existente, data); else polizas.push(Object.assign({ id: 'pol-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), ts: Date.now() }, data)); try { if(typeof saveState === 'function') saveState(); } catch(e){} try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} window._polCapturedForm = null; window.renderPlanillaPolizas(); showT(existente ? 'PÓLIZA ACTUALIZADA' : 'PÓLIZA REGISTRADA', 'green'); }
+  window.eliminarPoliza = async function(id){ if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; } const p = _activeProj(); if (!p) return; const polizas = _getPolizas(p); const idx = polizas.findIndex(x => x.id === id); if (idx < 0) return; const po = polizas[idx]; const ok = await window.prConfirm({ title:'Eliminar póliza', bodyHTML:'<div style="font-size:12.5px;color:#333;line-height:1.5"><div><strong>'+_h(po.aseguradoNombre)+'</strong> ('+_h(po.aseguradoPuesto||'—')+')</div><div style="color:var(--mute);margin-top:4px">A cargo de: '+_h(po.aCargoDeNombre)+'</div><div style="margin-top:4px">Certificado '+_h(po.noCertificado||'—')+' · '+_money(po.monto)+'</div></div>', okText:'ELIMINAR', danger:true }); if (!ok) return; polizas.splice(idx, 1); try { if(typeof saveState === 'function') saveState(); } catch(e){} try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} window.renderPlanillaPolizas(); showT('PÓLIZA ELIMINADA','green'); };
+
+  window.importarPolizasDesdeExcel = async function(){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    if (typeof ExcelJS === 'undefined') { showT('LIBRERÍA EXCELJS NO CARGADA - RECARGAR','red'); return; }
+    const p = _activeProj();
+    if (!p) return;
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = '.xlsx,.xls'; input.style.display = 'none';
+    document.body.appendChild(input);
+    input.onchange = async (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file) { input.remove(); return; }
+      try {
+        showT('LEYENDO ARCHIVO...','');
+        const buffer = await file.arrayBuffer();
+        const wb = new ExcelJS.Workbook();
+        await wb.xlsx.load(buffer);
+        const polizas = _getPolizas(p);
+        const colabs = (p.planilla.colaboradores || []);
+        const norm = s => String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();
+        const colabByName = {};
+        colabs.forEach(c => { colabByName[norm(c.nombre)] = c; });
+        function findColab(nombreRaw){ if (!nombreRaw) return null; const n = norm(nombreRaw); if (colabByName[n]) return colabByName[n]; for (const k in colabByName){ if (k.includes(n) || n.includes(k)) return colabByName[k]; } return null; }
+        let importadas = 0, saltadas = 0, sinColab = 0;
+        const sinColabNombres = new Set();
+        wb.worksheets.forEach(ws => {
+          let headerRow = -1;
+          for (let r = 1; r <= Math.min(ws.rowCount, 10); r++){
+            const row = ws.getRow(r);
+            let foundNombre = false, foundACargo = false;
+            for (let c = 1; c <= ws.columnCount; c++){ const v = norm(ws.getCell(r,c).value); if (v === 'NOMBRE') foundNombre = true; if (v.includes('A CARGO')) foundACargo = true; }
+            if (foundNombre && foundACargo) { headerRow = r; break; }
+          }
+          if (headerRow < 0) return;
+          const headers = {};
+          const row = ws.getRow(headerRow);
+          for (let c = 1; c <= ws.columnCount; c++){
+            const v = norm(row.getCell(c).value);
+            if (v === 'NOMBRE') headers.aseguradoNombre = c;
+            else if (v === 'PUESTO') headers.aseguradoPuesto = c;
+            else if (v.includes('A CARGO')) headers.aCargoDeNombre = c;
+            else if (v.includes('FECHA INICIO')) headers.fechaInicio = c;
+            else if (v.includes('VENCIMIENTO')) headers.fechaVencimiento = c;
+            else if (v.includes('NO. POLIZA') || v === 'NO POLIZA') headers.noPoliza = c;
+            else if (v === 'MONTO') headers.monto = c;
+            else if (v === 'ESTATUS') headers.estatus = c;
+            else if (v.includes('ANOTACIONES')) headers.anotaciones = c;
+            else if (v.includes('ASEGURADORA')) headers.aseguradora = c;
+          }
+          if (!headers.aseguradoNombre || !headers.aCargoDeNombre) return;
+          const aseguradoraSheet = ws.name === 'ASEGURADORA RURAL' ? 'ASEGURADORA RURAL' : '';
+          for (let r = headerRow + 1; r <= ws.rowCount; r++){
+            const rowEl = ws.getRow(r);
+            const aseguradoNombre = String(rowEl.getCell(headers.aseguradoNombre).value || '').trim().toUpperCase();
+            if (!aseguradoNombre) continue;
+            const aCargoNombre = String(rowEl.getCell(headers.aCargoDeNombre).value || '').trim().toUpperCase();
+            const colab = findColab(aCargoNombre);
+            if (!colab) { sinColab++; if (aCargoNombre) sinColabNombres.add(aCargoNombre); continue; }
+            const noPoliza = String(rowEl.getCell(headers.noPoliza||0)?.value || '').trim();
+            const anot = String(rowEl.getCell(headers.anotaciones||0)?.value || '').trim();
+            const certMatch = (anot.match(/CERTIFICADO\s+(\d+)/i) || noPoliza.match(/CERTIFICADO\s+(\d+)/i) || [])[1] || '';
+            const existing = polizas.find(x => norm(x.aseguradoNombre) === norm(aseguradoNombre) && (x.noCertificado === certMatch || (!x.noCertificado && !certMatch)));
+            if (existing) { saltadas++; continue; }
+            const parseDate = v => { if(!v) return ''; if (v instanceof Date) return v.toISOString().slice(0,10); try { const d = new Date(v); return isNaN(d.getTime()) ? '' : d.toISOString().slice(0,10); } catch(e){ return ''; } };
+            const monto = Number(rowEl.getCell(headers.monto||0)?.value) || _getConfig(p).montoDefault;
+            const estatusRaw = String(rowEl.getCell(headers.estatus||0)?.value || '').trim().toUpperCase();
+            const estatus = estatusRaw === 'ACTIVA' ? 'ACTIVA' : (estatusRaw === 'EN PROCESO' ? 'EN PROCESO' : (estatusRaw === 'CANCELADA' ? 'CANCELADA' : 'ACTIVA'));
+            polizas.push({ id: 'pol-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), aseguradoNombre, aseguradoPuesto: String(rowEl.getCell(headers.aseguradoPuesto||0)?.value || 'OTRO').trim().toUpperCase(), aCargoDeColabId: colab.id, aCargoDeNombre: colab.nombre, noCertificado: certMatch, noPoliza: noPoliza.replace(/\s*CERTIFICADO\s+\d+\s*/i,'').trim(), aseguradora: aseguradoraSheet || String(rowEl.getCell(headers.aseguradora||0)?.value || '').trim().toUpperCase(), fechaInicio: parseDate(rowEl.getCell(headers.fechaInicio||0)?.value), fechaVencimiento: parseDate(rowEl.getCell(headers.fechaVencimiento||0)?.value), monto, estatus, creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), ts: Date.now() });
+            importadas++;
+          }
+        });
+        try { if(typeof saveState === 'function') saveState(); } catch(e){}
+        try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) await CloudSync.forceUploadNow(); } catch(e){}
+        window.renderPlanillaPolizas();
+        let msg = '✅ IMPORTACIÓN COMPLETA\n\n' + importadas + ' pólizas importadas\n' + saltadas + ' saltadas (ya existían)\n';
+        if (sinColab > 0) { msg += sinColab + ' sin persona a cargo encontrada en COLABORADORES\n'; if (sinColabNombres.size) { msg += '\nNombres no encontrados:\n' + Array.from(sinColabNombres).slice(0,10).join('\n'); if (sinColabNombres.size > 10) msg += '\n... y ' + (sinColabNombres.size - 10) + ' más'; msg += '\n\nAgregalos primero en COLABORADORES y volvé a importar.'; } }
+        alert(msg);
+      } catch(e){ console.error('[v347] importar póliza:', e); showT('ERROR LEYENDO ARCHIVO: '+(e.message||e),'red'); }
+      input.remove();
+    };
+    input.click();
+  };
+
+  window.getPolizasActivasACargoDe = function(colabId){ const p = _activeProj(); if (!p) return []; return _getPolizas(p).filter(po => po.aCargoDeColabId === colabId && po.estatus === 'ACTIVA'); };
+  window.getMontoMensualPolizasDe = function(colabId){ const p = _activeProj(); if (!p) return 0; const cfg = _getConfig(p); return _getPolizas(p).filter(po => po.aCargoDeColabId === colabId && po.estatus === 'ACTIVA').reduce((s,po) => s + (Number(po.monto)||cfg.montoDefault), 0); };
+
+  console.log('[v347] Catálogo de Pólizas cargado');
 })();
 </script>
