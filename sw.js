@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v349-anticipos-5-tipos-de-prestamo-especificos';
+const CACHE_VERSION = 'v350-polizas-boton-dar-de-baja-mas-observaciones';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
