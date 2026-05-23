@@ -2458,7 +2458,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v342</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v343</span>
   </footer>
 
 </div>
@@ -21137,24 +21137,45 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
             <th>DESCRIPCIÓN</th>
             <th>CUOTA</th>
             <th class="num">MONTO</th>
-            <th>ESTADO</th>
+            <th>ESTADO / ORIGEN</th>
             <th></th>
           </tr></thead>
           <tbody>
-            ${descuentos.length === 0 ? '<tr><td colspan="7" style="text-align:center;padding:14px;color:var(--mute);font-size:10px;letter-spacing:1px">SIN DESCUENTOS</td></tr>' :
-              descuentos.map(d => {
+            ${(() => {
+              // v343: unificar descuentos globales + descuentos de planillas armadas
+              const descTodos = [];
+              descuentos.forEach(d => descTodos.push({ d, fuente: 'global' }));
+              (p.planilla.planillasArmadas || [])
+                .filter(plArm => plArm.estado !== 'rechazada')
+                .forEach(plArm => {
+                  (plArm.descuentosPlanilla || []).forEach(d => {
+                    descTodos.push({ d, fuente: 'planilla', planilla: plArm });
+                  });
+                });
+              if(descTodos.length === 0){
+                return '<tr><td colspan="7" style="text-align:center;padding:14px;color:var(--mute);font-size:10px;letter-spacing:1px">SIN DESCUENTOS</td></tr>';
+              }
+              return descTodos.map(({ d, fuente, planilla }) => {
                 const cuotaTxt = (d.cuotasTotales && d.cuotasTotales > 1) ? `${d.cuotaActual||1}/${d.cuotasTotales}` : '—';
-                return `<tr>
+                const esPlanilla = (fuente === 'planilla');
+                const titPl = esPlanilla ? ((typeof _planillaTitulo === 'function' ? _planillaTitulo(planilla) : ('PLANILLA #'+(planilla.numero||'?')))) : '';
+                const estadoCell = esPlanilla
+                  ? `<span class="planilla-badge" style="background:#E3F2FD;color:#1565C0;border:1px solid #1565C0" title="Descuento aplicado en ${h(titPl)}">DE ${h(titPl).toUpperCase()}</span>`
+                  : (d.autorizado ? '<span class="planilla-badge ok">AUTORIZADO</span>' : '<span class="planilla-badge pending">PENDIENTE</span>');
+                const accionesCell = esPlanilla
+                  ? `<span style="font-size:8px;color:var(--mute);letter-spacing:.5px">SE EDITA EN LA PLANILLA</span>`
+                  : `${(!d.autorizado && canAuth)?`<button class="btn sm" onclick="autorizarAjuste('${h(d.id)}')">AUTORIZAR</button>`:''} ${canEdit?`<button class="btn ghost sm" style="color:var(--red)" onclick="eliminarAjuste('${h(d.id)}')" title="Eliminar">✕</button>`:''}`;
+                return `<tr${esPlanilla?' style="background:#F8FAFC"':''}>
                   <td><span class="planilla-badge" style="background:#FEE2E2;color:var(--red);border:1px solid var(--red)">${h(_descTipoLabel(d.subtipo || 'OTRO'))}</span></td>
                   <td style="font-size:10px;font-weight:700">${h(d.colaboradorNombre || _colabName(p, d.colaboradorId))}</td>
                   <td style="font-size:10px">${h(d.desc || '—')}</td>
                   <td style="font-size:10px">${cuotaTxt}</td>
                   <td class="num"><strong style="color:var(--red)">- ${fQ(d.monto || 0)}</strong></td>
-                  <td>${d.autorizado ? '<span class="planilla-badge ok">AUTORIZADO</span>' : '<span class="planilla-badge pending">PENDIENTE</span>'}</td>
-                  <td>${(!d.autorizado && canAuth)?`<button class="btn sm" onclick="autorizarAjuste('${h(d.id)}')">AUTORIZAR</button>`:''} ${canEdit?`<button class="btn ghost sm" style="color:var(--red)" onclick="eliminarAjuste('${h(d.id)}')" title="Eliminar">✕</button>`:''}</td>
+                  <td>${estadoCell}</td>
+                  <td>${accionesCell}</td>
                 </tr>`;
-              }).join('')
-            }
+              }).join('');
+            })()}
           </tbody>
         </table>
       </div>
@@ -25665,7 +25686,12 @@ window.addEventListener('load', () => {
     const bruto = pagos.reduce((s,x)=>s+Number(x.bruto||0),0) + ajustes.filter(a=>a.tipo!=='DESCUENTO').reduce((s,x)=>s+Number(x.monto||0),0);
     const retenido = pagos.reduce((s,x)=>s+Number(x.retencion||0),0);
     const retenPag = pagos.filter(x=>x.retencionPagada).reduce((s,x)=>s+Number(x.retencion||0),0);
-    const desc = ajustes.filter(a=>a.tipo==='DESCUENTO').reduce((s,x)=>s+Number(x.monto||0),0);
+    // v343: incluir descuentos de planillas armadas (no solo ajustes globales)
+    const descAjustes = ajustes.filter(a=>a.tipo==='DESCUENTO').reduce((s,x)=>s+Number(x.monto||0),0);
+    const descPlanillas = (pl.planillasArmadas || [])
+      .filter(plArm => plArm.estado !== 'rechazada')
+      .reduce((s, plArm) => s + (plArm.descuentosPlanilla || []).reduce((ss, d) => ss + Number(d.monto||0), 0), 0);
+    const desc = descAjustes + descPlanillas;
     const kpis=document.getElementById('planillaKpis');
     // v340: LIQUIDO DESEMBOLSADO = bruto - retencion pendiente (no liberada) - descuentos
     const liquido = bruto - (retenido - retenPag) - desc;

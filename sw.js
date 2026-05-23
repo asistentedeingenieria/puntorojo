@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v342-banner-actualizacion-rediseno-moderno';
+const CACHE_VERSION = 'v343-descuentos-de-planilla-aparecen-en-kpi-y-pestana';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
