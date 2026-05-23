@@ -2748,7 +2748,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v354</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v355</span>
   </footer>
 
 </div>
@@ -7192,6 +7192,96 @@ function ensureDataV9(data){
       if (migradas > 0) console.log('[v352] Migradas ' + migradas + ' pólizas a state.polizasGlobales');
     }
   } catch(e) { console.warn('[v352] migración pólizas globales:', e && e.message); }
+
+  // v355: ANTICIPOS GLOBALES — antes vivían en p.planilla.anticipos (per-proyecto),
+  // ahora viven en data.anticiposGlobales para que sean visibles desde cualquier
+  // proyecto. Migración idempotente: _anticiposMigratedToGlobalV355.
+  try {
+    if (!Array.isArray(data.anticiposGlobales)) data.anticiposGlobales = [];
+    if (!data._anticiposMigratedToGlobalV355) {
+      const seenIds = new Set(data.anticiposGlobales.map(a => a && a.id).filter(Boolean));
+      let migrados = 0;
+      (data.projects || []).forEach(pr => {
+        if (pr.planilla && Array.isArray(pr.planilla.anticipos)) {
+          pr.planilla.anticipos.forEach(a => {
+            if (a && a.id && !seenIds.has(a.id)) {
+              data.anticiposGlobales.push(a);
+              seenIds.add(a.id);
+              migrados++;
+            }
+          });
+          pr.planilla.anticipos = [];
+        }
+      });
+      data._anticiposMigratedToGlobalV355 = true;
+      if (migrados > 0) console.log('[v355] Migrados ' + migrados + ' anticipos a state.anticiposGlobales');
+    }
+  } catch(e) { console.warn('[v355] migración anticipos globales:', e && e.message); }
+
+  // v355: Carga inicial de los 27 anticipos del PDF "ANTICIPOS". Idempotente:
+  // _anticiposPDFSeedLoadedV355. Dedupea por nombre+fecha+monto+desc. Para
+  // anticipos históricos (que ya tienen cuotas pagadas FUERA del sistema),
+  // se guarda `cuotasPagadasInicial` que el cálculo de estado lo sumará al
+  // count del sistema (_calcCuotasPagadas).
+  try {
+    if (!data._anticiposPDFSeedLoadedV355 && Array.isArray(data.anticiposGlobales)) {
+      // [nombre, fechaISO, desc, monto, cuotas, cuotasPagadasInicial, subtipo]
+      const SEED = [
+        ['LUIS MIGUEL BARAN QUIEJ','2026-01-13','Bota De Seguridad Country',320,3,3,'PRESTAMO_CALZADO'],
+        ['JOSE MIGUEL LOPEZ SOYOS','2026-02-02','Pistola De Fijacion A Polvora Simpson PT-27',2900,6,6,'PRESTAMO_HERRAMIENTA'],
+        ['LUIS MIGUEL BARAN QUIEJ','2026-02-04','Nivel Laser De 3 Lineas Cruzadas De 360 Grados 12 Voltios Luz Verde, Incluye Cargador Y Bateria De 12 Volt. Marca Dewalt',3101.98,6,6,'PRESTAMO_HERRAMIENTA'],
+        ['JOSE MIGUEL LOPEZ SOYOS','2026-02-17','Préstamo Personal',600,1,1,'PRESTAMO_PERSONAL'],
+        ['MILTON ROLANDO MORALES','2026-02-19','Bota De Seguridad Country',320,3,3,'PRESTAMO_CALZADO'],
+        ['RAMIRO CHAMALÉ SIPAQUE','2026-02-26','Bota De Seguridad Country',640,5,5,'PRESTAMO_CALZADO'],
+        ['ESVIN OSWALDO MENDEZ VELASQUEZ','2026-02-26','Bota De Seguridad Country',320,3,3,'PRESTAMO_CALZADO'],
+        ['VICTOR ERNESTO SALAZAR RAMOS','2026-03-12','Lijadora, Para Paredes Y Techos Marca Stanley, 750 Watts',1614.42,5,5,'PRESTAMO_HERRAMIENTA'],
+        ['DANIEL EDUARDO MARROQUIN SIAN','2026-03-17',"Escalera De 4' Metálica",375,2,2,'PRESTAMO_HERRAMIENTA'],
+        ['ESVIN OSWALDO MENDEZ VELASQUEZ','2026-03-19','Lijadora, Para Paredes Y Techos Marca Stanley, 750 Watts',1614.42,5,5,'PRESTAMO_HERRAMIENTA'],
+        ['CESAR AGUSTO GONZALEZ ARAGON','2026-03-20',"Escalera De 4' Metálica",375,4,4,'PRESTAMO_HERRAMIENTA'],
+        ['CESAR AGUSTO GONZALEZ ARAGON','2026-03-20',"Escalera De 6' Metálica",621.50,4,4,'PRESTAMO_HERRAMIENTA'],
+        ['JOSE MIGUEL LOPEZ SOYOS','2026-03-24','Piston Flat Incl Ring Simpson',200,2,2,'PRESTAMO_SERVICIO_HERRAMIENTA'],
+        ['CESAR AGUSTO GONZALEZ ARAGON','2026-03-26','Bota De Seguridad Century Safety#1 S1p',220,2,2,'PRESTAMO_CALZADO'],
+        ['CARLOS AUGUSTO MARROQUÍN SIAN','2026-03-31',"Escalera De 4' Metálica",375,2,2,'PRESTAMO_HERRAMIENTA'],
+        ['OTO RENE HERNÁNDEZ HERNÁNDEZ','2026-04-06','Zapato Tipo Tenis Cubo Acero Tactix',740,3,3,'PRESTAMO_CALZADO'],
+        ['HECTOR ARTURO CHET ITZOL','2026-04-08','Lijadora, Para Paredes Y Techos Marca Stanley, 750 Watts',1633.82,4,3,'PRESTAMO_HERRAMIENTA'],
+        ['LUIS FERNANDO MONROY ORTIZ','2026-04-09','Tonel Con Cincho Y Tapadera',75,1,1,'PRESTAMO_HERRAMIENTA'],
+        ['OTO RENE HERNÁNDEZ HERNÁNDEZ','2026-04-09','Tonel Con Cincho Y Tapadera',75,1,1,'PRESTAMO_HERRAMIENTA'],
+        ['LUIS MIGUEL BARAN QUIEJ','2026-04-14','Atornillador Tablayeso 20 V 2 Amp 4400 Rpm Dewalt',2500,6,3,'PRESTAMO_HERRAMIENTA'],
+        ['JOSE MIGUEL LOPEZ SOYOS','2026-04-16','Nivel Laser 360 Grados Luz Verde, Con Cargador Y Bateria Dewalt',3409.24,6,3,'PRESTAMO_HERRAMIENTA'],
+        ['RAMIRO CHAMALÉ SIPAQUE','2026-04-16','Préstamo Personal',2300,5,2,'PRESTAMO_PERSONAL'],
+        ['ESVIN OSWALDO MENDEZ VELASQUEZ','2026-04-17','Préstamo Personal',1000,1,1,'PRESTAMO_PERSONAL'],
+        ['VICTOR ERNESTO SALAZAR RAMOS','2026-04-21','Lijadora, Para Paredes Y Techos Marca Stanley, 750 Watts',1633.81,5,2,'PRESTAMO_HERRAMIENTA'],
+        ['ESVIN OSWALDO MENDEZ VELASQUEZ','2026-04-25',"3 Escalera De 4' Metálica",1125,6,2,'PRESTAMO_HERRAMIENTA'],
+        ['JOSE MIGUEL LOPEZ SOYOS','2026-04-30','Préstamo Personal',2000,4,2,'PRESTAMO_PERSONAL'],
+        ['MIGUEL ANGEL GUZMAN GARCIA','2026-05-14','Préstamo Personal',300,1,1,'PRESTAMO_PERSONAL']
+      ];
+      const keyOf = (r) => String(r[0]||'').trim().toUpperCase() + '|' + r[1] + '|' + Number(r[3]).toFixed(2) + '|' + String(r[2]||'').trim().toUpperCase();
+      const seenKeys = new Set(data.anticiposGlobales.map(a => String(a.colaboradorNombre||'').trim().toUpperCase() + '|' + (a.fecha||'').slice(0,10) + '|' + Number(a.montoTotal||0).toFixed(2) + '|' + String(a.desc||'').trim().toUpperCase()));
+      let agregados = 0;
+      SEED.forEach((row, i) => {
+        const k = keyOf(row);
+        if (seenKeys.has(k)) return;
+        data.anticiposGlobales.push({
+          id: 'ant-pdf-v355-' + Date.now() + '-' + i,
+          colaboradorId: '',
+          colaboradorNombre: row[0],
+          fecha: row[1],
+          subtipo: row[6],
+          desc: row[2],
+          montoTotal: row[3],
+          cantidadCuotas: row[4],
+          cuotasPagadasInicial: row[5], // v355: cuotas pagadas FUERA del sistema (historico)
+          creadoPor: '',
+          creadoNombre: 'CARGA INICIAL (PDF ANTICIPOS)',
+          ts: Date.now()
+        });
+        seenKeys.add(k);
+        agregados++;
+      });
+      data._anticiposPDFSeedLoadedV355 = true;
+      if (agregados > 0) console.log('[v355] Seed PDF: ' + agregados + ' anticipos agregados');
+    }
+  } catch(e) { console.warn('[v355] seed PDF anticipos:', e && e.message); }
 
   // v354: Carga inicial de las 57 pólizas del PDF "PERSONAL CON SEGURO DE
   // ACCIDENTE". Idempotente: corre una sola vez (_polizasPDFSeedLoadedV354).
@@ -35918,21 +36008,63 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   function _money(n){ const v = Number(n)||0; return 'Q ' + v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
   function _fmtFecha(iso){ if(!iso) return '—'; try{ const d=new Date(iso); return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear(); }catch(e){ return iso; } }
   function _activeProj(){ return (typeof activeProj === 'function') ? activeProj() : null; }
-  function _getAnticipos(p){ if(!p || !p.planilla) return []; p.planilla.anticipos = p.planilla.anticipos || []; return p.planilla.anticipos; }
-
-  function _calcCuotasPagadas(p, anticipoId){
-    let count = 0;
-    (p.planilla.planillasArmadas || []).forEach(pl => {
-      if (pl.estado === 'rechazada') return;
-      (pl.descuentosPlanilla || []).forEach(d => {
-        if (d.anticipoId === anticipoId) count++;
+  // v355: anticipos son GLOBALES — viven en state.anticiposGlobales. El argumento p se ignora.
+  function _getAnticipos(_p){
+    try {
+      if (typeof state !== 'undefined' && state) {
+        if (!Array.isArray(state.anticiposGlobales)) state.anticiposGlobales = [];
+        return state.anticiposGlobales;
+      }
+    } catch(e){}
+    return [];
+  }
+  // v355: nombres únicos de colaboradores agregados de TODOS los proyectos.
+  function _allColabsGlobal(){
+    const seen = {};
+    const list = [];
+    try {
+      const projs = (typeof state !== 'undefined' && state && Array.isArray(state.projects)) ? state.projects : [];
+      projs.forEach(pr => {
+        const cs = (pr && pr.planilla && Array.isArray(pr.planilla.colaboradores)) ? pr.planilla.colaboradores : [];
+        cs.forEach(c => {
+          const k = String(c.nombre||'').trim().toUpperCase();
+          if (!k) return;
+          if (!seen[k]) {
+            seen[k] = { id: c.id, nombre: c.nombre, _projId: pr.id };
+            list.push(seen[k]);
+          }
+        });
       });
-    });
+    } catch(e){}
+    return list.sort((a,b) => String(a.nombre||'').localeCompare(String(b.nombre||'')));
+  }
+
+  // v355: cuenta cuotas pagadas para un anticipo. Suma:
+  //   1) cuotasPagadasInicial (cuotas pagadas FUERA del sistema — historico PDF)
+  //   2) descuentos aplicados en planillas armadas (de TODOS los proyectos, ya que ahora son globales)
+  function _calcCuotasPagadas(_p, anticipoId, anticipo){
+    let count = 0;
+    try {
+      // Suma de descuentos aplicados en planillas de cualquier proyecto.
+      const projs = (typeof state !== 'undefined' && state && Array.isArray(state.projects)) ? state.projects : [];
+      projs.forEach(pr => {
+        (pr.planilla?.planillasArmadas || []).forEach(pl => {
+          if (pl.estado === 'rechazada') return;
+          (pl.descuentosPlanilla || []).forEach(d => {
+            if (d.anticipoId === anticipoId) count++;
+          });
+        });
+      });
+    } catch(e){}
+    // Suma de cuotas históricas pre-cargadas del PDF.
+    if (anticipo && typeof anticipo.cuotasPagadasInicial === 'number') {
+      count += anticipo.cuotasPagadasInicial;
+    }
     return count;
   }
 
   function _estadoAnticipo(p, anticipo){
-    const pagadas = _calcCuotasPagadas(p, anticipo.id);
+    const pagadas = _calcCuotasPagadas(p, anticipo.id, anticipo);
     const total = Number(anticipo.cantidadCuotas) || 1;
     const cancelado = pagadas >= total;
     const montoCuota = Number(anticipo.montoTotal) / total;
@@ -35948,19 +36080,25 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
   // ── RENDER ────────────────────────────────────────────────────
   window.renderPlanillaAnticipos = function(){
-    const p = _activeProj();
     const cont = document.getElementById('planilla-anticipos');
     if (!cont) return;
-    if (!p || !p.planilla) { cont.innerHTML = '<div class="card"><div class="empty" style="padding:30px">SIN PROYECTO ACTIVO</div></div>'; return; }
-    const ant = _getAnticipos(p);
-    const colabs = (p.planilla.colaboradores || []);
+    // v355: anticipos globales — visibles sin proyecto activo.
+    const ant = _getAnticipos();
     const puedeEditar = _puedeEditar();
     const filtroPersona = window._antFiltroPersona || '';
     const filtroEstado = window._antFiltroEstado || 'todos';
+    // v355: filtro por nombre (texto libre)
+    const filtroPersonaNombre = String(filtroPersona||'').trim().toUpperCase();
+    // Lista de personas en pólizas existentes para el filtro
+    const personasFiltro = Array.from(new Set(ant.map(a => String(a.colaboradorNombre||'').trim()).filter(Boolean))).sort((a,b) => a.localeCompare(b));
 
-    const filas = ant.map(a => Object.assign({}, a, _estadoAnticipo(p, a)))
+    const filas = ant.map(a => Object.assign({}, a, _estadoAnticipo(null, a)))
       .filter(a => {
-        if (filtroPersona && a.colaboradorId !== filtroPersona) return false;
+        if (filtroPersona) {
+          const matchId = a.colaboradorId === filtroPersona;
+          const matchName = filtroPersonaNombre && String(a.colaboradorNombre||'').trim().toUpperCase() === filtroPersonaNombre;
+          if (!matchId && !matchName) return false;
+        }
         if (filtroEstado === 'pendiente' && a.estado !== 'PENDIENTE') return false;
         if (filtroEstado === 'cancelado' && a.estado !== 'CANCELADO') return false;
         return true;
@@ -35992,9 +36130,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     // Filtros
     html += '<div style="display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap">';
     html += '<label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700">PERSONA</label>';
+    // v355: filtro por nombre (texto libre, lista de personas con anticipos)
     html += '<select onchange="window._antFiltroPersona=this.value; window.renderPlanillaAnticipos()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px">';
     html += '<option value="">TODAS</option>';
-    colabs.forEach(c => { html += '<option value="'+_h(c.id)+'"'+(c.id===filtroPersona?' selected':'')+'>'+_h(c.nombre)+'</option>'; });
+    personasFiltro.forEach(n => { html += '<option value="'+_h(n)+'"'+(n===filtroPersona?' selected':'')+'>'+_h(n)+'</option>'; });
     html += '</select>';
     html += '<label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700;margin-left:10px">ESTADO</label>';
     html += '<select onchange="window._antFiltroEstado=this.value; window.renderPlanillaAnticipos()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px">';
@@ -36046,19 +36185,23 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   };
 
   // ── FORM HTML (compartido por agregar/editar) ────────────────
-  function _formHTML(a, p){
+  function _formHTML(a, _p){
     a = a || {};
-    const colabs = (p.planilla.colaboradores || []);
+    // v355: PERSONA es TEXTO LIBRE — sugerencias vía datalist (anticipos existentes + colabs globales).
     const fechaDefault = a.fecha ? String(a.fecha).slice(0,10) : new Date().toISOString().slice(0,10);
     const montoCuota = (Number(a.montoTotal)||0) / (Number(a.cantidadCuotas)||1);
+    const sugSet = {};
+    try {
+      (_getAnticipos() || []).forEach(x => { const n = String(x.colaboradorNombre||'').trim(); if (n) sugSet[n.toUpperCase()] = n; });
+      (_allColabsGlobal() || []).forEach(c => { const n = String(c.nombre||'').trim(); if (n && !sugSet[n.toUpperCase()]) sugSet[n.toUpperCase()] = n; });
+    } catch(e){}
+    const sugerencias = Object.values(sugSet).sort((a,b) => a.localeCompare(b));
     return ''
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;font-size:12px">'
       +   '<div style="grid-column:1/-1">'
-      +     '<label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">PERSONA</label>'
-      +     '<select id="antColab" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'
-      +       '<option value="">— SELECCIONÁ UNA PERSONA —</option>'
-      +       colabs.map(c => '<option value="'+_h(c.id)+'"'+(c.id===a.colaboradorId?' selected':'')+'>'+_h(c.nombre)+'</option>').join('')
-      +     '</select>'
+      +     '<label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">PERSONA (TEXTO LIBRE)</label>'
+      +     '<input id="antColab" type="text" list="antColabSuggestions" value="'+_h(a.colaboradorNombre||'')+'" placeholder="ej: LUIS MIGUEL BARAN QUIEJ" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'
+      +     '<datalist id="antColabSuggestions">'+sugerencias.map(s=>'<option value="'+_h(s)+'">').join('')+'</datalist>'
       +   '</div>'
       +   '<div>'
       +     '<label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">FECHA</label>'
@@ -36107,8 +36250,11 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const prev = okBtn.onclick;
     okBtn.onclick = function(ev){
       try {
+        // v355: PERSONA es texto libre — guardamos solo el nombre.
+        const colaboradorNombre = (document.getElementById('antColab')?.value || '').trim().toUpperCase();
         window._antCapturedForm = {
-          colaboradorId: document.getElementById('antColab')?.value || '',
+          colaboradorId: '', // v355: deprecado
+          colaboradorNombre: colaboradorNombre,
           fecha: document.getElementById('antFecha')?.value || '',
           subtipo: document.getElementById('antSubtipo')?.value || 'PRESTAMO_PERSONAL', // v349: default
           desc: (document.getElementById('antDesc')?.value || '').trim(),
@@ -36122,15 +36268,12 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
   window.agregarAnticipo = async function(){
     if (!_puedeEditar()) { showT('SIN PERMISO PARA AGREGAR ANTICIPOS','red'); return; }
-    const p = _activeProj();
-    if (!p) return;
-    const colabs = p.planilla.colaboradores || [];
-    if (colabs.length === 0) { showT('AGREGÁ AL MENOS UNA PERSONA EN COLABORADORES','red'); return; }
+    // v355: anticipos son independientes de COLABORADORES — no se valida.
     window._antCapturedForm = null;
     setTimeout(_hookCaptureForm, 80);
     const ok = await window.prConfirm({
       title: 'AGREGAR ANTICIPO',
-      bodyHTML: _formHTML(null, p),
+      bodyHTML: _formHTML(null, null),
       okText: 'GUARDAR ANTICIPO',
       wide: true
     });
@@ -36140,15 +36283,14 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
   window.editarAnticipo = async function(id){
     if (!_puedeEditar()) { showT('SIN PERMISO PARA EDITAR ANTICIPOS','red'); return; }
-    const p = _activeProj();
-    if (!p) return;
-    const ant = _getAnticipos(p).find(a => a.id === id);
+    // v355: anticipos globales — no requiere proyecto activo.
+    const ant = _getAnticipos().find(a => a.id === id);
     if (!ant) { showT('ANTICIPO NO ENCONTRADO','red'); return; }
     window._antCapturedForm = null;
     setTimeout(_hookCaptureForm, 80);
     const ok = await window.prConfirm({
       title: 'EDITAR ANTICIPO',
-      bodyHTML: _formHTML(ant, p),
+      bodyHTML: _formHTML(ant, null),
       okText: 'GUARDAR CAMBIOS',
       wide: true
     });
@@ -36157,26 +36299,23 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   };
 
   function _guardarDesdeCaptura(form, existente){
-    const p = _activeProj();
-    if (!p) return;
-    if (!form.colaboradorId) { showT('SELECCIONÁ UNA PERSONA','red'); return; }
+    // v355: texto libre — sin validación contra colaboradores.
+    if (!form.colaboradorNombre) { showT('INGRESÁ UNA PERSONA','red'); return; }
     if (!form.desc) { showT('INGRESÁ UN DETALLE DEL ANTICIPO','red'); return; }
     if (form.montoTotal <= 0) { showT('EL MONTO TOTAL DEBE SER MAYOR A 0','red'); return; }
     if (form.cantidadCuotas < 1) { showT('LA CANTIDAD DE CUOTAS DEBE SER MAYOR A 0','red'); return; }
     if (!form.fecha) { showT('INGRESÁ UNA FECHA','red'); return; }
-    const colab = (p.planilla.colaboradores||[]).find(c => c.id === form.colaboradorId);
-    if (!colab) { showT('PERSONA NO ENCONTRADA','red'); return; }
-    const ants = _getAnticipos(p);
+    const ants = _getAnticipos();
     if (existente) {
       Object.assign(existente, {
-        colaboradorId: form.colaboradorId, colaboradorNombre: colab.nombre,
+        colaboradorId: '', colaboradorNombre: form.colaboradorNombre,
         fecha: form.fecha, subtipo: form.subtipo, desc: form.desc,
         montoTotal: form.montoTotal, cantidadCuotas: form.cantidadCuotas
       });
     } else {
       ants.push({
         id: 'ant-' + Date.now() + '-' + Math.random().toString(36).slice(2,8),
-        colaboradorId: form.colaboradorId, colaboradorNombre: colab.nombre,
+        colaboradorId: '', colaboradorNombre: form.colaboradorNombre,
         fecha: form.fecha, subtipo: form.subtipo, desc: form.desc,
         montoTotal: form.montoTotal, cantidadCuotas: form.cantidadCuotas,
         creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''),
@@ -36193,13 +36332,12 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
   window.eliminarAnticipo = async function(id){
     if (!_puedeEditar()) { showT('SIN PERMISO PARA ELIMINAR ANTICIPOS','red'); return; }
-    const p = _activeProj();
-    if (!p) return;
-    const ants = _getAnticipos(p);
+    // v355: anticipos globales.
+    const ants = _getAnticipos();
     const idx = ants.findIndex(a => a.id === id);
     if (idx < 0) return;
     const a = ants[idx];
-    const est = _estadoAnticipo(p, a);
+    const est = _estadoAnticipo(null, a);
     let warning = '';
     if (est.cuotasPagadas > 0) {
       warning = '<div style="margin-top:12px;padding:10px 12px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:6px;color:#9A3412;font-size:11px"><strong>ATENCIÓN:</strong> Este anticipo tiene ' + est.cuotasPagadas + ' cuota(s) ya aplicada(s) en planillas. Eliminarlo NO eliminará esos descuentos de las planillas, pero perderás la referencia al anticipo original.</div>';
@@ -36222,13 +36360,25 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     showT('ANTICIPO ELIMINADO','green');
   };
 
-  // API para Fase 2: obtener anticipos pendientes de una persona
+  // API para Fase 2: obtener anticipos pendientes de una persona.
+  // v355: matchea por NOMBRE normalizado primero (texto libre global) y por
+  // id como fallback (compatibilidad con anticipos viejos).
   window.getAnticiposPendientesDeColab = function(colabId){
-    const p = _activeProj();
-    if (!p) return [];
-    return _getAnticipos(p).filter(a => a.colaboradorId === colabId)
-      .map(a => Object.assign({}, a, _estadoAnticipo(p, a)))
-      .filter(a => a.estado === 'PENDIENTE');
+    let nombreUC = '';
+    try {
+      const p = _activeProj();
+      if (p && Array.isArray(p.planilla?.colaboradores)){
+        const c = p.planilla.colaboradores.find(x => x.id === colabId);
+        if (c) nombreUC = String(c.nombre||'').trim().toUpperCase();
+      }
+    } catch(e){}
+    return _getAnticipos().filter(a => {
+      const matchName = nombreUC && String(a.colaboradorNombre||'').trim().toUpperCase() === nombreUC;
+      const matchId = colabId && a.colaboradorId === colabId;
+      return matchName || matchId;
+    })
+    .map(a => Object.assign({}, a, _estadoAnticipo(null, a)))
+    .filter(a => a.estado === 'PENDIENTE');
   };
 
   console.log('[v346] Catálogo de Anticipos cargado · Fase 1 lista');
