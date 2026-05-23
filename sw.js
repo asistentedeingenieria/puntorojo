@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v353-monto-default-polizas-en-modal-ajustes';
+const CACHE_VERSION = 'v354-polizas-texto-libre-mas-seed-57-pdf';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
