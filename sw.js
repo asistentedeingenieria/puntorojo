@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v345-reordenar-tabs-planilla-y-quitar-ajustes-excepciones';
+const CACHE_VERSION = 'v346-catalogo-anticipos-fase-1';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

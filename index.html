@@ -2647,6 +2647,7 @@ table{max-width:100%}
         <button class="mat-tab" data-plantab="retenciones" onclick="setPlanillaTab('retenciones')">RETENCIONES</button>
         <button class="mat-tab" data-plantab="reporte" onclick="setPlanillaTab('reporte')">REPORTE POR APTO</button>
         <button class="mat-tab" data-plantab="resumenpersona" onclick="setPlanillaTab('resumenpersona')">RESUMEN POR PERSONA</button>
+        <button class="mat-tab" data-plantab="anticipos" onclick="setPlanillaTab('anticipos')">ANTICIPOS</button>
         <button class="mat-tab" data-plantab="receta" onclick="setPlanillaTab('receta')" data-perm="users.manage">MODELOS Y COSTOS</button>
         <!-- COLABORADORES se inyecta al FINAL por injectPlanillaTabs -->
       </div>
@@ -2658,6 +2659,7 @@ table{max-width:100%}
       <div id="planilla-excepciones" style="display:none"></div>
       <div id="planilla-reporte" style="display:none"></div>
       <div id="planilla-resumenpersona" style="display:none"></div>
+      <div id="planilla-anticipos" style="display:none"></div>
     </section>
 
     <!-- ── ACTIVIDAD ── -->
@@ -2709,7 +2711,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v345</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v346</span>
   </footer>
 
 </div>
@@ -27956,7 +27958,7 @@ window.addEventListener('load', () => {
     window.currentPlanillaTab = tab;
     injectPlanillaTabs();
     document.querySelectorAll('[data-plantab]').forEach(b => b.classList.toggle('active', b.dataset.plantab === tab));
-    ['etapas','receta','colaboradores','retenciones','ajustes','reporte','excepciones','resumenpersona'].forEach(k => { const el=document.getElementById('planilla-'+k); if(el) el.style.display = tab === k ? '' : 'none'; });
+    ['etapas','receta','colaboradores','retenciones','ajustes','reporte','excepciones','resumenpersona','anticipos'].forEach(k => { const el=document.getElementById('planilla-'+k); if(el) el.style.display = tab === k ? '' : 'none'; });
     renderPlanilla();
   };
 
@@ -27999,6 +28001,8 @@ window.addEventListener('load', () => {
     if (currentPlanillaTab === 'ajustes') renderPlanillaAjustes();
     if (currentPlanillaTab === 'reporte') renderPlanillaReporte();
     if (currentPlanillaTab === 'resumenpersona' && typeof renderPlanillaResumenPersona === 'function') renderPlanillaResumenPersona();
+    // v346: catálogo de anticipos
+    if (currentPlanillaTab === 'anticipos' && typeof window.renderPlanillaAnticipos === 'function') window.renderPlanillaAnticipos();
     applyPermissions();
   };
 
@@ -34944,5 +34948,234 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   };
 
   console.log('[v229] preview/excel API lista · [v338] XLSX API lista');
+})();
+</script>
+
+<!-- v346 · CATÁLOGO DE ANTICIPOS (Fase 1) — ver doc completa en puntorojo.html -->
+<script id="pr-anticipos-module">
+(function(){
+  'use strict';
+  const SUBTIPOS = [
+    { key:'EQUIPO_PRESTADO', label:'EQUIPO PRESTADO' },
+    { key:'PRESTAMO',        label:'PRÉSTAMO' },
+    { key:'POLIZA',          label:'PÓLIZA DE SEGURO' },
+    { key:'ABONO_PREVIO',    label:'ABONO PREVIO' },
+    { key:'OTRO',            label:'OTRO' }
+  ];
+  const COLOR_SUBTIPO = { EQUIPO_PRESTADO:'#7B1FA2', PRESTAMO:'#1565C0', POLIZA:'#2E7D32', ABONO_PREVIO:'#F57C00', OTRO:'#616161' };
+  function _subtipoLabel(key){ const t = SUBTIPOS.find(x => x.key === key); return t ? t.label : (key || 'OTRO'); }
+  function _h(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function _money(n){ const v = Number(n)||0; return 'Q ' + v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+  function _fmtFecha(iso){ if(!iso) return '—'; try{ const d=new Date(iso); return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear(); }catch(e){ return iso; } }
+  function _activeProj(){ return (typeof activeProj === 'function') ? activeProj() : null; }
+  function _getAnticipos(p){ if(!p || !p.planilla) return []; p.planilla.anticipos = p.planilla.anticipos || []; return p.planilla.anticipos; }
+  function _calcCuotasPagadas(p, anticipoId){
+    let count = 0;
+    (p.planilla.planillasArmadas || []).forEach(pl => {
+      if (pl.estado === 'rechazada') return;
+      (pl.descuentosPlanilla || []).forEach(d => { if (d.anticipoId === anticipoId) count++; });
+    });
+    return count;
+  }
+  function _estadoAnticipo(p, anticipo){
+    const pagadas = _calcCuotasPagadas(p, anticipo.id);
+    const total = Number(anticipo.cantidadCuotas) || 1;
+    const cancelado = pagadas >= total;
+    const montoCuota = Number(anticipo.montoTotal) / total;
+    return { cuotasPagadas: pagadas, cuotasRestantes: Math.max(0, total - pagadas), montoCuota, estado: cancelado ? 'CANCELADO' : 'PENDIENTE' };
+  }
+  function _puedeEditar(){ try { return typeof can === 'function' && (can('users.manage') || can('planilla.descuentos')); } catch(e){ return false; } }
+
+  window.renderPlanillaAnticipos = function(){
+    const p = _activeProj();
+    const cont = document.getElementById('planilla-anticipos');
+    if (!cont) return;
+    if (!p || !p.planilla) { cont.innerHTML = '<div class="card"><div class="empty" style="padding:30px">SIN PROYECTO ACTIVO</div></div>'; return; }
+    const ant = _getAnticipos(p);
+    const colabs = (p.planilla.colaboradores || []);
+    const puedeEditar = _puedeEditar();
+    const filtroPersona = window._antFiltroPersona || '';
+    const filtroEstado = window._antFiltroEstado || 'todos';
+    const filas = ant.map(a => Object.assign({}, a, _estadoAnticipo(p, a)))
+      .filter(a => { if (filtroPersona && a.colaboradorId !== filtroPersona) return false; if (filtroEstado === 'pendiente' && a.estado !== 'PENDIENTE') return false; if (filtroEstado === 'cancelado' && a.estado !== 'CANCELADO') return false; return true; })
+      .sort((a,b) => { if (a.estado !== b.estado) return a.estado === 'PENDIENTE' ? -1 : 1; return (new Date(b.fecha||0)) - (new Date(a.fecha||0)); });
+    const totalActivos = filas.filter(a=>a.estado==='PENDIENTE').length;
+    const totalCancelado = filas.filter(a=>a.estado==='CANCELADO').length;
+    const totalPendienteQ = filas.filter(a=>a.estado==='PENDIENTE').reduce((s,a)=>s + (a.montoCuota * a.cuotasRestantes), 0);
+    let html = '';
+    html += '<div class="card">';
+    html += '<div class="card-hd"><h3>CATÁLOGO DE ANTICIPOS</h3><span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Préstamos, equipos, pólizas, abonos previos — base de datos centralizada</span>';
+    if (puedeEditar) html += '<button class="btn sm" style="background:#1565C0;border-color:#1565C0;color:#fff" onclick="window.agregarAnticipo()">+ AGREGAR ANTICIPO</button>';
+    html += '</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:14px 16px;background:var(--cream);border-bottom:1px solid var(--line)">';
+    html += '<div style="background:#fff;border:1px solid #FFE082;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">PENDIENTES</div><div style="font-size:18px;font-weight:800;color:#F57C00;margin-top:3px">' + totalActivos + '</div></div>';
+    html += '<div style="background:#fff;border:1px solid #C8E6C9;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">CANCELADOS</div><div style="font-size:18px;font-weight:800;color:#2E7D32;margin-top:3px">' + totalCancelado + '</div></div>';
+    html += '<div style="background:#fff;border:1px solid #EF9A9A;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">MONTO PENDIENTE</div><div style="font-size:18px;font-weight:800;color:#C62828;margin-top:3px">' + _money(totalPendienteQ) + '</div></div>';
+    html += '</div>';
+    html += '<div style="display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap">';
+    html += '<label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700">PERSONA</label>';
+    html += '<select onchange="window._antFiltroPersona=this.value; window.renderPlanillaAnticipos()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px">';
+    html += '<option value="">TODAS</option>';
+    colabs.forEach(c => { html += '<option value="'+_h(c.id)+'"'+(c.id===filtroPersona?' selected':'')+'>'+_h(c.nombre)+'</option>'; });
+    html += '</select>';
+    html += '<label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700;margin-left:10px">ESTADO</label>';
+    html += '<select onchange="window._antFiltroEstado=this.value; window.renderPlanillaAnticipos()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px">';
+    html += '<option value="todos"'+(filtroEstado==='todos'?' selected':'')+'>TODOS</option>';
+    html += '<option value="pendiente"'+(filtroEstado==='pendiente'?' selected':'')+'>PENDIENTES</option>';
+    html += '<option value="cancelado"'+(filtroEstado==='cancelado'?' selected':'')+'>CANCELADOS</option>';
+    html += '</select></div>';
+    html += '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>STATUS</th><th>NOMBRE DEL COLABORADOR</th><th>FECHA</th><th>TIPO</th><th>DETALLE</th><th class="num">MONTO TOTAL</th><th>CUOTAS</th><th class="num">MONTO POR CUOTA</th><th>PAGADAS</th>';
+    if (puedeEditar) html += '<th></th>';
+    html += '</tr></thead><tbody>';
+    if (filas.length === 0) {
+      html += '<tr><td colspan="'+(puedeEditar?10:9)+'" style="text-align:center;padding:30px;color:var(--mute);font-size:11px;letter-spacing:1px">SIN ANTICIPOS REGISTRADOS</td></tr>';
+    } else {
+      filas.forEach(a => {
+        const colorTipo = COLOR_SUBTIPO[a.subtipo] || '#616161';
+        const estadoBadge = a.estado === 'PENDIENTE'
+          ? '<span class="planilla-badge" style="background:#E8F5E9;color:#2E7D32;border:1px solid #2E7D32">PENDIENTE</span>'
+          : '<span class="planilla-badge" style="background:#FFEBEE;color:#C62828;border:1px solid #C62828">CANCELADO</span>';
+        const totalP = Number(a.cantidadCuotas)||1;
+        const progreso = a.cuotasPagadas + '/' + totalP;
+        const filaStyle = a.estado === 'CANCELADO' ? 'opacity:.7' : '';
+        html += '<tr style="'+filaStyle+'">';
+        html += '<td>'+estadoBadge+'</td>';
+        html += '<td style="font-size:10px;font-weight:700">'+_h(a.colaboradorNombre||'—')+'</td>';
+        html += '<td style="font-size:10px">'+_h(_fmtFecha(a.fecha))+'</td>';
+        html += '<td><span class="planilla-badge" style="background:'+colorTipo+'22;color:'+colorTipo+';border:1px solid '+colorTipo+';font-size:8.5px">'+_h(_subtipoLabel(a.subtipo))+'</span></td>';
+        html += '<td style="font-size:10px">'+_h(a.desc||'—')+'</td>';
+        html += '<td class="num"><strong>'+_money(a.montoTotal)+'</strong></td>';
+        html += '<td style="text-align:center;font-size:10px">'+totalP+'</td>';
+        html += '<td class="num">'+_money(a.montoCuota)+'</td>';
+        html += '<td style="text-align:center;font-size:10px;font-weight:700;color:'+(a.estado==='CANCELADO'?'#2E7D32':'#1565C0')+'">'+progreso+'</td>';
+        if (puedeEditar) {
+          html += '<td><button class="btn ghost sm" onclick="window.editarAnticipo(\''+_h(a.id)+'\')" style="font-size:9px">EDITAR</button> <button class="btn ghost sm" style="color:var(--red);font-size:9px" onclick="window.eliminarAnticipo(\''+_h(a.id)+'\')" title="Eliminar">✕</button></td>';
+        }
+        html += '</tr>';
+      });
+    }
+    html += '</tbody></table></div></div>';
+    cont.innerHTML = html;
+  };
+
+  function _formHTML(a, p){
+    a = a || {};
+    const colabs = (p.planilla.colaboradores || []);
+    const fechaDefault = a.fecha ? String(a.fecha).slice(0,10) : new Date().toISOString().slice(0,10);
+    const montoCuota = (Number(a.montoTotal)||0) / (Number(a.cantidadCuotas)||1);
+    return ''
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;font-size:12px">'
+      +   '<div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">PERSONA</label><select id="antColab" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"><option value="">— SELECCIONÁ UNA PERSONA —</option>'+colabs.map(c => '<option value="'+_h(c.id)+'"'+(c.id===a.colaboradorId?' selected':'')+'>'+_h(c.nombre)+'</option>').join('')+'</select></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">FECHA</label><input id="antFecha" type="date" value="'+_h(fechaDefault)+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">TIPO</label><select id="antSubtipo" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'+SUBTIPOS.map(t => '<option value="'+t.key+'"'+(t.key===a.subtipo?' selected':'')+'>'+t.label+'</option>').join('')+'</select></div>'
+      +   '<div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">DETALLE</label><input id="antDesc" type="text" placeholder="ej: Lijadora STANLEY 750W" value="'+_h(a.desc||'')+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">MONTO TOTAL (Q)</label><input id="antMontoTotal" type="number" step="0.01" min="0" value="'+(a.montoTotal||'')+'" oninput="window._antRecalcMontoCuota()" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">CANTIDAD DE CUOTAS</label><input id="antCantCuotas" type="number" step="1" min="1" value="'+(a.cantidadCuotas||1)+'" oninput="window._antRecalcMontoCuota()" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
+      +   '<div style="grid-column:1/-1;background:#F1F5F9;padding:10px 12px;border-radius:6px;border:1px solid #CBD5E1"><div style="font-size:9px;letter-spacing:1.2px;color:#475569;font-weight:700;text-transform:uppercase">MONTO POR CUOTA (CALCULADO AUTOMÁTICAMENTE)</div><div id="antMontoCuotaCalc" style="font-size:20px;font-weight:800;color:#0F172A;margin-top:3px">'+_money(montoCuota)+'</div></div>'
+      + '</div>';
+  }
+
+  window._antRecalcMontoCuota = function(){
+    const total = Number(document.getElementById('antMontoTotal')?.value) || 0;
+    const cant = Number(document.getElementById('antCantCuotas')?.value) || 1;
+    const cuota = cant > 0 ? total/cant : 0;
+    const out = document.getElementById('antMontoCuotaCalc');
+    if (out) out.textContent = _money(cuota);
+  };
+
+  function _hookCaptureForm(){
+    const okBtn = document.getElementById('prConfOk');
+    if (!okBtn) { setTimeout(_hookCaptureForm, 50); return; }
+    if (okBtn.dataset._antHooked === '1') return;
+    okBtn.dataset._antHooked = '1';
+    const prev = okBtn.onclick;
+    okBtn.onclick = function(ev){
+      try {
+        window._antCapturedForm = {
+          colaboradorId: document.getElementById('antColab')?.value || '',
+          fecha: document.getElementById('antFecha')?.value || '',
+          subtipo: document.getElementById('antSubtipo')?.value || 'OTRO',
+          desc: (document.getElementById('antDesc')?.value || '').trim(),
+          montoTotal: Number(document.getElementById('antMontoTotal')?.value) || 0,
+          cantidadCuotas: Number(document.getElementById('antCantCuotas')?.value) || 1
+        };
+      } catch(e){ console.warn('[v346] captura form anticipo:', e); }
+      if (typeof prev === 'function') prev.call(this, ev);
+    };
+  }
+
+  window.agregarAnticipo = async function(){
+    if (!_puedeEditar()) { showT('SIN PERMISO PARA AGREGAR ANTICIPOS','red'); return; }
+    const p = _activeProj();
+    if (!p) return;
+    const colabs = p.planilla.colaboradores || [];
+    if (colabs.length === 0) { showT('AGREGÁ AL MENOS UNA PERSONA EN COLABORADORES','red'); return; }
+    window._antCapturedForm = null;
+    setTimeout(_hookCaptureForm, 80);
+    const ok = await window.prConfirm({ title:'AGREGAR ANTICIPO', bodyHTML:_formHTML(null, p), okText:'GUARDAR ANTICIPO' });
+    if (!ok) { window._antCapturedForm = null; return; }
+    _guardarDesdeCaptura(window._antCapturedForm || {}, null);
+  };
+  window.editarAnticipo = async function(id){
+    if (!_puedeEditar()) { showT('SIN PERMISO PARA EDITAR ANTICIPOS','red'); return; }
+    const p = _activeProj();
+    if (!p) return;
+    const ant = _getAnticipos(p).find(a => a.id === id);
+    if (!ant) { showT('ANTICIPO NO ENCONTRADO','red'); return; }
+    window._antCapturedForm = null;
+    setTimeout(_hookCaptureForm, 80);
+    const ok = await window.prConfirm({ title:'EDITAR ANTICIPO', bodyHTML:_formHTML(ant, p), okText:'GUARDAR CAMBIOS' });
+    if (!ok) { window._antCapturedForm = null; return; }
+    _guardarDesdeCaptura(window._antCapturedForm || {}, ant);
+  };
+  function _guardarDesdeCaptura(form, existente){
+    const p = _activeProj();
+    if (!p) return;
+    if (!form.colaboradorId) { showT('SELECCIONÁ UNA PERSONA','red'); return; }
+    if (!form.desc) { showT('INGRESÁ UN DETALLE DEL ANTICIPO','red'); return; }
+    if (form.montoTotal <= 0) { showT('EL MONTO TOTAL DEBE SER MAYOR A 0','red'); return; }
+    if (form.cantidadCuotas < 1) { showT('LA CANTIDAD DE CUOTAS DEBE SER MAYOR A 0','red'); return; }
+    if (!form.fecha) { showT('INGRESÁ UNA FECHA','red'); return; }
+    const colab = (p.planilla.colaboradores||[]).find(c => c.id === form.colaboradorId);
+    if (!colab) { showT('PERSONA NO ENCONTRADA','red'); return; }
+    const ants = _getAnticipos(p);
+    if (existente) {
+      Object.assign(existente, { colaboradorId:form.colaboradorId, colaboradorNombre:colab.nombre, fecha:form.fecha, subtipo:form.subtipo, desc:form.desc, montoTotal:form.montoTotal, cantidadCuotas:form.cantidadCuotas });
+    } else {
+      ants.push({ id:'ant-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), colaboradorId:form.colaboradorId, colaboradorNombre:colab.nombre, fecha:form.fecha, subtipo:form.subtipo, desc:form.desc, montoTotal:form.montoTotal, cantidadCuotas:form.cantidadCuotas, creadoPor:(typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), creadoNombre:(typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : ''), ts:Date.now() });
+    }
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow){ CloudSync.forceUploadNow().catch(()=>{}); } } catch(e){}
+    window._antCapturedForm = null;
+    window.renderPlanillaAnticipos();
+    showT(existente ? 'ANTICIPO ACTUALIZADO' : 'ANTICIPO REGISTRADO', 'green');
+  }
+  window.eliminarAnticipo = async function(id){
+    if (!_puedeEditar()) { showT('SIN PERMISO PARA ELIMINAR ANTICIPOS','red'); return; }
+    const p = _activeProj();
+    if (!p) return;
+    const ants = _getAnticipos(p);
+    const idx = ants.findIndex(a => a.id === id);
+    if (idx < 0) return;
+    const a = ants[idx];
+    const est = _estadoAnticipo(p, a);
+    let warning = '';
+    if (est.cuotasPagadas > 0) {
+      warning = '<div style="margin-top:12px;padding:10px 12px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:6px;color:#9A3412;font-size:11px"><strong>ATENCIÓN:</strong> Este anticipo tiene ' + est.cuotasPagadas + ' cuota(s) ya aplicada(s) en planillas. Eliminarlo NO eliminará esos descuentos de las planillas, pero perderás la referencia al anticipo original.</div>';
+    }
+    const ok = await window.prConfirm({ title:'Eliminar anticipo', bodyHTML:'<div style="font-size:12.5px;color:#333;line-height:1.5"><div><strong>'+_h(a.colaboradorNombre)+'</strong></div><div style="color:var(--mute);margin-top:4px">'+_h(_subtipoLabel(a.subtipo))+' · '+_h(a.desc)+'</div><div style="margin-top:4px"><strong>'+_money(a.montoTotal)+'</strong> en '+a.cantidadCuotas+' cuotas</div></div>' + warning, okText:'ELIMINAR', danger:true });
+    if (!ok) return;
+    ants.splice(idx, 1);
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow){ CloudSync.forceUploadNow().catch(()=>{}); } } catch(e){}
+    window.renderPlanillaAnticipos();
+    showT('ANTICIPO ELIMINADO','green');
+  };
+  window.getAnticiposPendientesDeColab = function(colabId){
+    const p = _activeProj();
+    if (!p) return [];
+    return _getAnticipos(p).filter(a => a.colaboradorId === colabId).map(a => Object.assign({}, a, _estadoAnticipo(p, a))).filter(a => a.estado === 'PENDIENTE');
+  };
+  console.log('[v346] Catálogo de Anticipos cargado · Fase 1 lista');
 })();
 </script>
