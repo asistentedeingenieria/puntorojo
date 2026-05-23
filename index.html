@@ -2713,7 +2713,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v370</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v371</span>
   </footer>
 
 </div>
@@ -28995,6 +28995,33 @@ window.addEventListener('load', () => {
   function paidPct5(p,aid,idx){ const list=(p.planilla?.pagos||[]).filter(x=>x.tipo==='ETAPA' && x.aptoId===aid && Number(x.stageIdx)===Number(idx)); return list.length ? Math.max(...list.map(x=>Number(x.targetPct||100))) : 0; }
   function pctOptions5(current){ return PLANILLA_PCTS_5.filter(x=>x>current); }
   function nextPct5(current){ return pctOptions5(current)[0] || ''; }
+
+  // v371: regla secuencial de etapas (per-apto). Ver puntorojo.html para doc completa.
+  function _v371RequiereSecuencial(p, levelId){
+    const LEGACY_FREE = new Set(['vicinia-am']);
+    if (!p || !p.id) return false;
+    if (LEGACY_FREE.has(p.id)) return false;
+    if (p.id === 'vicinia-dc'){
+      if (levelId === 'va-s1' || levelId === 'va-n1') return true;
+      const mA = /^va-n(\d+)$/.exec(levelId); if (mA){ const n = Number(mA[1]); return n >= 5 && n <= 22; }
+      const mB = /^vb-n(\d+)$/.exec(levelId); if (mB){ const n = Number(mB[1]); return n >= 7 && n <= 22; }
+      return false;
+    }
+    if (p.id === 'essenza-f2'){
+      const m3 = /^t3-n(\d+)$/.exec(levelId); if (m3){ const n = Number(m3[1]); return n >= 10 && n <= 13; }
+      const m4 = /^t4-n(\d+)$/.exec(levelId); if (m4){ const n = Number(m4[1]); return n >= 9 && n <= 13; }
+      return false;
+    }
+    return true; // proyectos NUEVOS
+  }
+  function _v371PrevStagesAllComplete(p, apto, stageIdx){
+    for (let i = 0; i < stageIdx; i++){
+      const total = stageTotal5(p, apto, i);
+      if (total <= 0) continue;
+      if (paidPct5(p, apto.id, i) < 100) return false;
+    }
+    return true;
+  }
   // v210: BUSQUEDA EXHAUSTIVA + MERGE NO DESTRUCTIVO. La sincronizacion
   // ya no REEMPLAZA p.planilla.colaboradores — solo AGREGA los que faltan
   // (preservando ID y rol si ya existian). Esto evita que CloudSync.applyRemote
@@ -29418,10 +29445,8 @@ window.addEventListener('load', () => {
                 const total=stageTotal5(p,a,i); const paid=paidPct5(p,a.id,i); const opts=pctOptions5(paid); const next=nextPct5(paid);
                 const roleAllowed = !!colab && colRole !== 'SIN DEFINIR';
                 const roleMsg = (colRole === 'SIN DEFINIR') ? 'TIPO PENDIENTE' : '';
-                // v241: forzar orden — solo se puede pagar la etapa N si la
-                // etapa N-1 esta al 100% pagado.
-                // v279: etapas LIBERADAS, no se requiere etapa anterior al 100%.
-                const requierePrev = false;
+                // v371: regla secuencial reactivada para niveles configurados + nuevos proyectos
+                const requierePrev = (i > 0) && _v371RequiereSecuencial(p, l.id) && !_v371PrevStagesAllComplete(p, a, i);
                 // v341: NO bloquear por falta de persona — la validacion es al click.
                 const disabled=(!canGen || total<=0 || !opts.length || requierePrev);
                 const etapaName = (ETAPAS_PROJ[i] && ETAPAS_PROJ[i].name) || ('ETAPA '+(i+1));
@@ -29494,10 +29519,11 @@ window.addEventListener('load', () => {
     const ETAPAS_PROJ = getEtapasP(p);
     const N_ETAPAS = ETAPAS_PROJ.length;
     if(stageIdx<0 || stageIdx>=N_ETAPAS) return showToast('ETAPA NO VÁLIDA PARA PLANILLA','red');
-    // v241: forzar orden — etapa N requiere etapa N-1 al 100%
-    // v279: LIBERADO — cualquier etapa se puede pagar sin requerir que la
-    // anterior este al 100%.
+    // v371: regla secuencial reactivada para niveles configurados + nuevos proyectos
     const t=(p.towers||[]).find(x=>x.id===tid); const l=t&&(t.levels||[]).find(x=>x.id===lid); const a=l&&(l.aptos||[]).find(x=>x.id===aid); if(!a) return;
+    if (stageIdx > 0 && _v371RequiereSecuencial(p, lid) && !_v371PrevStagesAllComplete(p, a, stageIdx)){
+      return showToast('COMPLETÁ LA ETAPA ANTERIOR AL 100% ANTES DE PAGAR LA ETAPA '+(stageIdx+1),'red');
+    }
     // v341: toast claro + enfocar combo de PERSONA A PAGAR
     const colab=selectedColab5(p);
     if(!colab){
