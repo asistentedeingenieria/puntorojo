@@ -2748,7 +2748,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v356</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v357</span>
   </footer>
 
 </div>
@@ -36467,6 +36467,12 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const hoy = new Date(); hoy.setHours(0,0,0,0);
     return Math.round((d.getTime() - hoy.getTime()) / (1000*60*60*24));
   }
+  // v357: normalización de nombres para agrupar y detectar duplicados.
+  // Quita acentos, colapsa espacios, uppercase, trim. Así "MONROY ORTÍZ" y
+  // "MONROY ORTIZ " agrupan juntos.
+  function _normName(s){
+    return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim().toUpperCase();
+  }
 
   // ── RENDER ────────────────────────────────────────────────────
   window.renderPlanillaPolizas = function(){
@@ -36503,11 +36509,13 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const totalCanceladas = polizas.filter(po => po.estatus === 'CANCELADA').length;
     const montoMensualTotal = polizas.filter(po => po.estatus === 'ACTIVA').reduce((s,po) => s + (Number(po.monto)||cfg.montoDefault), 0);
 
-    // Resumen por persona a cargo (cuántas pólizas + monto mensual a descontar)
+    // Resumen por persona a cargo (cuántas pólizas + monto mensual a descontar).
+    // v357: agrupamos por NOMBRE NORMALIZADO (sin acentos, espacios colapsados)
+    // para que "MONROY ORTÍZ" y "MONROY ORTIZ" cuenten juntos.
     const porPersona = {};
     polizas.forEach(po => {
       if (po.estatus !== 'ACTIVA') return;
-      const k = po.aCargoDeColabId || ('_' + (po.aCargoDeNombre||'?').toUpperCase());
+      const k = _normName(po.aCargoDeNombre || '?');
       if(!porPersona[k]) porPersona[k] = { colabId: po.aCargoDeColabId, nombre: po.aCargoDeNombre, count: 0, monto: 0 };
       porPersona[k].count++;
       porPersona[k].monto += (Number(po.monto)||cfg.montoDefault);
@@ -36524,6 +36532,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     // v353: el campo "MONTO POR PÓLIZA (DEFAULT)" se movió a un botón ⚙ AJUSTES
     // (modal) para no ocupar lugar arriba.
     if (puedeEditar) {
+      html += '<button class="btn ghost sm" style="margin-right:6px" onclick="window.auditarPolizas()" title="Detectar canceladas y duplicados">🔍 AUDITAR</button>';
       html += '<button class="btn ghost sm" style="margin-right:6px" onclick="window.abrirAjustesPolizas()" title="Configurar monto default de pólizas nuevas">⚙ AJUSTES</button>';
       html += '<button class="btn sm" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.agregarPoliza()">+ AGREGAR PÓLIZA</button>';
     }
@@ -36672,6 +36681,125 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if (!nuevoMonto || nuevoMonto <= 0) { showT('MONTO INVÁLIDO','red'); return; }
     window.setPolizaMontoDefault(nuevoMonto);
   };
+
+  // v357: AUDITAR — detecta pólizas canceladas + duplicados (mismo nombre
+  // de asegurado normalizado) y permite eliminar individualmente.
+  window.auditarPolizas = async function(){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const polizas = _getPolizas();
+    const canceladas = polizas.filter(p => p.estatus === 'CANCELADA');
+    // Agrupar por nombre normalizado del ASEGURADO
+    const porAsegurado = {};
+    polizas.forEach(p => {
+      const k = _normName(p.aseguradoNombre || '?');
+      if (!porAsegurado[k]) porAsegurado[k] = [];
+      porAsegurado[k].push(p);
+    });
+    const duplicados = Object.entries(porAsegurado).filter(([k, arr]) => arr.length > 1);
+    // Agrupar por nombre normalizado A CARGO DE — sólo informativo
+    const porACargo = {};
+    polizas.forEach(p => {
+      const k = _normName(p.aCargoDeNombre || '?');
+      if (!porACargo[k]) porACargo[k] = { variantes: new Set(), polizas: [] };
+      porACargo[k].variantes.add(String(p.aCargoDeNombre||'').trim());
+      porACargo[k].polizas.push(p);
+    });
+    const aCargoVariantes = Object.entries(porACargo).filter(([k, info]) => info.variantes.size > 1);
+
+    let body = '';
+    body += '<div style="font-size:12px;color:#1F2937;line-height:1.5;margin-bottom:14px">Revisión del catálogo. Podés eliminar individualmente las pólizas problemáticas. Los cambios se aplican <strong>al instante</strong> (no es necesario guardar).</div>';
+
+    // KPIs
+    body += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">';
+    body += '<div style="background:#FFF5F5;border:1px solid #FCA5A5;border-radius:8px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#991B1B;font-weight:700">CANCELADAS</div><div style="font-size:20px;font-weight:800;color:#DC2626;margin-top:2px">'+canceladas.length+'</div></div>';
+    body += '<div style="background:#FFFBEB;border:1px solid #FCD34D;border-radius:8px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#92400E;font-weight:700">DUPLICADOS (MISMO ASEGURADO)</div><div style="font-size:20px;font-weight:800;color:#D97706;margin-top:2px">'+duplicados.length+'</div></div>';
+    body += '<div style="background:#EFF6FF;border:1px solid #93C5FD;border-radius:8px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#1E40AF;font-weight:700">VARIANTES "A CARGO DE"</div><div style="font-size:20px;font-weight:800;color:#2563EB;margin-top:2px">'+aCargoVariantes.length+'</div></div>';
+    body += '</div>';
+
+    // Sección 1: CANCELADAS
+    if (canceladas.length > 0) {
+      body += '<div style="border:1px solid #FCA5A5;border-radius:8px;margin-bottom:14px;background:#FFFAFA">';
+      body += '<div style="padding:10px 14px;font-size:11px;font-weight:700;color:#991B1B;background:#FEE2E2;border-bottom:1px solid #FCA5A5;letter-spacing:.6px;border-radius:8px 8px 0 0">PÓLIZAS CANCELADAS · '+canceladas.length+'</div>';
+      body += '<div style="padding:8px 12px">';
+      canceladas.forEach(p => {
+        body += '<div data-pol-id="'+_h(p.id)+'" style="display:grid;grid-template-columns:1fr auto;gap:10px;padding:8px 10px;border-bottom:1px solid #FECACA;align-items:center">';
+        body += '<div><div style="font-size:11.5px;font-weight:700;color:#0F172A">'+_h(p.aseguradoNombre||'—')+'</div>';
+        body += '<div style="font-size:10px;color:#64748B;margin-top:2px">A cargo: '+_h(p.aCargoDeNombre||'—')+(p.fechaBaja?' · BAJA '+_h(_fmtFecha(p.fechaBaja)):'')+'</div></div>';
+        body += '<button class="btn ghost sm" data-action="auditDelete" data-id="'+_h(p.id)+'" style="color:#DC2626;border-color:#FCA5A5;font-size:10px">🗑 ELIMINAR</button>';
+        body += '</div>';
+      });
+      body += '</div></div>';
+    }
+
+    // Sección 2: DUPLICADOS
+    if (duplicados.length > 0) {
+      body += '<div style="border:1px solid #FCD34D;border-radius:8px;margin-bottom:14px;background:#FFFBEB">';
+      body += '<div style="padding:10px 14px;font-size:11px;font-weight:700;color:#92400E;background:#FEF3C7;border-bottom:1px solid #FCD34D;letter-spacing:.6px;border-radius:8px 8px 0 0">DUPLICADOS · MISMO ASEGURADO · '+duplicados.length+' GRUPO(S)</div>';
+      body += '<div style="padding:8px 12px">';
+      duplicados.forEach(([k, arr]) => {
+        body += '<div style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px dashed #FDE68A">';
+        body += '<div style="font-size:11px;font-weight:700;color:#92400E;margin-bottom:6px">'+_h(arr[0].aseguradoNombre)+' · '+arr.length+' registros</div>';
+        arr.forEach(p => {
+          body += '<div data-pol-id="'+_h(p.id)+'" style="display:grid;grid-template-columns:1fr auto;gap:10px;padding:6px 10px;background:#fff;border:1px solid #FDE68A;border-radius:6px;margin-bottom:4px;align-items:center">';
+          body += '<div style="font-size:10px"><span class="planilla-badge" style="background:#F1F5F9;color:#475569;border:1px solid #CBD5E1;font-size:8px;margin-right:6px">'+_h(p.estatus||'?')+'</span>';
+          body += 'Cert '+_h(p.noCertificado||p.noPoliza||'—')+' · '+_h(p.aseguradora||'—')+' · A cargo: '+_h(p.aCargoDeNombre||'—')+'</div>';
+          body += '<button class="btn ghost sm" data-action="auditDelete" data-id="'+_h(p.id)+'" style="color:#DC2626;border-color:#FCA5A5;font-size:9px">🗑 ELIMINAR</button>';
+          body += '</div>';
+        });
+        body += '</div>';
+      });
+      body += '</div></div>';
+    }
+
+    // Sección 3: VARIANTES A CARGO DE (informativo)
+    if (aCargoVariantes.length > 0) {
+      body += '<div style="border:1px solid #93C5FD;border-radius:8px;background:#EFF6FF">';
+      body += '<div style="padding:10px 14px;font-size:11px;font-weight:700;color:#1E40AF;background:#DBEAFE;border-bottom:1px solid #93C5FD;letter-spacing:.6px;border-radius:8px 8px 0 0">VARIANTES "A CARGO DE" · '+aCargoVariantes.length+' GRUPO(S) · INFORMATIVO</div>';
+      body += '<div style="padding:10px 14px;font-size:11px;color:#1E3A8A;line-height:1.5">';
+      body += '<div style="margin-bottom:8px;color:#3730A3">Nombres que se ven distintos por acentos/espacios pero <strong>cuentan juntos</strong> en el resumen. Si querés que se vean idénticos en la tabla, editá las pólizas manualmente:</div>';
+      aCargoVariantes.forEach(([k, info]) => {
+        const variantes = Array.from(info.variantes);
+        body += '<div style="margin-bottom:4px;padding:6px 10px;background:#fff;border:1px solid #BFDBFE;border-radius:6px"><strong>'+_h(variantes[0])+'</strong> ('+info.polizas.length+' pólizas): ';
+        body += variantes.slice(1).map(v => '<span style="color:#6366F1">+ "'+_h(v)+'"</span>').join(', ');
+        body += '</div>';
+      });
+      body += '</div></div>';
+    }
+
+    if (canceladas.length === 0 && duplicados.length === 0 && aCargoVariantes.length === 0) {
+      body += '<div style="padding:30px;text-align:center;background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;color:#15803D;font-weight:700">✅ TODO EN ORDEN · Sin canceladas, sin duplicados, sin variantes de nombre.</div>';
+    }
+
+    const ok = await window.prConfirm({ title:'🔍 AUDITAR CATÁLOGO DE PÓLIZAS', bodyHTML: body, okText:'CERRAR', cancelText:'', wide:true });
+    // Nota: el OK/CANCEL no hace nada — los borrados pasaron mientras estaba abierto el modal.
+  };
+
+  // v357: handler delegado para botones ELIMINAR dentro del modal AUDITAR.
+  // Se engancha al body con captura para sobrevivir a re-renders del modal.
+  if (!window._polAuditDelegateInstalled) {
+    document.body.addEventListener('click', async function(ev){
+      const btn = ev.target.closest && ev.target.closest('button[data-action="auditDelete"]');
+      if (!btn) return;
+      const id = btn.getAttribute('data-id');
+      if (!id) return;
+      const polizas = _getPolizas();
+      const idx = polizas.findIndex(x => x.id === id);
+      if (idx < 0) return;
+      const po = polizas[idx];
+      // Confirmación rápida inline (sin abrir otro prConfirm para no apilar modales)
+      btn.disabled = true;
+      btn.textContent = 'Eliminando...';
+      polizas.splice(idx, 1);
+      try { if(typeof saveState === 'function') saveState(); } catch(e){}
+      try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+      // Esconder la fila visualmente
+      const row = btn.closest('[data-pol-id]');
+      if (row) { row.style.opacity = '.35'; row.style.textDecoration = 'line-through'; btn.remove(); }
+      try { window.renderPlanillaPolizas(); } catch(e){}
+      showT('PÓLIZA ELIMINADA: ' + (po.aseguradoNombre||'—'), 'green');
+    });
+    window._polAuditDelegateInstalled = true;
+  }
 
   function _formHTML(po, p){
     po = po || {};
