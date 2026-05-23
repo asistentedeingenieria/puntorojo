@@ -2748,7 +2748,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v368</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v369</span>
   </footer>
 
 </div>
@@ -32897,8 +32897,16 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       const k = upper(pg.colaborador || 'SIN NOMBRE');
       if(!colabsMap[k]) colabsMap[k] = { nombre: k, colaboradorId: pg.colaboradorId || '' };
     });
-    const colabs = Object.values(colabsMap).sort((a,b)=>a.nombre.localeCompare(b.nombre));
+    let colabs = Object.values(colabsMap).sort((a,b)=>a.nombre.localeCompare(b.nombre));
     if(!colabs.length){ showT('LA PLANILLA NO TIENE COLABORADORES','red'); return; }
+    // v369: filtrar colabs que ya tienen TODOS sus descuentos aplicados en esta planilla.
+    // Solo aparecen en el dropdown los que tienen al menos 1 descuento disponible.
+    const _totalColabs = colabs.length;
+    colabs = colabs.filter(c => _v369TieneDescuentosDisponibles(c.nombre, c.colaboradorId, pl));
+    if (colabs.length === 0){
+      showT('TODOS LOS COLABORADORES YA TIENEN SUS DESCUENTOS APLICADOS · NADA QUE AGREGAR','green');
+      return;
+    }
 
     const prev = document.getElementById('v248DescModal');
     if(prev) prev.remove();
@@ -33120,6 +33128,50 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       PRESTAMO_CALZADO:'PRÉSTAMO PARA COMPRA DE CALZADO'
     };
     return M[key] || String(key||'OTRO').replace(/_/g,' ');
+  }
+
+  // v369: devuelve true si la persona TODAVÍA tiene al menos un descuento
+  // disponible para aplicar en esta planilla (anticipo pendiente no aplicado
+  // en esta planilla, o póliza activa no aplicada en esta planilla).
+  function _v369TieneDescuentosDisponibles(nombreColab, colaboradorId, pl){
+    const nombreUC = String(nombreColab||'').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+    if (!nombreUC) return false;
+    const matchPerson = (n, id) => {
+      const aN = String(n||'').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+      return (colaboradorId && id === colaboradorId) || aN === nombreUC;
+    };
+    // 1) ¿Algún anticipo pendiente no incluido en esta planilla?
+    const anticipos = (typeof state !== 'undefined' && Array.isArray(state.anticiposGlobales) ? state.anticiposGlobales : [])
+      .filter(a => matchPerson(a.colaboradorNombre, a.colaboradorId));
+    for (const a of anticipos){
+      let pagadasEnPlanillas = 0;
+      try {
+        (state.projects||[]).forEach(pr => {
+          (pr.planilla?.planillasArmadas||[]).forEach(plx => {
+            if (plx.estado === 'rechazada') return;
+            (plx.descuentosPlanilla||[]).forEach(d => { if (d.anticipoId === a.id) pagadasEnPlanillas++; });
+          });
+        });
+      } catch(e){}
+      const inicial = Number(a.cuotasPagadasInicial)||0;
+      const pagadas = inicial + pagadasEnPlanillas;
+      const total = Number(a.cantidadCuotas)||1;
+      if (pagadas >= total) continue; // anticipo ya cancelado en su totalidad
+      const yaIncluidoEnEsta = (pl.descuentosPlanilla||[]).some(d => d.anticipoId === a.id);
+      if (!yaIncluidoEnEsta) return true; // hay anticipo pendiente disponible
+    }
+    // 2) ¿Pólizas activas no incluidas todavía en esta planilla?
+    const polizas = (typeof state !== 'undefined' && Array.isArray(state.polizasGlobales) ? state.polizasGlobales : [])
+      .filter(po => {
+        if (po.estatus !== 'ACTIVA') return false;
+        const aC = String(po.aCargoDeNombre||'').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+        return aC === nombreUC;
+      });
+    if (polizas.length > 0){
+      const polizaYaIncluida = (pl.descuentosPlanilla||[]).some(d => d.subtipo === 'POLIZA' && (d.colaboradorNombre||'').toUpperCase() === String(nombreColab||'').toUpperCase());
+      if (!polizaYaIncluida) return true;
+    }
+    return false;
   }
 
   window.eliminarDescuentoPlanilla = async function(planillaId, descuentoId){

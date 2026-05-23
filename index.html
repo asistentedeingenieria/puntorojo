@@ -2713,7 +2713,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v368</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v369</span>
   </footer>
 
 </div>
@@ -32318,8 +32318,11 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       const k = upper(pg.colaborador || 'SIN NOMBRE');
       if(!colabsMap[k]) colabsMap[k] = { nombre: k, colaboradorId: pg.colaboradorId || '' };
     });
-    const colabs = Object.values(colabsMap).sort((a,b)=>a.nombre.localeCompare(b.nombre));
+    let colabs = Object.values(colabsMap).sort((a,b)=>a.nombre.localeCompare(b.nombre));
     if(!colabs.length){ showT('LA PLANILLA NO TIENE COLABORADORES','red'); return; }
+    // v369: filtrar colabs que ya tienen TODOS sus descuentos aplicados en esta planilla
+    colabs = colabs.filter(c => _v369TieneDescuentosDisponibles(c.nombre, c.colaboradorId, pl));
+    if (colabs.length === 0){ showT('TODOS LOS COLABORADORES YA TIENEN SUS DESCUENTOS APLICADOS · NADA QUE AGREGAR','green'); return; }
     const prev = document.getElementById('v248DescModal');
     if(prev) prev.remove();
     const html = '<div id="v248DescModal" style="position:fixed;inset:0;background:rgba(15,23,42,.5);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px"><div style="background:#fff;border-radius:16px;max-width:680px;width:100%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 25px 60px -12px rgba(15,23,42,.4),0 8px 20px -4px rgba(15,23,42,.18)"><div style="padding:18px 22px;border-bottom:1px solid #F1F5F9;display:flex;justify-content:space-between;align-items:flex-start;background:#0F172A;color:#fff;border-radius:16px 16px 0 0;gap:10px"><div style="flex:1;min-width:0"><h3 style="margin:0;font-size:15px;font-weight:700;letter-spacing:.3px">AGREGAR DESCUENTOS DESDE CATÁLOGO</h3><div style="margin-top:4px;font-size:10.5px;letter-spacing:1.1px;color:rgba(255,255,255,.88);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(_planillaTituloUpper(pl))+'</div></div><button onclick="window._v248CerrarDescModal()" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer;line-height:1;padding:0;margin-top:-2px">×</button></div><div style="padding:20px 22px;overflow-y:auto;flex:1;display:grid;gap:14px"><div style="padding:10px 12px;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;color:#1E40AF;font-size:11.5px;line-height:1.5">Los descuentos se cargan <strong>automáticamente</strong> desde el catálogo de Anticipos y Pólizas. No hay opción manual — primero registrá el anticipo o póliza en el catálogo si todavía no existe.</div><div><label style="font-size:10px;letter-spacing:1px;color:#666;font-weight:700;text-transform:uppercase">Trabajador</label><select id="v248DescColab" onchange="window._v365RefreshSugerencias(\''+esc(pl.id)+'\')" style="width:100%;padding:10px;border:1px solid #E2E8F0;border-radius:8px;font-size:13px;margin-top:4px;background:#FAFBFC"><option value="">— SELECCIONÁ UN TRABAJADOR —</option>'+colabs.map(c => '<option value="'+esc(c.nombre)+'" data-id="'+esc(c.colaboradorId||'')+'">'+esc(c.nombre)+'</option>').join('')+'</select></div><div id="v365SugerenciasBox" style="min-height:80px"><div style="padding:30px;text-align:center;color:#94A3B8;font-size:11.5px;letter-spacing:.8px;background:#F8FAFC;border:1px dashed #CBD5E1;border-radius:8px">SELECCIONÁ UN TRABAJADOR PARA VER SUS DESCUENTOS DISPONIBLES</div></div></div><div style="padding:14px 18px;border-top:1px solid #F1F5F9;background:#FAFBFC;display:flex;gap:10px;justify-content:flex-end;border-radius:0 0 16px 16px"><button class="btn ghost" onclick="window._v248CerrarDescModal()">CANCELAR</button><button class="btn" id="v365AplicarBtn" disabled onclick="window._v365AplicarSeleccionados(\''+esc(pl.id)+'\')" style="background:#15803D;border-color:#15803D;color:#fff;opacity:.5;cursor:not-allowed">APLICAR SELECCIONADOS</button></div></div></div>';
@@ -32419,6 +32422,32 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     showT(agregados+' DESCUENTO(S) AGREGADOS','green');
   };
   function _subtipoLabelAnt(key){ const M = { PRESTAMO_HERRAMIENTA:'PRÉSTAMO PARA COMPRA DE HERRAMIENTA', PRESTAMO_PERSONAL:'PRÉSTAMO PERSONAL', PRESTAMO_SAT:'PRÉSTAMO PARA TRÁMITE SAT', PRESTAMO_SERVICIO_HERRAMIENTA:'PRÉSTAMO PARA SERVICIO DE HERRAMIENTA', PRESTAMO_CALZADO:'PRÉSTAMO PARA COMPRA DE CALZADO' }; return M[key] || String(key||'OTRO').replace(/_/g,' '); }
+
+  // v369: ¿esta persona tiene algún descuento disponible para esta planilla?
+  function _v369TieneDescuentosDisponibles(nombreColab, colaboradorId, pl){
+    const nombreUC = String(nombreColab||'').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+    if (!nombreUC) return false;
+    const matchPerson = (n, id) => { const aN = String(n||'').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,''); return (colaboradorId && id === colaboradorId) || aN === nombreUC; };
+    const anticipos = (typeof state !== 'undefined' && Array.isArray(state.anticiposGlobales) ? state.anticiposGlobales : [])
+      .filter(a => matchPerson(a.colaboradorNombre, a.colaboradorId));
+    for (const a of anticipos){
+      let pagadasEnPlanillas = 0;
+      try { (state.projects||[]).forEach(pr => { (pr.planilla?.planillasArmadas||[]).forEach(plx => { if (plx.estado === 'rechazada') return; (plx.descuentosPlanilla||[]).forEach(d => { if (d.anticipoId === a.id) pagadasEnPlanillas++; }); }); }); } catch(e){}
+      const inicial = Number(a.cuotasPagadasInicial)||0;
+      const pagadas = inicial + pagadasEnPlanillas;
+      const total = Number(a.cantidadCuotas)||1;
+      if (pagadas >= total) continue;
+      const yaIncluidoEnEsta = (pl.descuentosPlanilla||[]).some(d => d.anticipoId === a.id);
+      if (!yaIncluidoEnEsta) return true;
+    }
+    const polizas = (typeof state !== 'undefined' && Array.isArray(state.polizasGlobales) ? state.polizasGlobales : [])
+      .filter(po => { if (po.estatus !== 'ACTIVA') return false; const aC = String(po.aCargoDeNombre||'').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,''); return aC === nombreUC; });
+    if (polizas.length > 0){
+      const polizaYaIncluida = (pl.descuentosPlanilla||[]).some(d => d.subtipo === 'POLIZA' && (d.colaboradorNombre||'').toUpperCase() === String(nombreColab||'').toUpperCase());
+      if (!polizaYaIncluida) return true;
+    }
+    return false;
+  }
 
   window.eliminarDescuentoPlanilla = async function(planillaId, descuentoId){
     if(!window.isDescuentosPlanilla()){ showT('SIN PERMISO','red'); return; }
