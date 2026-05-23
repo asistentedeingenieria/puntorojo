@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v336-pdf-no-parte-trabajador-entre-paginas-y-wrap-correcto';
+const CACHE_VERSION = 'v337-fix-eliminar-descuento-robusto-con-force-upload';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
