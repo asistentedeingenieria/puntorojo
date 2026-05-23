@@ -2713,7 +2713,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v351</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v352</span>
   </footer>
 
 </div>
@@ -7096,6 +7096,38 @@ function ensureDataV9(data){
       data._v311_solicitudesFotoCleaned = true;
     }
   } catch(e) { console.warn('[v311] cleanup solicitudes foto:', e && e.message); }
+
+  // v352: Pólizas GLOBALES — migrar de p.planilla.polizas a data.polizasGlobales.
+  // Idempotente: corre una sola vez (controlada con _polizasMigratedToGlobalV352).
+  try {
+    if (!Array.isArray(data.polizasGlobales)) data.polizasGlobales = [];
+    if (!data.polizasConfig || typeof data.polizasConfig !== 'object') data.polizasConfig = { montoDefault: 44.95 };
+    if (typeof data.polizasConfig.montoDefault !== 'number') data.polizasConfig.montoDefault = 44.95;
+    if (!data._polizasMigratedToGlobalV352) {
+      const seenIds = new Set(data.polizasGlobales.map(p => p && p.id).filter(Boolean));
+      let migradas = 0;
+      (data.projects || []).forEach(pr => {
+        if (pr.planilla && Array.isArray(pr.planilla.polizas)) {
+          pr.planilla.polizas.forEach(po => {
+            if (po && po.id && !seenIds.has(po.id)) {
+              data.polizasGlobales.push(po);
+              seenIds.add(po.id);
+              migradas++;
+            }
+          });
+          pr.planilla.polizas = [];
+        }
+        if (pr.planilla && pr.planilla.polizaConfig
+            && typeof pr.planilla.polizaConfig.montoDefault === 'number'
+            && pr.planilla.polizaConfig.montoDefault !== 44.95
+            && data.polizasConfig.montoDefault === 44.95) {
+          data.polizasConfig.montoDefault = pr.planilla.polizaConfig.montoDefault;
+        }
+      });
+      data._polizasMigratedToGlobalV352 = true;
+      if (migradas > 0) console.log('[v352] Migradas ' + migradas + ' pólizas a state.polizasGlobales');
+    }
+  } catch(e) { console.warn('[v352] migración pólizas globales:', e && e.message); }
 }
 
 /* Migración progresiva v1 → v9 */
@@ -35216,7 +35248,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 })();
 </script>
 
-<!-- v347 · CATÁLOGO DE PÓLIZAS DE SEGURO — ver doc completa en puntorojo.html -->
+<!-- v347 · CATÁLOGO DE PÓLIZAS DE SEGURO — ver doc completa en puntorojo.html
+     v352 · GLOBAL (state.polizasGlobales) — compartido entre proyectos -->
 <script id="pr-polizas-module">
 (function(){
   'use strict';
@@ -35226,25 +35259,28 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   function _money(n){ const v = Number(n)||0; return 'Q ' + v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
   function _fmtFecha(iso){ if(!iso) return '—'; try{ const d=new Date(iso); return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear(); }catch(e){ return iso; } }
   function _activeProj(){ return (typeof activeProj === 'function') ? activeProj() : null; }
-  function _getPolizas(p){ if(!p || !p.planilla) return []; p.planilla.polizas = p.planilla.polizas || []; return p.planilla.polizas; }
-  function _getConfig(p){ if(!p || !p.planilla) return { montoDefault: 44.95 }; p.planilla.polizaConfig = p.planilla.polizaConfig || { montoDefault: 44.95 }; return p.planilla.polizaConfig; }
+  // v352: storage GLOBAL (state.polizasGlobales) — el arg p se ignora.
+  function _getPolizas(_p){ try { if (typeof state !== 'undefined' && state) { if (!Array.isArray(state.polizasGlobales)) state.polizasGlobales = []; return state.polizasGlobales; } } catch(e){} return []; }
+  function _getConfig(_p){ try { if (typeof state !== 'undefined' && state) { if (!state.polizasConfig || typeof state.polizasConfig !== 'object') state.polizasConfig = { montoDefault: 44.95 }; if (typeof state.polizasConfig.montoDefault !== 'number') state.polizasConfig.montoDefault = 44.95; return state.polizasConfig; } } catch(e){} return { montoDefault: 44.95 }; }
+  // v352: colaboradores GLOBALES (todos los proyectos, dedupe por nombre).
+  function _allColabsGlobal(){ const seen = {}; const list = []; try { const projs = (typeof state !== 'undefined' && state && Array.isArray(state.projects)) ? state.projects : []; projs.forEach(pr => { const cs = (pr && pr.planilla && Array.isArray(pr.planilla.colaboradores)) ? pr.planilla.colaboradores : []; cs.forEach(c => { const k = String(c.nombre||'').trim().toUpperCase(); if (!k) return; if (!seen[k]) { seen[k] = { id: c.id, nombre: c.nombre, _projId: pr.id, _projName: pr.name }; list.push(seen[k]); } }); }); } catch(e){} return list.sort((a,b) => String(a.nombre||'').localeCompare(String(b.nombre||''))); }
   function _puedeEditar(){ try { return typeof can === 'function' && (can('users.manage') || can('planilla.descuentos')); } catch(e){ return false; } }
   function _diasHastaVencer(iso){ if(!iso) return null; const d = new Date(iso); if(isNaN(d.getTime())) return null; const hoy = new Date(); hoy.setHours(0,0,0,0); return Math.round((d.getTime() - hoy.getTime()) / 86400000); }
 
   window.renderPlanillaPolizas = function(){
-    const p = _activeProj();
     const cont = document.getElementById('planilla-polizas');
     if (!cont) return;
-    if (!p || !p.planilla) { cont.innerHTML = '<div class="card"><div class="empty" style="padding:30px">SIN PROYECTO ACTIVO</div></div>'; return; }
-    const polizas = _getPolizas(p);
-    const cfg = _getConfig(p);
-    const colabs = (p.planilla.colaboradores || []);
+    // v352: pólizas globales — se muestran sin proyecto activo.
+    const polizas = _getPolizas();
+    const cfg = _getConfig();
+    const colabs = _allColabsGlobal();
     const puedeEditar = _puedeEditar();
     const filtroEstatus = window._polFiltroEstatus || 'todas';
     const filtroAseg = window._polFiltroAseg || '';
     const filtroACargo = window._polFiltroACargo || '';
+    const filtroACargoNombre = (() => { if (!filtroACargo) return ''; const c = colabs.find(x => x.id === filtroACargo); return c ? String(c.nombre||'').trim().toUpperCase() : ''; })();
     const aseguradoras = Array.from(new Set(polizas.map(x => x.aseguradora).filter(Boolean))).sort();
-    const filas = polizas.filter(po => { if (filtroEstatus !== 'todas' && po.estatus !== filtroEstatus) return false; if (filtroAseg && po.aseguradora !== filtroAseg) return false; if (filtroACargo && po.aCargoDeColabId !== filtroACargo) return false; return true; }).sort((a,b) => (a.aCargoDeNombre||'').localeCompare(b.aCargoDeNombre||'') || (a.aseguradoNombre||'').localeCompare(b.aseguradoNombre||''));
+    const filas = polizas.filter(po => { if (filtroEstatus !== 'todas' && po.estatus !== filtroEstatus) return false; if (filtroAseg && po.aseguradora !== filtroAseg) return false; if (filtroACargo) { const matchId = po.aCargoDeColabId === filtroACargo; const matchName = filtroACargoNombre && String(po.aCargoDeNombre||'').trim().toUpperCase() === filtroACargoNombre; if (!matchId && !matchName) return false; } return true; }).sort((a,b) => (a.aCargoDeNombre||'').localeCompare(b.aCargoDeNombre||'') || (a.aseguradoNombre||'').localeCompare(b.aseguradoNombre||''));
     const totalActivas = polizas.filter(po => po.estatus === 'ACTIVA').length;
     const totalEnProceso = polizas.filter(po => po.estatus === 'EN PROCESO').length;
     const totalCanceladas = polizas.filter(po => po.estatus === 'CANCELADA').length;
@@ -35307,19 +35343,20 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     cont.innerHTML = html;
   };
 
-  window.setPolizaMontoDefault = function(val){ if (!_puedeEditar()) return; const p = _activeProj(); if (!p) return; const cfg = _getConfig(p); cfg.montoDefault = Number(val) || 44.95; try { if(typeof saveState === 'function') saveState(); } catch(e){} try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} window.renderPlanillaPolizas(); showT('MONTO POR PÓLIZA ACTUALIZADO','green'); };
+  window.setPolizaMontoDefault = function(val){ if (!_puedeEditar()) return; const cfg = _getConfig(); cfg.montoDefault = Number(val) || 44.95; try { if(typeof saveState === 'function') saveState(); } catch(e){} try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} window.renderPlanillaPolizas(); showT('MONTO POR PÓLIZA ACTUALIZADO','green'); };
 
-  function _formHTML(po, p){
+  function _formHTML(po, _p){
     po = po || {};
-    const colabs = (p.planilla.colaboradores || []);
-    const cfg = _getConfig(p);
+    const colabs = _allColabsGlobal(); // v352: global
+    const cfg = _getConfig();
     const fInicio = po.fechaInicio ? String(po.fechaInicio).slice(0,10) : new Date().toISOString().slice(0,10);
     const fVence = po.fechaVencimiento ? String(po.fechaVencimiento).slice(0,10) : '';
+    const matchACargo = (c) => { if (po.aCargoDeColabId && c.id === po.aCargoDeColabId) return true; if (po.aCargoDeNombre && String(c.nombre||'').trim().toUpperCase() === String(po.aCargoDeNombre).trim().toUpperCase()) return true; return false; };
     return ''
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;font-size:12px">'
       +   '<div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">NOMBRE DEL ASEGURADO</label><input id="polAseg" type="text" value="'+_h(po.aseguradoNombre||'')+'" placeholder="ej: CARLOS AROLDO SICAJAU CHACON" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
       +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">PUESTO</label><select id="polPuesto" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'+PUESTOS.map(x=>'<option value="'+x+'"'+(x===po.aseguradoPuesto?' selected':'')+'>'+x+'</option>').join('')+'</select></div>'
-      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">A CARGO DE (DESCUENTO EN PLANILLA)</label><select id="polACargo" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"><option value="">— SELECCIONÁ —</option>'+colabs.map(c=>'<option value="'+_h(c.id)+'"'+(c.id===po.aCargoDeColabId?' selected':'')+'>'+_h(c.nombre)+'</option>').join('')+'</select></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">A CARGO DE (DESCUENTO EN PLANILLA · GLOBAL)</label><select id="polACargo" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"><option value="">— SELECCIONÁ —</option>'+colabs.map(c=>'<option value="'+_h(c.id)+'" data-nombre="'+_h(c.nombre)+'"'+(matchACargo(c)?' selected':'')+'>'+_h(c.nombre)+'</option>').join('')+'</select></div>'
       +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">NO. CERTIFICADO</label><input id="polCert" type="text" value="'+_h(po.noCertificado||'')+'" placeholder="ej: 68" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
       +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">NO. PÓLIZA</label><input id="polNo" type="text" value="'+_h(po.noPoliza||'GTAP-16134')+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
       +   '<div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">ASEGURADORA</label><input id="polAseguradora" type="text" value="'+_h(po.aseguradora||'')+'" placeholder="ej: ASEGURADORA RURAL · SEGUROS G&T" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
@@ -35330,19 +35367,19 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       +   '<div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">OBSERVACIONES</label><input id="polObs" type="text" value="'+_h(po.observaciones||'')+'" placeholder="ej: DESCUENTO JUNIO · AVISO DE BAJA · etc" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>'
       + '</div>';
   }
-  function _hookCaptureForm(){ const okBtn = document.getElementById('prConfOk'); if (!okBtn) { setTimeout(_hookCaptureForm, 50); return; } if (okBtn.dataset._polHooked === '1') return; okBtn.dataset._polHooked = '1'; const prev = okBtn.onclick; okBtn.onclick = function(ev){ try { window._polCapturedForm = { aseguradoNombre: (document.getElementById('polAseg')?.value || '').trim().toUpperCase(), aseguradoPuesto: document.getElementById('polPuesto')?.value || 'OTRO', aCargoDeColabId: document.getElementById('polACargo')?.value || '', noCertificado: (document.getElementById('polCert')?.value || '').trim(), noPoliza: (document.getElementById('polNo')?.value || '').trim(), aseguradora: (document.getElementById('polAseguradora')?.value || '').trim().toUpperCase(), fechaInicio: document.getElementById('polFInicio')?.value || '', fechaVencimiento: document.getElementById('polFVence')?.value || '', monto: Number(document.getElementById('polMonto')?.value) || 0, estatus: document.getElementById('polEstatus')?.value || 'ACTIVA', observaciones: (document.getElementById('polObs')?.value || '').trim() }; } catch(e){ console.warn('[v347] captura form póliza:', e); } if (typeof prev === 'function') prev.call(this, ev); }; }
-  window.agregarPoliza = async function(){ if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; } const p = _activeProj(); if (!p) return; const colabs = p.planilla.colaboradores || []; if (colabs.length === 0) { showT('AGREGÁ AL MENOS UNA PERSONA EN COLABORADORES','red'); return; } window._polCapturedForm = null; setTimeout(_hookCaptureForm, 80); const ok = await window.prConfirm({ title:'AGREGAR PÓLIZA DE SEGURO', bodyHTML:_formHTML(null, p), okText:'GUARDAR PÓLIZA', wide:true }); if (!ok) { window._polCapturedForm = null; return; } _guardarDesdeCaptura(window._polCapturedForm || {}, null); };
-  window.editarPoliza = async function(id){ if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; } const p = _activeProj(); if (!p) return; const po = _getPolizas(p).find(x => x.id === id); if (!po) { showT('PÓLIZA NO ENCONTRADA','red'); return; } window._polCapturedForm = null; setTimeout(_hookCaptureForm, 80); const ok = await window.prConfirm({ title:'EDITAR PÓLIZA', bodyHTML:_formHTML(po, p), okText:'GUARDAR CAMBIOS', wide:true }); if (!ok) { window._polCapturedForm = null; return; } _guardarDesdeCaptura(window._polCapturedForm || {}, po); };
-  function _guardarDesdeCaptura(form, existente){ const p = _activeProj(); if (!p) return; if (!form.aseguradoNombre) { showT('INGRESÁ EL NOMBRE DEL ASEGURADO','red'); return; } if (!form.aCargoDeColabId) { showT('SELECCIONÁ A QUIÉN SE LE DESCUENTA','red'); return; } const colab = (p.planilla.colaboradores||[]).find(c => c.id === form.aCargoDeColabId); if (!colab) { showT('PERSONA A CARGO NO ENCONTRADA','red'); return; } const polizas = _getPolizas(p); const data = { aseguradoNombre: form.aseguradoNombre, aseguradoPuesto: form.aseguradoPuesto, aCargoDeColabId: form.aCargoDeColabId, aCargoDeNombre: colab.nombre, noCertificado: form.noCertificado, noPoliza: form.noPoliza, aseguradora: form.aseguradora, fechaInicio: form.fechaInicio, fechaVencimiento: form.fechaVencimiento, monto: form.monto || _getConfig(p).montoDefault, estatus: form.estatus, observaciones: form.observaciones || '' }; if (existente) Object.assign(existente, data); else polizas.push(Object.assign({ id: 'pol-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), ts: Date.now() }, data)); try { if(typeof saveState === 'function') saveState(); } catch(e){} try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} window._polCapturedForm = null; window.renderPlanillaPolizas(); showT(existente ? 'PÓLIZA ACTUALIZADA' : 'PÓLIZA REGISTRADA', 'green'); }
-  window.eliminarPoliza = async function(id){ if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; } const p = _activeProj(); if (!p) return; const polizas = _getPolizas(p); const idx = polizas.findIndex(x => x.id === id); if (idx < 0) return; const po = polizas[idx]; const ok = await window.prConfirm({ title:'Eliminar póliza', bodyHTML:'<div style="font-size:12.5px;color:#333;line-height:1.5"><div><strong>'+_h(po.aseguradoNombre)+'</strong> ('+_h(po.aseguradoPuesto||'—')+')</div><div style="color:var(--mute);margin-top:4px">A cargo de: '+_h(po.aCargoDeNombre)+'</div><div style="margin-top:4px">Certificado '+_h(po.noCertificado||'—')+' · '+_money(po.monto)+'</div></div>', okText:'ELIMINAR', danger:true }); if (!ok) return; polizas.splice(idx, 1); try { if(typeof saveState === 'function') saveState(); } catch(e){} try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} window.renderPlanillaPolizas(); showT('PÓLIZA ELIMINADA','green'); };
+  function _hookCaptureForm(){ const okBtn = document.getElementById('prConfOk'); if (!okBtn) { setTimeout(_hookCaptureForm, 50); return; } if (okBtn.dataset._polHooked === '1') return; okBtn.dataset._polHooked = '1'; const prev = okBtn.onclick; okBtn.onclick = function(ev){ try { const selACargo = document.getElementById('polACargo'); const aCargoOpt = selACargo && selACargo.options && selACargo.options[selACargo.selectedIndex]; const aCargoNombre = aCargoOpt ? (aCargoOpt.getAttribute('data-nombre') || aCargoOpt.textContent || '').trim() : ''; window._polCapturedForm = { aseguradoNombre: (document.getElementById('polAseg')?.value || '').trim().toUpperCase(), aseguradoPuesto: document.getElementById('polPuesto')?.value || 'OTRO', aCargoDeColabId: selACargo?.value || '', aCargoDeNombre: aCargoNombre, noCertificado: (document.getElementById('polCert')?.value || '').trim(), noPoliza: (document.getElementById('polNo')?.value || '').trim(), aseguradora: (document.getElementById('polAseguradora')?.value || '').trim().toUpperCase(), fechaInicio: document.getElementById('polFInicio')?.value || '', fechaVencimiento: document.getElementById('polFVence')?.value || '', monto: Number(document.getElementById('polMonto')?.value) || 0, estatus: document.getElementById('polEstatus')?.value || 'ACTIVA', observaciones: (document.getElementById('polObs')?.value || '').trim() }; } catch(e){ console.warn('[v347] captura form póliza:', e); } if (typeof prev === 'function') prev.call(this, ev); }; }
+  window.agregarPoliza = async function(){ if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; } const colabs = _allColabsGlobal(); if (colabs.length === 0) { showT('AGREGÁ AL MENOS UNA PERSONA EN COLABORADORES (CUALQUIER PROYECTO)','red'); return; } window._polCapturedForm = null; setTimeout(_hookCaptureForm, 80); const ok = await window.prConfirm({ title:'AGREGAR PÓLIZA DE SEGURO', bodyHTML:_formHTML(null, null), okText:'GUARDAR PÓLIZA', wide:true }); if (!ok) { window._polCapturedForm = null; return; } _guardarDesdeCaptura(window._polCapturedForm || {}, null); };
+  window.editarPoliza = async function(id){ if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; } const po = _getPolizas().find(x => x.id === id); if (!po) { showT('PÓLIZA NO ENCONTRADA','red'); return; } window._polCapturedForm = null; setTimeout(_hookCaptureForm, 80); const ok = await window.prConfirm({ title:'EDITAR PÓLIZA', bodyHTML:_formHTML(po, null), okText:'GUARDAR CAMBIOS', wide:true }); if (!ok) { window._polCapturedForm = null; return; } _guardarDesdeCaptura(window._polCapturedForm || {}, po); };
+  function _guardarDesdeCaptura(form, existente){ if (!form.aseguradoNombre) { showT('INGRESÁ EL NOMBRE DEL ASEGURADO','red'); return; } if (!form.aCargoDeColabId && !form.aCargoDeNombre) { showT('SELECCIONÁ A QUIÉN SE LE DESCUENTA','red'); return; } let aCargoNombre = String(form.aCargoDeNombre||'').trim(); if (!aCargoNombre && form.aCargoDeColabId) { const gColab = _allColabsGlobal().find(c => c.id === form.aCargoDeColabId); if (gColab) aCargoNombre = gColab.nombre; } if (!aCargoNombre) { showT('PERSONA A CARGO NO ENCONTRADA','red'); return; } const polizas = _getPolizas(); const data = { aseguradoNombre: form.aseguradoNombre, aseguradoPuesto: form.aseguradoPuesto, aCargoDeColabId: form.aCargoDeColabId || (existente && existente.aCargoDeColabId) || '', aCargoDeNombre: aCargoNombre, noCertificado: form.noCertificado, noPoliza: form.noPoliza, aseguradora: form.aseguradora, fechaInicio: form.fechaInicio, fechaVencimiento: form.fechaVencimiento, monto: form.monto || _getConfig().montoDefault, estatus: form.estatus, observaciones: form.observaciones || '' }; if (existente) Object.assign(existente, data); else polizas.push(Object.assign({ id: 'pol-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), ts: Date.now() }, data)); try { if(typeof saveState === 'function') saveState(); } catch(e){} try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} window._polCapturedForm = null; window.renderPlanillaPolizas(); showT(existente ? 'PÓLIZA ACTUALIZADA' : 'PÓLIZA REGISTRADA', 'green'); }
+  window.eliminarPoliza = async function(id){ if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; } const polizas = _getPolizas(); const idx = polizas.findIndex(x => x.id === id); if (idx < 0) return; const po = polizas[idx]; const ok = await window.prConfirm({ title:'Eliminar póliza', bodyHTML:'<div style="font-size:12.5px;color:#333;line-height:1.5"><div><strong>'+_h(po.aseguradoNombre)+'</strong> ('+_h(po.aseguradoPuesto||'—')+')</div><div style="color:var(--mute);margin-top:4px">A cargo de: '+_h(po.aCargoDeNombre)+'</div><div style="margin-top:4px">Certificado '+_h(po.noCertificado||'—')+' · '+_money(po.monto)+'</div></div>', okText:'ELIMINAR', danger:true }); if (!ok) return; polizas.splice(idx, 1); try { if(typeof saveState === 'function') saveState(); } catch(e){} try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} window.renderPlanillaPolizas(); showT('PÓLIZA ELIMINADA','green'); };
 
   // v348: importarPolizasDesdeExcel removido por pedido del usuario. Solo manual.
 
   // v350: dar de baja / reactivar póliza (no eliminan, solo cambian estatus)
+  // v352: las pólizas son globales — no requiere proyecto activo.
   window.darDeBajaPoliza = async function(id){
     if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
-    const p = _activeProj(); if (!p) return;
-    const po = _getPolizas(p).find(x => x.id === id);
+    const po = _getPolizas().find(x => x.id === id);
     if (!po) { showT('PÓLIZA NO ENCONTRADA','red'); return; }
     const hoy = new Date().toISOString().slice(0,10);
     const ok = await window.prConfirm({
@@ -35361,8 +35398,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   };
   window.reactivarPoliza = async function(id){
     if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
-    const p = _activeProj(); if (!p) return;
-    const po = _getPolizas(p).find(x => x.id === id);
+    const po = _getPolizas().find(x => x.id === id);
     if (!po) { showT('PÓLIZA NO ENCONTRADA','red'); return; }
     const ok = await window.prConfirm({
       title:'Reactivar póliza',
@@ -35377,8 +35413,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     showT('PÓLIZA REACTIVADA','green');
   };
 
-  window.getPolizasActivasACargoDe = function(colabId){ const p = _activeProj(); if (!p) return []; return _getPolizas(p).filter(po => po.aCargoDeColabId === colabId && po.estatus === 'ACTIVA'); };
-  window.getMontoMensualPolizasDe = function(colabId){ const p = _activeProj(); if (!p) return 0; const cfg = _getConfig(p); return _getPolizas(p).filter(po => po.aCargoDeColabId === colabId && po.estatus === 'ACTIVA').reduce((s,po) => s + (Number(po.monto)||cfg.montoDefault), 0); };
+  // v352: match por id + fallback por nombre normalizado (ids difieren entre proyectos)
+  function _matchPolizaToColab(po, colabId){ if (po.estatus !== 'ACTIVA') return false; if (po.aCargoDeColabId && po.aCargoDeColabId === colabId) return true; try { const p = _activeProj(); if (!p || !Array.isArray(p.planilla?.colaboradores)) return false; const c = p.planilla.colaboradores.find(x => x.id === colabId); if (!c) return false; const a = String(c.nombre||'').trim().toUpperCase(); const b = String(po.aCargoDeNombre||'').trim().toUpperCase(); return !!a && a === b; } catch(e){ return false; } }
+  window.getPolizasActivasACargoDe = function(colabId){ return _getPolizas().filter(po => _matchPolizaToColab(po, colabId)); };
+  window.getMontoMensualPolizasDe = function(colabId){ const cfg = _getConfig(); return _getPolizas().filter(po => _matchPolizaToColab(po, colabId)).reduce((s,po) => s + (Number(po.monto)||cfg.montoDefault), 0); };
 
   console.log('[v347] Catálogo de Pólizas cargado');
 })();
