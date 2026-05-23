@@ -2708,7 +2708,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v335</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v336</span>
   </footer>
 
 </div>
@@ -34053,12 +34053,36 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
       // v263: layout estilo PRESUPUESTO con 6 columnas (cotizacion).
       //   Col 0: Descripcion | 1: Unidad ("global") | 2: Cant1 ("1.00")
-      //   Col 3: Cant2 ("1.00") | 4: Subtotal (Q) | 5: Total (Q, gris en pagos)
+      //   Col 3: Cant2 ("1.00") | 4: Subtotal (Q) | 5: Total
+      // v336: REFACTOR. Cada trabajador se dibuja en su PROPIA tabla. Asi:
+      //   a) Si el bloque no cabe en la pagina, salta a la siguiente (no se parte).
+      //   b) cellPadding reducido en filas de descuentos largos para que el texto
+      //      envuelva sin cortarse.
       const _fechaTxt = _fmtFechaSabado(data.fecha);
       const COLS = 6;
-      const body = [];
+      const pageH = doc.internal.pageSize.getHeight();
+      const marginBottom = 40;
 
-      data.colabs.forEach((c, idx) => {
+      const tableOpts = {
+        theme: 'grid',
+        styles: { fontSize: 9, cellPadding: 4, lineColor:[180,180,180], lineWidth:0.3, font:'helvetica', textColor:[0,0,0] },
+        columnStyles: {
+          0: { cellWidth: 240 },
+          1: { cellWidth: 50,  halign:'center' },
+          2: { cellWidth: 40,  halign:'center' },
+          3: { cellWidth: 40,  halign:'center' },
+          4: { cellWidth: 80,  halign:'right' },
+          5: { cellWidth: 80,  halign:'right' }
+        },
+        margin: { left: 40, right: 40 },
+        rowPageBreak: 'avoid'
+      };
+
+      // v336: cellPadding compacto para descuentos/retenciones/OCs/GRAN TOTAL.
+      const _padTxtLargo = { top:4, right:2, bottom:4, left:4 };
+
+      function _v336BuildWorkerBody(c){
+        const body = [];
         body.push([
           { content: c.nombre, colSpan: 3, styles: { fontStyle:'bold', fillColor:[255,255,255], textColor:[0,0,0] } },
           { content: 'Liquidación de trabajos del ' + _fechaTxt, colSpan: 3, styles: { fillColor:[255,255,255], textColor:[0,0,0], halign:'right' } }
@@ -34089,7 +34113,6 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
               { content: '1.00', styles: { halign:'center' } },
               { content: '1.00', styles: { halign:'center' } },
               { content: 'Q '+_fmtN(monto), styles: { halign:'right' } },
-              // v335: total individual SIN fondo gris. Solo TOTAL (suma) y GRAN TOTAL llevan color.
               { content: 'Q '+_fmtN(monto), styles: { halign:'right', fontStyle:'bold' } }
             ]);
           });
@@ -34098,14 +34121,12 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           { content: 'TOTAL', colSpan: 5, styles: { fontStyle:'bold', halign:'right', fillColor:[217,217,217], textColor:[0,0,0] } },
           { content: 'Q '+_fmtN(c.totalBruto||0), styles: { fontStyle:'bold', halign:'right', fillColor:[217,217,217], textColor:[0,0,0] } }
         ]);
-        // v335: overflow:'linebreak' en filas con texto largo (retencion/descuento/OC/GRAN TOTAL)
-        // para que aptos y descripciones largas envuelvan en varias lineas en vez de cortarse.
         c.pagos.forEach(pg => {
           const ret = Number(pg.retencion || (Number(pg.bruto||0)*0.10));
           if(ret <= 0) return;
           const aptoT = ((pg.towerName||'').trim() + ' - ' + (pg.aptoName||'').trim()).replace(/^ - | - $/g,'');
           body.push([
-            { content: '(-) RETENCIÓN 10% - '+aptoT.toUpperCase(), colSpan: 5, styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255], overflow:'linebreak' } },
+            { content: '(-) RETENCIÓN 10% - '+aptoT.toUpperCase(), colSpan: 5, styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255], overflow:'linebreak', cellPadding:_padTxtLargo } },
             { content: '-Q '+_fmtN(ret), styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255] } }
           ]);
         });
@@ -34113,56 +34134,60 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           const cuotaTxt = (d.cuotasTotales && d.cuotasTotales > 1) ? '('+(d.cuotaActual||1)+'/'+d.cuotasTotales+') ' : '';
           const lbl = '(-) '+cuotaTxt+(d.desc || d.subtipo || 'DESCUENTO');
           body.push([
-            { content: lbl.toUpperCase(), colSpan: 5, styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255], overflow:'linebreak' } },
+            { content: lbl.toUpperCase(), colSpan: 5, styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255], overflow:'linebreak', cellPadding:_padTxtLargo } },
             { content: '-Q '+_fmtN(d.monto||0), styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255] } }
           ]);
         });
         c.ocs.forEach(oc => {
           const m = Number(oc.neto || oc.monto || 0);
           body.push([
-            { content: ('(+) OC: '+(oc.desc||'')).toUpperCase(), colSpan: 5, styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255], overflow:'linebreak' } },
+            { content: ('(+) OC: '+(oc.desc||'')).toUpperCase(), colSpan: 5, styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255], overflow:'linebreak', cellPadding:_padTxtLargo } },
             { content: '+Q '+_fmtN(m), styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255] } }
           ]);
         });
         body.push([
-          { content: 'GRAN TOTAL    '+c.nombre, colSpan: 5, styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], overflow:'linebreak' } },
+          { content: 'GRAN TOTAL    '+c.nombre, colSpan: 5, styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], overflow:'linebreak', cellPadding:_padTxtLargo } },
           { content: 'Q '+_fmtN(c.totalNeto||0), styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0] } }
         ]);
-        if(idx < data.colabs.length - 1){
-          body.push([
-            { content: '', colSpan: COLS, styles: { fillColor:[255,255,255] } }
-          ]);
-        }
-      });
-      // "GRAN TOTAL PLANILLA DE TABLAYESO <fecha sabado>"
-      // v264: cellPadding extra a la derecha para que la fecha no toque la
-      // linea divisoria entre la columna del label y la del valor.
-      if(data.colabs.length > 1){
-        body.push([
-          { content: '', colSpan: COLS, styles: { fillColor:[255,255,255] } }
-        ]);
-        const _fechaSabTxt = _fmtFechaSabado(data.fecha);
-        body.push([
-          { content: 'GRAN TOTAL PLANILLA DE TABLAYESO  ' + _fechaSabTxt, colSpan: 5, styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], cellPadding: { top: 5, right: 12, bottom: 5, left: 5 } } },
-          { content: 'Q '+_fmtN(data.granTotal.neto||0), styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], cellPadding: { top: 5, right: 8, bottom: 5, left: 5 } } }
-        ]);
+        return body;
       }
 
-      doc.autoTable({
-        startY: y,
-        body: body,
-        theme: 'grid',
-        styles: { fontSize: 9, cellPadding: 4, lineColor:[180,180,180], lineWidth:0.3, font:'helvetica', textColor:[0,0,0] },
-        columnStyles: {
-          0: { cellWidth: 240 },                       // Descripcion
-          1: { cellWidth: 50,  halign:'center' },      // Unidad
-          2: { cellWidth: 40,  halign:'center' },      // Cantidad 1
-          3: { cellWidth: 40,  halign:'center' },      // Cantidad 2
-          4: { cellWidth: 80,  halign:'right' },       // Subtotal
-          5: { cellWidth: 80,  halign:'right' }        // Total
-        },
-        margin: { left: 40, right: 40 }
+      const ROW_AVG_H = 17;
+      data.colabs.forEach((c, idx) => {
+        const body = _v336BuildWorkerBody(c);
+        const wrapsExtra = (c.descuentos||[]).reduce((s,d)=>{
+          const len = String(d.desc||d.subtipo||'').length;
+          return s + (len > 28 ? ROW_AVG_H : 0);
+        }, 0);
+        const estimatedH = body.length * ROW_AVG_H + wrapsExtra + 6;
+
+        if(y + estimatedH > pageH - marginBottom && y > 70){
+          doc.addPage();
+          y = 32;
+        }
+
+        doc.autoTable(Object.assign({}, tableOpts, { startY: y, body: body }));
+        y = doc.lastAutoTable.finalY + 4;
       });
+
+      // "GRAN TOTAL PLANILLA DE TABLAYESO <fecha sabado>"
+      if(data.colabs.length > 1){
+        const _fechaSabTxt = _fmtFechaSabado(data.fecha);
+        const footBody = [
+          [
+            { content: 'GRAN TOTAL PLANILLA DE TABLAYESO  ' + _fechaSabTxt, colSpan: 5, styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], cellPadding: { top: 5, right: 12, bottom: 5, left: 5 } } },
+            { content: 'Q '+_fmtN(data.granTotal.neto||0), styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], cellPadding: { top: 5, right: 8, bottom: 5, left: 5 } } }
+          ]
+        ];
+        const footH = 32;
+        if(y + footH > pageH - marginBottom){
+          doc.addPage();
+          y = 32;
+        } else {
+          y += 6;
+        }
+        doc.autoTable(Object.assign({}, tableOpts, { startY: y, body: footBody }));
+      }
 
       // v262: filename "Planilla <Proyecto>_<DDMMYYYY del sabado>.pdf"
       const projClean = (data.proyecto||'Proyecto').replace(/[\\\/\?\*\[\]:"|<>]/g,'').trim();

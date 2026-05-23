@@ -2740,7 +2740,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v335</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v336</span>
   </footer>
 
 </div>
@@ -34693,27 +34693,51 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       //   Col 2: Cantidad 1 ("1.00")
       //   Col 3: Cantidad 2 ("1.00")
       //   Col 4: Subtotal (Q monto)
-      //   Col 5: Total (Q subtotal x cant, gris en cada pago)
-      // Rows:
-      //   - Worker header (blanco bold): NAME colSpan 3 | Liquidacion colSpan 3
-      //   - Apto header (azul): colSpan 6
-      //   - Pago: 6 cols
-      //   - TOTAL/Retencion/Descuento/OC: label colSpan 5 + valor
-      //   - GRAN TOTAL <NOMBRE> (amarillo): label colSpan 5 + neto
-      //   - Spacer: empty colSpan 6
-      //   - GRAN TOTAL PLANILLA DE TABLAYESO (amarillo): label colSpan 5 + total
+      //   Col 5: Total
+      // v336: REFACTOR. En vez de UN solo autoTable con todos los trabajadores,
+      // ahora cada trabajador se dibuja en su PROPIA tabla. Asi podemos:
+      //   a) Verificar si el bloque cabe en la pagina actual y si no, saltar
+      //      a la siguiente (evita el partido feo entre paginas).
+      //   b) Aplicar cellPadding reducido en filas de descuentos largos para
+      //      que descripciones tipo "LIJADORA STANLEY 750 WATTS" envuelvan
+      //      sin que el texto se corte por el border derecho.
       const _fechaTxt = _fmtFechaSabado(data.fecha);
       const COLS = 6;
-      const body = [];
+      const pageH = doc.internal.pageSize.getHeight();
+      const marginBottom = 40;
 
-      data.colabs.forEach((c, idx) => {
-        // 1. Worker header — blanco, negro bold. v269: sin rol (INSTALADOR/MASILLERO)
-        // al lado del nombre, no es necesario para efectos de la planilla.
+      // Opciones comunes para todas las llamadas a autoTable
+      const tableOpts = {
+        theme: 'grid',
+        styles: { fontSize: 9, cellPadding: 4, lineColor:[180,180,180], lineWidth:0.3, font:'helvetica', textColor:[0,0,0] },
+        columnStyles: {
+          0: { cellWidth: 240 },                       // Descripcion (wide)
+          1: { cellWidth: 50,  halign:'center' },      // Unidad
+          2: { cellWidth: 40,  halign:'center' },      // Cantidad 1
+          3: { cellWidth: 40,  halign:'center' },      // Cantidad 2
+          4: { cellWidth: 80,  halign:'right' },       // Subtotal
+          5: { cellWidth: 80,  halign:'right' }        // Total
+        },
+        margin: { left: 40, right: 40 },
+        // v336: dentro de UN bloque de trabajador, evitar partir filas individuales.
+        // El page break entre trabajadores se controla manualmente abajo.
+        rowPageBreak: 'avoid'
+      };
+
+      // v336: cellPadding compacto para filas con texto largo a la derecha
+      // (retenciones, descuentos, OCs, GRAN TOTAL). Reduce right padding de 4 a 2
+      // y deja extra espacio horizontal para que el texto no se corte.
+      const _padTxtLargo = { top:4, right:2, bottom:4, left:4 };
+
+      // Construye las filas (body) de UN solo trabajador
+      function _v336BuildWorkerBody(c){
+        const body = [];
+        // 1. Worker header — blanco, bold
         body.push([
           { content: c.nombre, colSpan: 3, styles: { fontStyle:'bold', fillColor:[255,255,255], textColor:[0,0,0] } },
           { content: 'Liquidación de trabajos del ' + _fechaTxt, colSpan: 3, styles: { fillColor:[255,255,255], textColor:[0,0,0], halign:'right' } }
         ]);
-        // 2. Pagos agrupados por apto. Header azul incluye TORRE - NIVEL - APTO.
+        // 2. Pagos agrupados por apto
         const aptoGroups = {};
         const aptoOrder = [];
         c.pagos.forEach(pg => {
@@ -34726,11 +34750,9 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           aptoGroups[k].push(pg);
         });
         aptoOrder.forEach(aptoKey => {
-          // Apto header — azul claro #BDD7EE, bold, spans las 6 cols
           body.push([
             { content: aptoKey, colSpan: COLS, styles: { fontStyle:'bold', fillColor:[189,215,238], textColor:[0,0,0], halign:'left' } }
           ]);
-          // Detail rows del apto — 6 cols: desc | global | 1.00 | 1.00 | subtotal | total
           aptoGroups[aptoKey].forEach(pg => {
             const sIdx = Number(pg.stageIdx||0);
             const stName = String(pg.stageName || _ETAPAS_NOMBRES[sIdx] || '').toUpperCase();
@@ -34742,87 +34764,92 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
               { content: '1.00', styles: { halign:'center' } },
               { content: '1.00', styles: { halign:'center' } },
               { content: 'Q '+_fmtN(monto), styles: { halign:'right' } },
-              // v335: total individual SIN fondo gris. Solo TOTAL (suma) y GRAN TOTAL llevan color.
+              // v335: total individual SIN fondo gris. Solo TOTAL y GRAN TOTAL llevan color.
               { content: 'Q '+_fmtN(monto), styles: { halign:'right', fontStyle:'bold' } }
             ]);
           });
         });
-        // 3. TOTAL — gris #D9D9D9, bold (subtotal bruto, label spans 5 cols)
+        // 3. TOTAL — gris
         body.push([
           { content: 'TOTAL', colSpan: 5, styles: { fontStyle:'bold', halign:'right', fillColor:[217,217,217], textColor:[0,0,0] } },
           { content: 'Q '+_fmtN(c.totalBruto||0), styles: { fontStyle:'bold', halign:'right', fillColor:[217,217,217], textColor:[0,0,0] } }
         ]);
-        // 4. Retenciones — blanco, label derecha (spans 5)
-        // v335: overflow:'linebreak' para que aptos largos envuelvan en vez de cortarse.
+        // 4. Retenciones (cellPadding compacto + linebreak)
         c.pagos.forEach(pg => {
           const ret = Number(pg.retencion || (Number(pg.bruto||0)*0.10));
           if(ret <= 0) return;
           const aptoT = ((pg.towerName||'').trim() + ' - ' + (pg.aptoName||'').trim()).replace(/^ - | - $/g,'');
           body.push([
-            { content: '(-) RETENCIÓN 10% - '+aptoT.toUpperCase(), colSpan: 5, styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255], overflow:'linebreak' } },
+            { content: '(-) RETENCIÓN 10% - '+aptoT.toUpperCase(), colSpan: 5, styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255], overflow:'linebreak', cellPadding:_padTxtLargo } },
             { content: '-Q '+_fmtN(ret), styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255] } }
           ]);
         });
         // 5. Descuentos
-        // v335: overflow:'linebreak' — descripciones largas (LIJADORA, PRESTAMO, etc.)
-        // se cortaban por la izquierda en halign:right. Ahora envuelven en varias lineas.
         c.descuentos.forEach(d => {
           const cuotaTxt = (d.cuotasTotales && d.cuotasTotales > 1) ? '('+(d.cuotaActual||1)+'/'+d.cuotasTotales+') ' : '';
           const lbl = '(-) '+cuotaTxt+(d.desc || d.subtipo || 'DESCUENTO');
           body.push([
-            { content: lbl.toUpperCase(), colSpan: 5, styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255], overflow:'linebreak' } },
+            { content: lbl.toUpperCase(), colSpan: 5, styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255], overflow:'linebreak', cellPadding:_padTxtLargo } },
             { content: '-Q '+_fmtN(d.monto||0), styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255] } }
           ]);
         });
-        // 6. OCs (suman)
+        // 6. OCs
         c.ocs.forEach(oc => {
           const m = Number(oc.neto || oc.monto || 0);
           body.push([
-            { content: ('(+) OC: '+(oc.desc||'')).toUpperCase(), colSpan: 5, styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255], overflow:'linebreak' } },
+            { content: ('(+) OC: '+(oc.desc||'')).toUpperCase(), colSpan: 5, styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255], overflow:'linebreak', cellPadding:_padTxtLargo } },
             { content: '+Q '+_fmtN(m), styles: { halign:'right', textColor:[0,0,0], fillColor:[255,255,255] } }
           ]);
         });
-        // 7. GRAN TOTAL <NOMBRE> — amarillo #FFFF00, bold
+        // 7. GRAN TOTAL <NOMBRE> — amarillo
         body.push([
-          { content: 'GRAN TOTAL    '+c.nombre, colSpan: 5, styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], overflow:'linebreak' } },
+          { content: 'GRAN TOTAL    '+c.nombre, colSpan: 5, styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], overflow:'linebreak', cellPadding:_padTxtLargo } },
           { content: 'Q '+_fmtN(c.totalNeto||0), styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0] } }
         ]);
-        // 8. Spacer entre trabajadores
-        if(idx < data.colabs.length - 1){
-          body.push([
-            { content: '', colSpan: COLS, styles: { fillColor:[255,255,255] } }
-          ]);
-        }
-      });
-      // Pie — "GRAN TOTAL PLANILLA DE TABLAYESO <fecha sabado>"
-      // v264: cellPadding extra a la derecha para que la fecha no toque la
-      // linea divisoria entre la columna del label y la del valor.
-      if(data.colabs.length > 1){
-        body.push([
-          { content: '', colSpan: COLS, styles: { fillColor:[255,255,255] } }
-        ]);
-        const _fechaSabTxt = _fmtFechaSabado(data.fecha);
-        body.push([
-          { content: 'GRAN TOTAL PLANILLA DE TABLAYESO  ' + _fechaSabTxt, colSpan: 5, styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], cellPadding: { top: 5, right: 12, bottom: 5, left: 5 } } },
-          { content: 'Q '+_fmtN(data.granTotal.neto||0), styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], cellPadding: { top: 5, right: 8, bottom: 5, left: 5 } } }
-        ]);
+        return body;
       }
 
-      doc.autoTable({
-        startY: y,
-        body: body,
-        theme: 'grid',
-        styles: { fontSize: 9, cellPadding: 4, lineColor:[180,180,180], lineWidth:0.3, font:'helvetica', textColor:[0,0,0] },
-        columnStyles: {
-          0: { cellWidth: 240 },                       // Descripcion (wide)
-          1: { cellWidth: 50,  halign:'center' },      // Unidad
-          2: { cellWidth: 40,  halign:'center' },      // Cantidad 1
-          3: { cellWidth: 40,  halign:'center' },      // Cantidad 2
-          4: { cellWidth: 80,  halign:'right' },       // Subtotal
-          5: { cellWidth: 80,  halign:'right' }        // Total
-        },
-        margin: { left: 40, right: 40 }
+      // v336: dibujar cada trabajador en SU PROPIA tabla, controlando el page break.
+      // Antes de dibujar un bloque, estimamos su alto. Si no cabe en la pagina actual,
+      // empezamos en nueva pagina. Asi NUNCA un trabajador queda partido.
+      const ROW_AVG_H = 17; // alto promedio por fila autoTable a fontSize 9 + cellPadding 4
+      data.colabs.forEach((c, idx) => {
+        const body = _v336BuildWorkerBody(c);
+        // estimacion conservadora: filas * promedio + margen por wraps potenciales
+        const wrapsExtra = (c.descuentos||[]).reduce((s,d)=>{
+          const len = String(d.desc||d.subtipo||'').length;
+          return s + (len > 28 ? ROW_AVG_H : 0); // wraps largos sumean ~1 linea
+        }, 0);
+        const estimatedH = body.length * ROW_AVG_H + wrapsExtra + 6;
+
+        if(y + estimatedH > pageH - marginBottom && y > 70){
+          doc.addPage();
+          y = 32;
+        }
+
+        doc.autoTable(Object.assign({}, tableOpts, { startY: y, body: body }));
+        y = doc.lastAutoTable.finalY + 4; // pequeno espacio entre trabajadores
       });
+
+      // Pie — "GRAN TOTAL PLANILLA DE TABLAYESO <fecha sabado>"
+      // v336: tambien como tabla independiente con su propio page-break.
+      if(data.colabs.length > 1){
+        const _fechaSabTxt = _fmtFechaSabado(data.fecha);
+        const footBody = [
+          [
+            { content: 'GRAN TOTAL PLANILLA DE TABLAYESO  ' + _fechaSabTxt, colSpan: 5, styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], cellPadding: { top: 5, right: 12, bottom: 5, left: 5 } } },
+            { content: 'Q '+_fmtN(data.granTotal.neto||0), styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], cellPadding: { top: 5, right: 8, bottom: 5, left: 5 } } }
+          ]
+        ];
+        const footH = 32;
+        if(y + footH > pageH - marginBottom){
+          doc.addPage();
+          y = 32;
+        } else {
+          y += 6; // separador antes del footer
+        }
+        doc.autoTable(Object.assign({}, tableOpts, { startY: y, body: footBody }));
+      }
 
       // ─── Guardar ───
       // v262: filename con el formato "Planilla <Proyecto>_<DDMMYYYY del sabado>.pdf"
