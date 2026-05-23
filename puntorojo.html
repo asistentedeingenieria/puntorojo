@@ -2748,7 +2748,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v366</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v367</span>
   </footer>
 
 </div>
@@ -33148,16 +33148,15 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     // recalcular totales por si los teniamos cacheados con el descuento incluido
     try { if(typeof _v289RecalcTotalesPlanilla === 'function') _v289RecalcTotalesPlanilla(p, pl); } catch(e){}
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
-    // v337: forzar subida inmediata al cloud para que el delete NO quede 1200ms
-    // en debounce. Sin esto, si el usuario refrescaba o cerraba la app rapido,
-    // el descuento volvia a aparecer desde el state remoto.
-    try {
-      if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow){
-        await CloudSync.forceUploadNow();
-      }
-    } catch(e){ console.warn('[v337] forceUploadNow en eliminarDescuento fallo:', e); }
+    // v367: render PRIMERO para feedback inmediato, CloudSync en background.
+    // Antes esperabamos await forceUploadNow (~500-2000ms) bloqueando el re-render.
     try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
     showT('DESCUENTO ELIMINADO','green');
+    try {
+      if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow){
+        CloudSync.forceUploadNow().catch(e => console.warn('[v367] CloudSync background fallo:', e));
+      }
+    } catch(e){ console.warn('[v367] CloudSync background:', e); }
   };
 
   window.finalizarDescuentosPlanilla = async function(planillaId){
@@ -33516,6 +33515,50 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     try { if(typeof saveState === 'function') saveState(); } catch(e){ console.error('[v289] saveState error:', e); }
     try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
     setTimeout(() => { try { window.abrirModalArmarPlanilla(); } catch(e){} }, 250);
+  };
+
+  // v367: ELIMINAR PLANILLA ARMADA · solo admin · modo prueba
+  // Borra la planilla del state y libera los pagos para poder re-armar.
+  window.eliminarPlanillaArmada = async function(planillaId){
+    const isAdmin = (typeof can === 'function' && can('users.manage'));
+    if (!isAdmin){ showT('SOLO EL ADMIN PUEDE ELIMINAR PLANILLAS','red'); return; }
+    const p = _activeProj();
+    if (!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    _ensurePlanillasArmadas(p);
+    const idx = p.planilla.planillasArmadas.findIndex(x => x.id === planillaId);
+    if (idx < 0){ showT('PLANILLA NO ENCONTRADA','red'); return; }
+    const pl = p.planilla.planillasArmadas[idx];
+    const nPagos = (pl.pagosIds||[]).length;
+    const nDesc = (pl.descuentosPlanilla||[]).length;
+    const bodyHTML = ''
+      + '<div style="padding:10px 12px;background:#FFF1F2;border:1px solid #FECDD3;border-radius:8px;color:#9F1239;font-size:11.5px;line-height:1.5;margin-bottom:12px">Esta acción <strong>borra completamente</strong> la planilla y <strong>libera los '+nPagos+' pago(s)</strong> para que puedan armarse en una planilla nueva. Solo disponible para admin en modo prueba.</div>'
+      + '<div style="font-size:12.5px;color:#333;line-height:1.5">'
+      +   '<div><strong>'+esc(_planillaTitulo(pl))+'</strong></div>'
+      +   '<div style="color:var(--mute);margin-top:4px">Estado: '+esc(pl.estado||'—')+'</div>'
+      +   '<div style="margin-top:4px">'+nPagos+' pago(s) · '+nDesc+' descuento(s)</div>'
+      + '</div>';
+    const ok = await window.prConfirm({
+      title: 'ELIMINAR PLANILLA',
+      bodyHTML, okText: 'ELIMINAR DEFINITIVAMENTE', danger: true
+    });
+    if (!ok) return;
+    // Liberar los pagos
+    (p.planilla.pagos || []).forEach(pg => {
+      if ((pl.pagosIds||[]).includes(pg.id)){
+        delete pg.planillaId;
+        delete pg.estadoPlanilla;
+      }
+    });
+    // Borrar la planilla
+    p.planilla.planillasArmadas.splice(idx, 1);
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+    showT('PLANILLA ELIMINADA · '+nPagos+' PAGOS LIBERADOS','green');
+    try {
+      if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow){
+        CloudSync.forceUploadNow().catch(e => console.warn('[v367] CloudSync bg:', e));
+      }
+    } catch(e){}
   };
 
   // ═════════════════════════════════════════════════════════════════════
@@ -34689,6 +34732,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       // v338: DESCARGAR EXCEL al lado del PDF
       h2 += '<button class="btn ghost sm" onclick="window.descargarPlanillaArmadaXLSX(\''+esc(pl.id)+'\')" style="border-color:#1565C0;color:#1565C0">DESCARGAR EXCEL</button>';
       h2 += '<button class="btn ghost sm" onclick="window.verHistorialPlanilla(\''+esc(pl.id)+'\')">VER HISTORIAL</button>';
+      // v367: ELIMINAR PLANILLA (solo admin) — para modo prueba. Libera los pagos.
+      if (isAdmin) {
+        h2 += '<button class="btn ghost sm" onclick="window.eliminarPlanillaArmada(\''+esc(pl.id)+'\')" style="border-color:#C62828;color:#C62828" title="Solo admin · libera los pagos y borra esta planilla">ELIMINAR PLANILLA</button>';
+      }
       h2 += '</div>';
       h2 += '</div>';
       return h2;
