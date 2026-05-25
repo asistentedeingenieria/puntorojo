@@ -2748,7 +2748,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v378</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v379</span>
   </footer>
 
 </div>
@@ -36977,6 +36977,26 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     }
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow){ CloudSync.forceUploadNow().catch(()=>{}); } } catch(e){}
+    // v379: notificar al admin cuando se REGISTRA un anticipo NUEVO (no en edición).
+    if (!existente) {
+      try {
+        if (typeof _notifyByPerm === 'function') {
+          const u = (typeof currentUser !== 'undefined') ? currentUser : null;
+          const isAdmin = u && Array.isArray(u.perms) && (u.perms.includes('*') || u.perms.includes('users.manage'));
+          if (!isAdmin) {
+            const actorName = ((u && (u.displayName || u.username || u.email)) || 'USUARIO').toUpperCase();
+            const subLabel = (typeof _subtipoLabel === 'function') ? _subtipoLabel(form.subtipo) : (form.subtipo || 'ANTICIPO');
+            const bodyTxt = (form.colaboradorNombre || '—') + ' · ' + subLabel + ' · Q ' + (Number(form.montoTotal)||0).toFixed(2) + ' en ' + (form.cantidadCuotas||1) + ' cuotas' + (form.desc ? ' · ' + form.desc : '');
+            _notifyByPerm('users.manage', {
+              type: 'anticipo-nuevo',
+              title: actorName + ' · NUEVO ANTICIPO',
+              body: bodyTxt.slice(0, 300),
+              projectId: (typeof state !== 'undefined' && state) ? (state.activeProjectId || null) : null
+            }).catch(()=>{});
+          }
+        }
+      } catch(e){ console.warn('[v379] notif anticipo nuevo:', e); }
+    }
     window._antCapturedForm = null;
     window.renderPlanillaAnticipos();
     showT(existente ? 'ANTICIPO ACTUALIZADO' : 'ANTICIPO REGISTRADO', 'green');
@@ -37713,51 +37733,17 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     _guardarDesdeCaptura(window._polCapturedForm || {}, null);
   };
 
+  // v379: EDITAR vuelve a aplicarse directo (no requiere admin) — solo ELIMINAR pide aprobación.
   window.editarPoliza = async function(id){
     if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
     // v352: las pólizas son globales — no se requiere proyecto activo.
     const po = _getPolizas().find(x => x.id === id);
     if (!po) { showT('PÓLIZA NO ENCONTRADA','red'); return; }
-    // v377: si ya hay solicitud PENDIENTE para esta póliza, avisar y salir.
-    const yaPendPol = _solicitudesPolPendientes().find(s => s.polizaId === id);
-    const esAdminPol = _esAdminPol();
-    if (yaPendPol && !esAdminPol){
-      await window.prAlert({ title:'YA HAY UNA SOLICITUD PENDIENTE', body:'Esta póliza tiene una solicitud de '+yaPendPol.tipo+' esperando aprobación del admin.' });
-      return;
-    }
     window._polCapturedForm = null;
     setTimeout(_hookCaptureForm, 80);
-    const isPendingPol = !esAdminPol && _puedeSolicitarPol();
-    const titleTxt = isPendingPol ? 'EDITAR PÓLIZA (ENVÍA SOLICITUD AL ADMIN)' : 'EDITAR PÓLIZA';
-    const okTxt = isPendingPol ? 'ENVIAR SOLICITUD' : 'GUARDAR CAMBIOS';
-    const hintHTML = isPendingPol ? '<div style="margin-bottom:12px;padding:10px 12px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:6px;color:#9A3412;font-size:11.5px;line-height:1.5">Los cambios <strong>NO se aplican inmediatamente</strong>. Se envía una solicitud al admin para que la apruebe.</div>' : '';
-    const ok = await window.prConfirm({ title: titleTxt, bodyHTML: hintHTML + _formHTML(po, null), okText: okTxt, wide:true });
+    const ok = await window.prConfirm({ title:'EDITAR PÓLIZA', bodyHTML:_formHTML(po, null), okText:'GUARDAR CAMBIOS', wide:true });
     if (!ok) { window._polCapturedForm = null; return; }
-    const form = window._polCapturedForm || {};
-    if (isPendingPol){
-      if (!form.aseguradoNombre){ showT('INGRESÁ EL NOMBRE DEL ASEGURADO','red'); return; }
-      const aCargoNombre = String(form.aCargoDeNombre||'').trim();
-      if (!aCargoNombre){ showT('INGRESÁ A QUIÉN SE LE DESCUENTA','red'); return; }
-      _crearSolicitudPol('EDITAR', po, {
-        aseguradoNombre: form.aseguradoNombre,
-        aseguradoPuesto: form.aseguradoPuesto,
-        aCargoDeColabId: '',
-        aCargoDeNombre: aCargoNombre,
-        noCertificado: form.noCertificado,
-        noPoliza: form.noPoliza,
-        aseguradora: form.aseguradora,
-        fechaInicio: form.fechaInicio,
-        fechaVencimiento: form.fechaVencimiento,
-        monto: form.monto || _getConfig().montoDefault,
-        estatus: form.estatus,
-        observaciones: form.observaciones || ''
-      });
-      window._polCapturedForm = null;
-      window.renderPlanillaPolizas();
-      showT('SOLICITUD DE EDICIÓN ENVIADA · ESPERANDO ADMIN','green');
-      return;
-    }
-    _guardarDesdeCaptura(form, po);
+    _guardarDesdeCaptura(window._polCapturedForm || {}, po);
   };
 
   function _guardarDesdeCaptura(form, existente){
@@ -37780,16 +37766,45 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       estatus: form.estatus,
       observaciones: form.observaciones || '' // v350
     };
+    let polFinal;
     if (existente) {
       Object.assign(existente, data);
+      polFinal = existente;
     } else {
-      polizas.push(Object.assign({ id: 'pol-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), ts: Date.now() }, data));
+      polFinal = Object.assign({ id: 'pol-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), ts: Date.now() }, data);
+      polizas.push(polFinal);
     }
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    // v379: notificar al admin de la creación/edición.
+    _notifyAdminPolizaChange(existente ? 'EDITADA' : 'NUEVA', polFinal, '');
     window._polCapturedForm = null;
     window.renderPlanillaPolizas();
     showT(existente ? 'PÓLIZA ACTUALIZADA' : 'PÓLIZA REGISTRADA', 'green');
+  }
+
+  // v379: helper para notificar al admin de cambios en pólizas (NUEVA, EDITADA, DADA DE BAJA, REACTIVADA).
+  // Usa _notifyByPerm('users.manage') si está disponible. La función ya skip-ea si el actor es admin.
+  function _notifyAdminPolizaChange(accion, po, extra){
+    try {
+      if (typeof _notifyByPerm !== 'function') return;
+      const u = (typeof currentUser !== 'undefined') ? currentUser : null;
+      // No notificar si el actor ya es admin (sería ruido propio).
+      const isAdmin = u && Array.isArray(u.perms) && (u.perms.includes('*') || u.perms.includes('users.manage'));
+      if (isAdmin) return;
+      const actorName = ((u && (u.displayName || u.username || u.email)) || 'USUARIO').toUpperCase();
+      const aseg = po && po.aseguradoNombre ? po.aseguradoNombre : '—';
+      const aCargo = po && po.aCargoDeNombre ? po.aCargoDeNombre : '—';
+      const cert = po && (po.noCertificado || po.noPoliza) ? (' · Cert ' + (po.noCertificado || po.noPoliza)) : '';
+      const monto = po && po.monto ? (' · ' + _money(po.monto)) : '';
+      const body = aseg + ' · A cargo: ' + aCargo + cert + monto + (extra ? ' · ' + extra : '');
+      _notifyByPerm('users.manage', {
+        type: 'poliza-' + accion.toLowerCase().replace(/\s+/g,'-'),
+        title: actorName + ' · PÓLIZA ' + accion,
+        body: body.slice(0, 300),
+        projectId: (typeof state !== 'undefined' && state) ? (state.activeProjectId || null) : null
+      }).catch(()=>{});
+    } catch(e){ console.warn('[v379] notif póliza:', e); }
   }
 
   window.eliminarPoliza = async function(id){
@@ -37834,24 +37849,16 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   // ── v350: DAR DE BAJA y REACTIVAR ─────────────────────────────
   // No eliminan el registro — solo cambian estatus a CANCELADA / ACTIVA
   // y setean/limpian fechaBaja. Mantiene el historial completo.
+  // v379: DAR DE BAJA vuelve a aplicarse directo (no requiere admin) — solo ELIMINAR pide aprobación.
   window.darDeBajaPoliza = async function(id){
     if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
     // v352: array global
     const po = _getPolizas().find(x => x.id === id);
     if (!po) { showT('PÓLIZA NO ENCONTRADA','red'); return; }
-    // v377: si ya hay solicitud PENDIENTE para esta póliza, avisar.
-    const esAdminPol = _esAdminPol();
-    const yaPendPol = _solicitudesPolPendientes().find(s => s.polizaId === id);
-    if (yaPendPol && !esAdminPol){
-      await window.prAlert({ title:'YA HAY UNA SOLICITUD PENDIENTE', body:'Esta póliza tiene una solicitud de '+yaPendPol.tipo+' esperando aprobación del admin.' });
-      return;
-    }
-    const isPendingPol = !esAdminPol && _puedeSolicitarPol();
     const hoy = new Date().toISOString().slice(0,10);
-    const hintHTML = isPendingPol ? '<div style="margin-bottom:12px;padding:10px 12px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:6px;color:#9A3412;font-size:11.5px;line-height:1.5">La baja <strong>NO se aplica inmediatamente</strong>. Se envía una solicitud al admin para que la apruebe.</div>' : '';
     const ok = await window.prConfirm({
-      title: isPendingPol ? 'DAR DE BAJA PÓLIZA (ENVÍA SOLICITUD AL ADMIN)' : 'Dar de baja póliza',
-      bodyHTML: hintHTML
+      title: 'Dar de baja póliza',
+      bodyHTML: ''
         + '<div style="font-size:12.5px;color:#333;line-height:1.5">'
         +   '<div><strong>'+_h(po.aseguradoNombre)+'</strong> ('+_h(po.aseguradoPuesto||'—')+')</div>'
         +   '<div style="color:var(--mute);margin-top:4px">A cargo de: '+_h(po.aCargoDeNombre)+'</div>'
@@ -37859,22 +37866,17 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         + '</div>'
         + '<div style="margin-top:14px;padding:10px 12px;background:#FFF3E0;border:1px solid #FFCC80;border-radius:6px;color:#9A3412;font-size:11.5px">La póliza se marcará como <strong>CANCELADA</strong> con fecha de baja <strong>'+_h(_fmtFecha(hoy))+'</strong>. El registro NO se elimina — queda en el historial.</div>'
         + '<div style="margin-top:12px"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">OBSERVACIÓN DE BAJA (OPCIONAL)</label><input id="polBajaMotivo" type="text" placeholder="ej: AVISO DE BAJA · CAMBIO DE PERSONAL · etc" value="'+_h(po.observaciones||'')+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>',
-      okText: isPendingPol ? 'ENVIAR SOLICITUD' : 'DAR DE BAJA',
-      danger: !isPendingPol
+      okText: 'DAR DE BAJA', danger: true
     });
     if (!ok) return;
     const motivo = (document.getElementById('polBajaMotivo')?.value || '').trim();
-    if (isPendingPol){
-      _crearSolicitudPol('DAR_DE_BAJA', po, { fechaBaja: hoy, observaciones: motivo || po.observaciones || '' });
-      window.renderPlanillaPolizas();
-      showT('SOLICITUD DE BAJA ENVIADA · ESPERANDO ADMIN','green');
-      return;
-    }
     po.estatus = 'CANCELADA';
     po.fechaBaja = hoy;
     if (motivo) po.observaciones = motivo;
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    // v379: notificar al admin
+    _notifyAdminPolizaChange('DADA DE BAJA', po, motivo ? ('Obs: ' + motivo) : '');
     window.renderPlanillaPolizas();
     showT('PÓLIZA DADA DE BAJA','green');
   };
@@ -37893,6 +37895,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     delete po.fechaBaja;
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    // v379: notificar al admin
+    _notifyAdminPolizaChange('REACTIVADA', po, '');
     window.renderPlanillaPolizas();
     showT('PÓLIZA REACTIVADA','green');
   };
