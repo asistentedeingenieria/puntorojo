@@ -2748,7 +2748,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v377</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v378</span>
   </footer>
 
 </div>
@@ -22693,9 +22693,28 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       const tiposArr = Object.values(porTipo).sort((a,b) => b.total - a.total);
       // Ordenar descuentos por fecha desc
       descuentos.sort((a,b) => new Date(b.ts||0) - new Date(a.ts||0));
+      // v378: agrupado por persona — cada persona es una card con sus descuentos adentro
+      // y un total propio. Más fácil ver "cuánto descontás a cada quien".
+      // Agrupamos los descuentos por persona usando la misma clave normalizada.
+      const descByPersona = {};
+      descuentos.forEach(d => {
+        const k = String(d.colaboradorNombre||'').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'') || '?';
+        if (!descByPersona[k]) descByPersona[k] = [];
+        descByPersona[k].push(d);
+      });
+      // Cada lista interna ordenada por fecha descendente.
+      Object.keys(descByPersona).forEach(k => {
+        descByPersona[k].sort((a,b) => new Date(b.ts||0) - new Date(a.ts||0));
+      });
+
       // Construir body
       let body = '';
-      body += '<div style="font-size:12.5px;color:#1F2937;line-height:1.55;margin-bottom:16px">Resumen de <strong>'+descuentos.length+' descuento(s)</strong> aplicado(s) en planillas de este proyecto. Total descontado: <strong style="color:#C62828;font-size:14px">'+fmt(total)+'</strong></div>';
+      // Cabecera con totales globales — barra horizontal compacta
+      body += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">';
+      body += '<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#64748B;font-weight:700">DESCUENTOS</div><div style="font-size:18px;font-weight:800;color:#0F172A;margin-top:2px">'+descuentos.length+'</div></div>';
+      body += '<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#64748B;font-weight:700">PERSONAS</div><div style="font-size:18px;font-weight:800;color:#1565C0;margin-top:2px">'+personasArr.length+'</div></div>';
+      body += '<div style="background:#FEF2F2;border:1px solid #FCA5A5;border-radius:8px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#991B1B;font-weight:700">TOTAL DESCONTADO</div><div style="font-size:18px;font-weight:800;color:#C62828;margin-top:2px">'+fmt(total)+'</div></div>';
+      body += '</div>';
 
       if (descuentos.length === 0){
         body += '<div style="padding:30px;text-align:center;background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;color:#15803D;font-weight:700">SIN DESCUENTOS APLICADOS TODAVÍA</div>';
@@ -22703,47 +22722,55 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         return;
       }
 
-      // Por persona
-      body += '<div style="border:1px solid #E2E8F0;border-radius:8px;background:#fff;margin-bottom:14px;overflow:hidden">';
-      body += '<div style="padding:10px 14px;background:#F1F5F9;font-size:10.5px;font-weight:700;color:#475569;letter-spacing:.6px;border-bottom:1px solid #E2E8F0">POR PERSONA · '+personasArr.length+'</div>';
-      body += '<div style="padding:10px 14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px">';
-      personasArr.forEach(per => {
-        body += '<div style="background:#FAFBFC;border:1px solid #E5E7EB;border-radius:6px;padding:8px 12px;display:grid;grid-template-columns:1fr auto;gap:6px;align-items:center">';
-        body += '<div><div style="font-size:11px;font-weight:700;color:#0F172A;line-height:1.3">'+escH(per.nombre)+'</div>';
-        body += '<div style="font-size:9.5px;color:#94A3B8;margin-top:2px">'+per.count+' descuento'+(per.count!==1?'s':'')+'</div></div>';
-        body += '<div style="font-size:13px;font-weight:800;color:#C62828">'+fmt(per.total)+'</div>';
-        body += '</div>';
-      });
-      body += '</div></div>';
-
-      // Por tipo
-      body += '<div style="border:1px solid #E2E8F0;border-radius:8px;background:#fff;margin-bottom:14px;overflow:hidden">';
-      body += '<div style="padding:10px 14px;background:#F1F5F9;font-size:10.5px;font-weight:700;color:#475569;letter-spacing:.6px;border-bottom:1px solid #E2E8F0">POR TIPO · '+tiposArr.length+'</div>';
-      body += '<div style="padding:10px 14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px">';
+      // POR TIPO — chips compactos (referencia rápida, una línea)
+      body += '<div style="background:#FAFBFC;border:1px solid #E2E8F0;border-radius:8px;padding:10px 12px;margin-bottom:14px">';
+      body += '<div style="font-size:9px;letter-spacing:1.2px;color:#64748B;font-weight:700;margin-bottom:8px">TOTAL POR TIPO</div>';
+      body += '<div style="display:flex;flex-wrap:wrap;gap:8px">';
       tiposArr.forEach(t => {
         const color = SUB_COLOR[t.tipo] || '#616161';
         const label = SUB_LABEL[t.tipo] || t.tipo.replace(/_/g,' ');
-        body += '<div style="background:#FAFBFC;border:1px solid #E5E7EB;border-left:3px solid '+color+';border-radius:6px;padding:8px 12px;display:grid;grid-template-columns:1fr auto;gap:6px;align-items:center">';
-        body += '<div><div style="font-size:10.5px;font-weight:700;color:'+color+';line-height:1.3">'+escH(label)+'</div>';
-        body += '<div style="font-size:9.5px;color:#94A3B8;margin-top:2px">'+t.count+' aplicacion'+(t.count!==1?'es':'')+'</div></div>';
-        body += '<div style="font-size:13px;font-weight:800;color:#C62828">'+fmt(t.total)+'</div>';
+        body += '<div style="background:#fff;border:1px solid '+color+';border-left:3px solid '+color+';border-radius:6px;padding:6px 10px;display:flex;align-items:center;gap:10px">';
+        body += '<div style="font-size:10px;font-weight:700;color:'+color+'">'+escH(label)+'</div>';
+        body += '<div style="font-size:9px;color:#94A3B8">'+t.count+'x</div>';
+        body += '<div style="font-size:12px;font-weight:800;color:#C62828">'+fmt(t.total)+'</div>';
         body += '</div>';
       });
       body += '</div></div>';
 
-      // Listado detallado
-      body += '<div style="border:1px solid #E2E8F0;border-radius:8px;background:#fff;overflow:hidden">';
-      body += '<div style="padding:10px 14px;background:#F1F5F9;font-size:10.5px;font-weight:700;color:#475569;letter-spacing:.6px;border-bottom:1px solid #E2E8F0">LISTADO DETALLADO · '+descuentos.length+' DESCUENTO(S)</div>';
-      body += '<div style="max-height:340px;overflow-y:auto">';
-      body += '<table style="width:100%;border-collapse:collapse;font-size:10.5px"><thead><tr style="background:#F8FAFC;border-bottom:1px solid #E2E8F0"><th style="text-align:left;padding:8px 10px;font-size:9.5px;color:#64748B;font-weight:700;letter-spacing:.5px">FECHA</th><th style="text-align:left;padding:8px 10px;font-size:9.5px;color:#64748B;font-weight:700;letter-spacing:.5px">PERSONA</th><th style="text-align:left;padding:8px 10px;font-size:9.5px;color:#64748B;font-weight:700;letter-spacing:.5px">TIPO</th><th style="text-align:left;padding:8px 10px;font-size:9.5px;color:#64748B;font-weight:700;letter-spacing:.5px">DETALLE</th><th style="text-align:center;padding:8px 10px;font-size:9.5px;color:#64748B;font-weight:700;letter-spacing:.5px">CUOTA</th><th style="text-align:right;padding:8px 10px;font-size:9.5px;color:#64748B;font-weight:700;letter-spacing:.5px">MONTO</th></tr></thead><tbody>';
-      descuentos.forEach(d => {
-        const fecha = d.ts ? new Date(d.ts).toLocaleDateString('es-GT') : '—';
-        const color = SUB_COLOR[String(d.subtipo||'').toUpperCase()] || '#616161';
-        const label = SUB_LABEL[String(d.subtipo||'').toUpperCase()] || String(d.subtipo||'OTRO').replace(/_/g,' ');
-        const cuota = (d.cuotaActual && d.cuotasTotales) ? (d.cuotaActual + '/' + d.cuotasTotales) : '—';
-        body += '<tr style="border-bottom:1px solid #F1F5F9"><td style="padding:7px 10px;color:#475569">'+escH(fecha)+'</td><td style="padding:7px 10px;font-weight:600;color:#0F172A">'+escH(d.colaboradorNombre||'—')+'</td><td style="padding:7px 10px"><span style="background:'+color+'22;color:'+color+';border:1px solid '+color+';padding:2px 7px;border-radius:10px;font-size:8.5px;font-weight:700;letter-spacing:.4px">'+escH(label)+'</span></td><td style="padding:7px 10px;color:#475569;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+escH(d.desc||'')+'">'+escH(d.desc||'—')+'</td><td style="padding:7px 10px;text-align:center;font-weight:700;color:#1565C0">'+escH(cuota)+'</td><td style="padding:7px 10px;text-align:right;font-weight:700;color:#C62828">'+fmt(d.monto)+'</td></tr>';
+      // POR PERSONA — cada persona es una card con sus descuentos adentro.
+      body += '<div style="display:flex;flex-direction:column;gap:12px">';
+      personasArr.forEach(per => {
+        const k = String(per.nombre||'').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'') || '?';
+        const items = descByPersona[k] || [];
+        body += '<div style="border:1px solid #E2E8F0;border-radius:10px;background:#fff;overflow:hidden">';
+        // Header de persona
+        body += '<div style="padding:12px 16px;background:linear-gradient(to right,#F8FAFC,#fff);border-bottom:1px solid #E2E8F0;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center">';
+        body += '<div><div style="font-size:13px;font-weight:800;color:#0F172A;letter-spacing:.2px">'+escH(per.nombre)+'</div>';
+        body += '<div style="font-size:10px;color:#94A3B8;margin-top:2px">'+per.count+' descuento'+(per.count!==1?'s':'')+'</div></div>';
+        body += '<div style="text-align:right"><div style="font-size:9px;color:#94A3B8;letter-spacing:.6px;font-weight:700">TOTAL</div><div style="font-size:18px;font-weight:800;color:#C62828;line-height:1.1">'+fmt(per.total)+'</div></div>';
+        body += '</div>';
+        // Lista de descuentos del person
+        body += '<div style="padding:4px 0">';
+        items.forEach((d, i) => {
+          const fecha = d.ts ? new Date(d.ts).toLocaleDateString('es-GT') : '—';
+          const color = SUB_COLOR[String(d.subtipo||'').toUpperCase()] || '#616161';
+          const label = SUB_LABEL[String(d.subtipo||'').toUpperCase()] || String(d.subtipo||'OTRO').replace(/_/g,' ');
+          const hasCuota = !!(d.cuotaActual && d.cuotasTotales);
+          const cuotaChip = hasCuota ? '<span style="background:#EFF6FF;color:#1E40AF;border:1px solid #BFDBFE;padding:1px 7px;border-radius:10px;font-size:9px;font-weight:700;margin-left:6px">'+d.cuotaActual+'/'+d.cuotasTotales+'</span>' : '';
+          const borderBottom = (i < items.length - 1) ? 'border-bottom:1px solid #F1F5F9;' : '';
+          body += '<div style="padding:10px 16px;'+borderBottom+'display:grid;grid-template-columns:60px 1fr auto;gap:12px;align-items:center">';
+          body += '<div style="font-size:9.5px;color:#94A3B8;letter-spacing:.3px;font-weight:600">'+escH(fecha)+'</div>';
+          body += '<div style="min-width:0">';
+          body += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;flex-wrap:wrap"><span style="background:'+color+'22;color:'+color+';border:1px solid '+color+';padding:2px 8px;border-radius:10px;font-size:8.5px;font-weight:800;letter-spacing:.4px;white-space:nowrap">'+escH(label)+'</span>'+cuotaChip+'</div>';
+          body += '<div style="font-size:11px;color:#475569;line-height:1.4;word-break:break-word">'+escH(d.desc||'—')+'</div>';
+          body += '</div>';
+          body += '<div style="font-size:14px;font-weight:800;color:#C62828;white-space:nowrap">'+fmt(d.monto)+'</div>';
+          body += '</div>';
+        });
+        body += '</div>';
+        body += '</div>';
       });
-      body += '</tbody></table></div></div>';
+      body += '</div>';
 
       window.prConfirm({ title:'RESUMEN DE DESCUENTOS APLICADOS', bodyHTML: body, okText:'CERRAR', cancelText:'', wide:true });
     } catch(e){
