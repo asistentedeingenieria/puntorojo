@@ -2748,7 +2748,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v371</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v372</span>
   </footer>
 
 </div>
@@ -36507,6 +36507,46 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     html += '<div role="button" title="Quitar filtro de estado · mostrar TODOS" onclick="window._antFiltroEstado=\'todos\';window.renderPlanillaAnticipos()" style="'+_kpiStyle(_kTodos, '#C62828')+'"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">MONTO PENDIENTE'+(_kTodos?_kpiTick:'')+'</div><div style="font-size:18px;font-weight:800;color:#C62828;margin-top:3px">' + _money(totalPendienteQ) + '</div></div>';
     html += '</div>';
 
+    // v372: SALDO PENDIENTE POR PERSONA — resumen por colaborador con buscador
+    // Agrupa anticipos PENDIENTES por nombre normalizado y calcula saldo total.
+    const _normNombreAnt = (s) => String(s||'').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+    const porPersonaAnt = {};
+    ant.forEach(a => {
+      const est = _estadoAnticipo(null, a);
+      if (est.estado !== 'PENDIENTE') return;
+      const k = _normNombreAnt(a.colaboradorNombre || '?');
+      if (!porPersonaAnt[k]) porPersonaAnt[k] = { nombre: a.colaboradorNombre || '—', count: 0, saldo: 0, montoTotal: 0, cuotasRestantes: 0 };
+      porPersonaAnt[k].count++;
+      porPersonaAnt[k].saldo += (est.montoCuota * est.cuotasRestantes);
+      porPersonaAnt[k].montoTotal += Number(a.montoTotal||0);
+      porPersonaAnt[k].cuotasRestantes += est.cuotasRestantes;
+    });
+    const personasResumenAnt = Object.values(porPersonaAnt).sort((a,b) => b.saldo - a.saldo);
+    if (personasResumenAnt.length > 0){
+      const totalPersonas = personasResumenAnt.length;
+      const totalSaldoPersonas = personasResumenAnt.reduce((s,x) => s + x.saldo, 0);
+      const buscadorVal = String(window._antPersonaBuscador || '');
+      html += '<div style="padding:14px 16px;border-bottom:1px solid var(--line);background:#F8FAFC">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">';
+      html += '<div><div style="font-size:10px;letter-spacing:1.4px;color:#475569;font-weight:700;text-transform:uppercase">SALDO PENDIENTE POR PERSONA</div>';
+      html += '<div style="font-size:10px;color:var(--mute);margin-top:2px">'+totalPersonas+' persona(s) · Total pendiente: <strong style="color:#C62828">'+_money(totalSaldoPersonas)+'</strong></div></div>';
+      html += '<input id="_antPersonaBuscador" type="search" placeholder="Buscar por nombre..." value="'+_h(buscadorVal)+'" oninput="window._antPersonaBuscador=this.value; window._v372FiltrarPersonas()" style="padding:8px 12px;border:1px solid #E2E8F0;border-radius:8px;font:inherit;font-size:11.5px;color:#0F172A;background:#fff;min-width:220px">';
+      html += '</div>';
+      html += '<div id="_antPersonasGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px">';
+      personasResumenAnt.forEach(per => {
+        const dataKey = _normNombreAnt(per.nombre);
+        html += '<div class="v372-persona-card" data-key="'+_h(dataKey)+'" data-nombre="'+_h(per.nombre.toLowerCase())+'" onclick="window._antFiltroPersona=\''+_h(per.nombre)+'\'; window.renderPlanillaAnticipos()" style="background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:10px 12px;display:grid;grid-template-columns:1fr auto;gap:6px;align-items:center;cursor:pointer;transition:all .15s ease" onmouseover="this.style.borderColor=\'#1565C0\';this.style.boxShadow=\'0 2px 8px rgba(15,23,42,.08)\'" onmouseout="this.style.borderColor=\'#E2E8F0\';this.style.boxShadow=\'none\'">';
+        html += '<div><div style="font-size:11px;font-weight:700;color:#1a1a1a;line-height:1.3">'+_h(per.nombre||'—')+'</div>';
+        html += '<div style="font-size:9.5px;color:var(--mute);letter-spacing:.3px;margin-top:2px">'+per.count+' anticipo'+(per.count!==1?'s':'')+' · '+per.cuotasRestantes+' cuota(s) restante(s)</div></div>';
+        html += '<div style="text-align:right"><div style="font-size:14px;font-weight:800;color:#C62828">'+_money(per.saldo)+'</div>';
+        html += '<div style="font-size:8.5px;color:#94A3B8;margin-top:1px">SALDO</div></div>';
+        html += '</div>';
+      });
+      html += '</div>';
+      html += '<div id="_antPersonasNoResults" style="display:none;padding:14px;text-align:center;font-size:11px;color:#94A3B8;letter-spacing:.4px">SIN COINCIDENCIAS</div>';
+      html += '</div>';
+    }
+
     // Filtros
     html += '<div style="display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap">';
     html += '<label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700">PERSONA</label>';
@@ -36622,6 +36662,21 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const cuota = cant > 0 ? total/cant : 0;
     const out = document.getElementById('antMontoCuotaCalc');
     if (out) out.textContent = _money(cuota);
+  };
+
+  // v372: filtrar cards de SALDO POR PERSONA en tiempo real sin re-render completo
+  window._v372FiltrarPersonas = function(){
+    const q = String(window._antPersonaBuscador||'').trim().toLowerCase();
+    const cards = document.querySelectorAll('.v372-persona-card');
+    let visibles = 0;
+    cards.forEach(c => {
+      const n = c.getAttribute('data-nombre') || '';
+      const match = !q || n.indexOf(q) >= 0;
+      c.style.display = match ? '' : 'none';
+      if (match) visibles++;
+    });
+    const noRes = document.getElementById('_antPersonasNoResults');
+    if (noRes) noRes.style.display = (q && visibles === 0) ? 'block' : 'none';
   };
 
   // formState pattern: captura los inputs ANTES de que prConfirm destruya el DOM
