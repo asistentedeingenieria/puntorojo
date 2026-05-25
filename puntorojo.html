@@ -2748,7 +2748,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v379</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v380</span>
   </footer>
 
 </div>
@@ -33184,10 +33184,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       })
       .filter(a => a._pagadas < a._total); // solo PENDIENTES
 
-    // Buscar pólizas ACTIVAS a cargo de esta persona
+    // Buscar pólizas a cargo de esta persona — v380: ACTIVA + EN PROCESO (CANCELADA excluida)
     const polizas = (typeof state !== 'undefined' && Array.isArray(state.polizasGlobales) ? state.polizasGlobales : [])
       .filter(po => {
-        if (po.estatus !== 'ACTIVA') return false;
+        if (po.estatus !== 'ACTIVA' && po.estatus !== 'EN PROCESO') return false;
         const aCargo = String(po.aCargoDeNombre||'').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
         return aCargo === nombreUC;
       });
@@ -33351,10 +33351,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       const yaIncluidoEnEsta = (pl.descuentosPlanilla||[]).some(d => d.anticipoId === a.id);
       if (!yaIncluidoEnEsta) return true; // hay anticipo pendiente disponible
     }
-    // 2) ¿Pólizas activas no incluidas todavía en esta planilla?
+    // 2) ¿Pólizas vigentes (ACTIVA o EN PROCESO) no incluidas todavía en esta planilla?  v380
     const polizas = (typeof state !== 'undefined' && Array.isArray(state.polizasGlobales) ? state.polizasGlobales : [])
       .filter(po => {
-        if (po.estatus !== 'ACTIVA') return false;
+        if (po.estatus !== 'ACTIVA' && po.estatus !== 'EN PROCESO') return false;
         const aC = String(po.aCargoDeNombre||'').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
         return aC === nombreUC;
       });
@@ -37351,14 +37351,18 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const totalActivas = polizas.filter(po => po.estatus === 'ACTIVA').length;
     const totalEnProceso = polizas.filter(po => po.estatus === 'EN PROCESO').length;
     const totalCanceladas = polizas.filter(po => po.estatus === 'CANCELADA').length;
-    const montoMensualTotal = polizas.filter(po => po.estatus === 'ACTIVA').reduce((s,po) => s + (Number(po.monto)||cfg.montoDefault), 0);
+    // v380: el MONTO QUINCENAL TOTAL incluye ACTIVA + EN PROCESO (CANCELADA queda fuera).
+    // Las EN PROCESO también se descuentan — solo significa que el papeleo de la aseguradora
+    // está en trámite, pero la persona ya está cubierta y aplica el cobro quincenal.
+    const polizasVigentes = polizas.filter(po => po.estatus === 'ACTIVA' || po.estatus === 'EN PROCESO');
+    const montoMensualTotal = polizasVigentes.reduce((s,po) => s + (Number(po.monto)||cfg.montoDefault), 0);
 
     // Resumen por persona a cargo (cuántas pólizas + monto quincenal a descontar).
     // v357: agrupamos por NOMBRE NORMALIZADO (sin acentos, espacios colapsados)
     // para que "MONROY ORTÍZ" y "MONROY ORTIZ" cuenten juntos.
+    // v380: incluye ACTIVA + EN PROCESO (vigentes).
     const porPersona = {};
-    polizas.forEach(po => {
-      if (po.estatus !== 'ACTIVA') return;
+    polizasVigentes.forEach(po => {
       const k = _normName(po.aCargoDeNombre || '?');
       if(!porPersona[k]) porPersona[k] = { colabId: po.aCargoDeColabId, nombre: po.aCargoDeNombre, count: 0, monto: 0 };
       porPersona[k].count++;
@@ -37411,7 +37415,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     // Resumen por persona a cargo
     if (personasResumen.length > 0) {
       html += '<div style="padding:14px 16px;border-bottom:1px solid var(--line);background:#F8FAFC">';
-      html += '<div style="font-size:10px;letter-spacing:1.4px;color:#475569;font-weight:700;text-transform:uppercase;margin-bottom:8px">DESCUENTO QUINCENAL POR PERSONA A CARGO (PÓLIZAS ACTIVAS)</div>';
+      html += '<div style="font-size:10px;letter-spacing:1.4px;color:#475569;font-weight:700;text-transform:uppercase;margin-bottom:8px">DESCUENTO QUINCENAL POR PERSONA A CARGO (PÓLIZAS VIGENTES · ACTIVA + EN PROCESO)</div>';
       html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px">';
       personasResumen.forEach(per => {
         html += '<div style="background:#fff;border:1px solid #E2E8F0;border-radius:6px;padding:8px 12px;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center">';
@@ -38030,7 +38034,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   // SOLO el nombre normalizado (uppercase trim). El campo aCargoDeColabId
   // está deprecado pero se conserva como fallback de compatibilidad.
   function _matchPolizaToColab(po, colabId){
-    if (po.estatus !== 'ACTIVA') return false;
+    // v380: ACTIVA + EN PROCESO cuentan como vigentes (solo CANCELADA queda fuera).
+    if (po.estatus !== 'ACTIVA' && po.estatus !== 'EN PROCESO') return false;
     try {
       const p = _activeProj();
       if (!p || !Array.isArray(p.planilla?.colaboradores)) return false;
