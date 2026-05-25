@@ -2748,7 +2748,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v380</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v381</span>
   </footer>
 
 </div>
@@ -7292,10 +7292,12 @@ function ensureDataV9(data){
   // Dedupea por aseguradoNombre (uppercase trim) — si ya existe una con ese
   // nombre, se salta. Las pólizas NO requieren matchear con colaboradores —
   // aCargoDeNombre se guarda como texto libre.
+  // v381: el SEED se expone como window.POLIZAS_PDF_SEED_V354 para que
+  // la función "RESTAURAR PÓLIZAS DEL PDF" pueda volver a leerlo y re-agregar
+  // las pólizas que el usuario haya borrado accidentalmente desde AUDITAR.
   try {
-    if (!data._polizasPDFSeedLoadedV354 && Array.isArray(data.polizasGlobales)) {
-      // Schema por fila: [nombre, puesto, aCargo, fechaInicio, fechaVenc, cert, estatus, aseguradora, obs]
-      const SEED = [
+    // Schema por fila: [nombre, puesto, aCargo, fechaInicio, fechaVenc, cert, estatus, aseguradora, obs]
+    const SEED = [
         ['ABNER MAURICIO ROSALES MAZARIEGOS','AYUDANTE','VICTOR ERNESTO SALAZAR RAMOS','2026-04-22','2027-02-07','','EN PROCESO','SEGUROS G&T','AVISO DE BAJA 18/05/2026'],
         ['ANDERSON DAVID BARAN SIPAC','AYUDANTE','LUIS MIGUEL BARAN QUIEJ','2025-02-07','2027-02-07','','ACTIVA','IGSS',''],
         ['ANDERSON STIVEN SALAZAR GONZALEZ','AYUDANTE','VICTOR ERNESTO SALAZAR RAMOS','2025-02-07','2027-02-07','','ACTIVA','IGSS',''],
@@ -7354,6 +7356,11 @@ function ensureDataV9(data){
         ['WESCESLAO DE JESUS ROSALES MAZARIEGOS','AYUDANTE','VICTOR ERNESTO SALAZAR RAMOS','2026-04-22','2027-02-07','','EN PROCESO','SEGUROS G&T',''],
         ['WILSON FERNANDO SICAJAU CHACON','INSTALADOR','LUDVIN GABRIEL CHAMALE RAFAEL','2026-03-29','2027-02-07','69','ACTIVA','SEGUROS G&T','AVISO DE BAJA 15/05/2026']
       ];
+      // v381: exponer el SEED como global para que el botón "RESTAURAR DEL PDF"
+      // pueda volver a leerlo y re-agregar pólizas borradas accidentalmente.
+      window.POLIZAS_PDF_SEED_V354 = SEED;
+    // Seed inicial — corre una sola vez gracias al flag _polizasPDFSeedLoadedV354
+    if (!data._polizasPDFSeedLoadedV354 && Array.isArray(data.polizasGlobales)) {
       const seenNombres = new Set(data.polizasGlobales.map(p => String(p && p.aseguradoNombre||'').trim().toUpperCase()));
       let agregadas = 0;
       SEED.forEach((row, i) => {
@@ -37391,6 +37398,19 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       html += '<button class="btn ghost sm" style="margin-right:6px;color:#9A3412;border-color:#FDBA74;background:#FFFBEB" onclick="window.verSolicitudesPolizas()" title="Ver solicitudes de edición/eliminación/baja pendientes">SOLICITUDES'+badgePol+'</button>';
     }
     if (puedeEditar) {
+      // v381: botón RESTAURAR DEL PDF — solo aparece si hay pólizas del PDF que faltan en la app.
+      const faltantesCount = (function(){
+        try {
+          const seed = window.POLIZAS_PDF_SEED_V354;
+          if (!Array.isArray(seed)) return 0;
+          const existentes = new Set(_getPolizas().map(p => _normName(p.aseguradoNombre||'')));
+          return seed.reduce((n,row) => n + (existentes.has(_normName(row[0]||'')) ? 0 : 1), 0);
+        } catch(e){ return 0; }
+      })();
+      if (faltantesCount > 0){
+        const badgeRes = ' <span style="background:#DC2626;color:#fff;border-radius:10px;padding:1px 7px;font-size:9.5px;font-weight:800;margin-left:4px">'+faltantesCount+'</span>';
+        html += '<button class="btn ghost sm" style="margin-right:6px;color:#15803D;border-color:#86EFAC;background:#F0FDF4" onclick="window.restaurarPolizasDelPDF()" title="Re-agregar pólizas del PDF original que fueron borradas">RESTAURAR DEL PDF'+badgeRes+'</button>';
+      }
       html += '<button class="btn ghost sm" style="margin-right:6px" onclick="window.auditarPolizas()" title="Detectar canceladas y duplicados">AUDITAR</button>';
       html += '<button class="btn ghost sm" style="margin-right:6px" onclick="window.abrirAjustesPolizas()" title="Configurar monto default de pólizas nuevas">AJUSTES</button>';
       html += '<button class="btn sm" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.agregarPoliza()">+ AGREGAR PÓLIZA</button>';
@@ -37666,6 +37686,77 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     });
     window._polAuditDelegateInstalled = true;
   }
+
+  // v381: RESTAURAR DEL PDF — compara las pólizas actuales contra el SEED
+  // original (57 del PDF) y permite re-agregar las que falten. Útil cuando
+  // el usuario borra accidentalmente alguna desde AUDITAR.
+  window.restaurarPolizasDelPDF = async function(){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const seed = window.POLIZAS_PDF_SEED_V354;
+    if (!Array.isArray(seed) || seed.length === 0){
+      await window.prAlert({ title:'SEED NO DISPONIBLE', body:'No se encontró el seed del PDF. Recargá la app e intentá de nuevo.' });
+      return;
+    }
+    const existentes = new Set(_getPolizas().map(p => _normName(p.aseguradoNombre||'')));
+    const faltantes = seed.filter(row => !existentes.has(_normName(row[0]||'')));
+    if (faltantes.length === 0){
+      await window.prAlert({ title:'NADA QUE RESTAURAR', body:'Todas las pólizas del PDF original ya están en la app. No hay nada que re-agregar.' });
+      return;
+    }
+    // Construir modal con la lista de faltantes
+    let body = '';
+    body += '<div style="font-size:12.5px;color:#1F2937;line-height:1.5;margin-bottom:14px">Se encontraron <strong>'+faltantes.length+' póliza(s)</strong> del PDF original que no están en la app. Probablemente fueron borradas desde AUDITAR. Podés restaurarlas todas con un clic — se vuelven a registrar con el estatus original del PDF (ACTIVA o EN PROCESO).</div>';
+    body += '<div style="max-height:380px;overflow-y:auto;border:1px solid #E2E8F0;border-radius:8px;background:#F8FAFC">';
+    faltantes.forEach((row, i) => {
+      const estBadge = row[6] === 'ACTIVA'
+        ? '<span class="planilla-badge" style="background:#E8F5E9;color:#2E7D32;border:1px solid #2E7D32;font-size:8.5px">ACTIVA</span>'
+        : '<span class="planilla-badge" style="background:#FFF3E0;color:#F57C00;border:1px solid #F57C00;font-size:8.5px">EN PROCESO</span>';
+      const borderBottom = (i < faltantes.length - 1) ? 'border-bottom:1px solid #E2E8F0;' : '';
+      body += '<div style="padding:10px 14px;'+borderBottom+'display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center">';
+      body += '<div><div style="font-size:11.5px;font-weight:700;color:#0F172A">'+_h(row[0])+'</div>';
+      body += '<div style="font-size:10px;color:#64748B;margin-top:2px">'+_h(row[1])+' · A cargo: '+_h(row[2])+(row[5]?' · Cert '+_h(row[5]):'')+' · '+_h(row[7])+'</div></div>';
+      body += '<div>'+estBadge+'</div>';
+      body += '</div>';
+    });
+    body += '</div>';
+    const ok = await window.prConfirm({
+      title:'RESTAURAR PÓLIZAS DEL PDF',
+      bodyHTML: body,
+      okText:'RESTAURAR TODAS ('+faltantes.length+')',
+      cancelText:'CANCELAR',
+      wide:true
+    });
+    if (!ok) return;
+    const polizas = _getPolizas();
+    const cfg = _getConfig();
+    let agregadas = 0;
+    faltantes.forEach((row, i) => {
+      const aseg = row[7];
+      const cert = row[5] || '';
+      polizas.push({
+        id: 'pol-pdf-restore-' + Date.now() + '-' + i,
+        aseguradoNombre: row[0],
+        aseguradoPuesto: row[1],
+        aCargoDeColabId: '',
+        aCargoDeNombre: row[2],
+        noCertificado: cert,
+        noPoliza: (aseg === 'IGSS' && !cert) ? '' : 'GTAP-16134',
+        aseguradora: aseg,
+        fechaInicio: row[3],
+        fechaVencimiento: row[4],
+        monto: cfg.montoDefault || 44.95,
+        estatus: row[6],
+        observaciones: row[8] || '',
+        creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''),
+        ts: Date.now()
+      });
+      agregadas++;
+    });
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    window.renderPlanillaPolizas();
+    showT(agregadas + ' PÓLIZA(S) RESTAURADA(S) DEL PDF', 'green');
+  };
 
   function _formHTML(po, p){
     po = po || {};
