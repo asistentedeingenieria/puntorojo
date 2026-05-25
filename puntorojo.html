@@ -2684,6 +2684,7 @@ table{max-width:100%}
         <button class="mat-tab" data-plantab="resumenpersona" onclick="setPlanillaTab('resumenpersona')">RESUMEN POR PERSONA</button>
         <button class="mat-tab" data-plantab="anticipos" onclick="setPlanillaTab('anticipos')">ANTICIPOS</button>
         <button class="mat-tab" data-plantab="polizas" onclick="setPlanillaTab('polizas')">PÓLIZAS</button>
+        <button class="mat-tab" data-plantab="ocs" onclick="setPlanillaTab('ocs')">ÓRDENES DE CAMBIO</button>
         <button class="mat-tab" data-plantab="receta" onclick="setPlanillaTab('receta')" data-perm="users.manage">MODELOS Y COSTOS</button>
         <!-- COLABORADORES se inyecta al FINAL por injectPlanillaTabs -->
       </div>
@@ -2697,6 +2698,7 @@ table{max-width:100%}
       <div id="planilla-resumenpersona" style="display:none"></div>
       <div id="planilla-anticipos" style="display:none"></div>
       <div id="planilla-polizas" style="display:none"></div>
+      <div id="planilla-ocs" style="display:none"></div>
     </section>
 
     <!-- ── ACTIVIDAD ── -->
@@ -2748,7 +2750,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v381</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v382</span>
   </footer>
 
 </div>
@@ -28689,6 +28691,8 @@ window.addEventListener('load', () => {
     if (currentPlanillaTab === 'anticipos' && typeof window.renderPlanillaAnticipos === 'function') window.renderPlanillaAnticipos();
     // v347: catálogo de pólizas
     if (currentPlanillaTab === 'polizas' && typeof window.renderPlanillaPolizas === 'function') window.renderPlanillaPolizas();
+    // v382: catálogo de OCs (Órdenes de Cambio)
+    if (currentPlanillaTab === 'ocs' && typeof window.renderPlanillaOCs === 'function') window.renderPlanillaOCs();
     applyPermissions();
   };
 
@@ -38149,6 +38153,296 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   };
 
   console.log('[v347] Catálogo de Pólizas cargado');
+})();
+</script>
+
+<!-- ════════════════════════════════════════════════════════════════
+     v382 · CATÁLOGO DE ÓRDENES DE CAMBIO (OCs)
+     ────────────────────────────────────────────────────────────────
+     Base de datos de OCs POR PROYECTO. Las OCs son trabajos extra que
+     el cliente solicita fuera del alcance original (cambios de diseño,
+     refuerzos, etc). Cada OC tiene:
+       - numero: identificador único dentro del proyecto (ej "14", "3")
+       - descripcion: texto del trabajo
+       - unidad: ml / m2 / U / etc
+       - precio: Q por unidad
+       - estatus: ACTIVA / CANCELADA
+
+     Datos: project.planilla.ocCatalogo = []
+
+     Fase 1 (v382): CRUD del catálogo
+     Fase 2 (v383): integración con armar planilla
+     Fase 3 (v384): PDF/Excel con sección OCs
+     ═══════════════════════════════════════════════════════════════ -->
+<script id="pr-ocs-module">
+(function(){
+  'use strict';
+
+  const UNIDAD_OPTS = ['ml','m2','U','Día','Global'];
+  const ESTATUS_OPTS = ['ACTIVA','CANCELADA'];
+
+  function _h(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function _money(n){ const v = Number(n)||0; return 'Q ' + v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+  function _activeProj(){ return (typeof activeProj === 'function') ? activeProj() : null; }
+
+  function _getOCs(p){
+    p = p || _activeProj();
+    if (!p) return [];
+    if (!p.planilla) p.planilla = {};
+    if (!Array.isArray(p.planilla.ocCatalogo)) p.planilla.ocCatalogo = [];
+    return p.planilla.ocCatalogo;
+  }
+  function _puedeEditar(){ try { return typeof can === 'function' && (can('users.manage') || can('planilla.descuentos')); } catch(e){ return false; } }
+
+  // ── RENDER ────────────────────────────────────────────────────
+  window.renderPlanillaOCs = function(){
+    const cont = document.getElementById('planilla-ocs');
+    if (!cont) return;
+    const p = _activeProj();
+    if (!p) { cont.innerHTML = '<div class="card" style="padding:20px;color:var(--mute)">SELECCIONÁ UN PROYECTO PARA VER SUS ÓRDENES DE CAMBIO.</div>'; return; }
+    const ocs = _getOCs(p);
+    const puedeEditar = _puedeEditar();
+
+    const filtroEstatus = window._ocFiltroEstatus || 'todas';
+    const filtroNumero = String(window._ocFiltroNumero || '').trim().toLowerCase();
+
+    const filas = ocs.filter(oc => {
+      if (filtroEstatus !== 'todas' && oc.estatus !== filtroEstatus) return false;
+      if (filtroNumero && !String(oc.numero||'').toLowerCase().includes(filtroNumero)) return false;
+      return true;
+    }).sort((a,b) => {
+      // Ordenar por número (numérico si es posible, sino alfabético)
+      const na = parseInt(a.numero, 10);
+      const nb = parseInt(b.numero, 10);
+      if (!isNaN(na) && !isNaN(nb)) return na - nb;
+      return String(a.numero||'').localeCompare(String(b.numero||''));
+    });
+
+    const activas = ocs.filter(x => x.estatus === 'ACTIVA').length;
+    const canceladas = ocs.filter(x => x.estatus === 'CANCELADA').length;
+    const totalActivas = ocs.filter(x => x.estatus === 'ACTIVA').reduce((s,oc) => s + (Number(oc.precio)||0), 0);
+
+    let html = '';
+    html += '<div class="card">';
+    html += '<div class="card-hd">';
+    html += '<h3>CATÁLOGO DE ÓRDENES DE CAMBIO</h3>';
+    html += '<span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Trabajos extra por OC · se cobran por cantidad ejecutada · '+_h(p.name||'')+'</span>';
+    if (puedeEditar) {
+      html += '<button class="btn sm" style="background:#7B1FA2;border-color:#7B1FA2;color:#fff" onclick="window.agregarOC()">+ AGREGAR OC</button>';
+    }
+    html += '</div>';
+
+    // KPIs
+    html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:14px 16px;background:var(--cream);border-bottom:1px solid var(--line)">';
+    html += '<div style="background:#fff;border:1px solid #E1BEE7;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">OCs ACTIVAS</div><div style="font-size:18px;font-weight:800;color:#7B1FA2;margin-top:3px">'+activas+'</div></div>';
+    html += '<div style="background:#fff;border:1px solid #BDBDBD;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">CANCELADAS</div><div style="font-size:18px;font-weight:800;color:#616161;margin-top:3px">'+canceladas+'</div></div>';
+    html += '<div style="background:#fff;border:1px solid #E1BEE7;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">PRECIO UNITARIO ACUM. (ACTIVAS)</div><div style="font-size:16px;font-weight:800;color:#7B1FA2;margin-top:3px">'+_money(totalActivas)+'</div></div>';
+    html += '</div>';
+
+    // Filtros
+    html += '<div style="display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap">';
+    html += '<label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700">ESTATUS</label>';
+    html += '<select onchange="window._ocFiltroEstatus=this.value; window.renderPlanillaOCs()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px">';
+    html += '<option value="todas"'+(filtroEstatus==='todas'?' selected':'')+'>TODAS</option>';
+    ESTATUS_OPTS.forEach(s => { html += '<option value="'+s+'"'+(s===filtroEstatus?' selected':'')+'>'+s+'</option>'; });
+    html += '</select>';
+    html += '<label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700;margin-left:10px">BUSCAR OC #</label>';
+    html += '<input type="text" placeholder="ej: 14" value="'+_h(window._ocFiltroNumero||'')+'" oninput="window._ocFiltroNumero=this.value; window.renderPlanillaOCs()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px;width:120px">';
+    html += '</div>';
+
+    // Tabla
+    html += '<div class="tbl-wrap"><table class="tbl">';
+    html += '<thead><tr>';
+    html += '<th style="width:40px;text-align:center">#</th>';
+    html += '<th style="width:90px">OC #</th>';
+    html += '<th>DESCRIPCIÓN</th>';
+    html += '<th style="width:80px;text-align:center">UNIDAD</th>';
+    html += '<th class="num" style="width:120px">PRECIO Q</th>';
+    html += '<th style="width:110px">ESTATUS</th>';
+    if (puedeEditar) html += '<th style="width:160px"></th>';
+    html += '</tr></thead><tbody>';
+
+    if (filas.length === 0){
+      html += '<tr><td colspan="'+(puedeEditar?7:6)+'" style="text-align:center;padding:30px;color:var(--mute);font-size:11px;letter-spacing:1px">SIN OCs REGISTRADAS EN ESTE PROYECTO · AGREGÁ LA PRIMERA CON + AGREGAR OC</td></tr>';
+    } else {
+      filas.forEach((oc, idx) => {
+        const estBadge = oc.estatus === 'ACTIVA'
+          ? '<span class="planilla-badge" style="background:#F3E5F5;color:#7B1FA2;border:1px solid #7B1FA2">ACTIVA</span>'
+          : '<span class="planilla-badge" style="background:#FFEBEE;color:#C62828;border:1px solid #C62828">CANCELADA</span>';
+        const filaStyle = oc.estatus === 'CANCELADA' ? 'opacity:.55;background:#FAFAFA' : '';
+        html += '<tr style="'+filaStyle+'">';
+        html += '<td style="text-align:center;font-size:10px;font-weight:700;color:#94A3B8">'+(idx+1)+'</td>';
+        html += '<td style="font-size:12px;font-weight:800;color:#7B1FA2">OC #'+_h(oc.numero||'?')+'</td>';
+        html += '<td style="font-size:11px;line-height:1.4'+(oc.estatus==='CANCELADA'?';text-decoration:line-through':'')+'">'+_h(oc.descripcion||'—')+'</td>';
+        html += '<td style="text-align:center;font-size:10.5px;font-weight:700">'+_h(oc.unidad||'—')+'</td>';
+        html += '<td class="num" style="font-weight:800;color:#0F172A">'+_money(oc.precio)+'</td>';
+        html += '<td>'+estBadge+'</td>';
+        if (puedeEditar) {
+          html += '<td style="white-space:nowrap">';
+          html += '<button class="btn ghost sm" onclick="window.editarOC(\''+_h(oc.id)+'\')" style="font-size:9px">EDITAR</button> ';
+          if (oc.estatus === 'CANCELADA'){
+            html += '<button class="btn ghost sm" style="color:#7B1FA2;border-color:#7B1FA2;font-size:9px" onclick="window.reactivarOC(\''+_h(oc.id)+'\')" title="Reactivar">REACTIVAR</button> ';
+          } else {
+            html += '<button class="btn ghost sm" style="color:#F57C00;border-color:#F57C00;font-size:9px" onclick="window.darDeBajaOC(\''+_h(oc.id)+'\')" title="Marcar como CANCELADA">DAR DE BAJA</button> ';
+          }
+          html += '<button class="btn ghost sm" style="color:var(--red);font-size:9px" onclick="window.eliminarOC(\''+_h(oc.id)+'\')" title="Eliminar definitivamente">✕</button>';
+          html += '</td>';
+        }
+        html += '</tr>';
+      });
+    }
+    html += '</tbody></table></div></div>';
+    cont.innerHTML = html;
+  };
+
+  // ── FORMULARIO ────────────────────────────────────────────────
+  function _formHTML(oc){
+    oc = oc || {};
+    return ''
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;font-size:12px">'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">NÚMERO DE OC</label><input id="ocNumero" type="text" value="'+_h(oc.numero||'')+'" placeholder="ej: 14" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">UNIDAD</label><select id="ocUnidad" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'+UNIDAD_OPTS.map(u => '<option value="'+u+'"'+(u===(oc.unidad||'ml')?' selected':'')+'>'+u+'</option>').join('')+'</select></div>'
+      +   '<div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">DESCRIPCIÓN DEL TRABAJO</label><textarea id="ocDescripcion" rows="2" placeholder="ej: Dintel a una cara calibre 20 + cenefa horizontal + refuerzo de madera a 1.00 m" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;resize:vertical">'+_h(oc.descripcion||'')+'</textarea></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">PRECIO UNITARIO (Q)</label><input id="ocPrecio" type="number" step="0.01" min="0" value="'+(oc.precio||0)+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">ESTATUS</label><select id="ocEstatus" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'+ESTATUS_OPTS.map(s => '<option value="'+s+'"'+(s===(oc.estatus||'ACTIVA')?' selected':'')+'>'+s+'</option>').join('')+'</select></div>'
+      + '</div>';
+  }
+
+  function _captureForm(){
+    return {
+      numero: (document.getElementById('ocNumero')?.value || '').trim(),
+      descripcion: (document.getElementById('ocDescripcion')?.value || '').trim(),
+      unidad: document.getElementById('ocUnidad')?.value || 'ml',
+      precio: Number(document.getElementById('ocPrecio')?.value) || 0,
+      estatus: document.getElementById('ocEstatus')?.value || 'ACTIVA'
+    };
+  }
+
+  function _notifAdminOCChange(accion, oc){
+    try {
+      if (typeof _notifyByPerm !== 'function') return;
+      const u = (typeof currentUser !== 'undefined') ? currentUser : null;
+      const isAdmin = u && Array.isArray(u.perms) && (u.perms.includes('*') || u.perms.includes('users.manage'));
+      if (isAdmin) return;
+      const actorName = ((u && (u.displayName || u.username || u.email)) || 'USUARIO').toUpperCase();
+      const proj = _activeProj();
+      const projName = proj ? proj.name : '';
+      const body = (projName ? projName + ' · ' : '') + 'OC #'+(oc.numero||'?')+' · '+_money(oc.precio)+'/'+oc.unidad+' · '+(oc.descripcion||'').slice(0,150);
+      _notifyByPerm('users.manage', {
+        type: 'oc-' + accion.toLowerCase().replace(/\s+/g,'-'),
+        title: actorName + ' · OC ' + accion,
+        body: body.slice(0, 300),
+        projectId: proj ? proj.id : null
+      }).catch(()=>{});
+    } catch(e){ console.warn('[v382] notif OC:', e); }
+  }
+
+  window.agregarOC = async function(){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const p = _activeProj();
+    if (!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    const ok = await window.prConfirm({ title:'AGREGAR ORDEN DE CAMBIO', bodyHTML: _formHTML(null), okText:'GUARDAR OC', wide:true });
+    if (!ok) return;
+    const form = _captureForm();
+    if (!form.numero) { showT('INGRESÁ EL NÚMERO DE OC','red'); return; }
+    if (!form.descripcion) { showT('INGRESÁ LA DESCRIPCIÓN','red'); return; }
+    if (form.precio <= 0) { showT('PRECIO INVÁLIDO','red'); return; }
+    const ocs = _getOCs(p);
+    // Verificar duplicado de número
+    if (ocs.some(x => String(x.numero||'').trim().toUpperCase() === form.numero.toUpperCase())){
+      const conf = await window.prConfirm({ title:'NÚMERO YA EXISTE', body:'Ya existe una OC #'+form.numero+' en este proyecto. ¿Crear igual?', okText:'CREAR DE TODOS MODOS', danger:true });
+      if (!conf) return;
+    }
+    const ocNew = Object.assign({
+      id: 'oc-' + Date.now() + '-' + Math.random().toString(36).slice(2,8),
+      creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''),
+      ts: Date.now()
+    }, form);
+    ocs.push(ocNew);
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _notifAdminOCChange('NUEVA', ocNew);
+    window.renderPlanillaOCs();
+    showT('OC #'+form.numero+' REGISTRADA','green');
+  };
+
+  window.editarOC = async function(id){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const ocs = _getOCs();
+    const oc = ocs.find(x => x.id === id);
+    if (!oc) { showT('OC NO ENCONTRADA','red'); return; }
+    const ok = await window.prConfirm({ title:'EDITAR OC #'+_h(oc.numero||''), bodyHTML: _formHTML(oc), okText:'GUARDAR CAMBIOS', wide:true });
+    if (!ok) return;
+    const form = _captureForm();
+    if (!form.numero) { showT('INGRESÁ EL NÚMERO DE OC','red'); return; }
+    if (!form.descripcion) { showT('INGRESÁ LA DESCRIPCIÓN','red'); return; }
+    if (form.precio <= 0) { showT('PRECIO INVÁLIDO','red'); return; }
+    Object.assign(oc, form);
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _notifAdminOCChange('EDITADA', oc);
+    window.renderPlanillaOCs();
+    showT('OC ACTUALIZADA','green');
+  };
+
+  window.darDeBajaOC = async function(id){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const oc = _getOCs().find(x => x.id === id);
+    if (!oc) { showT('OC NO ENCONTRADA','red'); return; }
+    const ok = await window.prConfirm({
+      title:'Dar de baja OC',
+      bodyHTML: '<div style="font-size:12.5px;color:#333;line-height:1.5"><div><strong>OC #'+_h(oc.numero||'')+'</strong> · '+_money(oc.precio)+'/'+_h(oc.unidad||'')+'</div><div style="color:var(--mute);margin-top:4px">'+_h(oc.descripcion||'')+'</div></div><div style="margin-top:14px;padding:10px 12px;background:#FFF3E0;border:1px solid #FFCC80;border-radius:6px;color:#9A3412;font-size:11.5px">La OC se marcará como <strong>CANCELADA</strong>. No aparecerá en futuras planillas pero el historial se conserva.</div>',
+      okText:'DAR DE BAJA', danger:true
+    });
+    if (!ok) return;
+    oc.estatus = 'CANCELADA';
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _notifAdminOCChange('DADA DE BAJA', oc);
+    window.renderPlanillaOCs();
+    showT('OC DADA DE BAJA','green');
+  };
+  window.reactivarOC = async function(id){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const oc = _getOCs().find(x => x.id === id);
+    if (!oc) { showT('OC NO ENCONTRADA','red'); return; }
+    const ok = await window.prConfirm({
+      title:'Reactivar OC',
+      bodyHTML: '<div style="font-size:12.5px;color:#333;line-height:1.5"><div><strong>OC #'+_h(oc.numero||'')+'</strong></div><div style="color:var(--mute);margin-top:4px">'+_h(oc.descripcion||'')+'</div></div><div style="margin-top:14px;padding:10px 12px;background:#F3E5F5;border:1px solid #CE93D8;border-radius:6px;color:#6A1B9A;font-size:11.5px">La OC volverá a <strong>ACTIVA</strong> y podrá usarse en futuras planillas.</div>',
+      okText:'REACTIVAR'
+    });
+    if (!ok) return;
+    oc.estatus = 'ACTIVA';
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _notifAdminOCChange('REACTIVADA', oc);
+    window.renderPlanillaOCs();
+    showT('OC REACTIVADA','green');
+  };
+
+  window.eliminarOC = async function(id){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const ocs = _getOCs();
+    const idx = ocs.findIndex(x => x.id === id);
+    if (idx < 0) return;
+    const oc = ocs[idx];
+    const ok = await window.prConfirm({
+      title:'Eliminar OC definitivamente',
+      bodyHTML: '<div style="font-size:12.5px;color:#333;line-height:1.5"><div><strong>OC #'+_h(oc.numero||'')+'</strong> · '+_money(oc.precio)+'/'+_h(oc.unidad||'')+'</div><div style="color:var(--mute);margin-top:4px">'+_h(oc.descripcion||'')+'</div></div><div style="margin-top:14px;padding:10px 12px;background:#FFEBEE;border:1px solid #EF9A9A;border-radius:6px;color:#C62828;font-size:11.5px">⚠️ ACCIÓN IRREVERSIBLE: la OC se borra del catálogo. Las planillas que ya la usaron mantienen su info.</div>',
+      okText:'ELIMINAR', danger:true
+    });
+    if (!ok) return;
+    ocs.splice(idx, 1);
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    window.renderPlanillaOCs();
+    showT('OC ELIMINADA','green');
+  };
+
+  // API para Fase 2: usado al armar planilla con sección OC
+  window.getOCsActivasDelProyecto = function(){ const p = _activeProj(); if (!p) return []; return _getOCs(p).filter(oc => oc.estatus === 'ACTIVA'); };
+
+  console.log('[v382] Catálogo de OCs cargado · Fase 1 lista');
 })();
 </script>
 
