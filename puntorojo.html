@@ -234,6 +234,23 @@ html,body{background:var(--paper);color:var(--text);font-family:'Inter',sans-ser
   body{padding-bottom:env(safe-area-inset-bottom, 0px)}
 }
 
+/* ═════════════ OCULTAR SCROLLBAR · v398 ═════════════
+   Mantiene el scroll funcional pero esconde la barra visual en TODOS los
+   contenedores (pagina principal, modales, listas, textareas). El usuario
+   sigue pudiendo hacer scroll con rueda / touch / teclado. */
+html, body, *{
+  scrollbar-width: none;            /* Firefox */
+  -ms-overflow-style: none;         /* IE / Edge legacy */
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+*::-webkit-scrollbar{
+  width: 0 !important;              /* Chrome / Safari / Edge / Opera */
+  height: 0 !important;
+  display: none !important;
+  background: transparent !important;
+}
+
 /* Cuando la app corre en modo standalone (PWA instalada en iOS), forzamos
    un padding-top mínimo grande aunque env() devuelva 0 por algún bug.
    La status bar de iPhones modernos es ~47-59px (notch / Dynamic Island). */
@@ -2750,7 +2767,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v396</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v398</span>
   </footer>
 
 </div>
@@ -39094,17 +39111,215 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     };
   }
 
-  // ── AGREGAR (v395 — todo síncrono en el onclick del OK)
+  // ════════════════════════════════════════════════════════════════
+  // v397: MODAL STANDALONE para AGREGAR/EDITAR colaborador
+  // ════════════════════════════════════════════════════════════════
+  // NO usa prConfirm — construye su propio DOM. El botón GUARDAR tiene su
+  // onclick adjuntado DIRECTAMENTE en el momento de crearlo (sin setTimeout,
+  // sin race conditions, sin Promises).
+  //
+  // CRÍTICO: muestra un BANNER VISIBLE adentro del modal cuando se hace click
+  // en GUARDAR para que el usuario VEA que el handler corrió. Si nada pasa al
+  // darle GUARDAR significa que el browser está sirviendo código viejo (SW no
+  // actualizado) — en ese caso el chip de versión arriba a la derecha del
+  // modal mostrará una versión más vieja que v397.
+  // ════════════════════════════════════════════════════════════════
+  function _v397ShowModalColab(modoEditar, colabIn){
+    const prev = document.getElementById('v397ColabModal');
+    if (prev) prev.remove();
+
+    const c = colabIn || {};
+    const colabId = c.id || null;
+    const titulo = modoEditar ? 'EDITAR COLABORADOR' : 'AGREGAR COLABORADOR';
+    const okText = modoEditar ? 'GUARDAR CAMBIOS' : 'GUARDAR';
+
+    // Pre-poblar captured form para que los helpers de DPI sigan funcionando
+    window._colabCapturedForm = {
+      nombre: String(c.nombre||''),
+      telefono: String(c.telefono||''),
+      telefonosExtras: Array.isArray(c.telefonosExtras) ? JSON.parse(JSON.stringify(c.telefonosExtras)) : [],
+      dpiFrenteURL: c.dpiFrenteURL || '',
+      dpiReversoURL: c.dpiReversoURL || '',
+      _dpiFrenteFile: null,
+      _dpiReversoFile: null
+    };
+
+    const formBody = _formHTML(c);
+
+    const html = ''
+      + '<div id="v397ColabModal" class="prModal-backdrop" style="position:fixed;inset:0;background:rgba(15,23,42,.5);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;font-family:inherit">'
+      +   '<div class="prModal-card" style="background:#fff;border-radius:16px;max-width:720px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 25px 60px -12px rgba(15,23,42,.4),0 8px 20px -4px rgba(15,23,42,.18);overflow:hidden;border:1px solid rgba(255,255,255,.06)">'
+      +     '<div style="padding:22px 30px 14px;border-bottom:1px solid #F1F5F9;display:flex;align-items:center;justify-content:space-between;gap:12px">'
+      +       '<div style="font-size:16px;font-weight:700;color:#0F172A;letter-spacing:.1px">'+_h(titulo)+'</div>'
+      +       '<div style="font-size:9.5px;letter-spacing:1.5px;background:#FEF3C7;color:#92400E;padding:4px 9px;border-radius:5px;font-weight:800;border:1px solid #FCD34D">v397</div>'
+      +     '</div>'
+      +     '<div id="v397StatusBanner" style="display:none;padding:12px 30px;font-size:12.5px;font-weight:700;letter-spacing:.4px;text-align:center"></div>'
+      +     '<div style="padding:24px 30px;font-size:13px;line-height:1.6;color:#1F2937;overflow-y:auto;flex:1">'+formBody+'</div>'
+      +     '<div style="padding:18px 28px;border-top:1px solid #F1F5F9;background:#FAFBFC;display:flex;gap:10px;justify-content:flex-end;align-items:center">'
+      +       '<button id="v397CancelBtn" type="button" class="btn ghost prModal-btn" style="border:1px solid #E5E7EB;color:#475569;padding:10px 20px;border-radius:9px;font-weight:600;font-size:11.5px;letter-spacing:.6px;background:#fff;cursor:pointer">CANCELAR</button>'
+      +       '<button id="v397SaveBtn" type="button" class="btn prModal-btn" style="background:#0F172A;border:1px solid #0F172A;color:#fff;padding:10px 22px;border-radius:9px;font-weight:700;font-size:11.5px;letter-spacing:.6px;cursor:pointer">'+_h(okText)+'</button>'
+      +     '</div>'
+      +   '</div>'
+      + '</div>';
+
+    const wrap = document.createElement('div');
+    wrap.innerHTML = html;
+    const modal = wrap.firstElementChild;
+    document.body.appendChild(modal);
+    if (typeof window._prLockScroll === 'function') window._prLockScroll();
+
+    const cancelBtn = modal.querySelector('#v397CancelBtn');
+    const saveBtn = modal.querySelector('#v397SaveBtn');
+    const banner = modal.querySelector('#v397StatusBanner');
+
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    const close = () => {
+      try { document.removeEventListener('keydown', onKey); } catch(e){}
+      try { modal.remove(); } catch(e){}
+      if (typeof window._prUnlockScroll === 'function') window._prUnlockScroll();
+      window._colabCapturedForm = null;
+    };
+    document.addEventListener('keydown', onKey);
+
+    const showStatus = (msg, color) => {
+      const palette = color === 'green' ? { bg:'#DCFCE7', fg:'#15803D', br:'#86EFAC' }
+                    : color === 'red'   ? { bg:'#FEE2E2', fg:'#991B1B', br:'#FCA5A5' }
+                    :                     { bg:'#FEF3C7', fg:'#92400E', br:'#FCD34D' };
+      banner.style.display = 'block';
+      banner.style.background = palette.bg;
+      banner.style.color = palette.fg;
+      banner.style.borderBottom = '1px solid ' + palette.br;
+      banner.style.borderTop = '1px solid ' + palette.br;
+      banner.textContent = msg;
+    };
+
+    cancelBtn.onclick = close;
+    modal.onclick = (e) => { if (e.target === modal) close(); };
+
+    // ★★★ HANDLER PRINCIPAL DE GUARDAR — adjuntado DIRECTO sin setTimeout ★★★
+    saveBtn.onclick = function(){
+      console.log('[v397] SAVE click — modoEditar=', modoEditar, ' colabId=', colabId);
+      showStatus('GUARDANDO...', 'orange');
+
+      const nombre = String((document.getElementById('colNombre')?.value || '')).toUpperCase().trim();
+      const telefono = String((document.getElementById('colTel')?.value || '')).trim();
+
+      if (!nombre){ showStatus('FALTA NOMBRE COMPLETO — ESCRIBÍLO ARRIBA', 'red'); return; }
+      if (!telefono){ showStatus('FALTA TELÉFONO CELULAR — ES OBLIGATORIO', 'red'); return; }
+
+      const extras = [];
+      const cont = document.getElementById('colExtrasContainer');
+      if (cont){
+        cont.querySelectorAll('[data-extra-idx]').forEach(r => {
+          const inputs = r.querySelectorAll('input');
+          if (inputs.length >= 3){
+            const n = String(inputs[0].value||'').trim();
+            const t = String(inputs[1].value||'').trim();
+            const rel = String(inputs[2].value||'').trim();
+            if (n || t) extras.push({ nombre:n, telefono:t, relacion:rel });
+          }
+        });
+      }
+
+      const cap = window._colabCapturedForm || {};
+      const dpiFrenteFile = cap._dpiFrenteFile || null;
+      const dpiReversoFile = cap._dpiReversoFile || null;
+
+      saveBtn.disabled = true;
+      saveBtn.style.opacity = '0.7';
+      saveBtn.style.cursor = 'wait';
+
+      try {
+        if (modoEditar){
+          const colabActual = _allColabs().find(cc => cc.id === colabId);
+          if (!colabActual){ showStatus('COLABORADOR NO ENCONTRADO', 'red'); saveBtn.disabled = false; saveBtn.style.opacity = '1'; saveBtn.style.cursor = 'pointer'; return; }
+          const dup = (window.state?.projects||[]).some(p => (p.planilla?.colaboradores||[]).some(cc => cc.id !== colabId && _normName(cc.nombre) === _normName(nombre)));
+          if (dup){ showStatus('YA EXISTE OTRO COLABORADOR CON ESE NOMBRE', 'red'); saveBtn.disabled = false; saveBtn.style.opacity = '1'; saveBtn.style.cursor = 'pointer'; return; }
+
+          const updates = { nombre, telefono, telefonosExtras: extras, dpiFrenteURL: colabActual.dpiFrenteURL || '', dpiReversoURL: colabActual.dpiReversoURL || '' };
+          (window.state?.projects || []).forEach(p => { const list = p.planilla?.colaboradores || []; list.forEach(cc => { if (cc.id === colabId) Object.assign(cc, updates); }); });
+          if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(cc => { if (cc.id === colabId) Object.assign(cc, updates); });
+          try { if (typeof saveState === 'function') saveState(); } catch(e){ console.error('[v397] saveState:', e); }
+          try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+          try { _notifyAdmin('EDITADO', Object.assign({}, colabActual, updates), ''); } catch(e){ console.warn('[v397] notify:', e); }
+          try { window.renderPlanillaColaboradores(); } catch(e){}
+
+          showStatus('✓ COLABORADOR ACTUALIZADO — CERRANDO...', 'green');
+
+          if (dpiFrenteFile && !colabActual.dpiFrenteURL){
+            _uploadDPI(dpiFrenteFile, colabId, 'frente').then(url => {
+              (window.state?.projects||[]).forEach(p => (p.planilla?.colaboradores||[]).forEach(cc => { if (cc.id === colabId) cc.dpiFrenteURL = url; }));
+              if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(cc => { if (cc.id === colabId) cc.dpiFrenteURL = url; });
+              try { saveState(); } catch(e){} try { CloudSync.forceUploadNow(); } catch(e){} try { window.renderPlanillaColaboradores(); } catch(e){}
+              showT('DPI FRENTE SUBIDO','green');
+            }).catch(e => { console.error('[v397] DPI frente:', e); showT('ERROR DPI FRENTE','red'); });
+          }
+          if (dpiReversoFile && !colabActual.dpiReversoURL){
+            _uploadDPI(dpiReversoFile, colabId, 'reverso').then(url => {
+              (window.state?.projects||[]).forEach(p => (p.planilla?.colaboradores||[]).forEach(cc => { if (cc.id === colabId) cc.dpiReversoURL = url; }));
+              if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(cc => { if (cc.id === colabId) cc.dpiReversoURL = url; });
+              try { saveState(); } catch(e){} try { CloudSync.forceUploadNow(); } catch(e){} try { window.renderPlanillaColaboradores(); } catch(e){}
+              showT('DPI REVERSO SUBIDO','green');
+            }).catch(e => { console.error('[v397] DPI reverso:', e); showT('ERROR DPI REVERSO','red'); });
+          }
+          showT('COLABORADOR ACTUALIZADO','green');
+        } else {
+          const dup = (window.state?.projects||[]).some(p => (p.planilla?.colaboradores||[]).some(cc => _normName(cc.nombre) === _normName(nombre)));
+          if (dup){ showStatus('YA EXISTE UN COLABORADOR CON ESE NOMBRE', 'red'); saveBtn.disabled = false; saveBtn.style.opacity = '1'; saveBtn.style.cursor = 'pointer'; return; }
+          const newId = 'col-' + (typeof uid === 'function' ? uid() : (Date.now()+Math.random().toString(36).slice(2,8)));
+          const nuevo = { id: newId, nombre, rol:'PERSONAL', telefono, telefonosExtras: extras, dpiFrenteURL:'', dpiReversoURL:'', creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), creadoTs: Date.now() };
+          (window.state?.projects || []).forEach(p => { if (!p.planilla) p.planilla = { pagos:[], retencionesPagadas:[], ajustes:[], modelos:[], aptoModelMap:{}, colaboradores:[], etapas:[] }; if (!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores = []; p.planilla.colaboradores.push({ ...nuevo }); });
+          if (!Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal = [];
+          window.state.colaboradoresGlobal.push({ ...nuevo });
+          try { if (typeof saveState === 'function') saveState(); } catch(e){ console.error('[v397] saveState:', e); }
+          try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+          try { _notifyAdmin('NUEVO', nuevo, ''); } catch(e){ console.warn('[v397] notify:', e); }
+          try { window.renderPlanillaColaboradores(); } catch(e){}
+
+          showStatus('✓ COLABORADOR AGREGADO — CERRANDO...', 'green');
+
+          if (dpiFrenteFile){
+            _uploadDPI(dpiFrenteFile, newId, 'frente').then(url => {
+              (window.state?.projects||[]).forEach(p => (p.planilla?.colaboradores||[]).forEach(cc => { if (cc.id === newId) cc.dpiFrenteURL = url; }));
+              if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(cc => { if (cc.id === newId) cc.dpiFrenteURL = url; });
+              try { saveState(); } catch(e){} try { CloudSync.forceUploadNow(); } catch(e){} try { window.renderPlanillaColaboradores(); } catch(e){}
+            }).catch(e => { console.error('[v397] DPI frente:', e); });
+          }
+          if (dpiReversoFile){
+            _uploadDPI(dpiReversoFile, newId, 'reverso').then(url => {
+              (window.state?.projects||[]).forEach(p => (p.planilla?.colaboradores||[]).forEach(cc => { if (cc.id === newId) cc.dpiReversoURL = url; }));
+              if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(cc => { if (cc.id === newId) cc.dpiReversoURL = url; });
+              try { saveState(); } catch(e){} try { CloudSync.forceUploadNow(); } catch(e){} try { window.renderPlanillaColaboradores(); } catch(e){}
+            }).catch(e => { console.error('[v397] DPI reverso:', e); });
+          }
+          showT('COLABORADOR AGREGADO','green');
+        }
+
+        setTimeout(close, 1300);
+      } catch(err){
+        console.error('[v397] error guardando:', err);
+        showStatus('ERROR: ' + (err.message || 'no se pudo guardar'), 'red');
+        saveBtn.disabled = false; saveBtn.style.opacity = '1'; saveBtn.style.cursor = 'pointer';
+      }
+    };
+
+    // Foco al input de nombre al abrir
+    setTimeout(() => { try { document.getElementById('colNombre')?.focus(); } catch(e){} }, 60);
+  }
+
+  // ── AGREGAR / EDITAR — wrappers v397
   window.agregarColaborador = function(){
     if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
-    _v395InstallSaveHandlerAgregar();
-    window.prConfirm({ title:'AGREGAR COLABORADOR', bodyHTML: _formHTML(null), okText:'GUARDAR', wide:true })
-      .then(ok => { if (!ok) window._colabCapturedForm = null; });
+    _v397ShowModalColab(false, null);
+  };
+  window.editarColaborador = function(id){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const colab = _allColabs().find(c => c.id === id);
+    if (!colab) { showT('COLABORADOR NO ENCONTRADO','red'); return; }
+    _v397ShowModalColab(true, colab);
   };
 
-  // ── EDITAR
-  // v395: lee TODO del DOM. Guarda + cierra modal manualmente.
-  // No depende de Promise/await/captured form.
+  // ── LEGACY v395 (no usado, conservado por si algún lugar lo llama)
   function _v395GuardarColabDesdeDOM(modoEditar, colabId){
     const nombreEl = document.getElementById('colNombre');
     const telEl = document.getElementById('colTel');
@@ -39241,15 +39456,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     };
     setTimeout(tryHook, 50);
   }
-
-  window.editarColaborador = function(id){
-    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
-    const colab = _allColabs().find(c => c.id === id);
-    if (!colab) { showT('COLABORADOR NO ENCONTRADO','red'); return; }
-    _v395InstallSaveHandlerEditar(id);
-    window.prConfirm({ title:'EDITAR COLABORADOR', bodyHTML: _formHTML(colab), okText:'GUARDAR CAMBIOS', wide:true })
-      .then(ok => { if (!ok) window._colabCapturedForm = null; });
-  };
+  // NOTA v397: window.editarColaborador y window.agregarColaborador YA están
+  // definidos arriba apuntando a _v397ShowModalColab. No los redefinimos acá.
 
   // ── ELIMINAR (sobrescribe la legacy)
   // Admin elimina directo. Supervisor genera solicitud.
