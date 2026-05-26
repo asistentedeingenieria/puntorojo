@@ -2750,7 +2750,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v385</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v386</span>
   </footer>
 
 </div>
@@ -38518,6 +38518,9 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       + '</div>';
   }
 
+  // v386: el modal prConfirm hace node.remove() ANTES de resolver, así que
+  // hay que capturar los valores del form interceptando el click del OK,
+  // no después de que la Promise resuelva. Mismo patrón que anticipos/polizas.
   function _captureForm(){
     return {
       numero: (document.getElementById('ocNumero')?.value || '').trim(),
@@ -38525,6 +38528,17 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       unidad: document.getElementById('ocUnidad')?.value || 'ML',
       precio: Number(document.getElementById('ocPrecio')?.value) || 0,
       estatus: document.getElementById('ocEstatus')?.value || 'ACTIVA'
+    };
+  }
+  function _hookCaptureForm(){
+    const okBtn = document.getElementById('prConfOk');
+    if (!okBtn) { setTimeout(_hookCaptureForm, 50); return; }
+    if (okBtn.dataset._ocHooked === '1') return;
+    okBtn.dataset._ocHooked = '1';
+    const prev = okBtn.onclick;
+    okBtn.onclick = function(ev){
+      try { window._ocCapturedForm = _captureForm(); } catch(e){ console.warn('[v386] captura form OC:', e); }
+      if (typeof prev === 'function') prev.call(this, ev);
     };
   }
 
@@ -38551,12 +38565,15 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
     const p = _activeProj();
     if (!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    // v386: hookear el OK ANTES de abrir el modal para capturar antes del cierre
+    window._ocCapturedForm = null;
+    setTimeout(_hookCaptureForm, 80);
     const ok = await window.prConfirm({ title:'AGREGAR ORDEN DE CAMBIO', bodyHTML: _formHTML(null), okText:'GUARDAR OC', wide:true });
-    if (!ok) return;
-    const form = _captureForm();
+    if (!ok) { window._ocCapturedForm = null; return; }
+    const form = window._ocCapturedForm || {};
     if (!form.numero) { showT('INGRESÁ EL NÚMERO DE OC','red'); return; }
     if (!form.descripcion) { showT('INGRESÁ LA DESCRIPCIÓN','red'); return; }
-    if (form.precio <= 0) { showT('PRECIO INVÁLIDO','red'); return; }
+    if (!form.precio || form.precio <= 0) { showT('PRECIO INVÁLIDO','red'); return; }
     const ocs = _getOCs(p);
     // Verificar duplicado de número
     if (ocs.some(x => String(x.numero||'').trim().toUpperCase() === form.numero.toUpperCase())){
@@ -38572,6 +38589,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
     _notifAdminOCChange('NUEVA', ocNew);
+    window._ocCapturedForm = null;
     window.renderPlanillaOCs();
     showT('OC #'+form.numero+' REGISTRADA','green');
   };
@@ -38581,16 +38599,20 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const ocs = _getOCs();
     const oc = ocs.find(x => x.id === id);
     if (!oc) { showT('OC NO ENCONTRADA','red'); return; }
+    // v386: hook captura antes del cierre
+    window._ocCapturedForm = null;
+    setTimeout(_hookCaptureForm, 80);
     const ok = await window.prConfirm({ title:'EDITAR OC #'+_h(oc.numero||''), bodyHTML: _formHTML(oc), okText:'GUARDAR CAMBIOS', wide:true });
-    if (!ok) return;
-    const form = _captureForm();
+    if (!ok) { window._ocCapturedForm = null; return; }
+    const form = window._ocCapturedForm || {};
     if (!form.numero) { showT('INGRESÁ EL NÚMERO DE OC','red'); return; }
     if (!form.descripcion) { showT('INGRESÁ LA DESCRIPCIÓN','red'); return; }
-    if (form.precio <= 0) { showT('PRECIO INVÁLIDO','red'); return; }
+    if (!form.precio || form.precio <= 0) { showT('PRECIO INVÁLIDO','red'); return; }
     Object.assign(oc, form);
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
     _notifAdminOCChange('EDITADA', oc);
+    window._ocCapturedForm = null;
     window.renderPlanillaOCs();
     showT('OC ACTUALIZADA','green');
   };
