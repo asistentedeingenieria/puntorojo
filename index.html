@@ -2715,7 +2715,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v394</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v395</span>
   </footer>
 
 </div>
@@ -36700,58 +36700,72 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   function _v392CaptureFromDom(){ if (!window._colabCapturedForm) window._colabCapturedForm = {}; const f = window._colabCapturedForm; try { const nEl = document.getElementById('colNombre'); if (nEl) f.nombre = String(nEl.value||'').toUpperCase().trim(); const tEl = document.getElementById('colTel'); if (tEl) f.telefono = String(tEl.value||'').trim(); const cont = document.getElementById('colExtrasContainer'); if (cont){ const rows = cont.querySelectorAll('[data-extra-idx]'); const arr = []; rows.forEach(r => { const inputs = r.querySelectorAll('input'); if (inputs.length >= 3){ const nombre = String(inputs[0].value||'').trim(); const telefono = String(inputs[1].value||'').trim(); const relacion = String(inputs[2].value||'').trim(); if (nombre || telefono) arr.push({ nombre, telefono, relacion }); } }); f.telefonosExtras = arr; } } catch(e){ console.warn('[v392] capture DOM colab:', e); } }
   function _v392HookOk(){ const okBtn = document.getElementById('prConfOk'); if (!okBtn) { setTimeout(_v392HookOk, 50); return; } if (okBtn.dataset._colHooked === '1') return; okBtn.dataset._colHooked = '1'; const prev = okBtn.onclick; okBtn.onclick = function(ev){ try { _v392CaptureFromDom(); } catch(e){ console.warn('[v392] hook captura colab:', e); } if (typeof prev === 'function') prev.call(this, ev); }; }
 
-  window.agregarColaborador = async function(){
-    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
-    setTimeout(_v392HookOk, 80);
-    const ok = await window.prConfirm({ title:'AGREGAR COLABORADOR', bodyHTML: _formHTML(null), okText:'GUARDAR', wide:true });
-    if (!ok) { window._colabCapturedForm = null; return; }
-    const form = window._colabCapturedForm || {};
-    console.log('[v394 agregarColaborador] form:', JSON.parse(JSON.stringify(form)));
-    if (!form.nombre) { await window.prAlert({ title:'FALTA NOMBRE', body:'Tenés que ingresar el nombre completo del colaborador.' }); return; }
-    if (!form.telefono) { await window.prAlert({ title:'FALTA TELÉFONO', body:'El número de teléfono celular es obligatorio. Tipealo antes de guardar.' }); return; }
-    const nombreUC = form.nombre.toUpperCase();
-    const existe = (window.state?.projects||[]).some(p => (p.planilla?.colaboradores||[]).some(c => String(c.nombre||'').trim().toUpperCase() === nombreUC));
-    if (existe) { showT('YA EXISTE ESE COLABORADOR','red'); return; }
-    const newId = 'col-' + (typeof uid === 'function' ? uid() : (Date.now()+Math.random().toString(36).slice(2,8)));
-    let dpiFrenteURL = '', dpiReversoURL = '';
-    try { if (form._dpiFrenteFile) dpiFrenteURL = await _uploadDPI(form._dpiFrenteFile, newId, 'frente'); } catch(e){ console.error(e); showT('ERROR DPI FRENTE','red'); return; }
-    try { if (form._dpiReversoFile) dpiReversoURL = await _uploadDPI(form._dpiReversoFile, newId, 'reverso'); } catch(e){ console.error(e); showT('ERROR DPI REVERSO','red'); return; }
-    const nuevo = { id: newId, nombre: nombreUC, rol: 'PERSONAL', telefono: form.telefono, telefonosExtras: (form.telefonosExtras || []).filter(x => x.nombre || x.telefono), dpiFrenteURL, dpiReversoURL, creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), creadoTs: Date.now() };
-    (window.state?.projects || []).forEach(p => { if (!p.planilla) p.planilla = { pagos:[], retencionesPagadas:[], ajustes:[], modelos:[], aptoModelMap:{}, colaboradores:[], etapas:[] }; if (!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores = []; p.planilla.colaboradores.push({ ...nuevo }); });
-    if (!Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal = [];
-    window.state.colaboradoresGlobal.push({ ...nuevo });
-    try { if (typeof saveState === 'function') saveState(); } catch(e){}
-    try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
-    _notifyAdmin('NUEVO', nuevo, '');
+  // v395: lee TODO del DOM. Guarda + cierra modal manualmente. Sin async/await/promise.
+  function _v395GuardarColabDesdeDOM(modoEditar, colabId){
+    const nombre = String(document.getElementById('colNombre')?.value||'').toUpperCase().trim();
+    const telefono = String(document.getElementById('colTel')?.value||'').trim();
+    console.log('[v395] guardar:', { modoEditar, colabId, nombre, telefono });
+    if (!nombre){ alert('FALTA NOMBRE\n\nTenés que ingresar el nombre completo.'); return false; }
+    if (!telefono){ alert('FALTA TELÉFONO\n\nEl número de teléfono celular es obligatorio.'); return false; }
+    const extras = [];
+    const cont = document.getElementById('colExtrasContainer');
+    if (cont){ cont.querySelectorAll('[data-extra-idx]').forEach(r => { const inputs = r.querySelectorAll('input'); if (inputs.length >= 3){ const n = String(inputs[0].value||'').trim(); const t = String(inputs[1].value||'').trim(); const rel = String(inputs[2].value||'').trim(); if (n || t) extras.push({ nombre:n, telefono:t, relacion:rel }); } }); }
+    const cap = window._colabCapturedForm || {};
+    const dpiFrenteFile = cap._dpiFrenteFile || null;
+    const dpiReversoFile = cap._dpiReversoFile || null;
+    if (modoEditar){
+      const colab = _allColabs().find(c => c.id === colabId);
+      if (!colab){ alert('Colaborador no encontrado'); return false; }
+      const dup = (window.state?.projects||[]).some(p => (p.planilla?.colaboradores||[]).some(c => c.id !== colabId && _normName(c.nombre) === _normName(nombre)));
+      if (dup){ alert('YA EXISTE OTRO COLABORADOR CON ESE NOMBRE'); return false; }
+      const updates = { nombre, telefono, telefonosExtras: extras, dpiFrenteURL: colab.dpiFrenteURL || '', dpiReversoURL: colab.dpiReversoURL || '' };
+      (window.state?.projects || []).forEach(p => { const list = p.planilla?.colaboradores || []; list.forEach(c => { if (c.id === colabId) Object.assign(c, updates); }); });
+      if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(c => { if (c.id === colabId) Object.assign(c, updates); });
+      try { if (typeof saveState === 'function') saveState(); } catch(e){ console.error('[v395] saveState:', e); }
+      try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+      _notifyAdmin('EDITADO', Object.assign({}, colab, updates), '');
+      try { window.renderPlanillaColaboradores(); } catch(e){}
+      if (dpiFrenteFile && !colab.dpiFrenteURL) _uploadDPI(dpiFrenteFile, colabId, 'frente').then(url => { (window.state?.projects||[]).forEach(p => (p.planilla?.colaboradores||[]).forEach(c => { if (c.id === colabId) c.dpiFrenteURL = url; })); if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(c => { if (c.id === colabId) c.dpiFrenteURL = url; }); try { saveState(); } catch(e){} try { CloudSync.forceUploadNow(); } catch(e){} try { window.renderPlanillaColaboradores(); } catch(e){} showT('DPI FRENTE SUBIDO','green'); }).catch(e => { console.error(e); });
+      if (dpiReversoFile && !colab.dpiReversoURL) _uploadDPI(dpiReversoFile, colabId, 'reverso').then(url => { (window.state?.projects||[]).forEach(p => (p.planilla?.colaboradores||[]).forEach(c => { if (c.id === colabId) c.dpiReversoURL = url; })); if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(c => { if (c.id === colabId) c.dpiReversoURL = url; }); try { saveState(); } catch(e){} try { CloudSync.forceUploadNow(); } catch(e){} try { window.renderPlanillaColaboradores(); } catch(e){} showT('DPI REVERSO SUBIDO','green'); }).catch(e => { console.error(e); });
+      showT('COLABORADOR ACTUALIZADO','green');
+    } else {
+      const dup = (window.state?.projects||[]).some(p => (p.planilla?.colaboradores||[]).some(c => _normName(c.nombre) === _normName(nombre)));
+      if (dup){ alert('YA EXISTE UN COLABORADOR CON ESE NOMBRE'); return false; }
+      const newId = 'col-' + (typeof uid === 'function' ? uid() : (Date.now()+Math.random().toString(36).slice(2,8)));
+      const nuevo = { id: newId, nombre, rol:'PERSONAL', telefono, telefonosExtras: extras, dpiFrenteURL:'', dpiReversoURL:'', creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), creadoTs: Date.now() };
+      (window.state?.projects || []).forEach(p => { if (!p.planilla) p.planilla = { pagos:[], retencionesPagadas:[], ajustes:[], modelos:[], aptoModelMap:{}, colaboradores:[], etapas:[] }; if (!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores = []; p.planilla.colaboradores.push({ ...nuevo }); });
+      if (!Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal = [];
+      window.state.colaboradoresGlobal.push({ ...nuevo });
+      try { if (typeof saveState === 'function') saveState(); } catch(e){ console.error('[v395] saveState:', e); }
+      try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+      _notifyAdmin('NUEVO', nuevo, '');
+      try { window.renderPlanillaColaboradores(); } catch(e){}
+      if (dpiFrenteFile) _uploadDPI(dpiFrenteFile, newId, 'frente').then(url => { (window.state?.projects||[]).forEach(p => (p.planilla?.colaboradores||[]).forEach(c => { if (c.id === newId) c.dpiFrenteURL = url; })); if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(c => { if (c.id === newId) c.dpiFrenteURL = url; }); try { saveState(); } catch(e){} try { CloudSync.forceUploadNow(); } catch(e){} try { window.renderPlanillaColaboradores(); } catch(e){} }).catch(e => { console.error(e); });
+      if (dpiReversoFile) _uploadDPI(dpiReversoFile, newId, 'reverso').then(url => { (window.state?.projects||[]).forEach(p => (p.planilla?.colaboradores||[]).forEach(c => { if (c.id === newId) c.dpiReversoURL = url; })); if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(c => { if (c.id === newId) c.dpiReversoURL = url; }); try { saveState(); } catch(e){} try { CloudSync.forceUploadNow(); } catch(e){} try { window.renderPlanillaColaboradores(); } catch(e){} }).catch(e => { console.error(e); });
+      showT('COLABORADOR AGREGADO','green');
+    }
     window._colabCapturedForm = null;
-    window.renderPlanillaColaboradores();
-    showT('COLABORADOR AGREGADO','green');
+    return true;
+  }
+  function _v395CerrarModalColab(){
+    const allDivs = document.querySelectorAll('body > div');
+    allDivs.forEach(d => { if (d.querySelector && d.querySelector('#prConfOk')) d.remove(); });
+    if (typeof window._prUnlockScroll === 'function') window._prUnlockScroll();
+  }
+  function _v395InstallSaveHandlerEditar(colabId){ const tryHook = () => { const okBtn = document.getElementById('prConfOk'); if (!okBtn) { setTimeout(tryHook, 50); return; } okBtn.onclick = function(){ if (_v395GuardarColabDesdeDOM(true, colabId)) _v395CerrarModalColab(); }; }; setTimeout(tryHook, 50); }
+  function _v395InstallSaveHandlerAgregar(){ const tryHook = () => { const okBtn = document.getElementById('prConfOk'); if (!okBtn) { setTimeout(tryHook, 50); return; } okBtn.onclick = function(){ if (_v395GuardarColabDesdeDOM(false, null)) _v395CerrarModalColab(); }; }; setTimeout(tryHook, 50); }
+
+  window.agregarColaborador = function(){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    _v395InstallSaveHandlerAgregar();
+    window.prConfirm({ title:'AGREGAR COLABORADOR', bodyHTML: _formHTML(null), okText:'GUARDAR', wide:true }).then(ok => { if (!ok) window._colabCapturedForm = null; });
   };
-  window.editarColaborador = async function(id){
+  window.editarColaborador = function(id){
     if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
     const colab = _allColabs().find(c => c.id === id);
     if (!colab) { showT('COLABORADOR NO ENCONTRADO','red'); return; }
-    setTimeout(_v392HookOk, 80);
-    const ok = await window.prConfirm({ title:'EDITAR COLABORADOR', bodyHTML: _formHTML(colab), okText:'GUARDAR CAMBIOS', wide:true });
-    if (!ok) { window._colabCapturedForm = null; return; }
-    const form = window._colabCapturedForm || {};
-    console.log('[v394 editarColaborador] colab actual:', JSON.parse(JSON.stringify(colab)));
-    console.log('[v394 editarColaborador] form:', JSON.parse(JSON.stringify(form)));
-    if (!form.nombre) { await window.prAlert({ title:'FALTA NOMBRE', body:'Tenés que ingresar el nombre completo.' }); return; }
-    if (!form.telefono) { await window.prAlert({ title:'FALTA TELÉFONO', body:'El número de teléfono celular es obligatorio. Asegurate de tipearlo antes de guardar.' }); return; }
-    const nombreUC = form.nombre.toUpperCase();
-    let dpiFrenteURL = colab.dpiFrenteURL || '', dpiReversoURL = colab.dpiReversoURL || '';
-    try { if (form._dpiFrenteFile && !dpiFrenteURL) dpiFrenteURL = await _uploadDPI(form._dpiFrenteFile, colab.id, 'frente'); } catch(e){ showT('ERROR DPI FRENTE','red'); return; }
-    try { if (form._dpiReversoFile && !dpiReversoURL) dpiReversoURL = await _uploadDPI(form._dpiReversoFile, colab.id, 'reverso'); } catch(e){ showT('ERROR DPI REVERSO','red'); return; }
-    const updates = { nombre: nombreUC, telefono: form.telefono, telefonosExtras: (form.telefonosExtras || []).filter(x => x.nombre || x.telefono), dpiFrenteURL, dpiReversoURL };
-    (window.state?.projects || []).forEach(p => { const list = p.planilla?.colaboradores || []; list.forEach(c => { if (c.id === id) Object.assign(c, updates); }); });
-    if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(c => { if (c.id === id) Object.assign(c, updates); });
-    try { if (typeof saveState === 'function') saveState(); } catch(e){}
-    try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
-    _notifyAdmin('EDITADO', Object.assign({}, colab, updates), '');
-    window._colabCapturedForm = null;
-    window.renderPlanillaColaboradores();
-    showT('COLABORADOR ACTUALIZADO','green');
+    _v395InstallSaveHandlerEditar(id);
+    window.prConfirm({ title:'EDITAR COLABORADOR', bodyHTML: _formHTML(colab), okText:'GUARDAR CAMBIOS', wide:true }).then(ok => { if (!ok) window._colabCapturedForm = null; });
   };
   window.deletePlanillaColaborador = async function(id){
     if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }

@@ -2750,7 +2750,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v394</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v395</span>
   </footer>
 
 </div>
@@ -39094,105 +39094,161 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     };
   }
 
-  // ── AGREGAR
-  window.agregarColaborador = async function(){
+  // ── AGREGAR (v395 — todo síncrono en el onclick del OK)
+  window.agregarColaborador = function(){
     if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
-    // v392: hookear OK ANTES de abrir para capturar al click del usuario
-    setTimeout(_v392HookOk, 80);
-    const ok = await window.prConfirm({ title:'AGREGAR COLABORADOR', bodyHTML: _formHTML(null), okText:'GUARDAR', wide:true });
-    if (!ok) { window._colabCapturedForm = null; return; }
-    const form = window._colabCapturedForm || {};
-    console.log('[v394 agregarColaborador] form capturado:', JSON.parse(JSON.stringify(form)));
-    // v394: prAlert (modal) en vez de showT (toast efímero) — el usuario lo ve sí o sí
-    if (!form.nombre) { await window.prAlert({ title:'FALTA NOMBRE', body:'Tenés que ingresar el nombre completo del colaborador.' }); return; }
-    if (!form.telefono) { await window.prAlert({ title:'FALTA TELÉFONO', body:'El número de teléfono celular es obligatorio. Tipealo en el campo correspondiente antes de guardar.' }); return; }
-    const nombreUC = form.nombre.toUpperCase();
-    // Verificar duplicado
-    const existe = (window.state?.projects||[]).some(p => (p.planilla?.colaboradores||[]).some(c => String(c.nombre||'').trim().toUpperCase() === nombreUC));
-    if (existe) { showT('YA EXISTE UN COLABORADOR CON ESE NOMBRE','red'); return; }
-    const newId = 'col-' + (typeof uid === 'function' ? uid() : (Date.now()+Math.random().toString(36).slice(2,8)));
-    // Upload DPI photos si fueron seleccionadas
-    let dpiFrenteURL = '', dpiReversoURL = '';
-    try {
-      if (form._dpiFrenteFile) dpiFrenteURL = await _uploadDPI(form._dpiFrenteFile, newId, 'frente');
-    } catch(e){ console.error('[v390] upload DPI frente:', e); showT('ERROR SUBIENDO DPI FRENTE: '+(e.message||e),'red'); return; }
-    try {
-      if (form._dpiReversoFile) dpiReversoURL = await _uploadDPI(form._dpiReversoFile, newId, 'reverso');
-    } catch(e){ console.error('[v390] upload DPI reverso:', e); showT('ERROR SUBIENDO DPI REVERSO: '+(e.message||e),'red'); return; }
-    const nuevo = {
-      id: newId,
-      nombre: nombreUC,
-      rol: 'PERSONAL',
-      telefono: form.telefono,
-      telefonosExtras: (form.telefonosExtras || []).filter(x => x.nombre || x.telefono),
-      dpiFrenteURL: dpiFrenteURL,
-      dpiReversoURL: dpiReversoURL,
-      creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''),
-      creadoTs: Date.now()
-    };
-    // Agregar a TODOS los proyectos (igual que el legacy)
-    (window.state?.projects || []).forEach(p => {
-      if (!p.planilla) p.planilla = { pagos:[], retencionesPagadas:[], ajustes:[], modelos:[], aptoModelMap:{}, colaboradores:[], etapas:[] };
-      if (!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores = [];
-      p.planilla.colaboradores.push({ ...nuevo });
-    });
-    if (!Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal = [];
-    window.state.colaboradoresGlobal.push({ ...nuevo });
-    try { if (typeof saveState === 'function') saveState(); } catch(e){}
-    try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
-    _notifyAdmin('NUEVO', nuevo, '');
-    window._colabCapturedForm = null;
-    window.renderPlanillaColaboradores();
-    showT('COLABORADOR AGREGADO','green');
+    _v395InstallSaveHandlerAgregar();
+    window.prConfirm({ title:'AGREGAR COLABORADOR', bodyHTML: _formHTML(null), okText:'GUARDAR', wide:true })
+      .then(ok => { if (!ok) window._colabCapturedForm = null; });
   };
 
   // ── EDITAR
-  window.editarColaborador = async function(id){
+  // v395: lee TODO del DOM. Guarda + cierra modal manualmente.
+  // No depende de Promise/await/captured form.
+  function _v395GuardarColabDesdeDOM(modoEditar, colabId){
+    const nombreEl = document.getElementById('colNombre');
+    const telEl = document.getElementById('colTel');
+    const nombre = String(nombreEl?.value||'').toUpperCase().trim();
+    const telefono = String(telEl?.value||'').trim();
+    console.log('[v395] _v395GuardarColabDesdeDOM:', { modoEditar, colabId, nombre, telefono });
+    if (!nombre){ alert('FALTA NOMBRE\n\nTenés que ingresar el nombre completo.'); return false; }
+    if (!telefono){ alert('FALTA TELÉFONO\n\nEl número de teléfono celular es obligatorio. Asegurate de tipearlo antes de guardar.'); return false; }
+
+    // Leer contactos extras
+    const extras = [];
+    const cont = document.getElementById('colExtrasContainer');
+    if (cont){
+      cont.querySelectorAll('[data-extra-idx]').forEach(r => {
+        const inputs = r.querySelectorAll('input');
+        if (inputs.length >= 3){
+          const n = String(inputs[0].value||'').trim();
+          const t = String(inputs[1].value||'').trim();
+          const rel = String(inputs[2].value||'').trim();
+          if (n || t) extras.push({ nombre:n, telefono:t, relacion:rel });
+        }
+      });
+    }
+    // Archivos DPI seleccionados pero todavía no subidos
+    const cap = window._colabCapturedForm || {};
+    const dpiFrenteFile = cap._dpiFrenteFile || null;
+    const dpiReversoFile = cap._dpiReversoFile || null;
+
+    if (modoEditar){
+      const colab = _allColabs().find(c => c.id === colabId);
+      if (!colab){ alert('Colaborador no encontrado'); return false; }
+      // Verificar duplicado de nombre (excluyendo el mismo)
+      const dup = (window.state?.projects||[]).some(p => (p.planilla?.colaboradores||[]).some(c => c.id !== colabId && _normName(c.nombre) === _normName(nombre)));
+      if (dup){ alert('YA EXISTE OTRO COLABORADOR CON ESE NOMBRE'); return false; }
+      // Hacer el save inmediato (sin esperar uploads) y subir DPI en background
+      const updates = { nombre, telefono, telefonosExtras: extras, dpiFrenteURL: colab.dpiFrenteURL || '', dpiReversoURL: colab.dpiReversoURL || '' };
+      (window.state?.projects || []).forEach(p => { const list = p.planilla?.colaboradores || []; list.forEach(c => { if (c.id === colabId) Object.assign(c, updates); }); });
+      if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(c => { if (c.id === colabId) Object.assign(c, updates); });
+      try { if (typeof saveState === 'function') saveState(); } catch(e){ console.error('[v395] saveState:', e); }
+      try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+      _notifyAdmin('EDITADO', Object.assign({}, colab, updates), '');
+      try { window.renderPlanillaColaboradores(); } catch(e){}
+      // Upload DPI en background (no bloquea el cierre del modal)
+      if (dpiFrenteFile && !colab.dpiFrenteURL){
+        _uploadDPI(dpiFrenteFile, colabId, 'frente').then(url => {
+          (window.state?.projects || []).forEach(p => { (p.planilla?.colaboradores||[]).forEach(c => { if (c.id === colabId) c.dpiFrenteURL = url; }); });
+          if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(c => { if (c.id === colabId) c.dpiFrenteURL = url; });
+          try { if (typeof saveState === 'function') saveState(); } catch(e){}
+          try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+          try { window.renderPlanillaColaboradores(); } catch(e){}
+          showT('DPI FRENTE SUBIDO','green');
+        }).catch(e => { console.error('[v395] upload DPI frente:', e); showT('ERROR DPI FRENTE','red'); });
+      }
+      if (dpiReversoFile && !colab.dpiReversoURL){
+        _uploadDPI(dpiReversoFile, colabId, 'reverso').then(url => {
+          (window.state?.projects || []).forEach(p => { (p.planilla?.colaboradores||[]).forEach(c => { if (c.id === colabId) c.dpiReversoURL = url; }); });
+          if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(c => { if (c.id === colabId) c.dpiReversoURL = url; });
+          try { if (typeof saveState === 'function') saveState(); } catch(e){}
+          try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+          try { window.renderPlanillaColaboradores(); } catch(e){}
+          showT('DPI REVERSO SUBIDO','green');
+        }).catch(e => { console.error('[v395] upload DPI reverso:', e); showT('ERROR DPI REVERSO','red'); });
+      }
+      showT('COLABORADOR ACTUALIZADO','green');
+    } else {
+      // Crear nuevo
+      const dup = (window.state?.projects||[]).some(p => (p.planilla?.colaboradores||[]).some(c => _normName(c.nombre) === _normName(nombre)));
+      if (dup){ alert('YA EXISTE UN COLABORADOR CON ESE NOMBRE'); return false; }
+      const newId = 'col-' + (typeof uid === 'function' ? uid() : (Date.now()+Math.random().toString(36).slice(2,8)));
+      const nuevo = { id: newId, nombre, rol:'PERSONAL', telefono, telefonosExtras: extras, dpiFrenteURL:'', dpiReversoURL:'', creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), creadoTs: Date.now() };
+      (window.state?.projects || []).forEach(p => { if (!p.planilla) p.planilla = { pagos:[], retencionesPagadas:[], ajustes:[], modelos:[], aptoModelMap:{}, colaboradores:[], etapas:[] }; if (!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores = []; p.planilla.colaboradores.push({ ...nuevo }); });
+      if (!Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal = [];
+      window.state.colaboradoresGlobal.push({ ...nuevo });
+      try { if (typeof saveState === 'function') saveState(); } catch(e){ console.error('[v395] saveState:', e); }
+      try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+      _notifyAdmin('NUEVO', nuevo, '');
+      try { window.renderPlanillaColaboradores(); } catch(e){}
+      // Background DPI upload
+      if (dpiFrenteFile){
+        _uploadDPI(dpiFrenteFile, newId, 'frente').then(url => {
+          (window.state?.projects || []).forEach(p => { (p.planilla?.colaboradores||[]).forEach(c => { if (c.id === newId) c.dpiFrenteURL = url; }); });
+          if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(c => { if (c.id === newId) c.dpiFrenteURL = url; });
+          try { if (typeof saveState === 'function') saveState(); } catch(e){}
+          try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+          try { window.renderPlanillaColaboradores(); } catch(e){}
+        }).catch(e => { console.error('[v395] DPI frente upload:', e); });
+      }
+      if (dpiReversoFile){
+        _uploadDPI(dpiReversoFile, newId, 'reverso').then(url => {
+          (window.state?.projects || []).forEach(p => { (p.planilla?.colaboradores||[]).forEach(c => { if (c.id === newId) c.dpiReversoURL = url; }); });
+          if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal.forEach(c => { if (c.id === newId) c.dpiReversoURL = url; });
+          try { if (typeof saveState === 'function') saveState(); } catch(e){}
+          try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+          try { window.renderPlanillaColaboradores(); } catch(e){}
+        }).catch(e => { console.error('[v395] DPI reverso upload:', e); });
+      }
+      showT('COLABORADOR AGREGADO','green');
+    }
+    window._colabCapturedForm = null;
+    return true;
+  }
+  // Cierra el modal de prConfirm manualmente
+  function _v395CerrarModalColab(){
+    const modal = document.querySelector('[id^="prConfOk"]')?.closest('div[style*="position"]');
+    // Buscar el overlay (es el padre del root del modal)
+    const allDivs = document.querySelectorAll('body > div');
+    allDivs.forEach(d => {
+      if (d.querySelector && d.querySelector('#prConfOk')) {
+        d.remove();
+      }
+    });
+    if (typeof window._prUnlockScroll === 'function') window._prUnlockScroll();
+  }
+  // Hook que reemplaza el onclick del OK para EDITAR
+  function _v395InstallSaveHandlerEditar(colabId){
+    const tryHook = () => {
+      const okBtn = document.getElementById('prConfOk');
+      if (!okBtn) { setTimeout(tryHook, 50); return; }
+      okBtn.onclick = function(){
+        const success = _v395GuardarColabDesdeDOM(true, colabId);
+        if (success) _v395CerrarModalColab();
+      };
+    };
+    setTimeout(tryHook, 50);
+  }
+  function _v395InstallSaveHandlerAgregar(){
+    const tryHook = () => {
+      const okBtn = document.getElementById('prConfOk');
+      if (!okBtn) { setTimeout(tryHook, 50); return; }
+      okBtn.onclick = function(){
+        const success = _v395GuardarColabDesdeDOM(false, null);
+        if (success) _v395CerrarModalColab();
+      };
+    };
+    setTimeout(tryHook, 50);
+  }
+
+  window.editarColaborador = function(id){
     if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
     const colab = _allColabs().find(c => c.id === id);
     if (!colab) { showT('COLABORADOR NO ENCONTRADO','red'); return; }
-    // v392: hook OK button para capture definitivo desde DOM
-    setTimeout(_v392HookOk, 80);
-    const ok = await window.prConfirm({ title:'EDITAR COLABORADOR', bodyHTML: _formHTML(colab), okText:'GUARDAR CAMBIOS', wide:true });
-    if (!ok) { window._colabCapturedForm = null; return; }
-    const form = window._colabCapturedForm || {};
-    console.log('[v394 editarColaborador] colab actual:', JSON.parse(JSON.stringify(colab)));
-    console.log('[v394 editarColaborador] form capturado:', JSON.parse(JSON.stringify(form)));
-    // v394: prAlert en vez de showT — modal forzado para que se vea sí o sí
-    if (!form.nombre) { await window.prAlert({ title:'FALTA NOMBRE', body:'Tenés que ingresar el nombre completo.' }); return; }
-    if (!form.telefono) { await window.prAlert({ title:'FALTA TELÉFONO', body:'El número de teléfono celular es obligatorio. Asegurate de tipearlo en el campo TELÉFONO CELULAR antes de guardar.' }); return; }
-    const nombreUC = form.nombre.toUpperCase();
-    // Subir DPI si hay archivos nuevos (y todavía no hay URL guardada)
-    let dpiFrenteURL = colab.dpiFrenteURL || '';
-    let dpiReversoURL = colab.dpiReversoURL || '';
-    try {
-      if (form._dpiFrenteFile && !dpiFrenteURL) dpiFrenteURL = await _uploadDPI(form._dpiFrenteFile, colab.id, 'frente');
-    } catch(e){ console.error('[v390] upload DPI frente:', e); showT('ERROR SUBIENDO DPI FRENTE','red'); return; }
-    try {
-      if (form._dpiReversoFile && !dpiReversoURL) dpiReversoURL = await _uploadDPI(form._dpiReversoFile, colab.id, 'reverso');
-    } catch(e){ console.error('[v390] upload DPI reverso:', e); showT('ERROR SUBIENDO DPI REVERSO','red'); return; }
-    // Actualizar en TODOS los proyectos donde aparece
-    const updates = {
-      nombre: nombreUC,
-      telefono: form.telefono,
-      telefonosExtras: (form.telefonosExtras || []).filter(x => x.nombre || x.telefono),
-      dpiFrenteURL: dpiFrenteURL,
-      dpiReversoURL: dpiReversoURL
-    };
-    let actualizados = 0;
-    (window.state?.projects || []).forEach(p => {
-      const list = p.planilla?.colaboradores || [];
-      list.forEach(c => { if (c.id === id){ Object.assign(c, updates); actualizados++; } });
-    });
-    if (Array.isArray(window.state.colaboradoresGlobal)){
-      window.state.colaboradoresGlobal.forEach(c => { if (c.id === id) Object.assign(c, updates); });
-    }
-    try { if (typeof saveState === 'function') saveState(); } catch(e){}
-    try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
-    _notifyAdmin('EDITADO', Object.assign({}, colab, updates), '');
-    window._colabCapturedForm = null;
-    window.renderPlanillaColaboradores();
-    showT('COLABORADOR ACTUALIZADO','green');
+    _v395InstallSaveHandlerEditar(id);
+    window.prConfirm({ title:'EDITAR COLABORADOR', bodyHTML: _formHTML(colab), okText:'GUARDAR CAMBIOS', wide:true })
+      .then(ok => { if (!ok) window._colabCapturedForm = null; });
   };
 
   // ── ELIMINAR (sobrescribe la legacy)
