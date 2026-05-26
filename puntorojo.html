@@ -2750,7 +2750,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v391</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v392</span>
   </footer>
 
 </div>
@@ -38912,10 +38912,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
     let h = '';
     h += '<div style="display:grid;grid-template-columns:1fr;gap:14px;font-size:12px">';
-    // Nombre
-    h += '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">NOMBRE COMPLETO</label><input id="colNombre" type="text" oninput="window._colabCapturedForm.nombre=this.value.toUpperCase().trim()" value="'+_h(c.nombre||'')+'" placeholder="ej: LUIS MIGUEL BARAN QUIEJ" style="width:100%;padding:9px 12px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700;text-transform:uppercase"></div>';
+    // Nombre — v392: defensive (window._colabCapturedForm ||= {})
+    h += '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">NOMBRE COMPLETO</label><input id="colNombre" type="text" oninput="(window._colabCapturedForm=window._colabCapturedForm||{}).nombre=this.value.toUpperCase().trim()" value="'+_h(c.nombre||'')+'" placeholder="ej: LUIS MIGUEL BARAN QUIEJ" style="width:100%;padding:9px 12px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700;text-transform:uppercase"></div>';
     // Teléfono celular
-    h += '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">TELÉFONO CELULAR (OBLIGATORIO)</label><input id="colTel" type="tel" oninput="window._colabCapturedForm.telefono=this.value.trim()" value="'+_h(c.telefono||'')+'" placeholder="ej: 5555 1234" style="width:100%;padding:9px 12px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>';
+    h += '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">TELÉFONO CELULAR (OBLIGATORIO)</label><input id="colTel" type="tel" oninput="(window._colabCapturedForm=window._colabCapturedForm||{}).telefono=this.value.trim()" value="'+_h(c.telefono||'')+'" placeholder="ej: 5555 1234" style="width:100%;padding:9px 12px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>';
     // Contactos extras
     h += '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:6px;text-transform:uppercase">CONTACTOS ADICIONALES (OPCIONAL)</label>';
     h += '<div id="colExtrasContainer" style="display:flex;flex-direction:column;gap:8px">';
@@ -39000,9 +39000,52 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     });
   };
 
+  // ── v392: hook OK button para hacer un capture DEFINITIVO desde el DOM
+  // antes de que el modal se destruya. Garantía final por si los oninput
+  // no se dispararon (autocomplete del browser, paste, etc.).
+  function _v392CaptureFromDom(){
+    if (!window._colabCapturedForm) window._colabCapturedForm = {};
+    const f = window._colabCapturedForm;
+    try {
+      const nEl = document.getElementById('colNombre');
+      if (nEl) f.nombre = String(nEl.value||'').toUpperCase().trim();
+      const tEl = document.getElementById('colTel');
+      if (tEl) f.telefono = String(tEl.value||'').trim();
+      // telefonosExtras: leer todas las filas extras del contenedor
+      const cont = document.getElementById('colExtrasContainer');
+      if (cont){
+        const rows = cont.querySelectorAll('[data-extra-idx]');
+        const arr = [];
+        rows.forEach(r => {
+          const inputs = r.querySelectorAll('input');
+          if (inputs.length >= 3){
+            const nombre = String(inputs[0].value||'').trim();
+            const telefono = String(inputs[1].value||'').trim();
+            const relacion = String(inputs[2].value||'').trim();
+            if (nombre || telefono) arr.push({ nombre, telefono, relacion });
+          }
+        });
+        f.telefonosExtras = arr;
+      }
+    } catch(e){ console.warn('[v392] capture DOM colab:', e); }
+  }
+  function _v392HookOk(){
+    const okBtn = document.getElementById('prConfOk');
+    if (!okBtn) { setTimeout(_v392HookOk, 50); return; }
+    if (okBtn.dataset._colHooked === '1') return;
+    okBtn.dataset._colHooked = '1';
+    const prev = okBtn.onclick;
+    okBtn.onclick = function(ev){
+      try { _v392CaptureFromDom(); } catch(e){ console.warn('[v392] hook captura colab:', e); }
+      if (typeof prev === 'function') prev.call(this, ev);
+    };
+  }
+
   // ── AGREGAR
   window.agregarColaborador = async function(){
     if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    // v392: hookear OK ANTES de abrir para capturar al click del usuario
+    setTimeout(_v392HookOk, 80);
     const ok = await window.prConfirm({ title:'AGREGAR COLABORADOR', bodyHTML: _formHTML(null), okText:'GUARDAR', wide:true });
     if (!ok) { window._colabCapturedForm = null; return; }
     const form = window._colabCapturedForm || {};
@@ -39053,6 +39096,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
     const colab = _allColabs().find(c => c.id === id);
     if (!colab) { showT('COLABORADOR NO ENCONTRADO','red'); return; }
+    // v392: hook OK button para capture definitivo desde DOM
+    setTimeout(_v392HookOk, 80);
     const ok = await window.prConfirm({ title:'EDITAR COLABORADOR', bodyHTML: _formHTML(colab), okText:'GUARDAR CAMBIOS', wide:true });
     if (!ok) { window._colabCapturedForm = null; return; }
     const form = window._colabCapturedForm || {};
