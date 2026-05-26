@@ -2750,7 +2750,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v389</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v390</span>
   </footer>
 
 </div>
@@ -7197,6 +7197,8 @@ function ensureDataV9(data){
     // Mismo patrón que v358 (anticipos): supervisores no admin envían solicitud,
     // el admin aprueba/rechaza desde el modal SOLICITUDES.
     if (!Array.isArray(data.solicitudesPolizas)) data.solicitudesPolizas = [];
+    // v390: solicitudes de eliminación de colaboradores (admin approval)
+    if (!Array.isArray(data.solicitudesColaboradores)) data.solicitudesColaboradores = [];
   } catch(e) { console.warn('[v352] migración pólizas globales:', e && e.message); }
 
   // v355: ANTICIPOS GLOBALES — antes vivían en p.planilla.anticipos (per-proyecto),
@@ -28600,7 +28602,8 @@ window.addEventListener('load', () => {
     // Antes se insertaba antes de RETENCIONES, pero el orden pedido por el usuario
     // es: etapas → retenciones → reporte → resumenpersona → modelos → colaboradores.
     if (!tabs.querySelector('[data-plantab="colaboradores"]')) {
-      const btn = document.createElement('button'); btn.className='mat-tab'; btn.dataset.plantab='colaboradores'; btn.setAttribute('onclick',"setPlanillaTab('colaboradores')"); btn.setAttribute('data-perm','users.manage'); btn.textContent='COLABORADORES';
+      // v390: COLABORADORES visible para admin Y supervisores (planilla.descuentos). Antes solo admin.
+      const btn = document.createElement('button'); btn.className='mat-tab'; btn.dataset.plantab='colaboradores'; btn.setAttribute('onclick',"setPlanillaTab('colaboradores')"); btn.setAttribute('data-perm','planilla.descuentos'); btn.textContent='COLABORADORES';
       tabs.appendChild(btn); // al final
     }
     const recetaBtn = tabs.querySelector('[data-plantab="receta"]'); if (recetaBtn) recetaBtn.textContent='MODELOS Y COSTOS';
@@ -28613,6 +28616,10 @@ window.addEventListener('load', () => {
     const colabBtn = tabs.querySelector('[data-plantab="colaboradores"]');
     if (colabBtn && colabBtn !== tabs.lastElementChild) {
       tabs.appendChild(colabBtn);
+    }
+    // v390: actualizar data-perm si todavía tiene el viejo "users.manage" (cache previo).
+    if (colabBtn && colabBtn.getAttribute('data-perm') === 'users.manage') {
+      colabBtn.setAttribute('data-perm', 'planilla.descuentos');
     }
     // v345: ocultar tabs eliminadas si alguien las dejo en DOM por cache.
     const old1 = tabs.querySelector('[data-plantab="ajustes"]');
@@ -38656,6 +38663,541 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   window.getOCsActivasDelProyecto = function(){ const p = _activeProj(); if (!p) return []; return _getOCs(p).filter(oc => oc.estatus === 'ACTIVA'); };
 
   console.log('[v382] Catálogo de OCs cargado · Fase 1 lista');
+})();
+</script>
+
+<!-- ════════════════════════════════════════════════════════════════
+     v390 · COLABORADORES — FASE 1 EXPANSION
+     ────────────────────────────────────────────────────────────────
+     Nuevo schema con teléfono celular, contactos extras, foto DPI
+     (frente + reverso) inmutable una vez subida. Sobrescribe el render
+     y el delete existentes para soportar:
+       - Visibilidad / edición para supervisores (planilla.descuentos)
+       - Modal AGREGAR/EDITAR con todos los campos nuevos
+       - Eliminar via solicitud admin para no-admin
+       - Quita el botón IMPORTAR PDF
+     ═══════════════════════════════════════════════════════════════ -->
+<script id="pr-colabs-v390-module">
+(function(){
+  'use strict';
+
+  function _h(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function _activeProj(){ return (typeof activeProj === 'function') ? activeProj() : null; }
+  function _esAdmin(){ try { return typeof can === 'function' && can('users.manage'); } catch(e){ return false; } }
+  function _puedeEditar(){ try { return typeof can === 'function' && (can('users.manage') || can('planilla.descuentos')); } catch(e){ return false; } }
+
+  // ── COLABORADORES GLOBALES (todos los proyectos comparten la misma lista)
+  // Las funciones existentes ya guardan en p.planilla.colaboradores para CADA
+  // proyecto. Lo que cambia ahora es que la edición agrega más campos al objeto.
+  function _allColabs(){
+    const p = _activeProj();
+    if (!p) return [];
+    let list = (p.planilla && p.planilla.colaboradores) || [];
+    if (list.length === 0){
+      // fallback: cualquier proyecto que tenga
+      for (const otro of (window.state?.projects || [])){
+        if ((otro.planilla?.colaboradores||[]).length > 0){ list = otro.planilla.colaboradores; break; }
+      }
+    }
+    return list;
+  }
+
+  function _normName(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim().toUpperCase(); }
+
+  // ── SOLICITUDES (admin approval para ELIMINAR colaboradores)
+  function _getSolicitudesCol(){
+    if (typeof state !== 'undefined' && state){
+      if (!Array.isArray(state.solicitudesColaboradores)) state.solicitudesColaboradores = [];
+      return state.solicitudesColaboradores;
+    }
+    return [];
+  }
+  function _solicitudesColPendientes(){ return _getSolicitudesCol().filter(s => s.estado === 'PENDIENTE'); }
+  function _crearSolicitudCol(tipo, colab, cambios){
+    const sol = {
+      id: 'solcol-' + Date.now() + '-' + Math.random().toString(36).slice(2,8),
+      tipo: tipo,
+      colaboradorId: colab.id,
+      colaboradorSnapshot: JSON.parse(JSON.stringify(colab)),
+      cambios: cambios || null,
+      solicitadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''),
+      solicitadoNombre: (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || '',
+      ts: Date.now(),
+      estado: 'PENDIENTE',
+      procesadoPor: null, procesadoNombre: null, fechaProceso: null, motivoRechazo: null
+    };
+    _getSolicitudesCol().push(sol);
+    try { if (typeof saveState === 'function') saveState(); } catch(e){}
+    try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    return sol;
+  }
+  function _marcarProcesadaCol(sol, estado, motivo){
+    sol.estado = estado;
+    sol.procesadoPor = (typeof window._getUserEmail === 'function' ? window._getUserEmail() : '');
+    sol.procesadoNombre = (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || '';
+    sol.fechaProceso = new Date().toISOString();
+    if (estado === 'RECHAZADA') sol.motivoRechazo = motivo || '';
+    try { if (typeof saveState === 'function') saveState(); } catch(e){}
+    try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    try { window.renderPlanillaColaboradores(); } catch(e){}
+  }
+
+  // ── NOTIFICAR ADMIN
+  function _notifyAdmin(accion, colab, extra){
+    try {
+      if (typeof _notifyByPerm !== 'function') return;
+      const u = (typeof currentUser !== 'undefined') ? currentUser : null;
+      const actorName = ((u && (u.displayName || u.username || u.email)) || 'USUARIO').toUpperCase();
+      const body = (colab.nombre || '—') + (colab.telefono ? ' · Tel ' + colab.telefono : '') + (extra ? ' · ' + extra : '');
+      _notifyByPerm('users.manage', {
+        type: 'colab-' + accion.toLowerCase().replace(/\s+/g,'-'),
+        title: actorName + ' · COLABORADOR ' + accion,
+        body: body.slice(0, 300),
+        projectId: (typeof state !== 'undefined' && state) ? (state.activeProjectId || null) : null
+      }).catch(()=>{});
+    } catch(e){ console.warn('[v390] notif colab:', e); }
+  }
+
+  // ── PAGOS COUNT (para mostrar al lado del nombre)
+  function _pagosDe(c){
+    let n = 0;
+    (window.state?.projects || []).forEach(pr => (pr.planilla?.pagos||[]).forEach(pg => {
+      if (pg.colaboradorId === c.id || _normName(pg.colaborador) === _normName(c.nombre)) n++;
+    }));
+    return n;
+  }
+
+  // ── UPLOAD A FIREBASE STORAGE
+  // Sube una foto (File o blob) a Firebase Storage en `colaboradores/<id>/<slot>`
+  // y retorna la URL. Usa la misma infra que las fotos de avance.
+  async function _uploadDPI(file, colabId, slot){
+    if (!file) return null;
+    if (typeof firebase === 'undefined' || !firebase.storage) throw new Error('FIREBASE STORAGE NO DISPONIBLE');
+    let blob = file;
+    // Comprimir si tenemos el helper
+    try {
+      if (typeof compressImage === 'function' && typeof getCompressionSettings === 'function'){
+        const cs = getCompressionSettings();
+        const base64 = await compressImage(file, cs.maxWidth || 1280, cs.quality || 0.8);
+        blob = await (await fetch(base64)).blob();
+      }
+    } catch(e){ console.warn('[v390] compresión DPI fallida, subo original:', e); }
+    const path = 'colaboradores/' + colabId + '/dpi-' + slot + '-' + Date.now();
+    const ref = firebase.storage().ref(path);
+    await ref.put(blob, { contentType: blob.type || 'image/jpeg' });
+    return await ref.getDownloadURL();
+  }
+
+  // ── RENDER (sobrescribe la versión legacy)
+  window.renderPlanillaColaboradores = function(){
+    if (typeof ensureEnhancedData === 'function') ensureEnhancedData();
+    const p = _activeProj();
+    const puedeEditar = _puedeEditar();
+    const esAdmin = _esAdmin();
+    const list = _allColabs().slice().sort((a,b) => String(a.nombre||'').localeCompare(String(b.nombre||''), 'es', { sensitivity: 'base' }));
+
+    // Filtro de búsqueda
+    const filtro = (window._colabFiltro || '').trim().toLowerCase();
+    const filtrados = filtro ? list.filter(c => (c.nombre||'').toLowerCase().includes(filtro) || (c.telefono||'').toLowerCase().includes(filtro)) : list;
+
+    let html = '';
+    html += '<div class="card">';
+    html += '<div class="card-hd" style="display:flex;align-items:center;gap:10px"><h3 style="flex:1;margin:0;text-align:left">PERSONAL <span style="font-size:10px;font-weight:400;color:var(--mute);letter-spacing:1px">· '+list.length+'</span></h3>';
+    // SOLICITUDES button (solo si hay pendientes)
+    const solPend = _solicitudesColPendientes();
+    const solCount = esAdmin ? solPend.length : solPend.filter(s => s.solicitadoPor === (typeof window._getUserEmail === 'function' ? window._getUserEmail() : '')).length;
+    if (solCount > 0){
+      const badge = ' <span style="background:#DC2626;color:#fff;border-radius:10px;padding:1px 7px;font-size:9.5px;font-weight:800;margin-left:4px">'+solCount+'</span>';
+      html += '<button class="btn ghost sm" style="margin-right:6px;color:#9A3412;border-color:#FDBA74;background:#FFFBEB" onclick="window.verSolicitudesColabs()" title="Solicitudes de eliminación pendientes">SOLICITUDES'+badge+'</button>';
+    }
+    if (puedeEditar) html += '<button class="btn sm" style="background:#1565C0;border-color:#1565C0;color:#fff" onclick="window.agregarColaborador()">+ AGREGAR COLABORADOR</button>';
+    html += '</div>';
+
+    // Intro + buscador
+    html += '<p style="padding:9px 14px;margin:0;border-bottom:1px solid var(--line-soft);font-size:10px;letter-spacing:.3px;color:var(--mute);text-align:left;background:#fafafa">LISTADO COMPARTIDO ENTRE TODOS LOS PROYECTOS · NOMBRE, TELÉFONO Y DPI</p>';
+    html += '<div style="padding:10px 14px;background:var(--cream);border-bottom:1px solid var(--line)"><input type="text" placeholder="BUSCAR POR NOMBRE O TELÉFONO" value="'+_h(window._colabFiltro||'')+'" oninput="window._colabFiltro=this.value; window.renderPlanillaColaboradores()" style="width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:4px;font:inherit;font-size:11px"></div>';
+
+    if (esAdmin && solPend.length > 0){
+      html += '<div style="margin:10px 14px;padding:12px 14px;background:#FFFBEB;border:1px solid #FCD34D;border-radius:8px;color:#92400E;font-size:11.5px;line-height:1.4;display:flex;justify-content:space-between;align-items:center;gap:10px"><div>Hay <strong>'+solPend.length+' solicitud(es)</strong> de eliminación pendientes de aprobación.</div><button class="btn sm" style="background:#92400E;border-color:#92400E;color:#fff;font-size:10.5px" onclick="window.verSolicitudesColabs()">REVISAR AHORA</button></div>';
+    }
+
+    // Tabla
+    if (filtrados.length === 0){
+      html += '<div class="empty" style="padding:40px;text-align:center;color:var(--mute);font-size:11px;letter-spacing:1px">'+(filtro?'NO HAY RESULTADOS PARA "'+_h(filtro.toUpperCase())+'"':'SIN PERSONAL REGISTRADO')+'</div>';
+    } else {
+      html += '<div style="padding:0">';
+      filtrados.forEach(c => {
+        const tieneDPIFrente = !!c.dpiFrenteURL;
+        const tieneDPIReverso = !!c.dpiReversoURL;
+        const dpiStatus = (tieneDPIFrente && tieneDPIReverso) ? '<span class="planilla-badge" style="background:#DCFCE7;color:#15803D;border:1px solid #86EFAC;font-size:8.5px">DPI COMPLETO</span>' : (tieneDPIFrente || tieneDPIReverso) ? '<span class="planilla-badge" style="background:#FEF3C7;color:#92400E;border:1px solid #FCD34D;font-size:8.5px">DPI PARCIAL</span>' : '<span class="planilla-badge" style="background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;font-size:8.5px">SIN DPI</span>';
+        const yaPendSol = _solicitudesColPendientes().find(s => s.colaboradorId === c.id);
+        html += '<div style="display:grid;grid-template-columns:48px 1fr auto auto auto;gap:14px;align-items:center;padding:11px 14px;border-bottom:1px solid var(--line-soft)">';
+        // Avatar (foto del DPI frente si existe, sino iniciales)
+        if (tieneDPIFrente){
+          html += '<div style="width:42px;height:42px;border-radius:50%;overflow:hidden;background:#F1F5F9;display:flex;align-items:center;justify-content:center;border:1px solid #E2E8F0"><img src="'+_h(c.dpiFrenteURL)+'" style="width:100%;height:100%;object-fit:cover" alt="DPI"></div>';
+        } else {
+          const iniciales = String(c.nombre||'').split(' ').filter(Boolean).slice(0,2).map(w=>w[0]).join('').toUpperCase();
+          html += '<div style="width:42px;height:42px;border-radius:50%;background:#E0F2FE;color:#075985;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;border:1px solid #BAE6FD">'+_h(iniciales)+'</div>';
+        }
+        // Info
+        html += '<div style="min-width:0"><div style="font-size:11.5px;font-weight:700;color:var(--ink);letter-spacing:.3px">'+_h(c.nombre||'—')+'</div>';
+        html += '<div style="font-size:9.5px;color:#64748B;margin-top:2px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+        if (c.telefono) html += '<span>Tel: <strong style="color:#0F172A">'+_h(c.telefono)+'</strong></span>';
+        else html += '<span style="color:#DC2626;font-weight:700">SIN TELÉFONO</span>';
+        if (Array.isArray(c.telefonosExtras) && c.telefonosExtras.length > 0) html += '<span>+'+c.telefonosExtras.length+' contacto'+(c.telefonosExtras.length!==1?'s':'')+'</span>';
+        html += '</div></div>';
+        // DPI status
+        html += '<div>'+dpiStatus+'</div>';
+        // Pagos count
+        html += '<div style="text-align:center;font-size:9.5px;letter-spacing:1.1px;color:var(--mute);font-weight:600">'+_pagosDe(c)+' PAGOS</div>';
+        // Acciones
+        if (puedeEditar){
+          html += '<div style="display:flex;gap:6px">';
+          html += '<button class="btn ghost sm" style="font-size:9.5px;padding:5px 10px" onclick="window.editarColaborador(\''+_h(c.id)+'\')">EDITAR</button>';
+          if (yaPendSol && !esAdmin) {
+            html += '<button class="btn ghost sm" style="font-size:9.5px;padding:5px 10px;color:#92400E;border-color:#FCD34D;background:#FFFBEB" disabled title="Solicitud pendiente">PENDIENTE</button>';
+          } else {
+            html += '<button class="btn ghost sm" style="font-size:9.5px;padding:5px 10px;color:var(--red);border-color:#FCA5A5" onclick="window.deletePlanillaColaborador(\''+_h(c.id)+'\')">ELIMINAR</button>';
+          }
+          html += '</div>';
+        } else {
+          html += '<div></div>';
+        }
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+    const el = document.getElementById('planilla-colaboradores');
+    if (el) el.innerHTML = html;
+  };
+
+  // ── FORM HTML
+  function _formHTML(c){
+    c = c || {};
+    const esEdicion = !!c.id;
+    // Pre-populate captured form
+    window._colabCapturedForm = {
+      nombre: String(c.nombre||''),
+      telefono: String(c.telefono||''),
+      telefonosExtras: Array.isArray(c.telefonosExtras) ? JSON.parse(JSON.stringify(c.telefonosExtras)) : [],
+      dpiFrenteURL: c.dpiFrenteURL || '',
+      dpiReversoURL: c.dpiReversoURL || '',
+      _dpiFrenteFile: null, // File pendiente de upload
+      _dpiReversoFile: null
+    };
+
+    let h = '';
+    h += '<div style="display:grid;grid-template-columns:1fr;gap:14px;font-size:12px">';
+    // Nombre
+    h += '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">NOMBRE COMPLETO</label><input id="colNombre" type="text" oninput="window._colabCapturedForm.nombre=this.value.toUpperCase().trim()" value="'+_h(c.nombre||'')+'" placeholder="ej: LUIS MIGUEL BARAN QUIEJ" style="width:100%;padding:9px 12px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700;text-transform:uppercase"></div>';
+    // Teléfono celular
+    h += '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">TELÉFONO CELULAR (OBLIGATORIO)</label><input id="colTel" type="tel" oninput="window._colabCapturedForm.telefono=this.value.trim()" value="'+_h(c.telefono||'')+'" placeholder="ej: 5555 1234" style="width:100%;padding:9px 12px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>';
+    // Contactos extras
+    h += '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:6px;text-transform:uppercase">CONTACTOS ADICIONALES (OPCIONAL)</label>';
+    h += '<div id="colExtrasContainer" style="display:flex;flex-direction:column;gap:8px">';
+    const extras = (c.telefonosExtras || []);
+    if (extras.length === 0){
+      h += '<div style="color:#94A3B8;font-size:10.5px;padding:8px 0">Ningún contacto extra. Click en + AGREGAR para uno (esposa, familiar, emergencia, etc.).</div>';
+    } else {
+      extras.forEach((ex, i) => {
+        h += '<div data-extra-idx="'+i+'" style="display:grid;grid-template-columns:1fr 1fr 1fr 30px;gap:8px;align-items:center"><input type="text" placeholder="Nombre" value="'+_h(ex.nombre||'')+'" oninput="window._colabCapturedForm.telefonosExtras['+i+'].nombre=this.value" style="padding:7px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"><input type="tel" placeholder="Teléfono" value="'+_h(ex.telefono||'')+'" oninput="window._colabCapturedForm.telefonosExtras['+i+'].telefono=this.value" style="padding:7px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"><input type="text" placeholder="Relación (esposa, mamá, etc.)" value="'+_h(ex.relacion||'')+'" oninput="window._colabCapturedForm.telefonosExtras['+i+'].relacion=this.value" style="padding:7px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"><button type="button" onclick="window._v390RemoveExtra('+i+')" style="background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;border-radius:4px;cursor:pointer;font-weight:700;font-size:14px">×</button></div>';
+      });
+    }
+    h += '</div>';
+    h += '<button type="button" onclick="window._v390AddExtra()" style="margin-top:8px;padding:6px 12px;background:#F8FAFC;color:#1565C0;border:1px dashed #93C5FD;border-radius:4px;cursor:pointer;font-size:10.5px;font-weight:600;letter-spacing:.4px">+ AGREGAR CONTACTO</button>';
+    h += '</div>';
+    // DPI FRENTE
+    h += '<div style="border:1px solid #E2E8F0;border-radius:8px;padding:12px;background:#FAFBFC">';
+    h += '<label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:8px;text-transform:uppercase">DPI FRENTE</label>';
+    if (c.dpiFrenteURL){
+      h += '<div style="display:flex;align-items:center;gap:12px"><img src="'+_h(c.dpiFrenteURL)+'" style="width:120px;height:80px;object-fit:cover;border:1px solid #CBD5E1;border-radius:6px"><div style="font-size:10.5px;color:#15803D;line-height:1.5"><strong>YA SUBIDO</strong><br><span style="color:#94A3B8;font-size:9.5px">Una vez subido el DPI no se puede modificar.</span></div></div>';
+    } else {
+      h += '<input id="colDpiFrenteFile" type="file" accept="image/*" capture="environment" onchange="window._v390OnDpiSelected(\'Frente\', this.files[0])" style="width:100%;padding:8px;font:inherit;font-size:11px;background:#fff;border:1px solid #DDD;border-radius:4px"><div id="colDpiFrentePreview" style="margin-top:8px"></div>';
+    }
+    h += '</div>';
+    // DPI REVERSO
+    h += '<div style="border:1px solid #E2E8F0;border-radius:8px;padding:12px;background:#FAFBFC">';
+    h += '<label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:8px;text-transform:uppercase">DPI REVERSO</label>';
+    if (c.dpiReversoURL){
+      h += '<div style="display:flex;align-items:center;gap:12px"><img src="'+_h(c.dpiReversoURL)+'" style="width:120px;height:80px;object-fit:cover;border:1px solid #CBD5E1;border-radius:6px"><div style="font-size:10.5px;color:#15803D;line-height:1.5"><strong>YA SUBIDO</strong><br><span style="color:#94A3B8;font-size:9.5px">Una vez subido el DPI no se puede modificar.</span></div></div>';
+    } else {
+      h += '<input id="colDpiReversoFile" type="file" accept="image/*" capture="environment" onchange="window._v390OnDpiSelected(\'Reverso\', this.files[0])" style="width:100%;padding:8px;font:inherit;font-size:11px;background:#fff;border:1px solid #DDD;border-radius:4px"><div id="colDpiReversoPreview" style="margin-top:8px"></div>';
+    }
+    h += '</div>';
+
+    h += '</div>';
+    return h;
+  }
+
+  // Helpers globales (inline en el form)
+  window._v390OnDpiSelected = function(slot, file){
+    if (!file) return;
+    window._colabCapturedForm['_dpi'+slot+'File'] = file;
+    const reader = new FileReader();
+    reader.onload = function(ev){
+      const prevEl = document.getElementById('colDpi'+slot+'Preview');
+      if (prevEl) prevEl.innerHTML = '<div style="display:flex;align-items:center;gap:10px"><img src="'+ev.target.result+'" style="width:120px;height:80px;object-fit:cover;border:1px solid #CBD5E1;border-radius:6px"><div style="font-size:10.5px;color:#475569"><strong style="color:#1565C0">LISTO PARA SUBIR</strong><br><span style="color:#94A3B8;font-size:9.5px">Click GUARDAR para subirlo.</span></div></div>';
+    };
+    reader.readAsDataURL(file);
+  };
+  window._v390AddExtra = function(){
+    if (!Array.isArray(window._colabCapturedForm.telefonosExtras)) window._colabCapturedForm.telefonosExtras = [];
+    window._colabCapturedForm.telefonosExtras.push({ nombre:'', telefono:'', relacion:'' });
+    // Re-renderizar el contenedor de extras
+    const cont = document.getElementById('colExtrasContainer');
+    if (!cont) return;
+    const i = window._colabCapturedForm.telefonosExtras.length - 1;
+    const div = document.createElement('div');
+    div.setAttribute('data-extra-idx', i);
+    div.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr 30px;gap:8px;align-items:center';
+    div.innerHTML = '<input type="text" placeholder="Nombre" oninput="window._colabCapturedForm.telefonosExtras['+i+'].nombre=this.value" style="padding:7px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"><input type="tel" placeholder="Teléfono" oninput="window._colabCapturedForm.telefonosExtras['+i+'].telefono=this.value" style="padding:7px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"><input type="text" placeholder="Relación" oninput="window._colabCapturedForm.telefonosExtras['+i+'].relacion=this.value" style="padding:7px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"><button type="button" onclick="window._v390RemoveExtra('+i+')" style="background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;border-radius:4px;cursor:pointer;font-weight:700;font-size:14px">×</button>';
+    // Si solo había el mensaje vacío, lo quito
+    const empty = cont.querySelector('div[style*="Ningún contacto"]');
+    if (empty) empty.remove();
+    cont.appendChild(div);
+  };
+  window._v390RemoveExtra = function(i){
+    if (!Array.isArray(window._colabCapturedForm.telefonosExtras)) return;
+    window._colabCapturedForm.telefonosExtras.splice(i, 1);
+    // Re-render del contenedor (cambian los índices)
+    const cont = document.getElementById('colExtrasContainer');
+    if (!cont) return;
+    cont.innerHTML = '';
+    if (window._colabCapturedForm.telefonosExtras.length === 0){
+      cont.innerHTML = '<div style="color:#94A3B8;font-size:10.5px;padding:8px 0">Ningún contacto extra.</div>';
+      return;
+    }
+    window._colabCapturedForm.telefonosExtras.forEach((ex, idx) => {
+      const div = document.createElement('div');
+      div.setAttribute('data-extra-idx', idx);
+      div.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr 30px;gap:8px;align-items:center';
+      div.innerHTML = '<input type="text" placeholder="Nombre" value="'+_h(ex.nombre||'')+'" oninput="window._colabCapturedForm.telefonosExtras['+idx+'].nombre=this.value" style="padding:7px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"><input type="tel" placeholder="Teléfono" value="'+_h(ex.telefono||'')+'" oninput="window._colabCapturedForm.telefonosExtras['+idx+'].telefono=this.value" style="padding:7px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"><input type="text" placeholder="Relación" value="'+_h(ex.relacion||'')+'" oninput="window._colabCapturedForm.telefonosExtras['+idx+'].relacion=this.value" style="padding:7px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"><button type="button" onclick="window._v390RemoveExtra('+idx+')" style="background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;border-radius:4px;cursor:pointer;font-weight:700;font-size:14px">×</button>';
+      cont.appendChild(div);
+    });
+  };
+
+  // ── AGREGAR
+  window.agregarColaborador = async function(){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const ok = await window.prConfirm({ title:'AGREGAR COLABORADOR', bodyHTML: _formHTML(null), okText:'GUARDAR', wide:true });
+    if (!ok) { window._colabCapturedForm = null; return; }
+    const form = window._colabCapturedForm || {};
+    if (!form.nombre) { showT('INGRESÁ EL NOMBRE','red'); return; }
+    if (!form.telefono) { showT('INGRESÁ EL TELÉFONO CELULAR','red'); return; }
+    const nombreUC = form.nombre.toUpperCase();
+    // Verificar duplicado
+    const existe = (window.state?.projects||[]).some(p => (p.planilla?.colaboradores||[]).some(c => String(c.nombre||'').trim().toUpperCase() === nombreUC));
+    if (existe) { showT('YA EXISTE UN COLABORADOR CON ESE NOMBRE','red'); return; }
+    const newId = 'col-' + (typeof uid === 'function' ? uid() : (Date.now()+Math.random().toString(36).slice(2,8)));
+    // Upload DPI photos si fueron seleccionadas
+    let dpiFrenteURL = '', dpiReversoURL = '';
+    try {
+      if (form._dpiFrenteFile) dpiFrenteURL = await _uploadDPI(form._dpiFrenteFile, newId, 'frente');
+    } catch(e){ console.error('[v390] upload DPI frente:', e); showT('ERROR SUBIENDO DPI FRENTE: '+(e.message||e),'red'); return; }
+    try {
+      if (form._dpiReversoFile) dpiReversoURL = await _uploadDPI(form._dpiReversoFile, newId, 'reverso');
+    } catch(e){ console.error('[v390] upload DPI reverso:', e); showT('ERROR SUBIENDO DPI REVERSO: '+(e.message||e),'red'); return; }
+    const nuevo = {
+      id: newId,
+      nombre: nombreUC,
+      rol: 'PERSONAL',
+      telefono: form.telefono,
+      telefonosExtras: (form.telefonosExtras || []).filter(x => x.nombre || x.telefono),
+      dpiFrenteURL: dpiFrenteURL,
+      dpiReversoURL: dpiReversoURL,
+      creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''),
+      creadoTs: Date.now()
+    };
+    // Agregar a TODOS los proyectos (igual que el legacy)
+    (window.state?.projects || []).forEach(p => {
+      if (!p.planilla) p.planilla = { pagos:[], retencionesPagadas:[], ajustes:[], modelos:[], aptoModelMap:{}, colaboradores:[], etapas:[] };
+      if (!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores = [];
+      p.planilla.colaboradores.push({ ...nuevo });
+    });
+    if (!Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal = [];
+    window.state.colaboradoresGlobal.push({ ...nuevo });
+    try { if (typeof saveState === 'function') saveState(); } catch(e){}
+    try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _notifyAdmin('NUEVO', nuevo, '');
+    window._colabCapturedForm = null;
+    window.renderPlanillaColaboradores();
+    showT('COLABORADOR AGREGADO','green');
+  };
+
+  // ── EDITAR
+  window.editarColaborador = async function(id){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const colab = _allColabs().find(c => c.id === id);
+    if (!colab) { showT('COLABORADOR NO ENCONTRADO','red'); return; }
+    const ok = await window.prConfirm({ title:'EDITAR COLABORADOR', bodyHTML: _formHTML(colab), okText:'GUARDAR CAMBIOS', wide:true });
+    if (!ok) { window._colabCapturedForm = null; return; }
+    const form = window._colabCapturedForm || {};
+    if (!form.nombre) { showT('INGRESÁ EL NOMBRE','red'); return; }
+    if (!form.telefono) { showT('INGRESÁ EL TELÉFONO CELULAR','red'); return; }
+    const nombreUC = form.nombre.toUpperCase();
+    // Subir DPI si hay archivos nuevos (y todavía no hay URL guardada)
+    let dpiFrenteURL = colab.dpiFrenteURL || '';
+    let dpiReversoURL = colab.dpiReversoURL || '';
+    try {
+      if (form._dpiFrenteFile && !dpiFrenteURL) dpiFrenteURL = await _uploadDPI(form._dpiFrenteFile, colab.id, 'frente');
+    } catch(e){ console.error('[v390] upload DPI frente:', e); showT('ERROR SUBIENDO DPI FRENTE','red'); return; }
+    try {
+      if (form._dpiReversoFile && !dpiReversoURL) dpiReversoURL = await _uploadDPI(form._dpiReversoFile, colab.id, 'reverso');
+    } catch(e){ console.error('[v390] upload DPI reverso:', e); showT('ERROR SUBIENDO DPI REVERSO','red'); return; }
+    // Actualizar en TODOS los proyectos donde aparece
+    const updates = {
+      nombre: nombreUC,
+      telefono: form.telefono,
+      telefonosExtras: (form.telefonosExtras || []).filter(x => x.nombre || x.telefono),
+      dpiFrenteURL: dpiFrenteURL,
+      dpiReversoURL: dpiReversoURL
+    };
+    let actualizados = 0;
+    (window.state?.projects || []).forEach(p => {
+      const list = p.planilla?.colaboradores || [];
+      list.forEach(c => { if (c.id === id){ Object.assign(c, updates); actualizados++; } });
+    });
+    if (Array.isArray(window.state.colaboradoresGlobal)){
+      window.state.colaboradoresGlobal.forEach(c => { if (c.id === id) Object.assign(c, updates); });
+    }
+    try { if (typeof saveState === 'function') saveState(); } catch(e){}
+    try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _notifyAdmin('EDITADO', Object.assign({}, colab, updates), '');
+    window._colabCapturedForm = null;
+    window.renderPlanillaColaboradores();
+    showT('COLABORADOR ACTUALIZADO','green');
+  };
+
+  // ── ELIMINAR (sobrescribe la legacy)
+  // Admin elimina directo. Supervisor genera solicitud.
+  window.deletePlanillaColaborador = async function(id){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const colab = _allColabs().find(c => c.id === id);
+    if (!colab) { showT('COLABORADOR NO ENCONTRADO','red'); return; }
+    // Validar que no tenga pagos en ningún proyecto
+    let usado = false;
+    const nombreUC = _normName(colab.nombre);
+    (window.state?.projects || []).forEach(pr => (pr.planilla?.pagos||[]).forEach(pg => {
+      if (pg.colaboradorId === id || _normName(pg.colaborador) === nombreUC) usado = true;
+    }));
+    if (usado) { showT('NO SE PUEDE ELIMINAR: TIENE PAGOS EN ALGÚN PROYECTO','red'); return; }
+
+    const esAdmin = _esAdmin();
+    // Si ya hay solicitud PENDIENTE para este colaborador, avisar
+    const yaPend = _solicitudesColPendientes().find(s => s.colaboradorId === id);
+    if (yaPend && !esAdmin){
+      await window.prAlert({ title:'YA HAY UNA SOLICITUD PENDIENTE', body:'Este colaborador tiene una solicitud de '+yaPend.tipo+' esperando aprobación del admin.' });
+      return;
+    }
+
+    const isPending = !esAdmin;
+    const hintHTML = isPending ? '<div style="margin-bottom:12px;padding:10px 12px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:6px;color:#9A3412;font-size:11.5px;line-height:1.5">La eliminación <strong>NO se aplica inmediatamente</strong>. Se envía una solicitud al admin para que la apruebe.</div>' : '';
+    const ok = await window.prConfirm({
+      title: isPending ? 'ELIMINAR COLABORADOR (ENVÍA SOLICITUD AL ADMIN)' : 'Eliminar colaborador',
+      bodyHTML: hintHTML + '<div style="font-size:12.5px;color:#333;line-height:1.5"><div><strong>'+_h(colab.nombre)+'</strong></div>'+(colab.telefono?'<div style="color:var(--mute);margin-top:4px">Tel: '+_h(colab.telefono)+'</div>':'')+'</div>',
+      okText: isPending ? 'ENVIAR SOLICITUD' : 'ELIMINAR',
+      danger: !isPending
+    });
+    if (!ok) return;
+    if (isPending){
+      _crearSolicitudCol('ELIMINAR', colab, null);
+      window.renderPlanillaColaboradores();
+      showT('SOLICITUD DE ELIMINACIÓN ENVIADA · ESPERANDO ADMIN','green');
+      return;
+    }
+    _eliminarColabDirecto(id);
+  };
+
+  // Función interna que ejecuta el delete (compartida entre delete admin directo y aprobarSolicitud)
+  function _eliminarColabDirecto(id){
+    const colab = _allColabs().find(c => c.id === id);
+    if (!colab) return;
+    const nombreUC = _normName(colab.nombre);
+    (window.state?.projects || []).forEach(p => {
+      if (!Array.isArray(p.planilla?.colaboradores)) return;
+      p.planilla.colaboradores = p.planilla.colaboradores.filter(c => c.id !== id && _normName(c.nombre) !== nombreUC);
+    });
+    if (Array.isArray(window.state.colaboradoresGlobal)){
+      window.state.colaboradoresGlobal = window.state.colaboradoresGlobal.filter(c => c.id !== id && _normName(c.nombre) !== nombreUC);
+    }
+    if (window.planillaSelectedColaborador === id) window.planillaSelectedColaborador = '';
+    try { if (typeof saveState === 'function') saveState(); } catch(e){}
+    try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _notifyAdmin('ELIMINADO', colab, '');
+    try { window.renderPlanillaColaboradores(); } catch(e){}
+    showT('COLABORADOR ELIMINADO','green');
+  }
+
+  // ── APROBAR / RECHAZAR / VER SOLICITUDES
+  window.aprobarSolicitudColab = async function(solId){
+    if (!_esAdmin()){ showT('SOLO EL ADMIN PUEDE APROBAR','red'); return; }
+    const sol = _getSolicitudesCol().find(s => s.id === solId);
+    if (!sol || sol.estado !== 'PENDIENTE'){ showT('SOLICITUD NO ENCONTRADA O YA PROCESADA','red'); return; }
+    if (sol.tipo === 'ELIMINAR'){
+      _eliminarColabDirecto(sol.colaboradorId);
+    }
+    _marcarProcesadaCol(sol, 'APROBADA', null);
+    showT('SOLICITUD APROBADA · CAMBIO APLICADO','green');
+  };
+  window.rechazarSolicitudColab = async function(solId){
+    if (!_esAdmin()){ showT('SOLO EL ADMIN PUEDE RECHAZAR','red'); return; }
+    const sol = _getSolicitudesCol().find(s => s.id === solId);
+    if (!sol || sol.estado !== 'PENDIENTE'){ showT('SOLICITUD NO ENCONTRADA O YA PROCESADA','red'); return; }
+    const motivo = await window.prPrompt({ title:'RECHAZAR SOLICITUD', body:'Motivo del rechazo (opcional)', placeholder:'ej: Aún tiene historial importante', required:false });
+    if (motivo === null) return;
+    _marcarProcesadaCol(sol, 'RECHAZADA', motivo || '');
+    showT('SOLICITUD RECHAZADA','green');
+  };
+  window.verSolicitudesColabs = async function(){
+    const sols = _getSolicitudesCol();
+    const pendientes = sols.filter(s => s.estado === 'PENDIENTE');
+    const procesadas = sols.filter(s => s.estado !== 'PENDIENTE').sort((a,b) => (b.ts||0) - (a.ts||0)).slice(0, 20);
+    const esAdmin = _esAdmin();
+    let body = '';
+    body += '<div style="font-size:12px;color:#1F2937;line-height:1.5;margin-bottom:14px">'+(esAdmin ? 'Solicitudes de los supervisores para eliminar colaboradores. Revisá y aprobá o rechazá.' : 'Tus solicitudes pendientes e historial reciente.')+'</div>';
+    if (pendientes.length === 0){
+      body += '<div style="padding:20px;text-align:center;background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;color:#15803D;font-weight:700;margin-bottom:14px">NO HAY SOLICITUDES PENDIENTES</div>';
+    } else {
+      body += '<div style="border:1px solid #FCD34D;border-radius:8px;margin-bottom:14px;background:#FFFBEB"><div style="padding:10px 14px;font-size:11px;font-weight:700;color:#92400E;background:#FEF3C7;border-bottom:1px solid #FCD34D;letter-spacing:.6px;border-radius:8px 8px 0 0">PENDIENTES · '+pendientes.length+'</div><div style="padding:10px 14px">';
+      pendientes.forEach(s => {
+        const c = s.colaboradorSnapshot || {};
+        body += '<div data-sol-id="'+_h(s.id)+'" style="background:#fff;border:1px solid #FCD34D;border-radius:6px;padding:10px 12px;margin-bottom:8px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px"><span class="planilla-badge" style="background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;font-size:9px">ELIMINAR</span><div style="font-size:9.5px;color:#64748B">Solicitado por <strong>'+_h(s.solicitadoNombre || s.solicitadoPor || '—')+'</strong></div></div><div style="font-size:11px;color:#0F172A;font-weight:700">'+_h(c.nombre||'—')+'</div>'+(c.telefono?'<div style="font-size:10.5px;color:#475569">Tel: '+_h(c.telefono)+'</div>':'');
+        if (esAdmin){
+          body += '<div style="display:flex;gap:8px;margin-top:10px;justify-content:flex-end"><button class="btn ghost sm" data-action="rechazarSolCol" data-id="'+_h(s.id)+'" style="color:#DC2626;border-color:#FCA5A5;font-size:10px">RECHAZAR</button><button class="btn sm" data-action="aprobarSolCol" data-id="'+_h(s.id)+'" style="background:#15803D;border-color:#15803D;color:#fff;font-size:10px">APROBAR</button></div>';
+        }
+        body += '</div>';
+      });
+      body += '</div></div>';
+    }
+    if (procesadas.length > 0){
+      body += '<div style="border:1px solid #E2E8F0;border-radius:8px;background:#F8FAFC"><div style="padding:10px 14px;font-size:11px;font-weight:700;color:#475569;background:#F1F5F9;border-bottom:1px solid #E2E8F0;letter-spacing:.6px;border-radius:8px 8px 0 0">HISTORIAL · ÚLTIMAS '+procesadas.length+'</div><div style="padding:8px 14px">';
+      procesadas.forEach(s => {
+        const c = s.colaboradorSnapshot || {};
+        const estBadge = s.estado === 'APROBADA' ? '<span class="planilla-badge" style="background:#DCFCE7;color:#15803D;border:1px solid #86EFAC;font-size:8.5px">APROBADA</span>' : '<span class="planilla-badge" style="background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;font-size:8.5px">RECHAZADA</span>';
+        body += '<div style="padding:6px 0;border-bottom:1px solid #E2E8F0;font-size:10.5px;color:#475569;display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center"><div>'+estBadge+'</div><div>'+s.tipo+' · <strong>'+_h(c.nombre||'')+'</strong></div><div style="font-size:9.5px;color:#94A3B8">'+_h(s.procesadoNombre||s.procesadoPor||'—')+(s.motivoRechazo?' · "'+_h(s.motivoRechazo)+'"':'')+'</div></div>';
+      });
+      body += '</div></div>';
+    }
+    await window.prConfirm({ title:'SOLICITUDES DE COLABORADORES', bodyHTML: body, okText:'CERRAR', cancelText:'', wide:true });
+  };
+  // Handler delegado
+  if (!window._solColDelegateInstalled){
+    document.body.addEventListener('click', function(ev){
+      const apr = ev.target.closest && ev.target.closest('button[data-action="aprobarSolCol"]');
+      const rej = ev.target.closest && ev.target.closest('button[data-action="rechazarSolCol"]');
+      if (apr){ const id = apr.getAttribute('data-id'); if (id){ apr.disabled = true; apr.textContent = 'Aprobando...'; window.aprobarSolicitudColab(id).catch(()=>{}); const card = apr.closest('[data-sol-id]'); if (card){ card.style.opacity = '.5'; setTimeout(() => card.remove(), 300); } } }
+      if (rej){ const id = rej.getAttribute('data-id'); if (id) window.rechazarSolicitudColab(id).catch(()=>{}); }
+    });
+    window._solColDelegateInstalled = true;
+  }
+
+  // API expuesta para v391 (selectores en anticipos / pólizas)
+  window.getColaboradoresActivos = function(){
+    return _allColabs().slice().sort((a,b) => String(a.nombre||'').localeCompare(String(b.nombre||''), 'es', { sensitivity: 'base' }));
+  };
+
+  console.log('[v390] Colaboradores Fase 1 cargado · módulo de override activo');
 })();
 </script>
 
