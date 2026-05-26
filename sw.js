@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v392-fix-editar-colab-no-guardaba';
+const CACHE_VERSION = 'v393-busqueda-visual-sin-perder-foco';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
