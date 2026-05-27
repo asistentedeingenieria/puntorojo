@@ -2767,7 +2767,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v410</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v411</span>
   </footer>
 
 </div>
@@ -33034,6 +33034,141 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(btn){ btn.disabled = count === 0; btn.style.opacity = count===0?'.5':'1'; }
   };
 
+  // ════════════════════════════════════════════════════════════════
+  // v411: AUTO-APLICAR DESCUENTOS INLINE (sin dependencia de módulo externo)
+  // ────────────────────────────────────────────────────────────────
+  // Función SELF-CONTAINED que lee state directo. Se llama desde _v226Enviar,
+  // aprobarPlanilla y renderPlanillasArmadasBlock — todas en este mismo script.
+  // Replica la lógica del manual "+ AGREGAR DESCUENTO" para garantizar que
+  // funcione igual: el manual encuentra los descuentos, así que esto también.
+  //
+  // - PÓLIZAS: para cada colab, una línea agrupada con todas sus pólizas activas.
+  //   Si el colab ya tiene línea de PÓLIZA en este planilla, se reemplaza
+  //   (recalc en cada llamada). Sin cross-project dedup para evitar bugs.
+  //
+  // - ANTICIPOS: una línea por cada anticipo pendiente. Se cuenta pagadas via
+  //   inicial + count en TODAS las planillas no-rechazadas (mismo método que
+  //   el manual flow). Si pagadas >= total, se salta (anticipo cancelado).
+  //
+  // - Marca pl.autoDescuentos=true SOLO si el catálogo tiene datos (evita
+  //   marcado prematuro cuando state aún carga de Firestore).
+  // ════════════════════════════════════════════════════════════════
+  function _v411AplicarDescuentosInline(pl, p){
+    try {
+      if (!pl || !p) return { applied:0, reason:'no pl/p' };
+      if (!Array.isArray(pl.descuentosPlanilla)) pl.descuentosPlanilla = [];
+      const _s = (typeof state !== 'undefined') ? state : window.state;
+      if (!_s){ console.warn('[v411] state no disponible'); return { applied:0, reason:'no state' }; }
+      const _catalogoTieneData = (Array.isArray(_s.anticiposGlobales) && _s.anticiposGlobales.length > 0)
+                              || (Array.isArray(_s.polizasGlobales) && _s.polizasGlobales.length > 0);
+      if (!_catalogoTieneData){
+        console.warn('[v411] catálogo vacío al auto-aplicar planilla', pl.id, '— reintentará luego');
+        return { applied:0, reason:'catalogo vacio' };
+      }
+
+      const _normKey = s => String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+
+      // Recopilar colabs únicos de los pagos de esta planilla
+      const colabsMap = new Map();
+      (p.planilla && p.planilla.pagos || []).forEach(pg => {
+        if (!Array.isArray(pl.pagosIds) || !pl.pagosIds.includes(pg.id)) return;
+        const nombre = String(pg.colaborador||'').trim();
+        if (!nombre) return;
+        const key = _normKey(nombre);
+        if (!key || key.replace(/[\s\-_]/g,'') === 'PREAPP') return;
+        if (!colabsMap.has(key)) colabsMap.set(key, { nombre, key, colaboradorId: pg.colaboradorId || '' });
+      });
+      console.log('[v411] colabs en planilla', pl.id, ':', [...colabsMap.values()].map(c => c.nombre));
+
+      // Limpiar los auto-aplicados previos (los vamos a recrear)
+      pl.descuentosPlanilla = pl.descuentosPlanilla.filter(d => !d.autoAplicado);
+
+      const ahora = (typeof nowStr === 'function') ? nowStr() : new Date().toISOString();
+      const montoUnitPoliza = (_s.polizasConfig && typeof _s.polizasConfig.montoDefault === 'number') ? _s.polizasConfig.montoDefault : 44.95;
+      let applied = 0;
+
+      colabsMap.forEach(c => {
+        // PÓLIZAS activas (estatus ACTIVA o EN PROCESO) donde el colab es A CARGO DE
+        const polizas = (_s.polizasGlobales||[]).filter(po => {
+          if (po.estatus !== 'ACTIVA' && po.estatus !== 'EN PROCESO') return false;
+          return _normKey(po.aCargoDeNombre) === c.key;
+        });
+        if (polizas.length > 0){
+          const montoTotal = +(polizas.length * montoUnitPoliza).toFixed(2);
+          const desc = polizas.length === 1
+            ? 'PÓLIZA SEGURO · ' + (polizas[0].aseguradoNombre || '')
+            : 'PÓLIZAS · ' + polizas.length + ' ACTIVAS';
+          pl.descuentosPlanilla.push({
+            id: 'desc-' + Date.now() + '-' + Math.random().toString(36).slice(2,8),
+            subtipo: 'POLIZA',
+            desc: desc,
+            monto: montoTotal,
+            colaboradorNombre: c.nombre,
+            colaboradorId: c.colaboradorId,
+            polizaIds: polizas.map(po => po.id),
+            polizasCount: polizas.length,
+            ts: ahora,
+            autor: 'sistema',
+            autorNombre: 'AUTO v411',
+            autoAplicado: true,
+            bloqueado: true
+          });
+          applied++;
+        }
+
+        // ANTICIPOS pendientes (calc pagadas igual que el manual flow)
+        const anticipos = (_s.anticiposGlobales||[]).filter(a => _normKey(a.colaboradorNombre) === c.key);
+        anticipos.forEach(a => {
+          const inicial = Number(a.cuotasPagadasInicial)||0;
+          const total = Number(a.cantidadCuotas)||1;
+          let aplicadas = 0;
+          (_s.projects||[]).forEach(pr => {
+            (pr.planilla && pr.planilla.planillasArmadas || []).forEach(plx => {
+              if (plx.id === pl.id) return; // no contar la planilla actual
+              if (plx.estado === 'rechazada') return;
+              (plx.descuentosPlanilla||[]).forEach(d => { if (d.anticipoId === a.id) aplicadas++; });
+            });
+          });
+          const pagadas = inicial + aplicadas;
+          if (pagadas >= total) return; // anticipo ya cancelado
+          const cuotaActual = pagadas + 1;
+          const montoCuota = Number(a.montoTotal)/total;
+          pl.descuentosPlanilla.push({
+            id: 'desc-' + Date.now() + '-' + Math.random().toString(36).slice(2,8),
+            subtipo: a.subtipo || 'PRESTAMO_PERSONAL',
+            desc: (a.desc||'ANTICIPO').toUpperCase(),
+            monto: +(montoCuota).toFixed(2),
+            cuotaActual,
+            cuotasTotales: total,
+            colaboradorNombre: c.nombre,
+            colaboradorId: c.colaboradorId,
+            anticipoId: a.id,
+            ts: ahora,
+            autor: 'sistema',
+            autorNombre: 'AUTO v411',
+            autoAplicado: true,
+            bloqueado: false
+          });
+          applied++;
+        });
+      });
+
+      pl.autoDescuentos = true;
+      pl.autoDescuentosTs = ahora;
+      pl.autoDescuentosVersion = 411;
+      pl.autoDescuentosApplied = applied;
+      pl.autoDescuentosSkipped = 0;  // v411 no hace cross-project dedup
+      pl.autoDescuentosDetalle = [];
+      console.log('[v411] applied', applied, 'descuentos a planilla', pl.id);
+      return { applied };
+    } catch(e){
+      console.error('[v411] error:', e);
+      return { applied:0, reason:'exception', error: String(e) };
+    }
+  }
+  // Exponer en window para que otras partes del código puedan llamarlo si necesitan
+  window._v411AplicarDescuentosInline = _v411AplicarDescuentosInline;
+
   window._v226Enviar = async function(){
     const p = _activeProj();
     if(!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
@@ -33099,21 +33234,16 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     // planilla parte de una nueva apertura del modal.
     try { delete window._v226PlanillaIniciadaTs; } catch(e){}
 
-    // v404/v406: AUTO-APLICAR DESCUENTOS (pólizas + anticipos) al enviar al gerente.
-    // El gerente recibe la planilla con todos los descuentos ya cargados.
+    // v411: AUTO-APLICAR DESCUENTOS INLINE (sin módulo externo, self-contained).
     try {
-      if (typeof window._v404AutoAplicarDescuentos === 'function'){
-        const res = window._v404AutoAplicarDescuentos(planilla, p);
-        console.log('[v404] auto-aplicados en envío:', res);
-        // v406: feedback visible al supervisor de cuántos descuentos se aplicaron
-        if (res && (res.applied > 0 || res.skipped > 0)){
-          const msg = 'DESCUENTOS AUTO-APLICADOS: '+res.applied+(res.skipped>0?' · '+res.skipped+' SALTADOS (DUP. QUINCENA)':'');
-          setTimeout(() => { try { showT(msg, 'green'); } catch(e){} }, 1500);
-        }
-      } else {
-        console.warn('[v406] _v404AutoAplicarDescuentos NO está disponible — la planilla se envió sin auto-aplicar. El gerente debe usar APLICAR DESCUENTOS AUTOMÁTICOS desde el detalle.');
+      const r411 = _v411AplicarDescuentosInline(planilla, p);
+      console.log('[v411] auto-aplicados en envío:', r411);
+      if (r411 && r411.applied > 0){
+        setTimeout(() => { try { showT('DESCUENTOS AUTO-APLICADOS: '+r411.applied, 'green'); } catch(e){} }, 1500);
+      } else if (r411 && r411.reason === 'catalogo vacio'){
+        console.warn('[v411] catálogo no cargó a tiempo, descuentos se aplicarán en próximo render');
       }
-    } catch(e){ console.error('[v404] error auto-aplicando:', e); }
+    } catch(e){ console.error('[v411] error auto-aplicando en envío:', e); }
 
     try { if(typeof saveState === 'function') saveState(); } catch(e){ console.error('[v226] saveState error:', e); }
     // v291/v296: notif al Gerente de Proyectos ANTES de subir (para que vaya en el mismo upload).
@@ -33169,16 +33299,13 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
     if(pl.estado !== 'pendiente_pm'){ showT('SOLO PLANILLAS PENDIENTES SE PUEDEN APROBAR','red'); return; }
 
-    // v406: last-chance. Si la planilla NO tiene autoDescuentos (porque se creó
-    // antes del deploy de v404 o el hook falló), lo intentamos ahora antes de
-    // decidir el flujo. Así el gerente siempre ve los descuentos al autorizar.
-    if (!pl.autoDescuentos){
+    // v411: last-chance INLINE. Si la planilla no tiene autoDescuentos con version >= 411,
+    // lo intentamos ahora antes de decidir el flujo.
+    if (!pl.autoDescuentos || Number(pl.autoDescuentosVersion||0) < 411){
       try {
-        if (typeof window._v404AutoAplicarDescuentos === 'function'){
-          const r2 = window._v404AutoAplicarDescuentos(pl, p);
-          console.log('[v406] last-chance auto-apply al autorizar:', r2);
-        }
-      } catch(e){ console.error('[v406] last-chance auto-apply error:', e); }
+        const r411 = _v411AplicarDescuentosInline(pl, p);
+        console.log('[v411] last-chance al autorizar:', r411);
+      } catch(e){ console.error('[v411] last-chance error:', e); }
     }
     // v404: si la planilla tiene descuentos auto-aplicados, el flujo nuevo es:
     //   pendiente_pm → APROBADA directamente (skip aprobada_inicial + descuentos stage).
@@ -35023,34 +35150,25 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     try {
       const _autoApplyAllowed = (typeof can === 'function')
         && (can('users.manage') || can('planilla.authorize') || can('planilla.generate') || can('planilla.descuentos'));
-      if (_autoApplyAllowed && typeof window._v404AutoAplicarDescuentos === 'function'){
+      if (_autoApplyAllowed){
         let _appliedAny = false;
-        const AUTO_VERSION = 410;  // v410: bump después del fix de marcado prematuro
+        const AUTO_VERSION = 411;
         arr.forEach(pl => {
           if (pl.estado !== 'pendiente_pm' && pl.estado !== 'aprobada_inicial') return;
           const versionAplicada = Number(pl.autoDescuentosVersion) || 0;
-          const yaAplicadoNuevaVersion = (pl.autoDescuentos === true && versionAplicada >= AUTO_VERSION);
-          if (yaAplicadoNuevaVersion) return;
-          // Si tenemos auto-aplicados de versión vieja, limpiarlos antes de re-correr
-          if (pl.autoDescuentos === true && versionAplicada < AUTO_VERSION){
-            pl.descuentosPlanilla = (pl.descuentosPlanilla || []).filter(d => !d.autoAplicado);
-            pl.autoDescuentos = false;
-            pl.autoDescuentosVersion = 0;
-          }
+          if (pl.autoDescuentos === true && versionAplicada >= AUTO_VERSION) return;
           try {
-            const r = window._v404AutoAplicarDescuentos(pl, p);
-            if (r && (r.applied > 0 || r.skipped >= 0)) _appliedAny = true;
-            console.log('[v410] auto-apply on render — planilla', pl.id, '·', r);
-          } catch(e){ console.warn('[v410] auto-apply error:', e); }
+            const r = _v411AplicarDescuentosInline(pl, p);
+            if (r && r.applied > 0) _appliedAny = true;
+            console.log('[v411] auto-apply on render — planilla', pl.id, '·', r);
+          } catch(e){ console.warn('[v411] auto-apply on render error:', e); }
         });
         if (_appliedAny){
           try { if (typeof saveState === 'function') saveState(); } catch(e){}
           try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
         }
-      } else if (!window._v404AutoAplicarDescuentos){
-        console.warn('[v407] _v404AutoAplicarDescuentos no está cargado — recargá la página (Ctrl+Shift+R)');
       }
-    } catch(e){ console.warn('[v407] bloque auto-apply on render error:', e); }
+    } catch(e){ console.warn('[v411] bloque auto-apply on render error:', e); }
 
     const isSup = window.isSupervisorPlanilla();
     const isPM = window.isPMPlanilla();
@@ -39986,12 +40104,16 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     pl.autoDescuentos = false;
     delete pl.autoDescuentosTs;
     delete pl.autoDescuentosQuincena;
-    // Aplicar de nuevo
-    if (typeof window._v404AutoAplicarDescuentos !== 'function'){
-      try { showT('ERROR: módulo v404 no cargado · recargá la página','red'); } catch(e){}
+    // v411: usar el INLINE primero (más confiable). Si no existe, fallback al módulo v404.
+    let res;
+    if (typeof window._v411AplicarDescuentosInline === 'function'){
+      res = window._v411AplicarDescuentosInline(pl, p);
+    } else if (typeof window._v404AutoAplicarDescuentos === 'function'){
+      res = window._v404AutoAplicarDescuentos(pl, p);
+    } else {
+      try { showT('ERROR: módulos de auto-descuentos no cargados · recargá la página','red'); } catch(e){}
       return;
     }
-    const res = window._v404AutoAplicarDescuentos(pl, p);
     try { if (typeof saveState === 'function') saveState(); } catch(e){}
     try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
     try { if (typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
@@ -39999,7 +40121,6 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       await window.prAlert({
         title: '✓ DESCUENTOS APLICADOS',
         body: 'Se aplicaron ' + res.applied + ' descuento(s) automáticamente.'
-          + (res.skipped > 0 ? '\n\n' + res.skipped + ' fueron saltados (ya están aplicados a esa persona en otra planilla de la misma quincena).' : '')
       });
     } else {
       try { showT(res.applied + ' DESCUENTOS APLICADOS','green'); } catch(e){}
