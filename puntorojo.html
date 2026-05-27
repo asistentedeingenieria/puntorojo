@@ -2767,7 +2767,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v405</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v406</span>
   </footer>
 
 </div>
@@ -33064,14 +33064,21 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     // planilla parte de una nueva apertura del modal.
     try { delete window._v226PlanillaIniciadaTs; } catch(e){}
 
-    // v404: AUTO-APLICAR DESCUENTOS (pólizas + anticipos) al enviar al gerente.
+    // v404/v406: AUTO-APLICAR DESCUENTOS (pólizas + anticipos) al enviar al gerente.
     // El gerente recibe la planilla con todos los descuentos ya cargados.
     try {
       if (typeof window._v404AutoAplicarDescuentos === 'function'){
         const res = window._v404AutoAplicarDescuentos(planilla, p);
         console.log('[v404] auto-aplicados en envío:', res);
+        // v406: feedback visible al supervisor de cuántos descuentos se aplicaron
+        if (res && (res.applied > 0 || res.skipped > 0)){
+          const msg = 'DESCUENTOS AUTO-APLICADOS: '+res.applied+(res.skipped>0?' · '+res.skipped+' SALTADOS (DUP. QUINCENA)':'');
+          setTimeout(() => { try { showT(msg, 'green'); } catch(e){} }, 1500);
+        }
+      } else {
+        console.warn('[v406] _v404AutoAplicarDescuentos NO está disponible — la planilla se envió sin auto-aplicar. El gerente debe usar APLICAR DESCUENTOS AUTOMÁTICOS desde el detalle.');
       }
-    } catch(e){ console.warn('[v404] error auto-aplicando:', e); }
+    } catch(e){ console.error('[v404] error auto-aplicando:', e); }
 
     try { if(typeof saveState === 'function') saveState(); } catch(e){ console.error('[v226] saveState error:', e); }
     // v291/v296: notif al Gerente de Proyectos ANTES de subir (para que vaya en el mismo upload).
@@ -33127,6 +33134,17 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
     if(pl.estado !== 'pendiente_pm'){ showT('SOLO PLANILLAS PENDIENTES SE PUEDEN APROBAR','red'); return; }
 
+    // v406: last-chance. Si la planilla NO tiene autoDescuentos (porque se creó
+    // antes del deploy de v404 o el hook falló), lo intentamos ahora antes de
+    // decidir el flujo. Así el gerente siempre ve los descuentos al autorizar.
+    if (!pl.autoDescuentos){
+      try {
+        if (typeof window._v404AutoAplicarDescuentos === 'function'){
+          const r2 = window._v404AutoAplicarDescuentos(pl, p);
+          console.log('[v406] last-chance auto-apply al autorizar:', r2);
+        }
+      } catch(e){ console.error('[v406] last-chance auto-apply error:', e); }
+    }
     // v404: si la planilla tiene descuentos auto-aplicados, el flujo nuevo es:
     //   pendiente_pm → APROBADA directamente (skip aprobada_inicial + descuentos stage).
     // El gerente ya vio + ajustó los descuentos antes de autorizar.
@@ -35149,6 +35167,15 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         h2 += '</div>';
       }
       h2 += '<div style="padding:10px 14px;border-top:1px dashed '+colorBorde+';display:flex;flex-wrap:wrap;gap:8px;background:rgba(255,255,255,.4)">';
+      // v406: botón APLICAR DESCUENTOS AUTOMÁTICOS para recuperar planillas viejas
+      // o re-calcular si se agregaron anticipos/pólizas nuevos al catálogo.
+      // Visible para admin y gerente cuando la planilla aún se puede modificar.
+      if ((pl.estado === 'pendiente_pm' || pl.estado === 'aprobada_inicial') && (isPM || isAdmin)){
+        const yaAuto = (pl.descuentosPlanilla||[]).some(d => d.autoAplicado);
+        const btnLabel = yaAuto ? 'RECALCULAR DESCUENTOS AUTO' : 'APLICAR DESCUENTOS AUTOMÁTICOS';
+        const btnTitle = yaAuto ? 'Re-calcular los descuentos automáticos de esta planilla' : 'Aplicar pólizas + anticipos pendientes que correspondan a esta quincena';
+        h2 += '<button class="btn ghost" style="border-color:#7B1FA2;color:#7B1FA2" onclick="window._v406ReAplicarDescuentos(\''+esc(pl.id)+'\')" title="'+esc(btnTitle)+'">'+esc(btnLabel)+'</button>';
+      }
       // v282: primera aprobacion del gerente — envia a descuentos.
       if(pl.estado === 'pendiente_pm' && (isPM || isAdmin)){
         h2 += '<button class="btn" style="background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.aprobarPlanilla(\''+esc(pl.id)+'\')">AUTORIZAR Y ENVIAR A DESCUENTOS</button>';
@@ -39790,6 +39817,63 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
     console.log('[v404] Auto-aplicados '+applied+', saltados '+skipped+' para planilla '+pl.id);
     return { applied, skipped };
+  };
+
+  // ── v406: re-aplicar descuentos automáticos a una planilla existente
+  // Útil para planillas que se crearon antes del deploy de v404 o donde el
+  // hook falló por alguna razón. Solo admin o gerente pueden ejecutar.
+  // Quita los descuentos auto-aplicados previos (mantiene los manuales) y
+  // los recalcula desde cero usando _v404AutoAplicarDescuentos.
+  window._v406ReAplicarDescuentos = async function(planillaId){
+    const _can = (typeof can === 'function') ? can : (()=>true);
+    if (!_can('users.manage') && !_can('planilla.authorize')){
+      try { if (typeof showT === 'function') showT('SOLO ADMIN O GERENTE','red'); } catch(e){}
+      return;
+    }
+    const p = (typeof activeProj === 'function') ? activeProj() : null;
+    if (!p){ try { showT('SIN PROYECTO ACTIVO','red'); } catch(e){} return; }
+    const pl = (p.planilla && p.planilla.planillasArmadas || []).find(x => x.id === planillaId);
+    if (!pl){ try { showT('PLANILLA NO ENCONTRADA','red'); } catch(e){} return; }
+    if (pl.estado !== 'pendiente_pm' && pl.estado !== 'aprobada_inicial' && pl.estado !== 'pendiente_pm_final'){
+      try { showT('SOLO SE PUEDE EN PLANILLAS NO FINALIZADAS','red'); } catch(e){}
+      return;
+    }
+    // Pedir confirmación
+    if (typeof window.prConfirm === 'function'){
+      const yaAuto = (pl.descuentosPlanilla||[]).filter(d => d.autoAplicado).length;
+      const yaManual = (pl.descuentosPlanilla||[]).filter(d => !d.autoAplicado).length;
+      const ok = await window.prConfirm({
+        title: 'APLICAR DESCUENTOS AUTOMÁTICOS',
+        bodyHTML: '<div style="font-size:12.5px;color:#333;line-height:1.5">El sistema va a calcular y aplicar todos los descuentos pendientes (pólizas + anticipos) para los colaboradores de esta planilla, respetando la deduplicación cross-project por quincena.</div>'
+          + (yaAuto > 0 ? '<div style="margin-top:10px;padding:8px 10px;background:#FFF3E0;border:1px solid #FFCC80;border-radius:4px;color:#9A3412;font-size:11.5px">'+yaAuto+' descuento(s) auto-aplicados anteriormente van a ser <strong>reemplazados</strong> por los nuevos calculados.</div>' : '')
+          + (yaManual > 0 ? '<div style="margin-top:8px;padding:8px 10px;background:#E3F2FD;border:1px solid #90CAF9;border-radius:4px;color:#0D47A1;font-size:11.5px">'+yaManual+' descuento(s) MANUALES se preservan intactos.</div>' : ''),
+        okText: 'APLICAR DESCUENTOS AUTO'
+      });
+      if (!ok) return;
+    }
+    // Conservar los manuales, eliminar los auto-aplicados previos
+    pl.descuentosPlanilla = (pl.descuentosPlanilla || []).filter(d => !d.autoAplicado);
+    pl.autoDescuentos = false;
+    delete pl.autoDescuentosTs;
+    delete pl.autoDescuentosQuincena;
+    // Aplicar de nuevo
+    if (typeof window._v404AutoAplicarDescuentos !== 'function'){
+      try { showT('ERROR: módulo v404 no cargado · recargá la página','red'); } catch(e){}
+      return;
+    }
+    const res = window._v404AutoAplicarDescuentos(pl, p);
+    try { if (typeof saveState === 'function') saveState(); } catch(e){}
+    try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    try { if (typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+    if (typeof window.prAlert === 'function'){
+      await window.prAlert({
+        title: '✓ DESCUENTOS APLICADOS',
+        body: 'Se aplicaron ' + res.applied + ' descuento(s) automáticamente.'
+          + (res.skipped > 0 ? '\n\n' + res.skipped + ' fueron saltados (ya están aplicados a esa persona en otra planilla de la misma quincena).' : '')
+      });
+    } else {
+      try { showT(res.applied + ' DESCUENTOS APLICADOS','green'); } catch(e){}
+    }
   };
 
   // ── HELPER PARA UI: ¿este descuento se puede eliminar por el usuario actual?
