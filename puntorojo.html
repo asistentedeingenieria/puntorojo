@@ -2767,7 +2767,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v402</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v403</span>
   </footer>
 
 </div>
@@ -38510,12 +38510,118 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     return orden.map(k => grupos[k]);
   }
 
-  // ── RENDER (v402: agrupado por OC#) ───────────────────────────
+  // ── v403: helpers para PLANILLAS OC ARMADAS ─────────────────
+  function _getPlanillasOC(p){
+    p = p || _activeProj();
+    if (!p) return [];
+    if (!p.planilla) p.planilla = {};
+    if (!Array.isArray(p.planilla.planillasArmadasOC)) p.planilla.planillasArmadasOC = [];
+    return p.planilla.planillasArmadasOC;
+  }
+  function _calcItemTotal(it){ return (Number(it.cantidad)||0) * (Number(it.factor)||1) * (Number(it.precio)||0); }
+  function _calcPlanillaTotal(pl){ return (pl.items||[]).reduce((s,it) => s + _calcItemTotal(it), 0); }
+  function _calcPorTorre(pl){
+    const totales = {};
+    (pl.items||[]).forEach(it => {
+      const t = (it.ubicacion && it.ubicacion.torre) || 'SIN TORRE';
+      totales[t] = (totales[t] || 0) + _calcItemTotal(it);
+    });
+    return totales;
+  }
+  function _ubicacionStr(u){
+    if (!u) return '—';
+    if (u.modo === 'apto'){
+      const partes = ['TORRE '+(u.torre||'?'), 'APTO '+(u.numeroApto||'?')+(u.tipoApto?'-TIPO '+u.tipoApto:'')];
+      return partes.join(' · ');
+    }
+    if (u.modo === 'nivel'){
+      const partes = ['NIVEL '+(u.nivel||'?'), 'TORRE '+(u.torre||'?'), 'TIPO '+(u.tipoApto||'?')];
+      return partes.join(' · ');
+    }
+    return '—';
+  }
+  // Helper: estructura del proyecto leyendo de los datos existentes (con fallbacks)
+  function _getEstructuraProyecto(p){
+    p = p || _activeProj();
+    if (!p) return { torres:['A','B'], nivelesMax:10, tiposApto:[], aptos:[] };
+    // Leer de p.planilla.estructura si existe, sino auto-detectar
+    if (p.planilla && p.planilla.estructura) return p.planilla.estructura;
+    // Auto-detectar desde modelos y aptos
+    const tiposApto = (p.planilla && Array.isArray(p.planilla.modelos)) ? p.planilla.modelos.map(m => String(m.tipo||m.nombre||'').toUpperCase()).filter(Boolean) : [];
+    const tiposUnicos = [...new Set(tiposApto)];
+    // Detectar torres de los aptos existentes (si hay)
+    const torresSet = new Set();
+    const nivelesSet = new Set();
+    const aptosArr = [];
+    if (Array.isArray(p.aptos)){
+      p.aptos.forEach(a => {
+        // Heurística: extraer torre/nivel del nombre del apto si está en formato "TORRE X - APTO YYY"
+        const nombre = String(a.nombre || a.id || '');
+        const m = nombre.match(/TORRE\s+([A-Z])/i);
+        if (m) torresSet.add(m[1].toUpperCase());
+        const mn = nombre.match(/(\d{2,4})/);
+        if (mn){
+          const n = parseInt(mn[1],10);
+          if (n > 0 && n < 9999){
+            const nivel = Math.floor(n/100);
+            if (nivel > 0 && nivel < 50) nivelesSet.add(nivel);
+            aptosArr.push({ torre: m?m[1].toUpperCase():'', nivel, numero: mn[1], tipo: a.tipo || a.modelo || '' });
+          }
+        }
+      });
+    }
+    return {
+      torres: torresSet.size ? [...torresSet].sort() : ['A','B'],
+      nivelesMax: nivelesSet.size ? Math.max(...nivelesSet) : 10,
+      tiposApto: tiposUnicos.length ? tiposUnicos : ['A','B','C','D','J'],
+      aptos: aptosArr
+    };
+  }
+
+  // ── v403: tabs internos del módulo OC (catálogo / planillas armadas)
+  window._ocSubTab = window._ocSubTab || 'catalogo';
+  window.setOCSubTab = function(t){
+    window._ocSubTab = t;
+    // Si estábamos en el constructor y cambiás de tab, lo cerramos
+    if (t !== 'planillas') window._ocConstructorActivo = null;
+    window.renderPlanillaOCs();
+  };
+
+  // ── RENDER (v402: agrupado por OC#; v403: con sub-tabs y planillas OC) ───────
   window.renderPlanillaOCs = function(){
     const cont = document.getElementById('planilla-ocs');
     if (!cont) return;
     const p = _activeProj();
     if (!p) { cont.innerHTML = '<div class="card" style="padding:20px;color:var(--mute)">SELECCIONÁ UN PROYECTO PARA VER SUS ÓRDENES DE CAMBIO.</div>'; return; }
+
+    const sub = window._ocSubTab || 'catalogo';
+    // v403: si el constructor está activo, renderizar el constructor (no las sub-tabs)
+    if (window._ocConstructorActivo){
+      cont.innerHTML = _renderConstructorOC(window._ocConstructorActivo);
+      _bindConstructorOC();
+      return;
+    }
+
+    // Render sub-tabs
+    let html = '';
+    html += '<div style="display:flex;gap:0;border-bottom:1px solid var(--line);background:#fff;margin-bottom:10px">';
+    html += '<button onclick="window.setOCSubTab(\'catalogo\')" style="flex:0 0 auto;padding:11px 18px;border:none;background:transparent;font:inherit;font-size:11px;letter-spacing:1px;font-weight:700;color:'+(sub==='catalogo'?'#7B1FA2':'#94A3B8')+';border-bottom:2px solid '+(sub==='catalogo'?'#7B1FA2':'transparent')+';cursor:pointer">CATÁLOGO DE OC</button>';
+    html += '<button onclick="window.setOCSubTab(\'planillas\')" style="flex:0 0 auto;padding:11px 18px;border:none;background:transparent;font:inherit;font-size:11px;letter-spacing:1px;font-weight:700;color:'+(sub==='planillas'?'#7B1FA2':'#94A3B8')+';border-bottom:2px solid '+(sub==='planillas'?'#7B1FA2':'transparent')+';cursor:pointer">PLANILLAS OC</button>';
+    html += '</div>';
+
+    if (sub === 'planillas'){
+      html += _renderListaPlanillasOC(p);
+      cont.innerHTML = html;
+      return;
+    }
+
+    // Sub-tab CATÁLOGO (default) — código original
+    cont.innerHTML = html;
+    cont.insertAdjacentHTML('beforeend', _renderCatalogoOC(p));
+  };
+
+  // Renombro el contenido viejo del catálogo a una función dedicada
+  function _renderCatalogoOC(p){
     const ocs = _getOCs(p);
     const puedeEditar = _puedeEditar();
 
@@ -38636,7 +38742,432 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       });
     }
     html += '</div>';
-    cont.innerHTML = html;
+    return html;
+  }
+  // ↑ fin _renderCatalogoOC (v403)
+
+  // ════════════════════════════════════════════════════════════════
+  // v403: LISTA DE PLANILLAS OC ARMADAS
+  // ════════════════════════════════════════════════════════════════
+  function _renderListaPlanillasOC(p){
+    const planillas = _getPlanillasOC(p);
+    const puedeEditar = _puedeEditar();
+    const filtroEstado = window._ocPlFiltroEstado || 'todas';
+    const filas = planillas.filter(pl => filtroEstado === 'todas' || pl.estado === filtroEstado)
+      .sort((a,b) => (b.creadoTs||0) - (a.creadoTs||0));
+    const cBorrador = planillas.filter(x => x.estado === 'borrador').length;
+    const cEnviada = planillas.filter(x => x.estado === 'enviada').length;
+    const cAprobada = planillas.filter(x => x.estado === 'aprobada').length;
+    const totalAprobado = planillas.filter(x => x.estado === 'aprobada').reduce((s,pl) => s + _calcPlanillaTotal(pl), 0);
+
+    let html = '';
+    html += '<div class="card"><div class="card-hd"><h3>PLANILLAS DE ÓRDENES DE CAMBIO</h3>';
+    html += '<span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Planillas armadas con OCs · '+_h(p.name||'')+'</span>';
+    if (puedeEditar){
+      html += '<button class="btn sm" style="background:#7B1FA2;border-color:#7B1FA2;color:#fff" onclick="window.armarNuevaPlanillaOC()">+ ARMAR NUEVA PLANILLA OC</button>';
+    }
+    html += '</div>';
+
+    // KPIs
+    html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:14px 16px;background:var(--cream);border-bottom:1px solid var(--line)">';
+    html += '<div style="background:#fff;border:1px solid #E0E0E0;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">BORRADORES</div><div style="font-size:18px;font-weight:800;color:#94A3B8;margin-top:3px">'+cBorrador+'</div></div>';
+    html += '<div style="background:#fff;border:1px solid #FFCC80;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">ENVIADAS</div><div style="font-size:18px;font-weight:800;color:#F57C00;margin-top:3px">'+cEnviada+'</div></div>';
+    html += '<div style="background:#fff;border:1px solid #86EFAC;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">APROBADAS</div><div style="font-size:18px;font-weight:800;color:#15803D;margin-top:3px">'+cAprobada+'</div></div>';
+    html += '<div style="background:#fff;border:1px solid #E1BEE7;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">TOTAL APROBADO</div><div style="font-size:15px;font-weight:800;color:#7B1FA2;margin-top:3px">'+_money(totalAprobado)+'</div></div>';
+    html += '</div>';
+
+    // Filtro
+    html += '<div style="display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line)">';
+    html += '<label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700">ESTADO</label>';
+    html += '<select onchange="window._ocPlFiltroEstado=this.value; window.renderPlanillaOCs()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px">';
+    ['todas','borrador','enviada','aprobada','rechazada'].forEach(e => {
+      html += '<option value="'+e+'"'+(e===filtroEstado?' selected':'')+'>'+e.toUpperCase()+'</option>';
+    });
+    html += '</select></div>';
+
+    // Tabla
+    if (filas.length === 0){
+      html += '<div class="empty" style="padding:40px;text-align:center;color:var(--mute);font-size:11px;letter-spacing:1px">SIN PLANILLAS OC TODAVÍA · ARMÁ LA PRIMERA CON + ARMAR NUEVA PLANILLA OC</div>';
+    } else {
+      html += '<div class="tbl-wrap"><table class="tbl"><thead><tr>';
+      html += '<th style="width:40px;text-align:center">#</th>';
+      html += '<th>TRABAJADOR</th>';
+      html += '<th style="width:120px">FECHA</th>';
+      html += '<th style="width:100px;text-align:center">ITEMS</th>';
+      html += '<th class="num" style="width:140px">TOTAL Q</th>';
+      html += '<th style="width:110px">ESTADO</th>';
+      if (puedeEditar) html += '<th style="width:180px"></th>';
+      html += '</tr></thead><tbody>';
+      filas.forEach((pl, idx) => {
+        const total = _calcPlanillaTotal(pl);
+        const estadoColors = { borrador:{bg:'#F1F5F9',fg:'#475569',br:'#CBD5E1'}, enviada:{bg:'#FEF3C7',fg:'#92400E',br:'#FCD34D'}, aprobada:{bg:'#DCFCE7',fg:'#15803D',br:'#86EFAC'}, rechazada:{bg:'#FEE2E2',fg:'#991B1B',br:'#FCA5A5'} };
+        const ec = estadoColors[pl.estado] || estadoColors.borrador;
+        const fechaTxt = pl.fecha ? new Date(pl.fecha).toLocaleDateString('es-GT') : '—';
+        html += '<tr>';
+        html += '<td style="text-align:center;font-size:10px;font-weight:700;color:#94A3B8">'+(idx+1)+'</td>';
+        html += '<td style="font-size:11.5px;font-weight:700;color:#0F172A">'+_h(pl.colaboradorNombre||'—')+'</td>';
+        html += '<td style="font-size:11px;color:#475569">'+_h(fechaTxt)+'</td>';
+        html += '<td style="text-align:center;font-size:11px;font-weight:600;color:#475569">'+((pl.items||[]).length)+'</td>';
+        html += '<td class="num" style="font-weight:800;color:#0F172A">'+_money(total)+'</td>';
+        html += '<td><span class="planilla-badge" style="background:'+ec.bg+';color:'+ec.fg+';border:1px solid '+ec.br+'">'+pl.estado.toUpperCase()+'</span></td>';
+        if (puedeEditar){
+          html += '<td style="white-space:nowrap">';
+          html += '<button class="btn ghost sm" style="font-size:9.5px" onclick="window.editarPlanillaOC(\''+_h(pl.id)+'\')">VER / EDITAR</button> ';
+          html += '<button class="btn ghost sm" style="font-size:9.5px;color:var(--red)" onclick="window.eliminarPlanillaOC(\''+_h(pl.id)+'\')">✕</button>';
+          html += '</td>';
+        }
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // v403: CONSTRUCTOR DE PLANILLA OC
+  // ════════════════════════════════════════════════════════════════
+  window.armarNuevaPlanillaOC = function(){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const p = _activeProj();
+    if (!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    // Crear borrador en memoria (no se guarda hasta que el usuario apriete GUARDAR)
+    window._ocConstructorActivo = {
+      id: 'opa-' + Date.now() + '-' + Math.random().toString(36).slice(2,8),
+      colaboradorId: '',
+      colaboradorNombre: '',
+      fecha: new Date().toISOString().slice(0,10),
+      estado: 'borrador',
+      creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''),
+      creadoTs: Date.now(),
+      items: [],
+      __nuevo: true  // flag temporal: no existe aún en el storage
+    };
+    window.renderPlanillaOCs();
+  };
+
+  window.editarPlanillaOC = function(planillaId){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const pl = _getPlanillasOC().find(x => x.id === planillaId);
+    if (!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
+    // Clonar para edición (cambios viven en memoria hasta guardar)
+    window._ocConstructorActivo = JSON.parse(JSON.stringify(pl));
+    window.renderPlanillaOCs();
+  };
+
+  window.eliminarPlanillaOC = async function(planillaId){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const planillas = _getPlanillasOC();
+    const idx = planillas.findIndex(x => x.id === planillaId);
+    if (idx < 0) { showT('PLANILLA NO ENCONTRADA','red'); return; }
+    const pl = planillas[idx];
+    const ok = await window.prConfirm({
+      title: 'Eliminar planilla OC',
+      bodyHTML: '<div style="font-size:12.5px;color:#333"><div><strong>'+_h(pl.colaboradorNombre||'—')+'</strong></div><div style="margin-top:4px;color:#666;font-size:11px">'+(pl.items||[]).length+' ITEMS · '+_money(_calcPlanillaTotal(pl))+' · estado '+pl.estado.toUpperCase()+'</div></div><div style="margin-top:14px;padding:10px 12px;background:#FEE2E2;border:1px solid #FCA5A5;border-radius:6px;color:#991B1B;font-size:11.5px">La planilla y sus items se eliminan. Si estaba aprobada, los pagos asociados también se borran en una futura versión.</div>',
+      okText: 'ELIMINAR', danger: true
+    });
+    if (!ok) return;
+    planillas.splice(idx, 1);
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    window.renderPlanillaOCs();
+    showT('PLANILLA OC ELIMINADA','green');
+  };
+
+  // Renderiza el constructor (reemplaza el contenido del sub-tab cuando _ocConstructorActivo está seteado)
+  function _renderConstructorOC(pl){
+    const p = _activeProj();
+    const colabs = (typeof window._allColabsGlobalForOC === 'function') ? window._allColabsGlobalForOC() : ((p && p.planilla && Array.isArray(p.planilla.colaboradores)) ? p.planilla.colaboradores : []);
+    const ocsActivas = (typeof window.getOCsActivasDelProyecto === 'function') ? window.getOCsActivasDelProyecto() : [];
+    const estructura = _getEstructuraProyecto(p);
+    const total = _calcPlanillaTotal(pl);
+    const porTorre = _calcPorTorre(pl);
+    const torresOrdenadas = Object.keys(porTorre).sort();
+
+    let html = '';
+    html += '<div class="card" style="overflow:hidden">';
+    // HEADER
+    html += '<div class="card-hd" style="background:#FAFAFA;border-bottom:1px solid var(--line)">';
+    html += '<h3 style="color:#7B1FA2">'+(pl.__nuevo?'ARMAR NUEVA PLANILLA OC':'EDITAR PLANILLA OC')+'</h3>';
+    html += '<span style="font-size:9px;letter-spacing:1.5px;color:var(--mute);font-weight:600">Estado: '+(pl.estado||'borrador').toUpperCase()+' · '+_h(p?p.name:'')+'</span>';
+    html += '<button class="btn ghost sm" style="margin-right:6px" onclick="window.cancelarConstructorOC()">CANCELAR</button>';
+    html += '<button class="btn sm" style="background:#7B1FA2;border-color:#7B1FA2;color:#fff" onclick="window.guardarBorradorOC()">GUARDAR BORRADOR</button>';
+    html += '</div>';
+
+    // FORM: trabajador + fecha
+    html += '<div style="display:grid;grid-template-columns:1fr 220px;gap:14px;padding:14px 16px;background:#fff;border-bottom:1px solid var(--line)">';
+    html += '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">TRABAJADOR</label>';
+    html += '<select id="ocPlColab" onchange="window._ocUpdateField(\'colaboradorNombre\', this.options[this.selectedIndex].text); window._ocUpdateField(\'colaboradorId\', this.value)" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700">';
+    html += '<option value="">— ELEGIR TRABAJADOR —</option>';
+    colabs.forEach(c => {
+      html += '<option value="'+_h(c.id||'')+'"'+(c.id===pl.colaboradorId?' selected':'')+'>'+_h(c.nombre||'')+'</option>';
+    });
+    html += '</select></div>';
+    html += '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">FECHA LIQUIDACIÓN</label>';
+    html += '<input id="ocPlFecha" type="date" value="'+_h(pl.fecha||'')+'" oninput="window._ocUpdateField(\'fecha\', this.value)" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>';
+    html += '</div>';
+
+    // TABLA DE ITEMS
+    html += '<div style="padding:14px 16px;background:#fff">';
+    html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">';
+    html += '<div style="flex:1;font-size:10.5px;letter-spacing:1.5px;color:#666;font-weight:800">RENGLONES · '+(pl.items||[]).length+'</div>';
+    html += '<button class="btn ghost sm" style="font-size:10px;color:#7B1FA2;border-color:#7B1FA2" onclick="window.agregarItemOC()">+ AGREGAR ITEM</button>';
+    if ((pl.items||[]).length > 0) html += ' <button class="btn ghost sm" style="font-size:10px" onclick="window.duplicarUltimoItemOC()">+ DUPLICAR ÚLTIMO</button>';
+    html += '</div>';
+
+    if ((pl.items||[]).length === 0){
+      html += '<div style="padding:30px;text-align:center;color:var(--mute);font-size:11px;letter-spacing:1px;background:#FAFAFA;border:1px dashed #E0E0E0;border-radius:8px">SIN RENGLONES TODAVÍA · CLICK EN + AGREGAR ITEM</div>';
+    } else {
+      html += '<div class="tbl-wrap"><table class="tbl" style="font-size:11px">';
+      html += '<thead><tr>';
+      html += '<th style="width:30px;text-align:center">#</th>';
+      html += '<th style="width:70px">OC #</th>';
+      html += '<th style="width:280px">DESCRIPCIÓN</th>';
+      html += '<th style="width:220px">UBICACIÓN</th>';
+      html += '<th style="width:55px;text-align:center">UD</th>';
+      html += '<th class="num" style="width:65px">CANT</th>';
+      html += '<th class="num" style="width:55px">FACT</th>';
+      html += '<th class="num" style="width:80px">Q UNIT</th>';
+      html += '<th class="num" style="width:95px">TOTAL</th>';
+      html += '<th style="width:40px"></th>';
+      html += '</tr></thead><tbody>';
+      (pl.items||[]).forEach((it, idx) => {
+        const tot = _calcItemTotal(it);
+        html += '<tr>';
+        html += '<td style="text-align:center;font-size:10px;color:#94A3B8">'+(idx+1)+'</td>';
+        html += '<td style="font-weight:800;color:#7B1FA2">OC #'+_h(it.ocNumero||'?')+'</td>';
+        html += '<td style="font-size:10.5px;line-height:1.35;color:#1F2937">'+_h(it.renglonDescripcion||'—')+'</td>';
+        html += '<td style="font-size:10px;color:#475569">'+_h(_ubicacionStr(it.ubicacion))+'</td>';
+        html += '<td style="text-align:center;font-weight:700">'+_h(it.unidad||'—')+'</td>';
+        html += '<td class="num" style="font-weight:600">'+(Number(it.cantidad)||0).toFixed(2)+'</td>';
+        html += '<td class="num">'+(Number(it.factor)||1).toFixed(2)+'</td>';
+        html += '<td class="num" style="color:#475569">'+_money(it.precio)+'</td>';
+        html += '<td class="num" style="font-weight:800;color:#0F172A">'+_money(tot)+'</td>';
+        html += '<td style="text-align:center"><button class="btn ghost sm" style="color:var(--red);font-size:10px;padding:3px 8px" onclick="window.eliminarItemOC(\''+_h(it.id)+'\')" title="Eliminar item">✕</button></td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+
+    // SUBTOTALES POR TORRE + TOTAL
+    if (torresOrdenadas.length > 0 || total > 0){
+      html += '<div style="margin-top:16px;padding:14px 18px;background:#FAFBFC;border:1px solid #E2E8F0;border-radius:8px">';
+      torresOrdenadas.forEach(t => {
+        html += '<div style="display:flex;justify-content:space-between;font-size:11.5px;color:#475569;padding:3px 0"><div>SUBTOTAL TORRE '+_h(t)+'</div><div style="font-weight:700;color:#0F172A">'+_money(porTorre[t])+'</div></div>';
+      });
+      html += '<div style="display:flex;justify-content:space-between;font-size:13px;color:#0F172A;padding:8px 0 0 0;border-top:1px solid #E2E8F0;margin-top:6px"><div style="font-weight:800;letter-spacing:.5px">GRAN TOTAL</div><div style="font-weight:800">'+_money(total)+'</div></div>';
+      html += '</div>';
+    }
+    html += '</div>';
+
+    html += '</div>';
+    return html;
+  }
+
+  // Re-binds dinámicos del constructor (focus al primer input al abrir)
+  function _bindConstructorOC(){
+    setTimeout(() => {
+      try {
+        const colab = document.getElementById('ocPlColab');
+        if (colab && !colab.value) colab.focus();
+      } catch(e){}
+    }, 60);
+  }
+
+  // Helpers en window para los inline handlers del constructor
+  window._ocUpdateField = function(field, value){
+    if (!window._ocConstructorActivo) return;
+    window._ocConstructorActivo[field] = value;
+  };
+
+  window.cancelarConstructorOC = async function(){
+    const pl = window._ocConstructorActivo;
+    if (!pl){ window.renderPlanillaOCs(); return; }
+    // Si tiene cambios sin guardar, pedir confirmación
+    if ((pl.items||[]).length > 0 || pl.colaboradorNombre){
+      const ok = await window.prConfirm({ title:'¿DESCARTAR CAMBIOS?', body:'Se van a perder los cambios sin guardar.', okText:'DESCARTAR', danger:true });
+      if (!ok) return;
+    }
+    window._ocConstructorActivo = null;
+    window.renderPlanillaOCs();
+  };
+
+  window.guardarBorradorOC = async function(){
+    const pl = window._ocConstructorActivo;
+    if (!pl){ showT('NO HAY PLANILLA ACTIVA','red'); return; }
+    if (!pl.colaboradorNombre){ showT('ELEGÍ UN TRABAJADOR','red'); return; }
+    if (!pl.fecha){ showT('ELEGÍ UNA FECHA','red'); return; }
+    if ((pl.items||[]).length === 0){
+      const ok = await window.prConfirm({ title:'PLANILLA SIN ITEMS', body:'No agregaste ningún renglón. ¿Guardar igual como borrador?', okText:'GUARDAR VACÍA' });
+      if (!ok) return;
+    }
+    const planillas = _getPlanillasOC();
+    // limpiar flags temporales
+    const toSave = JSON.parse(JSON.stringify(pl));
+    delete toSave.__nuevo;
+    toSave.estado = 'borrador';
+    toSave.modificadoTs = Date.now();
+    const idx = planillas.findIndex(x => x.id === toSave.id);
+    if (idx >= 0) planillas[idx] = toSave;
+    else planillas.push(toSave);
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    window._ocConstructorActivo = null;
+    window.renderPlanillaOCs();
+    showT('PLANILLA OC GUARDADA COMO BORRADOR','green');
+  };
+
+  // Agregar item: modal con OC del catálogo + ubicación estructurada
+  window.agregarItemOC = async function(){
+    if (!window._ocConstructorActivo) return;
+    const p = _activeProj();
+    const ocsActivas = (typeof window.getOCsActivasDelProyecto === 'function') ? window.getOCsActivasDelProyecto() : [];
+    if (ocsActivas.length === 0){
+      const ok = await window.prConfirm({ title:'CATÁLOGO VACÍO', body:'No hay OCs activas en este proyecto. Agregá una primero en el CATÁLOGO o continuá con texto libre.', okText:'CONTINUAR CON TEXTO LIBRE' });
+      if (!ok) return;
+    }
+    const estructura = _getEstructuraProyecto(p);
+    // Pre-popular el form
+    window._ocItemForm = {
+      ocCatalogId: '',
+      ocNumero: '',
+      renglonDescripcion: '',
+      unidad: 'ML',
+      precio: 0,
+      cantidad: 1,
+      factor: 1,
+      ubicacion: { modo:'apto', torre: estructura.torres[0]||'A', nivel: 1, tipoApto: estructura.tiposApto[0]||'', numeroApto: '' }
+    };
+    const ok = await window.prConfirm({
+      title: 'AGREGAR RENGLÓN A LA PLANILLA',
+      bodyHTML: _itemFormHTML(ocsActivas, estructura),
+      okText: 'AGREGAR',
+      wide: true
+    });
+    if (!ok) { window._ocItemForm = null; return; }
+    const f = window._ocItemForm;
+    if (!f.renglonDescripcion){ showT('FALTA DESCRIPCIÓN','red'); return; }
+    if (!f.precio || f.precio <= 0){ showT('PRECIO INVÁLIDO','red'); return; }
+    if (!f.cantidad || f.cantidad <= 0){ showT('CANTIDAD INVÁLIDA','red'); return; }
+    const newItem = Object.assign({ id: 'item-' + Date.now() + '-' + Math.random().toString(36).slice(2,8) }, f);
+    if (!Array.isArray(window._ocConstructorActivo.items)) window._ocConstructorActivo.items = [];
+    window._ocConstructorActivo.items.push(newItem);
+    window._ocItemForm = null;
+    window.renderPlanillaOCs();
+  };
+
+  window.duplicarUltimoItemOC = function(){
+    const pl = window._ocConstructorActivo;
+    if (!pl || !Array.isArray(pl.items) || pl.items.length === 0) return;
+    const last = pl.items[pl.items.length - 1];
+    const clone = JSON.parse(JSON.stringify(last));
+    clone.id = 'item-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
+    // Limpiar el numero de apto para que el usuario lo cambie (caso típico: mismo OC en otro apto)
+    if (clone.ubicacion && clone.ubicacion.modo === 'apto') clone.ubicacion.numeroApto = '';
+    pl.items.push(clone);
+    window.renderPlanillaOCs();
+  };
+
+  window.eliminarItemOC = function(itemId){
+    const pl = window._ocConstructorActivo;
+    if (!pl || !Array.isArray(pl.items)) return;
+    pl.items = pl.items.filter(x => x.id !== itemId);
+    window.renderPlanillaOCs();
+  };
+
+  // Form HTML para agregar/editar un item — captura via _ocItemForm en tiempo real
+  function _itemFormHTML(ocsActivas, estructura){
+    const f = window._ocItemForm || {};
+    // Dropdown de OC del catálogo
+    let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;font-size:12px">';
+    // OC del catálogo
+    html += '<div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">OC DEL CATÁLOGO</label>';
+    html += '<select id="ocItemCatalogo" onchange="window._ocOnSelectCatalogo(this.value)" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">';
+    html += '<option value="">— ELEGIR DEL CATÁLOGO O TIPEAR ABAJO —</option>';
+    ocsActivas.forEach(oc => {
+      html += '<option value="'+_h(oc.id||'')+'">OC #'+_h(oc.numero||'?')+' · '+_h(oc.descripcion||'').slice(0,80)+' · '+_h(_normUnidad(oc.unidad))+' · '+_money(oc.precio)+'</option>';
+    });
+    html += '</select></div>';
+    // OC# texto libre + descripcion
+    html += '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">OC #</label>';
+    html += '<input type="text" oninput="(window._ocItemForm=window._ocItemForm||{}).ocNumero=this.value.trim()" value="'+_h(f.ocNumero||'')+'" placeholder="ej: 14" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"></div>';
+    html += '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">UNIDAD</label>';
+    html += '<select onchange="(window._ocItemForm=window._ocItemForm||{}).unidad=this.value" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">';
+    UNIDAD_OPTS.forEach(u => { html += '<option value="'+u+'"'+(u===f.unidad?' selected':'')+'>'+u+'</option>'; });
+    html += '</select></div>';
+    html += '<div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">DESCRIPCIÓN DEL TRABAJO</label>';
+    html += '<textarea rows="2" oninput="(window._ocItemForm=window._ocItemForm||{}).renglonDescripcion=this.value.trim()" placeholder="ej: Dintel a una cara calibre 20 + cenefa horizontal" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;resize:vertical">'+_h(f.renglonDescripcion||'')+'</textarea></div>';
+    html += '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">CANTIDAD</label>';
+    html += '<input type="number" step="0.01" min="0" oninput="(window._ocItemForm=window._ocItemForm||{}).cantidad=Number(this.value)||0" value="'+(f.cantidad||1)+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"></div>';
+    html += '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">FACTOR (default 1.00)</label>';
+    html += '<input type="number" step="0.01" min="0" oninput="(window._ocItemForm=window._ocItemForm||{}).factor=Number(this.value)||1" value="'+(f.factor||1)+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>';
+    html += '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">PRECIO UNITARIO Q</label>';
+    html += '<input type="number" step="0.01" min="0" oninput="(window._ocItemForm=window._ocItemForm||{}).precio=Number(this.value)||0" value="'+(f.precio||0)+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"></div>';
+    // SECCIÓN UBICACIÓN
+    html += '<div style="grid-column:1/-1;border-top:1px solid #E2E8F0;padding-top:12px;margin-top:4px"><div style="font-size:10px;letter-spacing:1.5px;color:#7B1FA2;font-weight:800;margin-bottom:8px">UBICACIÓN DEL TRABAJO</div>';
+    html += '<div style="display:flex;gap:14px;font-size:11px;margin-bottom:10px">';
+    html += '<label style="display:flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="ocModo" value="apto" '+(f.ubicacion?.modo==='apto'?'checked':'')+' onchange="window._ocSetModoUbic(\'apto\')"> A un apartamento específico</label>';
+    html += '<label style="display:flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="ocModo" value="nivel" '+(f.ubicacion?.modo==='nivel'?'checked':'')+' onchange="window._ocSetModoUbic(\'nivel\')"> A un nivel entero (tipo de apto)</label>';
+    html += '</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px">';
+    html += '<div><label style="display:block;font-size:9px;letter-spacing:1px;color:#888;font-weight:700;margin-bottom:3px">TORRE</label><select onchange="(window._ocItemForm.ubicacion=window._ocItemForm.ubicacion||{}).torre=this.value" style="width:100%;padding:7px 9px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px">';
+    estructura.torres.forEach(t => { html += '<option value="'+_h(t)+'"'+(t===f.ubicacion?.torre?' selected':'')+'>'+_h(t)+'</option>'; });
+    html += '</select></div>';
+    html += '<div><label style="display:block;font-size:9px;letter-spacing:1px;color:#888;font-weight:700;margin-bottom:3px">NIVEL</label><select onchange="(window._ocItemForm.ubicacion=window._ocItemForm.ubicacion||{}).nivel=Number(this.value)" style="width:100%;padding:7px 9px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px">';
+    for (let n=1; n<=Math.max(estructura.nivelesMax||10, 12); n++){
+      html += '<option value="'+n+'"'+(n===Number(f.ubicacion?.nivel)?' selected':'')+'>'+n+'</option>';
+    }
+    html += '</select></div>';
+    html += '<div><label style="display:block;font-size:9px;letter-spacing:1px;color:#888;font-weight:700;margin-bottom:3px">TIPO APTO</label><select onchange="(window._ocItemForm.ubicacion=window._ocItemForm.ubicacion||{}).tipoApto=this.value" style="width:100%;padding:7px 9px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px">';
+    html += '<option value="">—</option>';
+    (estructura.tiposApto||[]).forEach(t => { html += '<option value="'+_h(t)+'"'+(t===f.ubicacion?.tipoApto?' selected':'')+'>'+_h(t)+'</option>'; });
+    html += '</select></div>';
+    html += '<div><label style="display:block;font-size:9px;letter-spacing:1px;color:#888;font-weight:700;margin-bottom:3px">N° APTO (solo si modo=apto)</label><input type="text" oninput="(window._ocItemForm.ubicacion=window._ocItemForm.ubicacion||{}).numeroApto=this.value.trim()" value="'+_h(f.ubicacion?.numeroApto||'')+'" placeholder="201" style="width:100%;padding:7px 9px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"></div>';
+    html += '</div></div>';
+    html += '</div>';
+    return html;
+  }
+
+  // Cuando se elige una OC del catálogo, autollenar campos
+  window._ocOnSelectCatalogo = function(ocId){
+    if (!ocId){ return; }
+    const ocs = (typeof window.getOCsActivasDelProyecto === 'function') ? window.getOCsActivasDelProyecto() : [];
+    const oc = ocs.find(x => x.id === ocId);
+    if (!oc) return;
+    if (!window._ocItemForm) window._ocItemForm = {};
+    window._ocItemForm.ocCatalogId = oc.id;
+    window._ocItemForm.ocNumero = oc.numero || '';
+    window._ocItemForm.renglonDescripcion = oc.descripcion || '';
+    window._ocItemForm.unidad = _normUnidad(oc.unidad);
+    window._ocItemForm.precio = Number(oc.precio) || 0;
+    // Re-render del form para reflejar los nuevos valores
+    const modal = document.getElementById('prConfirmModal');
+    if (modal){
+      // Encontrar el body del modal y reemplazar
+      const body = modal.querySelector('div[style*="padding:24px 30px;font-size:13px"]');
+      if (body){
+        const ocsActivas = ocs;
+        const p = _activeProj();
+        body.innerHTML = _itemFormHTML(ocsActivas, _getEstructuraProyecto(p));
+      }
+    }
+  };
+  window._ocSetModoUbic = function(modo){
+    if (!window._ocItemForm) window._ocItemForm = {};
+    if (!window._ocItemForm.ubicacion) window._ocItemForm.ubicacion = {};
+    window._ocItemForm.ubicacion.modo = modo;
+  };
+
+  // Helper compartido: lista global de colaboradores (excluyendo PRE-APP)
+  window._allColabsGlobalForOC = function(){
+    const p = _activeProj();
+    if (!p) return [];
+    // Reutilizar el listado del módulo colabs si existe, sino caer al de planilla.colaboradores
+    const list = (p.planilla && Array.isArray(p.planilla.colaboradores)) ? p.planilla.colaboradores : [];
+    return list.filter(c => {
+      const n = String(c && c.nombre || '').toUpperCase().replace(/[\s\-_]/g,'');
+      return n !== 'PREAPP';
+    }).sort((a,b) => String(a.nombre||'').localeCompare(String(b.nombre||''), 'es', { sensitivity:'base' }));
   };
 
   // ── v402: agregar un renglón nuevo a una OC# existente
