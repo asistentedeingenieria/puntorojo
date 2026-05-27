@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v419-gerente-revisa-preview-antes-autorizar';
+const CACHE_VERSION = 'v420-quitar-verificar-pdf-y-filtrar-preapp-buscadores';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
