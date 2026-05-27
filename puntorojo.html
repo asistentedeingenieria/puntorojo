@@ -2767,7 +2767,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v406</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v407</span>
   </footer>
 
 </div>
@@ -34973,6 +34973,41 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(!p) return '';
     _ensurePlanillasArmadas(p);
     const arr = ((p.planilla && p.planilla.planillasArmadas) || []).slice().sort((a,b)=>(b.numero||0)-(a.numero||0));
+
+    // ════════════════════════════════════════════════════════════════
+    // v407: auto-aplicar descuentos en render (idempotente)
+    // ────────────────────────────────────────────────────────────────
+    // Si una planilla está en pendiente_pm o aprobada_inicial y NO tiene
+    // pl.autoDescuentos=true (porque el hook del envío o el last-chance
+    // del autorizar fallaron por cualquier razón), lo aplicamos ahora al
+    // renderizar. Es seguro porque _v404AutoAplicarDescuentos verifica
+    // cross-project dedup, así que no duplicamos descuentos ya aplicados
+    // en otra planilla de la misma quincena. Solo corre si el módulo v404
+    // está cargado y el usuario tiene permiso para ver descuentos.
+    // ════════════════════════════════════════════════════════════════
+    try {
+      const _autoApplyAllowed = (typeof can === 'function')
+        && (can('users.manage') || can('planilla.authorize') || can('planilla.generate') || can('planilla.descuentos'));
+      if (_autoApplyAllowed && typeof window._v404AutoAplicarDescuentos === 'function'){
+        let _appliedAny = false;
+        arr.forEach(pl => {
+          if (pl.autoDescuentos === true) return;
+          if (pl.estado !== 'pendiente_pm' && pl.estado !== 'aprobada_inicial') return;
+          try {
+            const r = window._v404AutoAplicarDescuentos(pl, p);
+            if (r && (r.applied > 0 || r.skipped >= 0)) _appliedAny = true;
+            console.log('[v407] auto-apply on render — planilla', pl.id, '·', r);
+          } catch(e){ console.warn('[v407] auto-apply error:', e); }
+        });
+        if (_appliedAny){
+          try { if (typeof saveState === 'function') saveState(); } catch(e){}
+          try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+        }
+      } else if (!window._v404AutoAplicarDescuentos){
+        console.warn('[v407] _v404AutoAplicarDescuentos no está cargado — recargá la página (Ctrl+Shift+R)');
+      }
+    } catch(e){ console.warn('[v407] bloque auto-apply on render error:', e); }
+
     const isSup = window.isSupervisorPlanilla();
     const isPM = window.isPMPlanilla();
     const isAdmin = (typeof can === 'function' && can('users.manage'));
