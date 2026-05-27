@@ -2767,7 +2767,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v411</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v412</span>
   </footer>
 
 </div>
@@ -33066,19 +33066,31 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         return { applied:0, reason:'catalogo vacio' };
       }
 
-      const _normKey = s => String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+      // v412: normalización más agresiva — incluye   (nbsp) y otros chars whitespace raros
+      const _normKey = s => String(s||'')
+        .toUpperCase()
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g,'')   // diacríticos
+        .replace(/[\s  ​]+/g,' ')  // todo tipo de espacios + non-breaking + zero-width
+        .trim();
 
       // Recopilar colabs únicos de los pagos de esta planilla
       const colabsMap = new Map();
+      const debugColabs = [];
       (p.planilla && p.planilla.pagos || []).forEach(pg => {
         if (!Array.isArray(pl.pagosIds) || !pl.pagosIds.includes(pg.id)) return;
         const nombre = String(pg.colaborador||'').trim();
         if (!nombre) return;
+        debugColabs.push({nombre, len: nombre.length, key: _normKey(nombre)});
         const key = _normKey(nombre);
         if (!key || key.replace(/[\s\-_]/g,'') === 'PREAPP') return;
         if (!colabsMap.has(key)) colabsMap.set(key, { nombre, key, colaboradorId: pg.colaboradorId || '' });
       });
-      console.log('[v411] colabs en planilla', pl.id, ':', [...colabsMap.values()].map(c => c.nombre));
+      console.log('[v412] DEBUG colabs en planilla', pl.id, ':', debugColabs);
+      console.log('[v412] colabs unique map:', [...colabsMap.values()]);
+      // Debug: catalog sample
+      console.log('[v412] catalog anticipos sample:', (_s.anticiposGlobales||[]).slice(0,3).map(a => ({nombre:a.colaboradorNombre, key:_normKey(a.colaboradorNombre)})));
+      console.log('[v412] catalog polizas sample:', (_s.polizasGlobales||[]).slice(0,3).map(po => ({aCargo:po.aCargoDeNombre, key:_normKey(po.aCargoDeNombre), estatus:po.estatus})));
 
       // Limpiar los auto-aplicados previos (los vamos a recrear)
       pl.descuentosPlanilla = pl.descuentosPlanilla.filter(d => !d.autoAplicado);
@@ -33088,11 +33100,23 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       let applied = 0;
 
       colabsMap.forEach(c => {
+        // v412: matching más permisivo. Primero exacto, después substring (por si hay diferencias raras de espacios/chars).
+        const matchColab = (otroNombre) => {
+          const otroKey = _normKey(otroNombre);
+          if (!otroKey) return false;
+          if (otroKey === c.key) return true;
+          // Substring fallback: si uno contiene al otro completamente
+          if (otroKey.length >= 8 && c.key.length >= 8){
+            if (otroKey.includes(c.key) || c.key.includes(otroKey)) return true;
+          }
+          return false;
+        };
         // PÓLIZAS activas (estatus ACTIVA o EN PROCESO) donde el colab es A CARGO DE
         const polizas = (_s.polizasGlobales||[]).filter(po => {
           if (po.estatus !== 'ACTIVA' && po.estatus !== 'EN PROCESO') return false;
-          return _normKey(po.aCargoDeNombre) === c.key;
+          return matchColab(po.aCargoDeNombre);
         });
+        console.log('[v412] colab', c.nombre, '· pólizas activas encontradas:', polizas.length);
         if (polizas.length > 0){
           const montoTotal = +(polizas.length * montoUnitPoliza).toFixed(2);
           const desc = polizas.length === 1
@@ -33116,8 +33140,9 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           applied++;
         }
 
-        // ANTICIPOS pendientes (calc pagadas igual que el manual flow)
-        const anticipos = (_s.anticiposGlobales||[]).filter(a => _normKey(a.colaboradorNombre) === c.key);
+        // ANTICIPOS pendientes (calc pagadas igual que el manual flow) — v412: matching permisivo
+        const anticipos = (_s.anticiposGlobales||[]).filter(a => matchColab(a.colaboradorNombre));
+        console.log('[v412] colab', c.nombre, '· anticipos encontrados (antes de filtro pendientes):', anticipos.length);
         anticipos.forEach(a => {
           const inicial = Number(a.cuotasPagadasInicial)||0;
           const total = Number(a.cantidadCuotas)||1;
@@ -33155,11 +33180,11 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
       pl.autoDescuentos = true;
       pl.autoDescuentosTs = ahora;
-      pl.autoDescuentosVersion = 411;
+      pl.autoDescuentosVersion = 412;  // v412: bump por debug + matching permisivo
       pl.autoDescuentosApplied = applied;
-      pl.autoDescuentosSkipped = 0;  // v411 no hace cross-project dedup
+      pl.autoDescuentosSkipped = 0;
       pl.autoDescuentosDetalle = [];
-      console.log('[v411] applied', applied, 'descuentos a planilla', pl.id);
+      console.log('[v412] applied', applied, 'descuentos a planilla', pl.id);
       return { applied };
     } catch(e){
       console.error('[v411] error:', e);
@@ -33299,9 +33324,12 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
     if(pl.estado !== 'pendiente_pm'){ showT('SOLO PLANILLAS PENDIENTES SE PUEDEN APROBAR','red'); return; }
 
-    // v411: last-chance INLINE. Si la planilla no tiene autoDescuentos con version >= 411,
+    // v412: last-chance INLINE. Si la planilla no tiene autoDescuentos con version >= 412,
     // lo intentamos ahora antes de decidir el flujo.
-    if (!pl.autoDescuentos || Number(pl.autoDescuentosVersion||0) < 411){
+    if (!pl.autoDescuentos || Number(pl.autoDescuentosVersion||0) < 412){
+      // Limpiar auto-aplicados de versiones viejas antes de re-correr
+      pl.descuentosPlanilla = (pl.descuentosPlanilla||[]).filter(d => !d.autoAplicado);
+      pl.autoDescuentos = false;
       try {
         const r411 = _v411AplicarDescuentosInline(pl, p);
         console.log('[v411] last-chance al autorizar:', r411);
@@ -35152,16 +35180,21 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         && (can('users.manage') || can('planilla.authorize') || can('planilla.generate') || can('planilla.descuentos'));
       if (_autoApplyAllowed){
         let _appliedAny = false;
-        const AUTO_VERSION = 411;
+        const AUTO_VERSION = 412;  // v412: bump por debug + matching permisivo
         arr.forEach(pl => {
           if (pl.estado !== 'pendiente_pm' && pl.estado !== 'aprobada_inicial') return;
           const versionAplicada = Number(pl.autoDescuentosVersion) || 0;
           if (pl.autoDescuentos === true && versionAplicada >= AUTO_VERSION) return;
+          // v412: si tenia version vieja, limpiar auto-aplicados antes de re-correr
+          if (versionAplicada > 0 && versionAplicada < AUTO_VERSION){
+            pl.descuentosPlanilla = (pl.descuentosPlanilla||[]).filter(d => !d.autoAplicado);
+            pl.autoDescuentos = false;
+          }
           try {
             const r = _v411AplicarDescuentosInline(pl, p);
             if (r && r.applied > 0) _appliedAny = true;
-            console.log('[v411] auto-apply on render — planilla', pl.id, '·', r);
-          } catch(e){ console.warn('[v411] auto-apply on render error:', e); }
+            console.log('[v412] auto-apply on render — planilla', pl.id, '·', r);
+          } catch(e){ console.warn('[v412] auto-apply on render error:', e); }
         });
         if (_appliedAny){
           try { if (typeof saveState === 'function') saveState(); } catch(e){}
