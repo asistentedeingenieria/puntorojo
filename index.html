@@ -2732,7 +2732,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v412</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v413</span>
   </footer>
 
 </div>
@@ -32322,6 +32322,116 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(btn){ btn.disabled = count === 0; btn.style.opacity = count===0?'.5':'1'; }
   };
 
+  // ════════════════════════════════════════════════════════════════
+  // v412: AUTO-APLICAR DESCUENTOS INLINE (mirror desde puntorojo.html)
+  // Self-contained — sin dependencia de módulos externos.
+  // ════════════════════════════════════════════════════════════════
+  function _v411AplicarDescuentosInline(pl, p){
+    try {
+      if (!pl || !p) return { applied:0, reason:'no pl/p' };
+      if (!Array.isArray(pl.descuentosPlanilla)) pl.descuentosPlanilla = [];
+      const _s = (typeof state !== 'undefined') ? state : window.state;
+      if (!_s){ console.warn('[v411] state no disponible'); return { applied:0, reason:'no state' }; }
+      const _catalogoTieneData = (Array.isArray(_s.anticiposGlobales) && _s.anticiposGlobales.length > 0)
+                              || (Array.isArray(_s.polizasGlobales) && _s.polizasGlobales.length > 0);
+      if (!_catalogoTieneData){
+        console.warn('[v411] catálogo vacío al auto-aplicar planilla', pl.id);
+        return { applied:0, reason:'catalogo vacio' };
+      }
+      const _normKey = s => String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[\s  ​]+/g,' ').trim();
+      const colabsMap = new Map();
+      const debugColabs = [];
+      (p.planilla && p.planilla.pagos || []).forEach(pg => {
+        if (!Array.isArray(pl.pagosIds) || !pl.pagosIds.includes(pg.id)) return;
+        const nombre = String(pg.colaborador||'').trim();
+        if (!nombre) return;
+        debugColabs.push({nombre, len: nombre.length, key: _normKey(nombre)});
+        const key = _normKey(nombre);
+        if (!key || key.replace(/[\s\-_]/g,'') === 'PREAPP') return;
+        if (!colabsMap.has(key)) colabsMap.set(key, { nombre, key, colaboradorId: pg.colaboradorId || '' });
+      });
+      console.log('[v412 mobile] DEBUG colabs en planilla', pl.id, ':', debugColabs);
+      console.log('[v412 mobile] colabs unique map:', [...colabsMap.values()]);
+      console.log('[v412 mobile] catalog anticipos sample:', (_s.anticiposGlobales||[]).slice(0,3).map(a => ({nombre:a.colaboradorNombre, key:_normKey(a.colaboradorNombre)})));
+      console.log('[v412 mobile] catalog polizas sample:', (_s.polizasGlobales||[]).slice(0,3).map(po => ({aCargo:po.aCargoDeNombre, key:_normKey(po.aCargoDeNombre), estatus:po.estatus})));
+
+      pl.descuentosPlanilla = pl.descuentosPlanilla.filter(d => !d.autoAplicado);
+
+      const ahora = (typeof nowStr === 'function') ? nowStr() : new Date().toISOString();
+      const montoUnitPoliza = (_s.polizasConfig && typeof _s.polizasConfig.montoDefault === 'number') ? _s.polizasConfig.montoDefault : 44.95;
+      let applied = 0;
+
+      colabsMap.forEach(c => {
+        const matchColab = (otroNombre) => {
+          const otroKey = _normKey(otroNombre);
+          if (!otroKey) return false;
+          if (otroKey === c.key) return true;
+          if (otroKey.length >= 8 && c.key.length >= 8){
+            if (otroKey.includes(c.key) || c.key.includes(otroKey)) return true;
+          }
+          return false;
+        };
+        const polizas = (_s.polizasGlobales||[]).filter(po => {
+          if (po.estatus !== 'ACTIVA' && po.estatus !== 'EN PROCESO') return false;
+          return matchColab(po.aCargoDeNombre);
+        });
+        console.log('[v412 mobile] colab', c.nombre, '· pólizas activas encontradas:', polizas.length);
+        if (polizas.length > 0){
+          const montoTotal = +(polizas.length * montoUnitPoliza).toFixed(2);
+          const desc = polizas.length === 1
+            ? 'PÓLIZA SEGURO · ' + (polizas[0].aseguradoNombre || '')
+            : 'PÓLIZAS · ' + polizas.length + ' ACTIVAS';
+          pl.descuentosPlanilla.push({
+            id: 'desc-' + Date.now() + '-' + Math.random().toString(36).slice(2,8),
+            subtipo: 'POLIZA', desc, monto: montoTotal,
+            colaboradorNombre: c.nombre, colaboradorId: c.colaboradorId,
+            polizaIds: polizas.map(po => po.id), polizasCount: polizas.length,
+            ts: ahora, autor: 'sistema', autorNombre: 'AUTO v412',
+            autoAplicado: true, bloqueado: true
+          });
+          applied++;
+        }
+        const anticipos = (_s.anticiposGlobales||[]).filter(a => matchColab(a.colaboradorNombre));
+        console.log('[v412 mobile] colab', c.nombre, '· anticipos encontrados:', anticipos.length);
+        anticipos.forEach(a => {
+          const inicial = Number(a.cuotasPagadasInicial)||0;
+          const total = Number(a.cantidadCuotas)||1;
+          let aplicadas = 0;
+          (_s.projects||[]).forEach(pr => {
+            (pr.planilla && pr.planilla.planillasArmadas || []).forEach(plx => {
+              if (plx.id === pl.id) return;
+              if (plx.estado === 'rechazada') return;
+              (plx.descuentosPlanilla||[]).forEach(d => { if (d.anticipoId === a.id) aplicadas++; });
+            });
+          });
+          const pagadas = inicial + aplicadas;
+          if (pagadas >= total) return;
+          const cuotaActual = pagadas + 1;
+          const montoCuota = Number(a.montoTotal)/total;
+          pl.descuentosPlanilla.push({
+            id: 'desc-' + Date.now() + '-' + Math.random().toString(36).slice(2,8),
+            subtipo: a.subtipo || 'PRESTAMO_PERSONAL',
+            desc: (a.desc||'ANTICIPO').toUpperCase(),
+            monto: +(montoCuota).toFixed(2),
+            cuotaActual, cuotasTotales: total,
+            colaboradorNombre: c.nombre, colaboradorId: c.colaboradorId,
+            anticipoId: a.id,
+            ts: ahora, autor: 'sistema', autorNombre: 'AUTO v412',
+            autoAplicado: true, bloqueado: false
+          });
+          applied++;
+        });
+      });
+      pl.autoDescuentos = true;
+      pl.autoDescuentosTs = ahora;
+      pl.autoDescuentosVersion = 412;
+      pl.autoDescuentosApplied = applied;
+      console.log('[v412 mobile] applied', applied, 'descuentos a planilla', pl.id);
+      return { applied };
+    } catch(e){ console.error('[v412 mobile] error:', e); return { applied:0, reason:'exception', error: String(e) }; }
+  }
+  window._v411AplicarDescuentosInline = _v411AplicarDescuentosInline;
+
   window._v226Enviar = async function(){
     const p = _activeProj();
     if(!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
@@ -32382,6 +32492,15 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     });
     try { delete window._v226PlanillaIniciadaTs; } catch(e){}
 
+    // v412: AUTO-APLICAR DESCUENTOS INLINE (mirror desde puntorojo.html)
+    try {
+      const r412 = _v411AplicarDescuentosInline(planilla, p);
+      console.log('[v412 mobile] auto-aplicados en envío:', r412);
+      if (r412 && r412.applied > 0){
+        setTimeout(() => { try { showT('DESCUENTOS AUTO-APLICADOS: '+r412.applied, 'green'); } catch(e){} }, 1500);
+      }
+    } catch(e){ console.error('[v412 mobile] error auto-aplicando en envío:', e); }
+
     try { if(typeof saveState === 'function') saveState(); } catch(e){ console.error('[v226] saveState error:', e); }
     // v291/v296: notif al Gerente de Proyectos ANTES de subir (para que vaya en el mismo upload).
     try {
@@ -32433,40 +32552,74 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
     if(pl.estado !== 'pendiente_pm'){ showT('SOLO PLANILLAS PENDIENTES SE PUEDEN APROBAR','red'); return; }
 
-    const bodyHTML = ''
-      + '<div style="font-size:12px;color:#666;margin-bottom:10px">'+pl.totales.count+' pago'+(pl.totales.count!==1?'s':'')+'</div>'
-      + '<div style="display:grid;grid-template-columns:1fr auto;gap:6px 16px;font-size:12.5px;margin-bottom:14px;color:#444">'
-      +   '<div>Bruto</div><div style="text-align:right;font-weight:600;color:#1a1a1a">'+money(pl.totales.bruto)+'</div>'
-      +   '<div>Retención 10%</div><div style="text-align:right;font-weight:600;color:#888">- '+money(pl.totales.retencion)+'</div>'
-      +   '<div style="padding-top:6px;border-top:1px solid #EEE">Neto sin descuentos</div><div style="text-align:right;font-weight:700;color:#1a1a1a;padding-top:6px;border-top:1px solid #EEE">'+money(pl.totales.neto)+'</div>'
-      + '</div>'
-      + '<div style="font-size:11.5px;color:#1565C0;background:#E3F2FD;padding:10px 12px;border-radius:4px;border-left:3px solid #1565C0;line-height:1.5">'
-      +   'La planilla pasará a la <strong>persona de descuentos</strong> para que agregue préstamos, pólizas, equipos y abonos previos. Cuando termine, te volverá a llegar para aprobación final antes de procesar el pago.'
-      + '</div>';
-    const ok = await window.prConfirm({
-      title: 'Autorizar ' + _planillaTitulo(pl),
-      bodyHTML, okText: 'AUTORIZAR Y ENVIAR A DESCUENTOS'
-    });
+    // v412: last-chance INLINE auto-apply
+    if (!pl.autoDescuentos || Number(pl.autoDescuentosVersion||0) < 412){
+      pl.descuentosPlanilla = (pl.descuentosPlanilla||[]).filter(d => !d.autoAplicado);
+      pl.autoDescuentos = false;
+      try {
+        const r412 = _v411AplicarDescuentosInline(pl, p);
+        console.log('[v412 mobile] last-chance al autorizar:', r412);
+      } catch(e){ console.error('[v412 mobile] last-chance error:', e); }
+    }
+    const hasAutoDescuentos = pl.autoDescuentos === true;
+    const totalDescPl = (pl.descuentosPlanilla||[]).reduce((s,d)=>s+Number(d.monto||0),0);
+    const netoFinal = (pl.totales.neto || 0) - totalDescPl;
+
+    let bodyHTML;
+    let okText;
+    if (hasAutoDescuentos){
+      bodyHTML = ''
+        + '<div style="font-size:12px;color:#666;margin-bottom:10px">'+pl.totales.count+' pago'+(pl.totales.count!==1?'s':'')+'</div>'
+        + '<div style="display:grid;grid-template-columns:1fr auto;gap:6px 16px;font-size:12.5px;margin-bottom:14px;color:#444">'
+        +   '<div>Bruto</div><div style="text-align:right;font-weight:600;color:#1a1a1a">'+money(pl.totales.bruto)+'</div>'
+        +   '<div>Retención 10%</div><div style="text-align:right;font-weight:600;color:#888">- '+money(pl.totales.retencion)+'</div>'
+        +   '<div>Descuentos auto-aplicados</div><div style="text-align:right;font-weight:600;color:#C62828">- '+money(totalDescPl)+'</div>'
+        +   '<div style="padding-top:6px;border-top:1px solid #EEE">Neto final</div><div style="text-align:right;font-weight:700;color:#1a1a1a;padding-top:6px;border-top:1px solid #EEE">'+money(netoFinal)+'</div>'
+        + '</div>'
+        + '<div style="font-size:11.5px;color:#15803D;background:#DCFCE7;padding:10px 12px;border-radius:4px;border-left:3px solid #15803D;line-height:1.5">'
+        +   'Los <strong>descuentos ya fueron aplicados automáticamente</strong>. Si autorizás, la planilla queda <strong>APROBADA FINAL</strong> directamente.'
+        + '</div>';
+      okText = 'AUTORIZAR Y APROBAR PLANILLA';
+    } else {
+      bodyHTML = ''
+        + '<div style="font-size:12px;color:#666;margin-bottom:10px">'+pl.totales.count+' pago'+(pl.totales.count!==1?'s':'')+'</div>'
+        + '<div style="display:grid;grid-template-columns:1fr auto;gap:6px 16px;font-size:12.5px;margin-bottom:14px;color:#444">'
+        +   '<div>Bruto</div><div style="text-align:right;font-weight:600;color:#1a1a1a">'+money(pl.totales.bruto)+'</div>'
+        +   '<div>Retención 10%</div><div style="text-align:right;font-weight:600;color:#888">- '+money(pl.totales.retencion)+'</div>'
+        +   '<div style="padding-top:6px;border-top:1px solid #EEE">Neto sin descuentos</div><div style="text-align:right;font-weight:700;color:#1a1a1a;padding-top:6px;border-top:1px solid #EEE">'+money(pl.totales.neto)+'</div>'
+        + '</div>'
+        + '<div style="font-size:11.5px;color:#1565C0;background:#E3F2FD;padding:10px 12px;border-radius:4px;border-left:3px solid #1565C0;line-height:1.5">'
+        +   'La planilla pasará a la <strong>persona de descuentos</strong> para que agregue préstamos, pólizas, equipos y abonos previos.'
+        + '</div>';
+      okText = 'AUTORIZAR Y ENVIAR A DESCUENTOS';
+    }
+    const ok = await window.prConfirm({ title:'Autorizar '+_planillaTitulo(pl), bodyHTML, okText });
     if(!ok) return;
 
     const ahora = nowStr();
     const pmEmail = _getUserEmail();
     const pmNombre = _getUserDisplayName();
-    pl.estado = 'aprobada_inicial';
-    pl.fechaRespuesta = ahora;
-    pl.pmEmail = pmEmail;
-    pl.pmNombre = pmNombre;
-    if(!Array.isArray(pl.descuentosPlanilla)) pl.descuentosPlanilla = [];
-    pl.historial.push({ fecha: ahora, evento: 'aprobada_inicial', autor: pmEmail, autorNombre: pmNombre, comentario: 'Visto bueno del Gerente de Proyectos — pendiente descuentos' });
-
-    (p.planilla.pagos || []).forEach(pg => {
-      if(pl.pagosIds.includes(pg.id)){
-        pg.autorizado = true;
-        pg.estadoPlanilla = 'aprobada_inicial';
-        pg.fechaAutorizado = ahora;
-        pg.autorizadoPor = pmEmail;
-      }
-    });
+    // v412: si tiene auto-descuentos, va directo a 'aprobada'. Si no, flujo legacy.
+    if (hasAutoDescuentos){
+      pl.estado = 'aprobada';
+      pl.fechaRespuesta = ahora;
+      pl.fechaAprobacionFinal = ahora;
+      pl.pmEmail = pmEmail; pl.pmNombre = pmNombre;
+      if(!Array.isArray(pl.descuentosPlanilla)) pl.descuentosPlanilla = [];
+      pl.historial.push({ fecha: ahora, evento: 'aprobada', autor: pmEmail, autorNombre: pmNombre, comentario: 'Aprobada directamente por Gerente (auto-descuentos v412)' });
+      (p.planilla.pagos || []).forEach(pg => {
+        if(pl.pagosIds.includes(pg.id)){ pg.autorizado = true; pg.estadoPlanilla = 'aprobada'; pg.fechaAutorizado = ahora; pg.autorizadoPor = pmEmail; }
+      });
+    } else {
+      pl.estado = 'aprobada_inicial';
+      pl.fechaRespuesta = ahora;
+      pl.pmEmail = pmEmail; pl.pmNombre = pmNombre;
+      if(!Array.isArray(pl.descuentosPlanilla)) pl.descuentosPlanilla = [];
+      pl.historial.push({ fecha: ahora, evento: 'aprobada_inicial', autor: pmEmail, autorNombre: pmNombre, comentario: 'Visto bueno del Gerente de Proyectos — pendiente descuentos' });
+      (p.planilla.pagos || []).forEach(pg => {
+        if(pl.pagosIds.includes(pg.id)){ pg.autorizado = true; pg.estadoPlanilla = 'aprobada_inicial'; pg.fechaAutorizado = ahora; pg.autorizadoPor = pmEmail; }
+      });
+    }
 
     try { if(typeof saveState === 'function') saveState(); } catch(e){ console.error('[v226] saveState error:', e); }
     try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
@@ -33930,11 +34083,35 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const isSup = window.isSupervisorPlanilla();
     const isPM = window.isPMPlanilla();
     const isAdmin = (typeof can === 'function' && can('users.manage'));
-    // v258: la persona con permiso 'planilla.descuentos' tambien debe ver
-    // el bloque FLUJO DE APROBACION para poder agregar descuentos a las
-    // planillas en estado aprobada_inicial.
     const isDesc = (typeof window.isDescuentosPlanilla === 'function') ? window.isDescuentosPlanilla() : false;
     if(!isSup && !isPM && !isAdmin && !isDesc) return '';
+
+    // v412 mobile: auto-apply descuentos al render (fallback). Idempotente vía version flag.
+    try {
+      const _autoApplyAllowed = isAdmin || isPM || isSup || isDesc;
+      if (_autoApplyAllowed){
+        let _appliedAny = false;
+        const AUTO_VERSION = 412;
+        arr.forEach(pl => {
+          if (pl.estado !== 'pendiente_pm' && pl.estado !== 'aprobada_inicial') return;
+          const versionAplicada = Number(pl.autoDescuentosVersion) || 0;
+          if (pl.autoDescuentos === true && versionAplicada >= AUTO_VERSION) return;
+          if (versionAplicada > 0 && versionAplicada < AUTO_VERSION){
+            pl.descuentosPlanilla = (pl.descuentosPlanilla||[]).filter(d => !d.autoAplicado);
+            pl.autoDescuentos = false;
+          }
+          try {
+            const r = _v411AplicarDescuentosInline(pl, p);
+            if (r && r.applied > 0) _appliedAny = true;
+            console.log('[v412 mobile] auto-apply on render — planilla', pl.id, '·', r);
+          } catch(e){ console.warn('[v412 mobile] auto-apply on render error:', e); }
+        });
+        if (_appliedAny){
+          try { if (typeof saveState === 'function') saveState(); } catch(e){}
+          try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+        }
+      }
+    } catch(e){ console.warn('[v412 mobile] bloque auto-apply on render error:', e); }
 
     const disponibles = _pagosDisponiblesParaArmar(p);
     const totalDisp = disponibles.reduce((s,x)=>s+Number(x.neto||x.monto||0),0);
