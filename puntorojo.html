@@ -2767,7 +2767,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v407</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v408</span>
   </footer>
 
 </div>
@@ -34990,14 +34990,25 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         && (can('users.manage') || can('planilla.authorize') || can('planilla.generate') || can('planilla.descuentos'));
       if (_autoApplyAllowed && typeof window._v404AutoAplicarDescuentos === 'function'){
         let _appliedAny = false;
+        const AUTO_VERSION = 408;
         arr.forEach(pl => {
-          if (pl.autoDescuentos === true) return;
           if (pl.estado !== 'pendiente_pm' && pl.estado !== 'aprobada_inicial') return;
+          // v408: re-aplicar también si la planilla se procesó con una versión vieja
+          // del dedup (autoDescuentosVersion < 408). Esto recupera planillas hechas
+          // con v407 que el dedup buggy dejó sin descuentos.
+          const versionAplicada = Number(pl.autoDescuentosVersion) || 0;
+          const yaAplicadoNuevaVersion = (pl.autoDescuentos === true && versionAplicada >= AUTO_VERSION);
+          if (yaAplicadoNuevaVersion) return;
+          // Si tenemos auto-aplicados de versión vieja, limpiarlos antes de re-correr
+          if (pl.autoDescuentos === true && versionAplicada < AUTO_VERSION){
+            pl.descuentosPlanilla = (pl.descuentosPlanilla || []).filter(d => !d.autoAplicado);
+            pl.autoDescuentos = false;
+          }
           try {
             const r = window._v404AutoAplicarDescuentos(pl, p);
             if (r && (r.applied > 0 || r.skipped >= 0)) _appliedAny = true;
-            console.log('[v407] auto-apply on render — planilla', pl.id, '·', r);
-          } catch(e){ console.warn('[v407] auto-apply error:', e); }
+            console.log('[v408] auto-apply on render — planilla', pl.id, '·', r);
+          } catch(e){ console.warn('[v408] auto-apply error:', e); }
         });
         if (_appliedAny){
           try { if (typeof saveState === 'function') saveState(); } catch(e){}
@@ -35201,15 +35212,41 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         }
         h2 += '</div>';
       }
+      // v408: BANNER visible cuando auto-apply terminó con 0 aplicados pero hay
+      // descuentos disponibles (saltados por dedup u otro motivo). Solo se muestra
+      // en planillas activas para admin/gerente. Da explicación + botón para recalcular.
+      if ((pl.estado === 'pendiente_pm' || pl.estado === 'aprobada_inicial') && (isPM || isAdmin)
+          && pl.autoDescuentos === true && (pl.autoDescuentosApplied||0) === 0
+          && (pl.autoDescuentosSkipped||0) === 0
+          && (pl.descuentosPlanilla||[]).length === 0){
+        h2 += '<div style="margin:6px 14px;padding:12px 14px;background:#E3F2FD;border:1px solid #90CAF9;border-radius:6px;color:#0D47A1;font-size:11.5px;line-height:1.5">'
+          + '<strong style="display:block;margin-bottom:4px">SIN DESCUENTOS DISPONIBLES</strong>'
+          + 'Los colaboradores de esta planilla no tienen pólizas activas ni anticipos pendientes en el catálogo. Si esperás ver descuentos, verificá que las pólizas/anticipos estén registrados con el nombre exacto del colaborador.'
+          + '</div>';
+      } else if ((pl.estado === 'pendiente_pm' || pl.estado === 'aprobada_inicial') && (isPM || isAdmin)
+          && pl.autoDescuentos === true && (pl.autoDescuentosApplied||0) === 0
+          && (pl.autoDescuentosSkipped||0) > 0){
+        const detalle = (pl.autoDescuentosDetalle||[]).slice(0,5);
+        h2 += '<div style="margin:6px 14px;padding:12px 14px;background:#FFF3E0;border:1px solid #FFCC80;border-radius:6px;color:#9A3412;font-size:11.5px;line-height:1.5">'
+          + '<strong style="display:block;margin-bottom:4px">'+pl.autoDescuentosSkipped+' DESCUENTO(S) SALTADOS POR DEDUPLICACIÓN</strong>'
+          + 'Estos descuentos ya están aplicados en otra planilla de esta misma quincena, así que el sistema no los duplica:<br>'
+          + (detalle.length ? '<ul style="margin:6px 0 0 18px;padding:0;font-size:11px">'+detalle.map(d => '<li>'+esc(d)+'</li>').join('')+'</ul>' : '')
+          + '<div style="margin-top:8px;font-size:10.5px;color:#7B5800">Si necesitás que se apliquen acá, eliminá o rechazá la otra planilla, después click en RECALCULAR.</div>'
+          + '</div>';
+      }
       h2 += '<div style="padding:10px 14px;border-top:1px dashed '+colorBorde+';display:flex;flex-wrap:wrap;gap:8px;background:rgba(255,255,255,.4)">';
-      // v406: botón APLICAR DESCUENTOS AUTOMÁTICOS para recuperar planillas viejas
+      // v406/v408: botón APLICAR DESCUENTOS AUTOMÁTICOS para recuperar planillas viejas
       // o re-calcular si se agregaron anticipos/pólizas nuevos al catálogo.
-      // Visible para admin y gerente cuando la planilla aún se puede modificar.
+      // Más prominente: fondo morado lleno cuando no hay descuentos auto-aplicados.
       if ((pl.estado === 'pendiente_pm' || pl.estado === 'aprobada_inicial') && (isPM || isAdmin)){
         const yaAuto = (pl.descuentosPlanilla||[]).some(d => d.autoAplicado);
         const btnLabel = yaAuto ? 'RECALCULAR DESCUENTOS AUTO' : 'APLICAR DESCUENTOS AUTOMÁTICOS';
         const btnTitle = yaAuto ? 'Re-calcular los descuentos automáticos de esta planilla' : 'Aplicar pólizas + anticipos pendientes que correspondan a esta quincena';
-        h2 += '<button class="btn ghost" style="border-color:#7B1FA2;color:#7B1FA2" onclick="window._v406ReAplicarDescuentos(\''+esc(pl.id)+'\')" title="'+esc(btnTitle)+'">'+esc(btnLabel)+'</button>';
+        const btnStyle = yaAuto
+          ? 'border-color:#7B1FA2;color:#7B1FA2'
+          : 'background:#7B1FA2;border-color:#7B1FA2;color:#fff';
+        const btnClass = yaAuto ? 'btn ghost' : 'btn';
+        h2 += '<button class="'+btnClass+'" style="'+btnStyle+'" onclick="window._v406ReAplicarDescuentos(\''+esc(pl.id)+'\')" title="'+esc(btnTitle)+'">'+esc(btnLabel)+'</button>';
       }
       // v282: primera aprobacion del gerente — envia a descuentos.
       if(pl.estado === 'pendiente_pm' && (isPM || isAdmin)){
@@ -39737,11 +39774,15 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     return { si:false };
   }
 
-  // Verifica si un anticipo ya fue aplicado a este colab en otra planilla de la misma quincena
-  function _anticipoYaAplicadoEnQuincena(anticipoId, quincena, excludePlanillaId){
+  // v408: Verifica si LA MISMA CUOTA de un anticipo ya fue aplicada en otra
+  // planilla de la misma quincena. Distintas cuotas del mismo anticipo NO
+  // dedupean — un anticipo a 6 cuotas paga 1 distinta por quincena.
+  function _anticipoYaAplicadoEnQuincena(anticipoId, cuotaActual, quincena, excludePlanillaId){
     const otras = _planillasMismaQuincena(quincena, excludePlanillaId);
     for (const o of otras){
-      const ya = (o.planilla.descuentosPlanilla||[]).some(d => d.anticipoId === anticipoId);
+      const ya = (o.planilla.descuentosPlanilla||[]).some(d =>
+        d.anticipoId === anticipoId && Number(d.cuotaActual) === Number(cuotaActual)
+      );
       if (ya) return { si:true, proyecto: o.proyecto.name, planillaId: o.planilla.id };
     }
     return { si:false };
@@ -39808,10 +39849,13 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       // ── ANTICIPOS (1 línea por cada anticipo pendiente)
       const anticipos = _anticiposPendientesParaColab(c.nombre);
       anticipos.forEach(ant => {
-        const yaAplic = _anticipoYaAplicadoEnQuincena(ant.anticipo.id, quincena, pl.id);
+        // v408: dedup por (anticipoId + cuotaActual), no solo por anticipoId.
+        // Esto permite aplicar la cuota 3 aunque otra planilla en la misma
+        // quincena tenga la cuota 2 del mismo anticipo.
+        const yaAplic = _anticipoYaAplicadoEnQuincena(ant.anticipo.id, ant.cuotaActual, quincena, pl.id);
         if (yaAplic.si){
           skipped++;
-          detalleLog.push(c.nombre+' · anticipo '+(ant.anticipo.desc||'').slice(0,30)+' saltado (ya en '+yaAplic.proyecto+')');
+          detalleLog.push(c.nombre+' · cuota '+ant.cuotaActual+'/'+ant.total+' de '+(ant.anticipo.desc||'').slice(0,30)+' saltada (ya en '+yaAplic.proyecto+')');
           return;
         }
         const subtipoAnt = ant.anticipo.subtipo || 'PRESTAMO_PERSONAL';
@@ -39839,6 +39883,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     pl.autoDescuentos = true;
     pl.autoDescuentosTs = ahora;
     pl.autoDescuentosQuincena = quincena;
+    pl.autoDescuentosVersion = 408;  // v408: bump por fix de dedup anticipo por cuotaActual
+    pl.autoDescuentosApplied = applied;
+    pl.autoDescuentosSkipped = skipped;
+    pl.autoDescuentosDetalle = detalleLog.slice(0, 20);  // primeras 20 razones para mostrar en UI
 
     // Log al historial de la planilla
     if (!Array.isArray(pl.historial)) pl.historial = [];
