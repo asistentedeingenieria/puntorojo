@@ -2767,7 +2767,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v409</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v410</span>
   </footer>
 
 </div>
@@ -35025,12 +35025,9 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         && (can('users.manage') || can('planilla.authorize') || can('planilla.generate') || can('planilla.descuentos'));
       if (_autoApplyAllowed && typeof window._v404AutoAplicarDescuentos === 'function'){
         let _appliedAny = false;
-        const AUTO_VERSION = 408;
+        const AUTO_VERSION = 410;  // v410: bump después del fix de marcado prematuro
         arr.forEach(pl => {
           if (pl.estado !== 'pendiente_pm' && pl.estado !== 'aprobada_inicial') return;
-          // v408: re-aplicar también si la planilla se procesó con una versión vieja
-          // del dedup (autoDescuentosVersion < 408). Esto recupera planillas hechas
-          // con v407 que el dedup buggy dejó sin descuentos.
           const versionAplicada = Number(pl.autoDescuentosVersion) || 0;
           const yaAplicadoNuevaVersion = (pl.autoDescuentos === true && versionAplicada >= AUTO_VERSION);
           if (yaAplicadoNuevaVersion) return;
@@ -35038,12 +35035,13 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           if (pl.autoDescuentos === true && versionAplicada < AUTO_VERSION){
             pl.descuentosPlanilla = (pl.descuentosPlanilla || []).filter(d => !d.autoAplicado);
             pl.autoDescuentos = false;
+            pl.autoDescuentosVersion = 0;
           }
           try {
             const r = window._v404AutoAplicarDescuentos(pl, p);
             if (r && (r.applied > 0 || r.skipped >= 0)) _appliedAny = true;
-            console.log('[v408] auto-apply on render — planilla', pl.id, '·', r);
-          } catch(e){ console.warn('[v408] auto-apply error:', e); }
+            console.log('[v410] auto-apply on render — planilla', pl.id, '·', r);
+          } catch(e){ console.warn('[v410] auto-apply error:', e); }
         });
         if (_appliedAny){
           try { if (typeof saveState === 'function') saveState(); } catch(e){}
@@ -39914,14 +39912,28 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       });
     });
 
-    // Marcar la planilla para que sepamos que tiene descuentos auto-aplicados
-    pl.autoDescuentos = true;
-    pl.autoDescuentosTs = ahora;
-    pl.autoDescuentosQuincena = quincena;
-    pl.autoDescuentosVersion = 408;  // v408: bump por fix de dedup anticipo por cuotaActual
-    pl.autoDescuentosApplied = applied;
-    pl.autoDescuentosSkipped = skipped;
-    pl.autoDescuentosDetalle = detalleLog.slice(0, 20);  // primeras 20 razones para mostrar en UI
+    // v410 FIX CRÍTICO: solo marcar autoDescuentos=true si el catálogo TIENE datos.
+    // Si state.anticiposGlobales/polizasGlobales están vacíos (state aún cargando
+    // de Firestore), NO marcar — así el siguiente render lo reintenta cuando
+    // los datos ya estén disponibles. Antes esto se marcaba siempre y la planilla
+    // se quedaba bloqueada con autoDescuentos=true / 0 aplicados / 0 saltados.
+    const _s = (typeof state !== 'undefined') ? state : window.state;
+    const _catalogoHasData = !!_s && (
+      (Array.isArray(_s.anticiposGlobales) && _s.anticiposGlobales.length > 0)
+      || (Array.isArray(_s.polizasGlobales) && _s.polizasGlobales.length > 0)
+    );
+    if (applied > 0 || skipped > 0 || _catalogoHasData){
+      pl.autoDescuentos = true;
+      pl.autoDescuentosTs = ahora;
+      pl.autoDescuentosQuincena = quincena;
+      pl.autoDescuentosVersion = 410;  // v410: bump por fix del marcado prematuro
+      pl.autoDescuentosApplied = applied;
+      pl.autoDescuentosSkipped = skipped;
+      pl.autoDescuentosDetalle = detalleLog.slice(0, 20);
+    } else {
+      // Catálogo todavía no cargó — no marcar, reintentar en próximo render
+      console.warn('[v410] catálogo vacío al auto-aplicar planilla', pl.id, '— reintentará en próximo render');
+    }
 
     // Log al historial de la planilla
     if (!Array.isArray(pl.historial)) pl.historial = [];
@@ -40918,9 +40930,19 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const dropId = inputId + '-cbDrop';
     return ''
       + '<div style="position:relative">'
-      +   '<input id="'+_h(inputId)+'" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" role="combobox" name="cb_'+_h(inputId)+'" value="'+_h(currentName)+'" placeholder="'+_h(ph)+'" '
+      // v410: trick readonly+onfocus para que Chrome no muestre sugerencias de email/password.
+      // El input arranca readonly (Chrome ignora autofill en readonly) y se quita al hacer
+      // focus la primera vez. Combinado con autocomplete="new-password" que Chrome respeta más
+      // que "off". El name aleatorio evita que asocie con saved logins.
+      +   '<input id="'+_h(inputId)+'" type="text" '
+      +     'autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" '
+      +     'data-lpignore="true" data-1p-ignore="true" data-form-type="other" '
+      +     'role="combobox" '
+      +     'name="cb_random_'+_h(inputId)+'_'+Date.now()+'" '
+      +     'readonly '
+      +     'value="'+_h(currentName)+'" placeholder="'+_h(ph)+'" '
+      +     'onfocus="this.removeAttribute(\'readonly\'); window._v391CbFilter(\''+_h(inputId)+'\',\''+_h(cb)+'\')" '
       +     'oninput="window._v391CbFilter(\''+_h(inputId)+'\',\''+_h(cb)+'\')" '
-      +     'onfocus="window._v391CbFilter(\''+_h(inputId)+'\',\''+_h(cb)+'\')" '
       +     'onblur="setTimeout(function(){ window._v391CbHide(\''+_h(inputId)+'\'); },180)" '
       +     'style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'
       +   '<div id="'+_h(dropId)+'" style="display:none;position:absolute;top:calc(100% + 2px);left:0;right:0;max-height:260px;overflow-y:auto;background:#fff;border:1px solid #CBD5E1;border-radius:6px;box-shadow:0 6px 16px rgba(15,23,42,.12);z-index:9999"></div>'
