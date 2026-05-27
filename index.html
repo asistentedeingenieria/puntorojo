@@ -2732,7 +2732,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v401</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v402</span>
   </footer>
 
 </div>
@@ -36473,6 +36473,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   function _getOCs(p){ p = p || _activeProj(); if (!p) return []; if (!p.planilla) p.planilla = {}; if (!Array.isArray(p.planilla.ocCatalogo)) p.planilla.ocCatalogo = []; return p.planilla.ocCatalogo; }
   function _puedeEditar(){ try { return typeof can === 'function' && (can('users.manage') || can('planilla.descuentos')); } catch(e){ return false; } }
 
+  // v402: helpers para agrupar el catalogo por OC#
+  function _normNum(n){ return String(n||'').trim().toUpperCase(); }
+  function _agruparPorOC(ocs){ const grupos={}, orden=[]; ocs.forEach(oc=>{ const k=_normNum(oc.numero); if(!grupos[k]){ grupos[k]={numero:oc.numero, renglones:[]}; orden.push(k);} grupos[k].renglones.push(oc); }); return orden.map(k=>grupos[k]); }
+
   window.renderPlanillaOCs = function(){
     const cont = document.getElementById('planilla-ocs');
     if (!cont) return;
@@ -36482,45 +36486,123 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const puedeEditar = _puedeEditar();
     const filtroEstatus = window._ocFiltroEstatus || 'todas';
     const filtroNumero = String(window._ocFiltroNumero || '').trim().toLowerCase();
-    const filas = ocs.filter(oc => { if (filtroEstatus !== 'todas' && oc.estatus !== filtroEstatus) return false; if (filtroNumero && !String(oc.numero||'').toLowerCase().includes(filtroNumero)) return false; return true; }).sort((a,b) => { const na = parseInt(a.numero,10); const nb = parseInt(b.numero,10); if (!isNaN(na) && !isNaN(nb)) return na - nb; return String(a.numero||'').localeCompare(String(b.numero||'')); });
-    const activas = ocs.filter(x => x.estatus === 'ACTIVA').length;
-    const canceladas = ocs.filter(x => x.estatus === 'CANCELADA').length;
-    const totalActivas = ocs.filter(x => x.estatus === 'ACTIVA').reduce((s,oc) => s + (Number(oc.precio)||0), 0);
+    const itemsFiltrados = ocs.filter(oc => { if (filtroEstatus !== 'todas' && oc.estatus !== filtroEstatus) return false; if (filtroNumero && !String(oc.numero||'').toLowerCase().includes(filtroNumero)) return false; return true; });
+    const grupos = _agruparPorOC(itemsFiltrados).sort((a,b) => { const na=parseInt(a.numero,10), nb=parseInt(b.numero,10); if (!isNaN(na)&&!isNaN(nb)) return na-nb; return String(a.numero||'').localeCompare(String(b.numero||'')); });
+    const todosGrupos = _agruparPorOC(ocs);
+    const ocsActivas = todosGrupos.filter(g => g.renglones.some(r=>r.estatus==='ACTIVA')).length;
+    const ocsCanceladas = todosGrupos.filter(g => g.renglones.every(r=>r.estatus==='CANCELADA')).length;
+    const totalRenglonesActivos = ocs.filter(x => x.estatus === 'ACTIVA').length;
+
     let html = '';
-    html += '<div class="card"><div class="card-hd"><h3>CATÁLOGO DE ÓRDENES DE CAMBIO</h3><span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Trabajos extra por OC · '+_h(p.name||'')+'</span>';
-    if (puedeEditar) html += '<button class="btn sm" style="background:#7B1FA2;border-color:#7B1FA2;color:#fff" onclick="window.agregarOC()">+ AGREGAR OC</button>';
+    html += '<div class="card"><div class="card-hd"><h3>CATÁLOGO DE ÓRDENES DE CAMBIO</h3><span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">1 OC puede tener varios renglones · '+_h(p.name||'')+'</span>';
+    if (puedeEditar) html += '<button class="btn sm" style="background:#7B1FA2;border-color:#7B1FA2;color:#fff" onclick="window.agregarOC()">+ AGREGAR OC NUEVA</button>';
     html += '</div>';
     html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:14px 16px;background:var(--cream);border-bottom:1px solid var(--line)">';
-    html += '<div style="background:#fff;border:1px solid #E1BEE7;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">OCs ACTIVAS</div><div style="font-size:18px;font-weight:800;color:#7B1FA2;margin-top:3px">'+activas+'</div></div>';
-    html += '<div style="background:#fff;border:1px solid #BDBDBD;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">CANCELADAS</div><div style="font-size:18px;font-weight:800;color:#616161;margin-top:3px">'+canceladas+'</div></div>';
-    html += '<div style="background:#fff;border:1px solid #E1BEE7;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">PRECIO UNIT. ACUM. (ACTIVAS)</div><div style="font-size:16px;font-weight:800;color:#7B1FA2;margin-top:3px">'+_money(totalActivas)+'</div></div>';
+    html += '<div style="background:#fff;border:1px solid #E1BEE7;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">OCs ACTIVAS</div><div style="font-size:18px;font-weight:800;color:#7B1FA2;margin-top:3px">'+ocsActivas+'</div></div>';
+    html += '<div style="background:#fff;border:1px solid #BDBDBD;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">OCs CANCELADAS</div><div style="font-size:18px;font-weight:800;color:#616161;margin-top:3px">'+ocsCanceladas+'</div></div>';
+    html += '<div style="background:#fff;border:1px solid #E1BEE7;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">RENGLONES ACTIVOS</div><div style="font-size:18px;font-weight:800;color:#7B1FA2;margin-top:3px">'+totalRenglonesActivos+'</div></div>';
     html += '</div>';
     html += '<div style="display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap">';
     html += '<label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700">ESTATUS</label><select onchange="window._ocFiltroEstatus=this.value; window.renderPlanillaOCs()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"><option value="todas"'+(filtroEstatus==='todas'?' selected':'')+'>TODAS</option>';
     ESTATUS_OPTS.forEach(s => { html += '<option value="'+s+'"'+(s===filtroEstatus?' selected':'')+'>'+s+'</option>'; });
     html += '</select><label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700;margin-left:10px">BUSCAR OC #</label><input type="text" placeholder="ej: 14" value="'+_h(window._ocFiltroNumero||'')+'" oninput="window._ocFiltroNumero=this.value; window.renderPlanillaOCs()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px;width:120px"></div>';
-    html += '<div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:40px;text-align:center">#</th><th style="width:90px">OC #</th><th>DESCRIPCIÓN</th><th style="width:80px;text-align:center">UNIDAD</th><th class="num" style="width:120px">PRECIO Q</th><th style="width:110px">ESTATUS</th>'+(puedeEditar?'<th style="width:160px"></th>':'')+'</tr></thead><tbody>';
-    if (filas.length === 0){ html += '<tr><td colspan="'+(puedeEditar?7:6)+'" style="text-align:center;padding:30px;color:var(--mute);font-size:11px;letter-spacing:1px">SIN OCs REGISTRADAS · AGREGÁ LA PRIMERA</td></tr>'; }
-    else {
-      filas.forEach((oc, idx) => {
-        const estBadge = oc.estatus === 'ACTIVA' ? '<span class="planilla-badge" style="background:#F3E5F5;color:#7B1FA2;border:1px solid #7B1FA2">ACTIVA</span>' : '<span class="planilla-badge" style="background:#FFEBEE;color:#C62828;border:1px solid #C62828">CANCELADA</span>';
-        const filaStyle = oc.estatus === 'CANCELADA' ? 'opacity:.55;background:#FAFAFA' : '';
-        html += '<tr style="'+filaStyle+'"><td style="text-align:center;font-size:10px;font-weight:700;color:#94A3B8">'+(idx+1)+'</td><td style="font-size:12px;font-weight:800;color:#7B1FA2">OC #'+_h(oc.numero||'?')+'</td><td style="font-size:11px;line-height:1.4'+(oc.estatus==='CANCELADA'?';text-decoration:line-through':'')+'">'+_h(oc.descripcion||'—')+'</td><td style="text-align:center;font-size:10.5px;font-weight:700">'+_h(oc.unidad ? _normUnidad(oc.unidad) : '—')+'</td><td class="num" style="font-weight:800;color:#0F172A">'+_money(oc.precio)+'</td><td>'+estBadge+'</td>';
+    if (grupos.length === 0){
+      html += '<div class="empty" style="padding:40px;text-align:center;color:var(--mute);font-size:11px;letter-spacing:1px">SIN OCs REGISTRADAS · AGREGÁ LA PRIMERA</div>';
+    } else {
+      grupos.forEach(g => {
+        const renglonesActivos = g.renglones.filter(r => r.estatus === 'ACTIVA').length;
+        const renglonesTotal = g.renglones.length;
+        const todoCancelado = renglonesActivos === 0;
+        const headerBg = todoCancelado ? '#FAFAFA' : '#F3E5F5';
+        const headerColor = todoCancelado ? '#616161' : '#7B1FA2';
+        html += '<div style="border-bottom:1px solid var(--line)">';
+        html += '<div style="display:flex;align-items:center;gap:12px;padding:11px 16px;background:'+headerBg+';border-bottom:1px solid '+(todoCancelado?'#E0E0E0':'#E1BEE7')+'">';
+        html += '<div style="font-size:14px;font-weight:800;color:'+headerColor+';letter-spacing:.3px">OC #'+_h(g.numero||'?')+'</div>';
+        html += '<div style="flex:1;font-size:10px;color:#666;letter-spacing:.5px">'+renglonesTotal+' RENGLÓN'+(renglonesTotal!==1?'ES':'')+(renglonesActivos<renglonesTotal?' · '+renglonesActivos+' ACTIVO'+(renglonesActivos!==1?'S':''):'')+'</div>';
         if (puedeEditar){
-          html += '<td style="white-space:nowrap"><button class="btn ghost sm" onclick="window.editarOC(\''+_h(oc.id)+'\')" style="font-size:9px">EDITAR</button> ';
-          if (oc.estatus === 'CANCELADA') html += '<button class="btn ghost sm" style="color:#7B1FA2;border-color:#7B1FA2;font-size:9px" onclick="window.reactivarOC(\''+_h(oc.id)+'\')">REACTIVAR</button> ';
-          else html += '<button class="btn ghost sm" style="color:#F57C00;border-color:#F57C00;font-size:9px" onclick="window.darDeBajaOC(\''+_h(oc.id)+'\')">DAR DE BAJA</button> ';
-          html += '<button class="btn ghost sm" style="color:var(--red);font-size:9px" onclick="window.eliminarOC(\''+_h(oc.id)+'\')">✕</button></td>';
+          if (!todoCancelado){
+            html += '<button class="btn ghost sm" style="font-size:9.5px;color:#7B1FA2;border-color:#7B1FA2" onclick="window.agregarRenglonAOC(\''+_h(g.numero||'')+'\')">+ RENGLÓN</button> ';
+            html += '<button class="btn ghost sm" style="font-size:9.5px;color:#F57C00;border-color:#F57C00" onclick="window.darDeBajaOCNumero(\''+_h(g.numero||'')+'\')">DAR DE BAJA OC</button>';
+          } else {
+            html += '<button class="btn ghost sm" style="font-size:9.5px;color:#7B1FA2;border-color:#7B1FA2" onclick="window.reactivarOCNumero(\''+_h(g.numero||'')+'\')">REACTIVAR OC</button>';
+          }
         }
-        html += '</tr>';
+        html += '</div>';
+        html += '<div class="tbl-wrap" style="border:none"><table class="tbl" style="border:none"><thead><tr><th style="width:40px;text-align:center">#</th><th>DESCRIPCIÓN</th><th style="width:80px;text-align:center">UNIDAD</th><th class="num" style="width:120px">PRECIO Q</th><th style="width:110px">ESTATUS</th>'+(puedeEditar?'<th style="width:170px"></th>':'')+'</tr></thead><tbody>';
+        g.renglones.forEach((oc, idx) => {
+          const estBadge = oc.estatus === 'ACTIVA' ? '<span class="planilla-badge" style="background:#F3E5F5;color:#7B1FA2;border:1px solid #7B1FA2">ACTIVA</span>' : '<span class="planilla-badge" style="background:#FFEBEE;color:#C62828;border:1px solid #C62828">CANCELADA</span>';
+          const filaStyle = oc.estatus === 'CANCELADA' ? 'opacity:.55;background:#FAFAFA' : '';
+          html += '<tr style="'+filaStyle+'"><td style="text-align:center;font-size:10px;font-weight:700;color:#94A3B8">'+(idx+1)+'</td><td style="font-size:11px;line-height:1.4'+(oc.estatus==='CANCELADA'?';text-decoration:line-through':'')+'">'+_h(oc.descripcion||'—')+'</td><td style="text-align:center;font-size:10.5px;font-weight:700">'+_h(oc.unidad?_normUnidad(oc.unidad):'—')+'</td><td class="num" style="font-weight:800;color:#0F172A">'+_money(oc.precio)+'</td><td>'+estBadge+'</td>';
+          if (puedeEditar){
+            html += '<td style="white-space:nowrap"><button class="btn ghost sm" onclick="window.editarOC(\''+_h(oc.id)+'\')" style="font-size:9px">EDITAR</button> ';
+            if (oc.estatus === 'CANCELADA') html += '<button class="btn ghost sm" style="color:#7B1FA2;border-color:#7B1FA2;font-size:9px" onclick="window.reactivarOC(\''+_h(oc.id)+'\')">REACT.</button> ';
+            else html += '<button class="btn ghost sm" style="color:#F57C00;border-color:#F57C00;font-size:9px" onclick="window.darDeBajaOC(\''+_h(oc.id)+'\')">CANCELAR</button> ';
+            html += '<button class="btn ghost sm" style="color:var(--red);font-size:9px" onclick="window.eliminarOC(\''+_h(oc.id)+'\')">✕</button></td>';
+          }
+          html += '</tr>';
+        });
+        html += '</tbody></table></div></div>';
       });
     }
-    html += '</tbody></table></div></div>';
+    html += '</div>';
     cont.innerHTML = html;
   };
 
   // v387: captura en tiempo real con oninput/onchange. Pre-popula defaults en window._ocCapturedForm.
-  function _formHTML(oc){ oc = oc || {}; window._ocCapturedForm = { numero: String(oc.numero||''), descripcion: String(oc.descripcion||''), unidad: _normUnidad(oc.unidad), precio: Number(oc.precio)||0, estatus: oc.estatus || 'ACTIVA' }; return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;font-size:12px"><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">NÚMERO DE OC</label><input id="ocNumero" type="text" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).numero=this.value.trim()" value="'+_h(oc.numero||'')+'" placeholder="ej: 14" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"></div><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">UNIDAD</label><select id="ocUnidad" onchange="(window._ocCapturedForm=window._ocCapturedForm||{}).unidad=this.value" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'+UNIDAD_OPTS.map(u => '<option value="'+u+'"'+(u===_normUnidad(oc.unidad)?' selected':'')+'>'+u+'</option>').join('')+'</select></div><div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">DESCRIPCIÓN DEL TRABAJO</label><textarea id="ocDescripcion" rows="2" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).descripcion=this.value.trim()" placeholder="ej: Dintel a una cara calibre 20..." style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;resize:vertical">'+_h(oc.descripcion||'')+'</textarea></div><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">PRECIO UNITARIO (Q)</label><input id="ocPrecio" type="number" step="0.01" min="0" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).precio=Number(this.value)||0" value="'+(oc.precio||0)+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"></div><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">ESTATUS</label><select id="ocEstatus" onchange="(window._ocCapturedForm=window._ocCapturedForm||{}).estatus=this.value" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'+ESTATUS_OPTS.map(s => '<option value="'+s+'"'+(s===(oc.estatus||'ACTIVA')?' selected':'')+'>'+s+'</option>').join('')+'</select></div></div>'; }
+  // v402: parametro lockNumero para readonly al agregar renglon a OC existente
+  function _formHTML(oc, lockNumero){ oc = oc || {}; window._ocCapturedForm = { numero: String(oc.numero||''), descripcion: String(oc.descripcion||''), unidad: _normUnidad(oc.unidad), precio: Number(oc.precio)||0, estatus: oc.estatus || 'ACTIVA' }; const numAttr = lockNumero ? ' readonly style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700;background:#F3E5F5;color:#7B1FA2;cursor:not-allowed"' : ' style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"'; const numLabel = lockNumero ? 'OC # (BLOQUEADO · AGREGANDO RENGLÓN)' : 'NÚMERO DE OC'; return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;font-size:12px"><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">'+numLabel+'</label><input id="ocNumero" type="text" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).numero=this.value.trim()" value="'+_h(oc.numero||'')+'" placeholder="ej: 14"'+numAttr+'></div><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">UNIDAD</label><select id="ocUnidad" onchange="(window._ocCapturedForm=window._ocCapturedForm||{}).unidad=this.value" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'+UNIDAD_OPTS.map(u => '<option value="'+u+'"'+(u===_normUnidad(oc.unidad)?' selected':'')+'>'+u+'</option>').join('')+'</select></div><div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">DESCRIPCIÓN DEL TRABAJO</label><textarea id="ocDescripcion" rows="2" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).descripcion=this.value.trim()" placeholder="ej: Dintel a una cara calibre 20..." style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;resize:vertical">'+_h(oc.descripcion||'')+'</textarea></div><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">PRECIO UNITARIO (Q)</label><input id="ocPrecio" type="number" step="0.01" min="0" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).precio=Number(this.value)||0" value="'+(oc.precio||0)+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"></div><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">ESTATUS</label><select id="ocEstatus" onchange="(window._ocCapturedForm=window._ocCapturedForm||{}).estatus=this.value" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'+ESTATUS_OPTS.map(s => '<option value="'+s+'"'+(s===(oc.estatus||'ACTIVA')?' selected':'')+'>'+s+'</option>').join('')+'</select></div></div>'; }
+
+  // v402: agregar renglon a OC# existente
+  window.agregarRenglonAOC = async function(ocNumero){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const p = _activeProj();
+    if (!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    const ok = await window.prConfirm({ title:'AGREGAR RENGLÓN A OC #'+ocNumero, bodyHTML:_formHTML({numero:ocNumero}, true), okText:'GUARDAR RENGLÓN', wide:true });
+    if (!ok) { window._ocCapturedForm = null; return; }
+    const form = window._ocCapturedForm || {};
+    form.numero = ocNumero;
+    if (!form.descripcion) { showT('INGRESÁ LA DESCRIPCIÓN','red'); return; }
+    if (!form.precio || form.precio <= 0) { showT('PRECIO INVÁLIDO','red'); return; }
+    const ocs = _getOCs(p);
+    const ocNew = Object.assign({ id:'oc-'+Date.now()+'-'+Math.random().toString(36).slice(2,8), creadoPor:(typeof window._getUserEmail==='function'?window._getUserEmail():''), ts:Date.now() }, form);
+    ocs.push(ocNew);
+    try { if(typeof saveState==='function') saveState(); } catch(e){}
+    try { if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _notifAdminOCChange('NUEVO RENGLÓN', ocNew);
+    window._ocCapturedForm = null;
+    window.renderPlanillaOCs();
+    showT('RENGLÓN AGREGADO A OC #'+ocNumero,'green');
+  };
+
+  // v402: dar de baja TODOS los renglones de un OC#
+  window.darDeBajaOCNumero = async function(ocNumero){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const renglones = _getOCs().filter(x => _normNum(x.numero) === _normNum(ocNumero) && x.estatus === 'ACTIVA');
+    if (renglones.length === 0){ showT('NO HAY RENGLONES ACTIVOS','red'); return; }
+    const ok = await window.prConfirm({ title:'Dar de baja OC #'+ocNumero+' COMPLETA', bodyHTML:'<div style="font-size:12.5px;color:#333;line-height:1.5">Se van a cancelar <strong>'+renglones.length+' renglón'+(renglones.length!==1?'es':'')+'</strong>.</div><ul style="margin:10px 0 0 18px;padding:0;font-size:11.5px;color:#555;max-height:200px;overflow:auto">'+renglones.map(r => '<li>'+_h(r.descripcion||'')+'</li>').join('')+'</ul>', okText:'DAR DE BAJA OC #'+ocNumero, danger:true });
+    if (!ok) return;
+    renglones.forEach(r => { r.estatus = 'CANCELADA'; });
+    try { if(typeof saveState==='function') saveState(); } catch(e){}
+    try { if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _notifAdminOCChange('OC COMPLETA DADA DE BAJA', {numero:ocNumero, descripcion:renglones.length+' renglones cancelados', precio:0, unidad:''});
+    window.renderPlanillaOCs();
+    showT('OC #'+ocNumero+' CANCELADA · '+renglones.length+' RENGLONES','green');
+  };
+
+  // v402: reactivar TODOS los renglones cancelados de un OC#
+  window.reactivarOCNumero = async function(ocNumero){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const renglones = _getOCs().filter(x => _normNum(x.numero) === _normNum(ocNumero) && x.estatus === 'CANCELADA');
+    if (renglones.length === 0){ showT('NO HAY RENGLONES CANCELADOS','red'); return; }
+    const ok = await window.prConfirm({ title:'Reactivar OC #'+ocNumero, bodyHTML:'<div style="font-size:12.5px;color:#333">Se reactivarán <strong>'+renglones.length+' renglón'+(renglones.length!==1?'es':'')+'</strong>.</div>', okText:'REACTIVAR OC #'+ocNumero });
+    if (!ok) return;
+    renglones.forEach(r => { r.estatus = 'ACTIVA'; });
+    try { if(typeof saveState==='function') saveState(); } catch(e){}
+    try { if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _notifAdminOCChange('OC COMPLETA REACTIVADA', {numero:ocNumero, descripcion:renglones.length+' renglones', precio:0, unidad:''});
+    window.renderPlanillaOCs();
+    showT('OC #'+ocNumero+' REACTIVADA','green');
+  };
   // v389: sin guardrail isAdmin — _notifyByPerm ya excluye al actor automáticamente.
   function _notifAdminOCChange(accion, oc){ try { if (typeof _notifyByPerm !== 'function') return; const u = (typeof currentUser !== 'undefined') ? currentUser : null; const actorName = ((u && (u.displayName || u.username || u.email)) || 'USUARIO').toUpperCase(); const proj = _activeProj(); const projName = proj ? proj.name : ''; const body = (projName ? projName + ' · ' : '') + 'OC #'+(oc.numero||'?')+' · '+_money(oc.precio)+'/'+oc.unidad+' · '+(oc.descripcion||'').slice(0,150); _notifyByPerm('users.manage', { type: 'oc-' + accion.toLowerCase().replace(/\s+/g,'-'), title: actorName + ' · OC ' + accion, body: body.slice(0, 300), projectId: proj ? proj.id : null }).catch(()=>{}); } catch(e){ console.warn('[v382] notif OC:', e); } }
 

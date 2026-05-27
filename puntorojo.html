@@ -2767,7 +2767,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v401</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v402</span>
   </footer>
 
 </div>
@@ -38495,7 +38495,22 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   }
   function _puedeEditar(){ try { return typeof can === 'function' && (can('users.manage') || can('planilla.descuentos')); } catch(e){ return false; } }
 
-  // ── RENDER ────────────────────────────────────────────────────
+  // ── v402: helper para normalizar número de OC ────────────────
+  function _normNum(n){ return String(n||'').trim().toUpperCase(); }
+
+  // ── v402: agrupa renglones del catalogo por OC#, manteniendo orden de inserción dentro del grupo
+  function _agruparPorOC(ocs){
+    const grupos = {};
+    const orden = [];
+    ocs.forEach(oc => {
+      const k = _normNum(oc.numero);
+      if (!grupos[k]){ grupos[k] = { numero: oc.numero, renglones: [] }; orden.push(k); }
+      grupos[k].renglones.push(oc);
+    });
+    return orden.map(k => grupos[k]);
+  }
+
+  // ── RENDER (v402: agrupado por OC#) ───────────────────────────
   window.renderPlanillaOCs = function(){
     const cont = document.getElementById('planilla-ocs');
     if (!cont) return;
@@ -38507,37 +38522,42 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const filtroEstatus = window._ocFiltroEstatus || 'todas';
     const filtroNumero = String(window._ocFiltroNumero || '').trim().toLowerCase();
 
-    const filas = ocs.filter(oc => {
+    // Filtrar items
+    const itemsFiltrados = ocs.filter(oc => {
       if (filtroEstatus !== 'todas' && oc.estatus !== filtroEstatus) return false;
       if (filtroNumero && !String(oc.numero||'').toLowerCase().includes(filtroNumero)) return false;
       return true;
-    }).sort((a,b) => {
-      // Ordenar por número (numérico si es posible, sino alfabético)
+    });
+
+    // Agrupar por número y ordenar
+    const grupos = _agruparPorOC(itemsFiltrados).sort((a,b) => {
       const na = parseInt(a.numero, 10);
       const nb = parseInt(b.numero, 10);
       if (!isNaN(na) && !isNaN(nb)) return na - nb;
       return String(a.numero||'').localeCompare(String(b.numero||''));
     });
 
-    const activas = ocs.filter(x => x.estatus === 'ACTIVA').length;
-    const canceladas = ocs.filter(x => x.estatus === 'CANCELADA').length;
-    const totalActivas = ocs.filter(x => x.estatus === 'ACTIVA').reduce((s,oc) => s + (Number(oc.precio)||0), 0);
+    // KPIs: contamos OCs distintas (no renglones)
+    const todosGrupos = _agruparPorOC(ocs);
+    const ocsActivas = todosGrupos.filter(g => g.renglones.some(r => r.estatus === 'ACTIVA')).length;
+    const ocsCanceladas = todosGrupos.filter(g => g.renglones.every(r => r.estatus === 'CANCELADA')).length;
+    const totalRenglonesActivos = ocs.filter(x => x.estatus === 'ACTIVA').length;
 
     let html = '';
     html += '<div class="card">';
     html += '<div class="card-hd">';
     html += '<h3>CATÁLOGO DE ÓRDENES DE CAMBIO</h3>';
-    html += '<span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Trabajos extra por OC · se cobran por cantidad ejecutada · '+_h(p.name||'')+'</span>';
+    html += '<span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Trabajos extra por OC · 1 OC puede tener varios renglones · '+_h(p.name||'')+'</span>';
     if (puedeEditar) {
-      html += '<button class="btn sm" style="background:#7B1FA2;border-color:#7B1FA2;color:#fff" onclick="window.agregarOC()">+ AGREGAR OC</button>';
+      html += '<button class="btn sm" style="background:#7B1FA2;border-color:#7B1FA2;color:#fff" onclick="window.agregarOC()">+ AGREGAR OC NUEVA</button>';
     }
     html += '</div>';
 
     // KPIs
     html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:14px 16px;background:var(--cream);border-bottom:1px solid var(--line)">';
-    html += '<div style="background:#fff;border:1px solid #E1BEE7;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">OCs ACTIVAS</div><div style="font-size:18px;font-weight:800;color:#7B1FA2;margin-top:3px">'+activas+'</div></div>';
-    html += '<div style="background:#fff;border:1px solid #BDBDBD;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">CANCELADAS</div><div style="font-size:18px;font-weight:800;color:#616161;margin-top:3px">'+canceladas+'</div></div>';
-    html += '<div style="background:#fff;border:1px solid #E1BEE7;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">PRECIO UNITARIO ACUM. (ACTIVAS)</div><div style="font-size:16px;font-weight:800;color:#7B1FA2;margin-top:3px">'+_money(totalActivas)+'</div></div>';
+    html += '<div style="background:#fff;border:1px solid #E1BEE7;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">OCs ACTIVAS</div><div style="font-size:18px;font-weight:800;color:#7B1FA2;margin-top:3px">'+ocsActivas+'</div></div>';
+    html += '<div style="background:#fff;border:1px solid #BDBDBD;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">OCs CANCELADAS</div><div style="font-size:18px;font-weight:800;color:#616161;margin-top:3px">'+ocsCanceladas+'</div></div>';
+    html += '<div style="background:#fff;border:1px solid #E1BEE7;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">RENGLONES ACTIVOS</div><div style="font-size:18px;font-weight:800;color:#7B1FA2;margin-top:3px">'+totalRenglonesActivos+'</div></div>';
     html += '</div>';
 
     // Filtros
@@ -38551,49 +38571,143 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     html += '<input type="text" placeholder="ej: 14" value="'+_h(window._ocFiltroNumero||'')+'" oninput="window._ocFiltroNumero=this.value; window.renderPlanillaOCs()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px;width:120px">';
     html += '</div>';
 
-    // Tabla
-    html += '<div class="tbl-wrap"><table class="tbl">';
-    html += '<thead><tr>';
-    html += '<th style="width:40px;text-align:center">#</th>';
-    html += '<th style="width:90px">OC #</th>';
-    html += '<th>DESCRIPCIÓN</th>';
-    html += '<th style="width:80px;text-align:center">UNIDAD</th>';
-    html += '<th class="num" style="width:120px">PRECIO Q</th>';
-    html += '<th style="width:110px">ESTATUS</th>';
-    if (puedeEditar) html += '<th style="width:160px"></th>';
-    html += '</tr></thead><tbody>';
-
-    if (filas.length === 0){
-      html += '<tr><td colspan="'+(puedeEditar?7:6)+'" style="text-align:center;padding:30px;color:var(--mute);font-size:11px;letter-spacing:1px">SIN OCs REGISTRADAS EN ESTE PROYECTO · AGREGÁ LA PRIMERA CON + AGREGAR OC</td></tr>';
+    // Listado agrupado por OC #
+    if (grupos.length === 0){
+      html += '<div class="empty" style="padding:40px;text-align:center;color:var(--mute);font-size:11px;letter-spacing:1px">SIN OCs REGISTRADAS EN ESTE PROYECTO · AGREGÁ LA PRIMERA CON + AGREGAR OC NUEVA</div>';
     } else {
-      filas.forEach((oc, idx) => {
-        const estBadge = oc.estatus === 'ACTIVA'
-          ? '<span class="planilla-badge" style="background:#F3E5F5;color:#7B1FA2;border:1px solid #7B1FA2">ACTIVA</span>'
-          : '<span class="planilla-badge" style="background:#FFEBEE;color:#C62828;border:1px solid #C62828">CANCELADA</span>';
-        const filaStyle = oc.estatus === 'CANCELADA' ? 'opacity:.55;background:#FAFAFA' : '';
-        html += '<tr style="'+filaStyle+'">';
-        html += '<td style="text-align:center;font-size:10px;font-weight:700;color:#94A3B8">'+(idx+1)+'</td>';
-        html += '<td style="font-size:12px;font-weight:800;color:#7B1FA2">OC #'+_h(oc.numero||'?')+'</td>';
-        html += '<td style="font-size:11px;line-height:1.4'+(oc.estatus==='CANCELADA'?';text-decoration:line-through':'')+'">'+_h(oc.descripcion||'—')+'</td>';
-        html += '<td style="text-align:center;font-size:10.5px;font-weight:700">'+_h(oc.unidad ? _normUnidad(oc.unidad) : '—')+'</td>';
-        html += '<td class="num" style="font-weight:800;color:#0F172A">'+_money(oc.precio)+'</td>';
-        html += '<td>'+estBadge+'</td>';
-        if (puedeEditar) {
-          html += '<td style="white-space:nowrap">';
-          html += '<button class="btn ghost sm" onclick="window.editarOC(\''+_h(oc.id)+'\')" style="font-size:9px">EDITAR</button> ';
-          if (oc.estatus === 'CANCELADA'){
-            html += '<button class="btn ghost sm" style="color:#7B1FA2;border-color:#7B1FA2;font-size:9px" onclick="window.reactivarOC(\''+_h(oc.id)+'\')" title="Reactivar">REACTIVAR</button> ';
+      grupos.forEach(g => {
+        const renglonesActivos = g.renglones.filter(r => r.estatus === 'ACTIVA').length;
+        const renglonesTotal = g.renglones.length;
+        const todoCancelado = renglonesActivos === 0;
+        const headerBg = todoCancelado ? '#FAFAFA' : '#F3E5F5';
+        const headerColor = todoCancelado ? '#616161' : '#7B1FA2';
+
+        html += '<div style="border-bottom:1px solid var(--line)">';
+        // HEADER del grupo
+        html += '<div style="display:flex;align-items:center;gap:12px;padding:11px 16px;background:'+headerBg+';border-bottom:1px solid '+(todoCancelado?'#E0E0E0':'#E1BEE7')+'">';
+        html += '<div style="font-size:14px;font-weight:800;color:'+headerColor+';letter-spacing:.3px">OC #'+_h(g.numero||'?')+'</div>';
+        html += '<div style="flex:1;font-size:10px;color:#666;letter-spacing:.5px">'+renglonesTotal+' RENGLÓN'+(renglonesTotal!==1?'ES':'')+(renglonesActivos<renglonesTotal?' · '+renglonesActivos+' ACTIVO'+(renglonesActivos!==1?'S':''):'')+'</div>';
+        if (puedeEditar){
+          if (!todoCancelado){
+            html += '<button class="btn ghost sm" style="font-size:9.5px;color:#7B1FA2;border-color:#7B1FA2" onclick="window.agregarRenglonAOC(\''+_h(g.numero||'')+'\')" title="Agregar renglón a este OC">+ RENGLÓN</button> ';
+            html += '<button class="btn ghost sm" style="font-size:9.5px;color:#F57C00;border-color:#F57C00" onclick="window.darDeBajaOCNumero(\''+_h(g.numero||'')+'\')" title="Cancelar todos los renglones de este OC">DAR DE BAJA OC</button>';
           } else {
-            html += '<button class="btn ghost sm" style="color:#F57C00;border-color:#F57C00;font-size:9px" onclick="window.darDeBajaOC(\''+_h(oc.id)+'\')" title="Marcar como CANCELADA">DAR DE BAJA</button> ';
+            html += '<button class="btn ghost sm" style="font-size:9.5px;color:#7B1FA2;border-color:#7B1FA2" onclick="window.reactivarOCNumero(\''+_h(g.numero||'')+'\')" title="Reactivar todos los renglones de este OC">REACTIVAR OC</button>';
           }
-          html += '<button class="btn ghost sm" style="color:var(--red);font-size:9px" onclick="window.eliminarOC(\''+_h(oc.id)+'\')" title="Eliminar definitivamente">✕</button>';
-          html += '</td>';
         }
-        html += '</tr>';
+        html += '</div>';
+
+        // Tabla de renglones del grupo
+        html += '<div class="tbl-wrap" style="border:none"><table class="tbl" style="border:none">';
+        html += '<thead><tr>';
+        html += '<th style="width:40px;text-align:center">#</th>';
+        html += '<th>DESCRIPCIÓN</th>';
+        html += '<th style="width:80px;text-align:center">UNIDAD</th>';
+        html += '<th class="num" style="width:120px">PRECIO Q</th>';
+        html += '<th style="width:110px">ESTATUS</th>';
+        if (puedeEditar) html += '<th style="width:170px"></th>';
+        html += '</tr></thead><tbody>';
+        g.renglones.forEach((oc, idx) => {
+          const estBadge = oc.estatus === 'ACTIVA'
+            ? '<span class="planilla-badge" style="background:#F3E5F5;color:#7B1FA2;border:1px solid #7B1FA2">ACTIVA</span>'
+            : '<span class="planilla-badge" style="background:#FFEBEE;color:#C62828;border:1px solid #C62828">CANCELADA</span>';
+          const filaStyle = oc.estatus === 'CANCELADA' ? 'opacity:.55;background:#FAFAFA' : '';
+          html += '<tr style="'+filaStyle+'">';
+          html += '<td style="text-align:center;font-size:10px;font-weight:700;color:#94A3B8">'+(idx+1)+'</td>';
+          html += '<td style="font-size:11px;line-height:1.4'+(oc.estatus==='CANCELADA'?';text-decoration:line-through':'')+'">'+_h(oc.descripcion||'—')+'</td>';
+          html += '<td style="text-align:center;font-size:10.5px;font-weight:700">'+_h(oc.unidad ? _normUnidad(oc.unidad) : '—')+'</td>';
+          html += '<td class="num" style="font-weight:800;color:#0F172A">'+_money(oc.precio)+'</td>';
+          html += '<td>'+estBadge+'</td>';
+          if (puedeEditar) {
+            html += '<td style="white-space:nowrap">';
+            html += '<button class="btn ghost sm" onclick="window.editarOC(\''+_h(oc.id)+'\')" style="font-size:9px">EDITAR</button> ';
+            if (oc.estatus === 'CANCELADA'){
+              html += '<button class="btn ghost sm" style="color:#7B1FA2;border-color:#7B1FA2;font-size:9px" onclick="window.reactivarOC(\''+_h(oc.id)+'\')" title="Reactivar renglón">REACT.</button> ';
+            } else {
+              html += '<button class="btn ghost sm" style="color:#F57C00;border-color:#F57C00;font-size:9px" onclick="window.darDeBajaOC(\''+_h(oc.id)+'\')" title="Cancelar este renglón solo">CANCELAR</button> ';
+            }
+            html += '<button class="btn ghost sm" style="color:var(--red);font-size:9px" onclick="window.eliminarOC(\''+_h(oc.id)+'\')" title="Eliminar renglón definitivamente">✕</button>';
+            html += '</td>';
+          }
+          html += '</tr>';
+        });
+        html += '</tbody></table></div>';
+        html += '</div>';
       });
     }
-    html += '</tbody></table></div></div>';
+    html += '</div>';
     cont.innerHTML = html;
+  };
+
+  // ── v402: agregar un renglón nuevo a una OC# existente
+  window.agregarRenglonAOC = async function(ocNumero){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const p = _activeProj();
+    if (!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    // Pre-popular el form con el número pre-llenado
+    const ok = await window.prConfirm({
+      title: 'AGREGAR RENGLÓN A OC #' + ocNumero,
+      bodyHTML: _formHTML({ numero: ocNumero }, /*lockNumero=*/true),
+      okText: 'GUARDAR RENGLÓN',
+      wide: true
+    });
+    if (!ok) { window._ocCapturedForm = null; return; }
+    const form = window._ocCapturedForm || {};
+    // forzar el numero al pasado (por si alguien lo cambió a mano via DOM)
+    form.numero = ocNumero;
+    if (!form.descripcion) { showT('INGRESÁ LA DESCRIPCIÓN','red'); return; }
+    if (!form.precio || form.precio <= 0) { showT('PRECIO INVÁLIDO','red'); return; }
+    const ocs = _getOCs(p);
+    const ocNew = Object.assign({
+      id: 'oc-' + Date.now() + '-' + Math.random().toString(36).slice(2,8),
+      creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''),
+      ts: Date.now()
+    }, form);
+    ocs.push(ocNew);
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _notifAdminOCChange('NUEVO RENGLÓN', ocNew);
+    window._ocCapturedForm = null;
+    window.renderPlanillaOCs();
+    showT('RENGLÓN AGREGADO A OC #'+ocNumero,'green');
+  };
+
+  // ── v402: dar de baja TODOS los renglones de un OC#
+  window.darDeBajaOCNumero = async function(ocNumero){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const renglones = _getOCs().filter(x => _normNum(x.numero) === _normNum(ocNumero) && x.estatus === 'ACTIVA');
+    if (renglones.length === 0){ showT('NO HAY RENGLONES ACTIVOS EN ESTE OC','red'); return; }
+    const ok = await window.prConfirm({
+      title: 'Dar de baja OC #' + ocNumero + ' COMPLETA',
+      bodyHTML: '<div style="font-size:12.5px;color:#333;line-height:1.5">Se van a cancelar <strong>'+renglones.length+' renglón'+(renglones.length!==1?'es':'')+'</strong> de OC #'+_h(ocNumero)+':</div><ul style="margin:10px 0 0 18px;padding:0;font-size:11.5px;color:#555;max-height:200px;overflow:auto">'+renglones.map(r => '<li>'+_h(r.descripcion||'')+' <span style="color:#888">· '+_money(r.precio)+'/'+_normUnidad(r.unidad)+'</span></li>').join('')+'</ul><div style="margin-top:14px;padding:10px 12px;background:#FFF3E0;border:1px solid #FFCC80;border-radius:6px;color:#9A3412;font-size:11.5px">Todos los renglones se marcarán como <strong>CANCELADOS</strong>. El historial se conserva. Podés reactivar después.</div>',
+      okText: 'DAR DE BAJA OC #' + ocNumero, danger: true
+    });
+    if (!ok) return;
+    renglones.forEach(r => { r.estatus = 'CANCELADA'; });
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _notifAdminOCChange('OC COMPLETA DADA DE BAJA', { numero: ocNumero, descripcion: renglones.length+' renglones cancelados', precio: 0, unidad: '' });
+    window.renderPlanillaOCs();
+    showT('OC #'+ocNumero+' CANCELADA · '+renglones.length+' RENGLONES','green');
+  };
+
+  // ── v402: reactivar TODOS los renglones cancelados de un OC#
+  window.reactivarOCNumero = async function(ocNumero){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const renglones = _getOCs().filter(x => _normNum(x.numero) === _normNum(ocNumero) && x.estatus === 'CANCELADA');
+    if (renglones.length === 0){ showT('NO HAY RENGLONES CANCELADOS EN ESTE OC','red'); return; }
+    const ok = await window.prConfirm({
+      title: 'Reactivar OC #' + ocNumero + ' COMPLETA',
+      bodyHTML: '<div style="font-size:12.5px;color:#333;line-height:1.5">Se van a reactivar <strong>'+renglones.length+' renglón'+(renglones.length!==1?'es':'')+'</strong> de OC #'+_h(ocNumero)+'.</div><div style="margin-top:14px;padding:10px 12px;background:#F3E5F5;border:1px solid #CE93D8;border-radius:6px;color:#6A1B9A;font-size:11.5px">Volverán a estar <strong>ACTIVOS</strong> y disponibles para futuras planillas.</div>',
+      okText: 'REACTIVAR OC #' + ocNumero
+    });
+    if (!ok) return;
+    renglones.forEach(r => { r.estatus = 'ACTIVA'; });
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _notifAdminOCChange('OC COMPLETA REACTIVADA', { numero: ocNumero, descripcion: renglones.length+' renglones reactivados', precio: 0, unidad: '' });
+    window.renderPlanillaOCs();
+    showT('OC #'+ocNumero+' REACTIVADA','green');
   };
 
   // ── FORMULARIO ────────────────────────────────────────────────
@@ -38602,7 +38716,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   // tiene su propio oninput/onchange que actualiza window._ocCapturedForm en
   // tiempo real. Pre-populamos los defaults al inicio de _formHTML así si el
   // usuario no cambia nada, el captured tiene los valores iniciales correctos.
-  function _formHTML(oc){
+  function _formHTML(oc, lockNumero){
     oc = oc || {};
     // Pre-populate _ocCapturedForm con los defaults (o valores existentes si es edición)
     window._ocCapturedForm = {
@@ -38612,9 +38726,12 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       precio: Number(oc.precio)||0,
       estatus: oc.estatus || 'ACTIVA'
     };
+    // v402: si lockNumero=true, el campo numero queda readonly (al agregar renglón a OC existente)
+    const numAttr = lockNumero ? ' readonly style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700;background:#F3E5F5;color:#7B1FA2;cursor:not-allowed"' : ' style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"';
+    const numLabel = lockNumero ? 'OC # (BLOQUEADO · ESTÁS AGREGANDO RENGLÓN)' : 'NÚMERO DE OC';
     return ''
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;font-size:12px">'
-      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">NÚMERO DE OC</label><input id="ocNumero" type="text" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).numero=this.value.trim()" value="'+_h(oc.numero||'')+'" placeholder="ej: 14" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"></div>'
+      +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">'+numLabel+'</label><input id="ocNumero" type="text" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).numero=this.value.trim()" value="'+_h(oc.numero||'')+'" placeholder="ej: 14"'+numAttr+'></div>'
       +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">UNIDAD</label><select id="ocUnidad" onchange="(window._ocCapturedForm=window._ocCapturedForm||{}).unidad=this.value" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'+UNIDAD_OPTS.map(u => '<option value="'+u+'"'+(u===_normUnidad(oc.unidad)?' selected':'')+'>'+u+'</option>').join('')+'</select></div>'
       +   '<div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">DESCRIPCIÓN DEL TRABAJO</label><textarea id="ocDescripcion" rows="2" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).descripcion=this.value.trim()" placeholder="ej: Dintel a una cara calibre 20 + cenefa horizontal + refuerzo de madera a 1.00 m" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;resize:vertical">'+_h(oc.descripcion||'')+'</textarea></div>'
       +   '<div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">PRECIO UNITARIO (Q)</label><input id="ocPrecio" type="number" step="0.01" min="0" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).precio=Number(this.value)||0" value="'+(oc.precio||0)+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"></div>'
@@ -38653,9 +38770,13 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if (!form.descripcion) { showT('INGRESÁ LA DESCRIPCIÓN','red'); return; }
     if (!form.precio || form.precio <= 0) { showT('PRECIO INVÁLIDO','red'); return; }
     const ocs = _getOCs(p);
-    // Verificar duplicado de número
+    // v402: verificar si el número ya existe — si sí, sugerir usar "+ RENGLÓN" en vez de crear nuevo paquete
     if (ocs.some(x => String(x.numero||'').trim().toUpperCase() === form.numero.toUpperCase())){
-      const conf = await window.prConfirm({ title:'NÚMERO YA EXISTE', body:'Ya existe una OC #'+form.numero+' en este proyecto. ¿Crear igual?', okText:'CREAR DE TODOS MODOS', danger:true });
+      const conf = await window.prConfirm({
+        title:'OC #'+form.numero+' YA EXISTE',
+        bodyHTML: '<div style="font-size:12.5px;color:#333;line-height:1.5">Ya hay una OC #'+_h(form.numero)+' en este proyecto.</div><div style="margin-top:14px;padding:10px 12px;background:#FFF3E0;border:1px solid #FFCC80;border-radius:6px;color:#9A3412;font-size:11.5px">Si querés <strong>agregar un renglón más</strong> a esa OC, cerrá este modal y usá el botón <strong>+ RENGLÓN</strong> en la fila de OC #'+_h(form.numero)+'.<br><br>Si querés <strong>crear otra OC con el mismo número</strong> (caso raro), continuá.</div>',
+        okText:'CREAR OTRA CON ESTE NÚMERO', danger:true
+      });
       if (!conf) return;
     }
     const ocNew = Object.assign({
