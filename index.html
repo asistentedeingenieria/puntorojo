@@ -2732,7 +2732,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v413</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v414</span>
   </footer>
 
 </div>
@@ -32785,18 +32785,45 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     return false;
   }
 
+  // v413: helper para chequear si un descuento se puede eliminar
+  //  - POLIZA con bloqueado:true → NUNCA (ni admin)
+  //  - autoAplicado=true (no POLIZA, ej. anticipos) → solo admin o gerente (planilla.authorize)
+  //  - manual → admin, gerente o persona de descuentos
+  window._v413PuedeEliminarDescuento = function(d){
+    if (!d) return false;
+    try {
+      const _can = typeof can === 'function' ? can : (()=>false);
+      const isAdmin = _can('users.manage');
+      const isGerente = _can('planilla.authorize');
+      const isDescuentos = _can('planilla.descuentos');
+      if (d.subtipo === 'POLIZA' && d.bloqueado === true) return false;
+      if (d.autoAplicado === true) return isAdmin || isGerente;
+      return isAdmin || isGerente || isDescuentos;
+    } catch(e){ return false; }
+  };
+
   window.eliminarDescuentoPlanilla = async function(planillaId, descuentoId){
-    if(!window.isDescuentosPlanilla()){ showT('SIN PERMISO','red'); return; }
     const p = _activeProj();
     if(!p) return;
     const pl = (p.planilla && p.planilla.planillasArmadas || []).find(x => x.id === planillaId);
     if(!pl){ showT('PLANILLA NO ENCONTRADA','red'); return; }
-    if(pl.estado !== 'aprobada_inicial'){ showT('NO SE PUEDE ELIMINAR DESCUENTOS DE UNA PLANILLA YA FINALIZADA','red'); return; }
-    // v337: defensa contra arrays no inicializados
+    // v413: permitir eliminar en pendiente_pm (gerente ajusta antes de autorizar) y aprobada_inicial (descuentos)
+    if(pl.estado !== 'aprobada_inicial' && pl.estado !== 'pendiente_pm'){ showT('NO SE PUEDE ELIMINAR DESCUENTOS DE UNA PLANILLA YA FINALIZADA','red'); return; }
     pl.descuentosPlanilla = pl.descuentosPlanilla || [];
     const idx = pl.descuentosPlanilla.findIndex(d => d && d.id === descuentoId);
     if(idx < 0){ showT('DESCUENTO NO ENCONTRADO · QUIZA YA FUE ELIMINADO','red'); return; }
     const d = pl.descuentosPlanilla[idx] || {};
+    // v413: validar permisos según tipo
+    if (!window._v413PuedeEliminarDescuento(d)){
+      if (d.subtipo === 'POLIZA' && d.bloqueado){
+        showT('LAS PÓLIZAS NO SE PUEDEN ELIMINAR · OBLIGATORIAS PARA TODOS','red');
+      } else if (d.autoAplicado){
+        showT('SOLO EL GERENTE O EL ADMIN PUEDEN ELIMINAR ANTICIPOS AUTO-APLICADOS','red');
+      } else {
+        showT('SIN PERMISO PARA ELIMINAR ESTE DESCUENTO','red');
+      }
+      return;
+    }
     const bodyHTML = ''
       + '<div style="display:grid;grid-template-columns:1fr auto;gap:6px 16px;font-size:12.5px;color:#333">'
       +   '<div>Trabajador</div><div style="text-align:right;font-weight:600">'+esc(d.colaboradorNombre||'—')+'</div>'
@@ -34233,22 +34260,42 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         });
         h2 += '</div>';
       }
-      // v248: bloque de DESCUENTOS APLICADOS
+      // v413: bloque de DESCUENTOS APLICADOS — ahora visible también en pendiente_pm
+      // (para que gerente vea los auto-descuentos antes de autorizar)
       const descuentosPl = pl.descuentosPlanilla || [];
-      if(pl.estado === 'aprobada_inicial' || pl.estado === 'pendiente_pm_final' || (pl.estado === 'aprobada' && descuentosPl.length > 0)){
+      const verBloqueDesc = (pl.estado === 'pendiente_pm' && descuentosPl.length > 0)
+        || pl.estado === 'aprobada_inicial'
+        || pl.estado === 'pendiente_pm_final'
+        || (pl.estado === 'aprobada' && descuentosPl.length > 0);
+      if(verBloqueDesc){
         const totDesc = descuentosPl.reduce((s,d)=>s+Number(d.monto||0),0);
+        const headerLabel = (pl.estado === 'pendiente_pm' && pl.autoDescuentos) ? 'DESCUENTOS AUTO-APLICADOS · ' : 'DESCUENTOS APLICADOS · ';
         h2 += '<div style="margin:0 14px 10px;padding:10px 12px;background:#fff;border-left:3px solid #1565C0;font-size:12px;border-radius:4px">';
-        h2 += '<div style="font-weight:600;margin-bottom:6px;color:#1565C0;display:flex;justify-content:space-between"><span>DESCUENTOS APLICADOS · '+descuentosPl.length+'</span>'+(descuentosPl.length>0?'<span style="color:#C62828">-'+money(totDesc)+'</span>':'')+'</div>';
+        h2 += '<div style="font-weight:600;margin-bottom:6px;color:#1565C0;display:flex;justify-content:space-between"><span>'+headerLabel+descuentosPl.length+'</span>'+(descuentosPl.length>0?'<span style="color:#C62828">-'+money(totDesc)+'</span>':'')+'</div>';
         if(descuentosPl.length === 0){
           h2 += '<div style="font-style:italic;color:#888;font-size:11px;padding:4px 0">— SIN DESCUENTOS AGREGADOS TODAVÍA —</div>';
         } else {
+          if (pl.autoDescuentos && (pl.estado === 'pendiente_pm' || pl.estado === 'aprobada_inicial')){
+            h2 += '<div style="font-size:10px;color:#15803D;background:#DCFCE7;padding:6px 8px;border-radius:4px;margin-bottom:6px;line-height:1.4">Sistema aplicó automáticamente. Las <strong>pólizas</strong> son obligatorias (no se eliminan). Los <strong>anticipos</strong> los puede quitar el Gerente o el Admin si decide no aplicarlos esta quincena.</div>';
+          }
           descuentosPl.forEach(d => {
             const cuotaTxt = (d.cuotasTotales && d.cuotasTotales > 1) ? '('+(d.cuotaActual||1)+'/'+d.cuotasTotales+') ' : '';
+            let badge = '';
+            if (d.subtipo === 'POLIZA' && d.bloqueado){
+              badge = '<span style="background:#7B1FA2;color:#fff;font-size:8.5px;font-weight:700;padding:2px 6px;border-radius:3px;letter-spacing:.5px;margin-left:5px">AUTO · BLOQUEADO</span>';
+            } else if (d.autoAplicado){
+              badge = '<span style="background:#1565C0;color:#fff;font-size:8.5px;font-weight:700;padding:2px 6px;border-radius:3px;letter-spacing:.5px;margin-left:5px">AUTO</span>';
+            }
             h2 += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-bottom:1px dashed #eee;font-size:11px">';
-            h2 += '<div style="flex:1"><strong>'+esc(d.colaboradorNombre || '')+'</strong> · '+esc(cuotaTxt + (d.desc || d.subtipo || ''))+'</div>';
+            h2 += '<div style="flex:1"><strong>'+esc(d.colaboradorNombre || '')+'</strong> · '+esc(cuotaTxt + (d.desc || d.subtipo || ''))+badge+'</div>';
             h2 += '<div style="font-weight:700;color:#C62828;min-width:80px;text-align:right">-'+money(d.monto||0)+'</div>';
-            if(pl.estado === 'aprobada_inicial' && (isDescPerm || isAdmin)){
+            // v413: botón eliminar respetando permisos y tipo
+            const canDelete = (typeof window._v413PuedeEliminarDescuento === 'function') ? window._v413PuedeEliminarDescuento(d) : (isDescPerm || isAdmin);
+            const editableState = (pl.estado === 'pendiente_pm' || pl.estado === 'aprobada_inicial');
+            if (editableState && canDelete){
               h2 += '<button class="btn ghost sm" onclick="window.eliminarDescuentoPlanilla(\''+esc(pl.id)+'\',\''+esc(d.id)+'\')" title="Eliminar descuento" style="color:#C62828;border-color:#C62828;font-size:9px;padding:2px 7px">×</button>';
+            } else if (editableState && d.subtipo === 'POLIZA' && d.bloqueado){
+              h2 += '<span title="Pólizas obligatorias · no se pueden eliminar" style="color:#7B1FA2;font-size:11px;padding:2px 6px">🔒</span>';
             }
             h2 += '</div>';
           });
