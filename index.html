@@ -2732,7 +2732,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v420</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v421</span>
   </footer>
 
 </div>
@@ -7575,17 +7575,38 @@ function migrateData(data){
 }
 
 function saveState(){
+  // v421: la NUBE (Firestore) es la fuente de verdad; localStorage es solo un
+  // cache para arranque rapido y modo offline. Por eso, aunque el cache local
+  // este lleno, SIEMPRE empujamos los cambios a la nube — asi nunca se pierde nada.
+  let localOk = true;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    updateStorageIndicator();
   } catch(e) {
-    console.error('Save error:', e);
-    showToast('ERROR AL GUARDAR — ALMACENAMIENTO LLENO', 'red');
-    updateStorageIndicator();
-    throw e;
+    localOk = false;
+    console.error('saveState: cache local lleno —', e);
   }
-  // Empuja también a la nube (debounced). Si Firebase aún no está listo, no hace nada.
-  try { if (typeof CloudSync !== 'undefined' && CloudSync.enabled) CloudSync.scheduleSave(); } catch(e) { console.warn('CloudSync error:', e); }
+  try { updateStorageIndicator(); } catch(e){}
+
+  // Empuje a la nube. Si el cache local fallo, forzamos subida INMEDIATA (sin
+  // debounce) para que el cambio quede a salvo cuanto antes; si el local quedo
+  // bien, mantenemos el debounce normal.
+  let cloudActive = false;
+  try {
+    if (typeof CloudSync !== 'undefined' && CloudSync.enabled) {
+      cloudActive = true;
+      if (localOk) CloudSync.scheduleSave();
+      else Promise.resolve(CloudSync.forceUploadNow()).catch(err => console.warn('CloudSync forceUploadNow:', err));
+    }
+  } catch(e) { console.warn('CloudSync error:', e); cloudActive = false; }
+
+  // Avisar al usuario SOLO si el cache local fallo. Ya no lanzamos excepcion
+  // (antes el throw cortaba el flujo y se perdia la subida a la nube).
+  if (!localOk) {
+    try {
+      if (cloudActive) showToast('CACHE LOCAL LLENO · TUS CAMBIOS SE GUARDARON EN LA NUBE — LIBERA ESPACIO BORRANDO FOTOS VIEJAS', 'red');
+      else showToast('ALMACENAMIENTO LLENO Y SIN CONEXION A LA NUBE — EXPORTA UN BACKUP YA', 'red');
+    } catch(e){}
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════
