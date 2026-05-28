@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v422-boton-liberar-espacio-subir-fotos-a-la-nube';
+const CACHE_VERSION = 'v423-resumen-persona-responsive-en-celular';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
