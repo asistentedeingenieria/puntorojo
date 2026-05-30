@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v426-retirar-mobile-html-todos-usan-index-responsive';
+const CACHE_VERSION = 'v427-zoom-to-fit-automatico-en-celular';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
