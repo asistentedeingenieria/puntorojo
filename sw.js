@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v440-PERSONA-A-PAGAR-apilada-en-celular-combobox-completo';
+const CACHE_VERSION = 'v441-etapas-altura-uniforme-ETAPA-4-alineada';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
