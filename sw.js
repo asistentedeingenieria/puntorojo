@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v439-colabs-sin-overlap-y-polizas-kpis-en-2-columnas-mobile';
+const CACHE_VERSION = 'v440-PERSONA-A-PAGAR-apilada-en-celular-combobox-completo';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
