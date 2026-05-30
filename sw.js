@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v428-zoom-to-fit-ESTATICO-en-meta-viewport';
+const CACHE_VERSION = 'v429-desactivar-ios-standalone-que-forzaba-mobile';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
