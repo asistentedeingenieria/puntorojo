@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v437-auto-update-silencioso-cuando-usuario-idle';
+const CACHE_VERSION = 'v438-triangulo-nivel-CSS-no-emoji-iOS';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
