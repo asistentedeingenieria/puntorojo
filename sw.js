@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v436-PERSONA-A-PAGAR-combobox-touch-friendly-mobile';
+const CACHE_VERSION = 'v437-auto-update-silencioso-cuando-usuario-idle';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

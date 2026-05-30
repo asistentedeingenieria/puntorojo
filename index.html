@@ -2744,7 +2744,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v436</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v437</span>
   </footer>
 
 </div>
@@ -30953,66 +30953,66 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     });
   });
 
-  // v309-b: banner persistente — el usuario decide cuando aplicar la update.
-  // v342: diseno modernizado (slate glassmorphism + pulso verde + hover).
+  // v437: AUTO-UPDATE silencioso. Reemplaza el banner manual viejo (v309-b/v342).
+  // En vez de pedir al usuario que toque "ACTUALIZAR", esperamos a que esté
+  // IDLE — sin modal abierto, sin input enfocado, sin escritura pendiente al
+  // cloud, con la pestaña visible — y aplicamos la actualización SOLA. Al
+  // recargar, mostramos UN toast confirmando la nueva versión. Así NO se
+  // pierde nada del trabajo en curso y solo llega UNA notificación.
+  var _autoUpdateScheduled = false;
   function showUpdateToast(reg){
-    try {
-      if (document.getElementById('prUpdateBanner')) return;
-      if (!document.getElementById('prUpdateBannerStyles')){
-        var st = document.createElement('style');
-        st.id = 'prUpdateBannerStyles';
-        st.textContent =
-          '@keyframes prUpdateSlide{from{opacity:0;transform:translate(-50%,18px) scale(.96)}to{opacity:1;transform:translate(-50%,0) scale(1)}}'
-        + '@keyframes prPulse{0%{box-shadow:0 0 0 0 rgba(16,185,129,.55)}70%{box-shadow:0 0 0 9px rgba(16,185,129,0)}100%{box-shadow:0 0 0 0 rgba(16,185,129,0)}}'
-        + '#prUpdateBtn{transition:background .15s ease,transform .12s ease}'
-        + '#prUpdateBtn:hover{background:#F1F5F9!important}'
-        + '#prUpdateBtn:active{transform:scale(.97)}'
-        + '#prUpdateDismiss{transition:background .15s ease,color .15s ease}'
-        + '#prUpdateDismiss:hover{background:rgba(255,255,255,.16)!important;color:#fff!important}';
-        document.head.appendChild(st);
-      }
-      var bar = document.createElement('div');
-      bar.id = 'prUpdateBanner';
-      bar.style.cssText = 'position:fixed;left:50%;bottom:22px;transform:translateX(-50%);'
-        + 'background:rgba(15,23,42,.96);color:#fff;'
-        + 'padding:14px 16px 14px 22px;border-radius:14px;'
-        + 'border:1px solid rgba(255,255,255,.08);'
-        + 'box-shadow:0 20px 50px -10px rgba(15,23,42,.5),0 10px 30px -5px rgba(15,23,42,.3);'
-        + 'display:flex;align-items:center;gap:14px;z-index:99998;'
-        + 'font-family:inherit;letter-spacing:.2px;'
-        + 'max-width:calc(100vw - 32px);'
-        + 'animation:prUpdateSlide .35s cubic-bezier(.16,1,.3,1);'
-        + 'backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);';
-      bar.innerHTML =
-        '<div style="position:relative;width:10px;height:10px;flex-shrink:0">'
-      +   '<div style="position:absolute;inset:0;background:#10B981;border-radius:50%;animation:prPulse 2s infinite"></div>'
-      + '</div>'
-      + '<div style="display:flex;flex-direction:column;gap:3px;line-height:1.3">'
-      +   '<span style="font-size:10.5px;letter-spacing:1.3px;font-weight:700;opacity:.6;text-transform:uppercase">Actualización disponible</span>'
-      +   '<span style="font-size:13px;font-weight:500;opacity:.95">Refrescá cuando termines lo que estás haciendo</span>'
-      + '</div>'
-      + '<button id="prUpdateBtn" style="background:#fff;color:#0F172A;border:none;padding:10px 18px;border-radius:9px;font-family:inherit;font-size:11px;font-weight:700;letter-spacing:.8px;cursor:pointer;text-transform:uppercase;margin-left:8px">Actualizar</button>'
-      + '<button id="prUpdateDismiss" style="background:rgba(255,255,255,.08);color:rgba(255,255,255,.7);border:none;width:30px;height:30px;border-radius:9px;font-size:16px;font-weight:500;cursor:pointer;line-height:1;display:flex;align-items:center;justify-content:center;flex-shrink:0" title="Recordar más tarde">×</button>';
-      document.body.appendChild(bar);
-      document.getElementById('prUpdateBtn').onclick = function(){
-        try { if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING'); } catch(e){}
-        bar.innerHTML = '<div style="display:flex;align-items:center;gap:12px;padding:2px 8px"><div style="width:14px;height:14px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:prSpin 0.6s linear infinite"></div><span style="font-size:13px;font-weight:600;letter-spacing:.3px">ACTUALIZANDO...</span></div>';
-        var sp = document.getElementById('prSpinKeyframe');
-        if (!sp){
-          sp = document.createElement('style');
-          sp.id = 'prSpinKeyframe';
-          sp.textContent = '@keyframes prSpin{to{transform:rotate(360deg)}}';
-          document.head.appendChild(sp);
-        }
-      };
-      document.getElementById('prUpdateDismiss').onclick = function(){
-        bar.remove();
-        setTimeout(function(){
-          try { if (reg.waiting && !document.getElementById('prUpdateBanner')) showUpdateToast(reg); } catch(e){}
-        }, 5 * 60 * 1000);
-      };
-    } catch(e){ console.warn('showUpdateToast error', e); }
+    if (_autoUpdateScheduled) return;
+    _autoUpdateScheduled = true;
+    // Flag para que al cargar la nueva versión sepamos mostrar el toast.
+    try { localStorage.setItem('_pr_auto_update_pending', '1'); } catch(_){}
+    _tryAutoUpdateWhenIdle(reg);
   }
+  function _tryAutoUpdateWhenIdle(reg){
+    if (_isUserBusyForUpdate()) {
+      // Reintentar en 8s — apenas el usuario quede idle, aplicamos.
+      setTimeout(function(){ _tryAutoUpdateWhenIdle(reg); }, 8000);
+      return;
+    }
+    try { if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING'); }
+    catch(e){ console.warn('Auto-update SKIP_WAITING failed:', e); }
+  }
+  function _isUserBusyForUpdate(){
+    try {
+      // Modal abierto (planilla, anticipos, póliza, foto, etc.)
+      if (document.querySelector('.modal-bg.show')) return true;
+      // Input/textarea/select enfocado (usuario escribiendo)
+      var a = document.activeElement;
+      if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return true;
+      // Escritura pendiente al cloud o upload en curso
+      if (typeof CloudSync !== 'undefined' && (CloudSync.pendingWrite || CloudSync.uploadingNow)) return true;
+      // Pestaña no visible — esperar a que vuelva a foco
+      if (document.visibilityState !== 'visible') return true;
+    } catch(_){}
+    return false;
+  }
+
+  // v437: al cargar la NUEVA versión tras un auto-update, mostrar UN toast
+  // verde confirmando. Lee el chip de versión del footer dinámicamente.
+  window.addEventListener('load', function(){
+    try {
+      if (localStorage.getItem('_pr_auto_update_pending')){
+        localStorage.removeItem('_pr_auto_update_pending');
+        setTimeout(function(){
+          try {
+            var verChip = '';
+            var allSpans = document.querySelectorAll('footer span, .foot span');
+            for (var i=0; i<allSpans.length; i++){
+              var t = (allSpans[i].textContent||'').trim();
+              if (/^v4\d+$/.test(t)) { verChip = t.toUpperCase(); break; }
+            }
+            if (typeof showToast === 'function') {
+              showToast((verChip || 'NUEVA VERSION') + ' YA ESTA ACTIVA · TU TRABAJO ESTA A SALVO', 'green');
+            }
+          } catch(e){}
+        }, 2200);
+      }
+    } catch(_){}
+  });
 })();
 </script>
 
