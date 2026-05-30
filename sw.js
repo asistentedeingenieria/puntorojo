@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v434-reactivar-layout-vertical-mobile-original';
+const CACHE_VERSION = 'v435-acuses-usan-camara-nativa-iphone-como-etapas';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

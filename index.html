@@ -2732,7 +2732,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v434</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v435</span>
   </footer>
 
 </div>
@@ -11726,6 +11726,89 @@ window.tomarFotoAvance = async function(etapaIdx){
   input.click();
 };
 
+// v435: igual que tomarFotoAvance pero para ACUSES DE RECEPCION — usa cámara
+// NATIVA del iPhone (input file + capture=environment), mismo comportamiento
+// que las fotos de avance por etapa. Reemplaza al openCameraForAcuse que usaba
+// getUserMedia (a veces flaky en PWA standalone iOS).
+window.tomarFotoAcuseNativa = async function(towerId, levelId, aptoId, slotKey, photoIdx){
+  if (!can('avance.edit')) return showToast('SIN PERMISO', 'red');
+  const p = activeProj();
+  if (!p) { showToast('SIN PROYECTO ACTIVO', 'red'); return; }
+  const t = (p.towers||[]).find(x => x.id === towerId);
+  const l = t && (t.levels||[]).find(x => x.id === levelId);
+  const a = l && (l.aptos||[]).find(x => x.id === aptoId);
+  if (!a) return showToast('APTO NO ENCONTRADO', 'red');
+
+  // Bloqueo secuencial: etapa anterior debe estar FIRMADA.
+  const sIdx = ACUSE_SLOTS.findIndex(s => s.key === String(slotKey));
+  if (sIdx > 0) {
+    const check = acuseSlotPuedeIniciar(a, sIdx);
+    if (!check.ok && !can('users.manage')) {
+      const motivo = check.motivoAnt || 'pendiente';
+      const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+      const okSalto = await window.prConfirm({
+        title: 'BLOQUEO SECUENCIAL',
+        bodyHTML:
+          `<div>No se puede cargar esta etapa porque la anterior (<strong>${escHtml(check.etapaAnt)}</strong>) todavía no está firmada por el receptor.</div>` +
+          `<div style="margin-top:10px;padding:10px 14px;background:#FAF8F3;border-radius:4px;font-size:12px"><span style="color:#666">Estado actual:</span> <strong>${escHtml(motivo)}</strong></div>` +
+          `<div style="margin-top:12px">¿Enviar una solicitud al administrador para liberar el adelanto de esta etapa?</div>`,
+        okText: 'ENVIAR SOLICITUD',
+        cancelText: 'CANCELAR'
+      });
+      if (okSalto) abrirModalSolicitarSaltoAcuse(towerId, levelId, aptoId, slotKey);
+      return;
+    }
+  }
+
+  // Verificar que no se reemplace foto ya subida.
+  const slot = a.acuseRecepciones && a.acuseRecepciones[slotKey];
+  const urls = getAcuseUrls(slot);
+  if (urls[photoIdx]) {
+    return showToast('ESTA FOTO YA FUE SUBIDA — SOLICITAR AL ADMIN ELIMINARLA SI HAY UN ERROR', 'red');
+  }
+
+  // Orden estricto: Foto 1 antes de Foto 2.
+  const checkOrden = acuseSlotPuedeSubirFoto(slot, photoIdx);
+  if (!checkOrden.ok) {
+    return showToast(checkOrden.motivo || 'ORDEN DE FOTO INVÁLIDO', 'red');
+  }
+
+  // Abrir cámara NATIVA del iPhone via file input con capture=environment.
+  let input = document.getElementById('prNativeCameraInputAcuse');
+  if (input) input.remove();
+  input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.setAttribute('capture', 'environment');
+  input.id = 'prNativeCameraInputAcuse';
+  input.style.display = 'none';
+  document.body.appendChild(input);
+
+  input.onchange = async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    try {
+      if (!file) return;
+      if (!file.type || !file.type.startsWith('image/')) { showToast('ARCHIVO NO ES IMAGEN', 'red'); return; }
+      // Foto debe ser fresca (< 60s) para evitar que suban una de la galería.
+      const FRESHNESS_MS = 60 * 1000;
+      const lm = Number(file.lastModified || 0);
+      const fileAge = Date.now() - lm;
+      if (lm > 0 && fileAge > FRESHNESS_MS) {
+        const ageMin = Math.max(1, Math.round(fileAge / 60000));
+        showToast(`FOTO MUY VIEJA (${ageMin} MIN) · TOMÁ UNA EN VIVO`, 'red');
+        return;
+      }
+      await _uploadAcuseBlob(file, towerId, levelId, aptoId, slotKey, photoIdx);
+    } catch(e) {
+      console.error('tomarFotoAcuseNativa error:', e);
+      showToast('ERROR AL SUBIR FOTO: ' + (e.message || 'desconocido'), 'red');
+    } finally {
+      try { input.remove(); } catch(e){}
+    }
+  };
+  input.click();
+};
+
 async function _uploadPhotoBlobPush(file, etapaIdx){
   if (!can('avance.edit')) return showToast('SIN PERMISO', 'red');
   if (typeof firebase === 'undefined' || !firebase.storage) {
@@ -12081,13 +12164,13 @@ function renderAcusesRecepcion(){
                 // FOTO 1
                 foto1Btn = urls[0]
                   ? `<button class="btn ghost sm" onclick="viewPhoto('${String(urls[0]).replace(/'/g,"\\'")}')" title="Ver foto 1">VER F1</button>`
-                  : `<button class="btn sm cafe" onclick="openCameraForAcuse('${t.id}','${l.id}','${a.id}','${s.key}',0)" title="Tomar foto 1 de la entrega">FOTO 1</button>`;
+                  : `<button class="btn sm cafe" onclick="tomarFotoAcuseNativa('${t.id}','${l.id}','${a.id}','${s.key}',0)" title="Tomar foto 1 de la entrega">FOTO 1</button>`;
                 // FOTO 2: solo se puede tocar si FOTO 1 ya está subida.
                 // Triple defensa: disabled + pointer-events:none + onclick que intercepta y avisa.
                 if (urls[1]) {
                   foto2Btn = `<button class="btn ghost sm" onclick="viewPhoto('${String(urls[1]).replace(/'/g,"\\'")}')" title="Ver foto 2">VER F2</button>`;
                 } else if (urls[0]) {
-                  foto2Btn = `<button class="btn sm cafe" onclick="openCameraForAcuse('${t.id}','${l.id}','${a.id}','${s.key}',1)" title="Tomar foto 2 de la entrega">FOTO 2</button>`;
+                  foto2Btn = `<button class="btn sm cafe" onclick="tomarFotoAcuseNativa('${t.id}','${l.id}','${a.id}','${s.key}',1)" title="Tomar foto 2 de la entrega">FOTO 2</button>`;
                 } else {
                   foto2Btn = `<button class="btn ghost sm" disabled aria-disabled="true" title="Primero subir la FOTO 1" style="opacity:.45;pointer-events:none;cursor:not-allowed" onclick="event.preventDefault(); event.stopPropagation(); showToast('PRIMERO SUBIR LA FOTO 1','red'); return false;">🔒 FOTO 2</button>`;
                 }
