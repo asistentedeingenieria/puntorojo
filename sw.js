@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v431-columna-apto-sticky-en-matriz-planilla';
+const CACHE_VERSION = 'v432-CSS-zoom-para-iguala-PC-en-celular';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
