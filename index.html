@@ -2807,7 +2807,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v450</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v451</span>
   </footer>
 
 </div>
@@ -37154,8 +37154,11 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       .filter(g => { const e = _ocPlEstadoGrupo(p, g); return e === 'AUTORIZADA' || e === 'PAGADA'; })
       .reduce((s,g) => s + _ocPlTotal(g), 0);
 
+    // v451: admin puede limpiar TODO el historial OC con un solo click
+    const _esAdminOC = (typeof can === 'function') && can('users.manage');
     let html = '';
     html += '<div class="card"><div class="card-hd"><h3>PLANILLAS OC · ÓRDENES DE CAMBIO</h3><span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">1 PLANILLA OC POR # · '+_h(p.name||'')+'</span>';
+    if (_esAdminOC) html += '<button class="btn ghost sm" style="border-color:#C62828;color:#C62828;margin-right:6px" onclick="window.limpiarHistorialOCCompleto()" title="Borra catálogo + estados + ajustes OC (solo admin)">LIMPIAR HISTORIAL OC</button>';
     if (puedeEditar) html += '<button class="btn sm" style="background:#7B1FA2;border-color:#7B1FA2;color:#fff" onclick="window.agregarOC()">+ NUEVA PLANILLA OC</button>';
     html += '</div>';
     html += '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:14px 16px;background:var(--cream);border-bottom:1px solid var(--line)">';
@@ -37329,6 +37332,51 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   // v446: helper para obtener nombre del actor que ejecuta una transicion
   function _ocPlActorName(){ try { const u = (typeof currentUser !== 'undefined') ? currentUser : null; return ((u && (u.displayName || u.username || u.email)) || 'USUARIO').toUpperCase(); } catch(e){ return 'USUARIO'; } }
   function _ocPlNotifPM(accion, numero, total){ try { if (typeof _notifyByPerm !== 'function') return; const proj = _activeProj(); const projName = proj ? proj.name : ''; const body = (projName ? projName + ' · ' : '') + 'PLANILLA OC #'+numero+' · '+_money(total||0); _notifyByPerm('users.manage', { type: 'oc-planilla-' + accion.toLowerCase().replace(/\s+/g,'-'), title: _ocPlActorName() + ' · ' + accion + ' PLANILLA OC #' + numero, body: body.slice(0, 300), projectId: proj ? proj.id : null }).catch(()=>{}); } catch(e){ console.warn('[v446] notif planilla OC:', e); } }
+
+  // v451: LIMPIAR HISTORIAL OC COMPLETO (solo admin)
+  // Borra: ocCatalogo, ocPlanillaMeta, y todos los ajustes con tipo:'ORDEN_CAMBIO'
+  // que quedaron como leftover de v444 (cuando OCs se metían automáticamente
+  // en la planilla regular). No toca planillas armadas (data congelada).
+  window.limpiarHistorialOCCompleto = async function(){
+    const isAdmin = (typeof can === 'function') && can('users.manage');
+    if (!isAdmin){ showT('SOLO ADMIN PUEDE LIMPIAR EL HISTORIAL OC','red'); return; }
+    const p = _activeProj();
+    if (!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    if (!p.planilla) p.planilla = {};
+    const ocs = (p.planilla.ocCatalogo) || [];
+    const metaKeys = Object.keys(p.planilla.ocPlanillaMeta || {});
+    const ajustes = (p.planilla.ajustes) || [];
+    const ajustesOC = ajustes.filter(a => a && (a.tipo === 'ORDEN_CAMBIO' || a.tipo === 'ORDEN DE CAMBIO'));
+    if (ocs.length === 0 && metaKeys.length === 0 && ajustesOC.length === 0){
+      showT('NO HAY HISTORIAL DE OC PARA LIMPIAR','green');
+      return;
+    }
+    const totalAjustes = ajustesOC.reduce((s,a) => s + Number(a.monto||a.neto||0), 0);
+    const body = '<div style="font-size:12.5px;color:#333;line-height:1.6">'
+      + '<div style="font-weight:700;color:#C62828;margin-bottom:10px">ESTO ELIMINARÁ DEFINITIVAMENTE:</div>'
+      + '<ul style="margin:0 0 10px 18px;padding:0;font-size:11.5px">'
+      + '<li>'+ocs.length+' renglón'+(ocs.length!==1?'es':'')+' del catálogo de OCs</li>'
+      + '<li>'+metaKeys.length+' planilla OC con estado (BORRADOR/ENVIADA/AUTORIZADA/PAGADA)</li>'
+      + '<li>'+ajustesOC.length+' pago'+(ajustesOC.length!==1?'s':'')+' OC en planilla.ajustes — '+_money(totalAjustes)+' total (leftover de v444)</li>'
+      + '</ul>'
+      + '<div style="margin-top:10px;padding:10px;background:#FEF2F2;border:1px solid #FCA5A5;border-radius:6px;color:#991B1B;font-size:11px">No se puede deshacer. Las planillas YA ARMADAS no se tocan (su data está congelada).</div>'
+      + '</div>';
+    const ok = await window.prConfirm({ title:'LIMPIAR HISTORIAL OC COMPLETO', bodyHTML:body, okText:'SÍ, ELIMINAR TODO', danger:true });
+    if (!ok) return;
+    // Wipe
+    p.planilla.ocCatalogo = [];
+    p.planilla.ocPlanillaMeta = {};
+    if (Array.isArray(p.planilla.ajustes)){
+      p.planilla.ajustes = p.planilla.ajustes.filter(a => !(a && (a.tipo === 'ORDEN_CAMBIO' || a.tipo === 'ORDEN DE CAMBIO')));
+    }
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    // Re-render todo lo afectado
+    try { window.renderPlanillaOCs(); } catch(e){}
+    try { if (typeof window.renderPlanillaResumenPersona === 'function') window.renderPlanillaResumenPersona(); } catch(e){}
+    try { if (typeof window.renderPlanilla === 'function') window.renderPlanilla(); } catch(e){}
+    showT('HISTORIAL DE OC LIMPIADO · '+(ocs.length + ajustesOC.length)+' registros borrados','green');
+  };
 
   // v446: BORRADOR → ENVIADA (supervisor envia al gerente)
   window.enviarPlanillaOC = async function(numero){

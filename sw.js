@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v450-HOTFIX-anticipos-vacios-por-typo-en-v449';
+const CACHE_VERSION = 'v451-boton-LIMPIAR-HISTORIAL-OC-completo-admin';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
