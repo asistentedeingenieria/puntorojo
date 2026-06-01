@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v445-filtrar-PRE-APP-de-TODO-listado';
+const CACHE_VERSION = 'v446-PLANILLAS-OC-independientes-con-flujo-BORRADOR-ENVIADA-AUTORIZADA-PAGADA';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

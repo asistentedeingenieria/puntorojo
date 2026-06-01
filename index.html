@@ -2736,7 +2736,7 @@ table{max-width:100%}
            EXTRAS/DESCUENTOS/OC y EXCEPCIONES. -->
       <div class="mat-tabs" style="margin-bottom:18px">
         <button class="mat-tab active" data-plantab="etapas" onclick="setPlanillaTab('etapas')">PAGOS POR ETAPA</button>
-        <button class="mat-tab" data-plantab="ocs" onclick="setPlanillaTab('ocs')">ÓRDENES DE CAMBIO</button>
+        <button class="mat-tab" data-plantab="ocs" onclick="setPlanillaTab('ocs')">PLANILLAS OC</button>
         <button class="mat-tab" data-plantab="retenciones" onclick="setPlanillaTab('retenciones')">RETENCIONES</button>
         <button class="mat-tab" data-plantab="reporte" onclick="setPlanillaTab('reporte')">REPORTE POR APTO</button>
         <button class="mat-tab" data-plantab="resumenpersona" onclick="setPlanillaTab('resumenpersona')">RESUMEN POR PERSONA</button>
@@ -2807,7 +2807,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v445</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v446</span>
   </footer>
 
 </div>
@@ -37086,6 +37086,46 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   function _normNum(n){ return String(n||'').trim().toUpperCase(); }
   function _agruparPorOC(ocs){ const grupos={}, orden=[]; ocs.forEach(oc=>{ const k=_normNum(oc.numero); if(!grupos[k]){ grupos[k]={numero:oc.numero, renglones:[]}; orden.push(k);} grupos[k].renglones.push(oc); }); return orden.map(k=>grupos[k]); }
 
+  // v446: metadata de PLANILLA OC por #. Cada OC# se trata como su propia planilla
+  // con estado BORRADOR → ENVIADA → AUTORIZADA → PAGADA. ANULADA via DAR DE BAJA OC.
+  function _ocPlMeta(p, numero){
+    if (!p.planilla) p.planilla = {};
+    if (!p.planilla.ocPlanillaMeta) p.planilla.ocPlanillaMeta = {};
+    const k = _normNum(numero);
+    if (!p.planilla.ocPlanillaMeta[k]) p.planilla.ocPlanillaMeta[k] = { estado: 'BORRADOR' };
+    return p.planilla.ocPlanillaMeta[k];
+  }
+  function _ocPlEstadoGrupo(p, grupo){
+    // Si todos los renglones estan CANCELADA → ANULADA
+    const todosCancel = grupo.renglones.length > 0 && grupo.renglones.every(r => r.estatus === 'CANCELADA');
+    if (todosCancel) return 'ANULADA';
+    return (_ocPlMeta(p, grupo.numero).estado || 'BORRADOR');
+  }
+  function _ocPlTotal(grupo){
+    return grupo.renglones
+      .filter(r => r.estatus === 'ACTIVA')
+      .reduce((s,r) => s + (Number(r.cantidad)||1) * (Number(r.precio)||0), 0);
+  }
+  function _ocPlPersona(p, grupo){
+    const colabs = (p.planilla && p.planilla.colaboradores) || [];
+    const ids = Array.from(new Set(grupo.renglones.filter(r => r.estatus==='ACTIVA' && r.colaboradorId).map(r => r.colaboradorId)));
+    if (ids.length === 0) return '<span style="color:#C62828">SIN PERSONA</span>';
+    if (ids.length === 1){ const c = colabs.find(x => x.id === ids[0]); return _h((c && c.nombre) || '—'); }
+    return ids.length + ' PERSONAS';
+  }
+  function _ocPlBadge(estado){
+    const map = {
+      'BORRADOR':    {bg:'#FFF8E1', fg:'#9A6500', br:'#FFD54F'},
+      'ENVIADA':     {bg:'#FFF3E0', fg:'#9A3412', br:'#FB923C'},
+      'AUTORIZADA':  {bg:'#E3F2FD', fg:'#1565C0', br:'#42A5F5'},
+      'PAGADA':      {bg:'#E8F5E9', fg:'#2E7D32', br:'#66BB6A'},
+      'ANULADA':     {bg:'#FAFAFA', fg:'#616161', br:'#BDBDBD'}
+    };
+    const c = map[estado] || map.BORRADOR;
+    return '<span style="display:inline-block;font-size:9.5px;letter-spacing:1.2px;font-weight:800;padding:3px 9px;border-radius:3px;background:'+c.bg+';color:'+c.fg+';border:1px solid '+c.br+'">'+estado+'</span>';
+  }
+  function _ocPlPuedeAutorizar(){ try { return typeof can === 'function' && (can('users.manage') || can('planilla.aprobar')); } catch(e){ return false; } }
+
   window.renderPlanillaOCs = function(){
     const cont = document.getElementById('planilla-ocs');
     if (!cont) return;
@@ -37102,47 +37142,102 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const ocsCanceladas = todosGrupos.filter(g => g.renglones.every(r=>r.estatus==='CANCELADA')).length;
     const totalRenglonesActivos = ocs.filter(x => x.estatus === 'ACTIVA').length;
 
+    // v446: contar planillas OC por estado
+    const _gruposTodos = _agruparPorOC(ocs);
+    const _conteoEst = {BORRADOR:0, ENVIADA:0, AUTORIZADA:0, PAGADA:0, ANULADA:0};
+    _gruposTodos.forEach(g => { const e = _ocPlEstadoGrupo(p, g); _conteoEst[e] = (_conteoEst[e]||0) + 1; });
+    const _totalPendiente = _gruposTodos
+      .filter(g => { const e = _ocPlEstadoGrupo(p, g); return e === 'BORRADOR' || e === 'ENVIADA'; })
+      .reduce((s,g) => s + _ocPlTotal(g), 0);
+    const _totalAprobado = _gruposTodos
+      .filter(g => { const e = _ocPlEstadoGrupo(p, g); return e === 'AUTORIZADA' || e === 'PAGADA'; })
+      .reduce((s,g) => s + _ocPlTotal(g), 0);
+
     let html = '';
-    html += '<div class="card"><div class="card-hd"><h3>CATÁLOGO DE ÓRDENES DE CAMBIO</h3><span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">1 OC puede tener varios renglones · '+_h(p.name||'')+'</span>';
-    if (puedeEditar) html += '<button class="btn sm" style="background:#7B1FA2;border-color:#7B1FA2;color:#fff" onclick="window.agregarOC()">+ AGREGAR OC NUEVA</button>';
+    html += '<div class="card"><div class="card-hd"><h3>PLANILLAS OC · ÓRDENES DE CAMBIO</h3><span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">1 PLANILLA OC POR # · '+_h(p.name||'')+'</span>';
+    if (puedeEditar) html += '<button class="btn sm" style="background:#7B1FA2;border-color:#7B1FA2;color:#fff" onclick="window.agregarOC()">+ NUEVA PLANILLA OC</button>';
     html += '</div>';
-    html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:14px 16px;background:var(--cream);border-bottom:1px solid var(--line)">';
-    html += '<div style="background:#fff;border:1px solid #E1BEE7;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">OCs ACTIVAS</div><div style="font-size:18px;font-weight:800;color:#7B1FA2;margin-top:3px">'+ocsActivas+'</div></div>';
-    html += '<div style="background:#fff;border:1px solid #BDBDBD;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">OCs CANCELADAS</div><div style="font-size:18px;font-weight:800;color:#616161;margin-top:3px">'+ocsCanceladas+'</div></div>';
-    html += '<div style="background:#fff;border:1px solid #E1BEE7;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">RENGLONES ACTIVOS</div><div style="font-size:18px;font-weight:800;color:#7B1FA2;margin-top:3px">'+totalRenglonesActivos+'</div></div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:14px 16px;background:var(--cream);border-bottom:1px solid var(--line)">';
+    html += '<div style="background:#fff;border:1px solid #FFD54F;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">BORRADOR</div><div style="font-size:18px;font-weight:800;color:#9A6500;margin-top:3px">'+_conteoEst.BORRADOR+'</div></div>';
+    html += '<div style="background:#fff;border:1px solid #FB923C;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">ENVIADAS</div><div style="font-size:18px;font-weight:800;color:#9A3412;margin-top:3px">'+_conteoEst.ENVIADA+'</div></div>';
+    html += '<div style="background:#fff;border:1px solid #42A5F5;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">AUTORIZADAS</div><div style="font-size:18px;font-weight:800;color:#1565C0;margin-top:3px">'+_conteoEst.AUTORIZADA+'</div></div>';
+    html += '<div style="background:#fff;border:1px solid #66BB6A;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">PAGADAS</div><div style="font-size:18px;font-weight:800;color:#2E7D32;margin-top:3px">'+_conteoEst.PAGADA+'</div></div>';
+    html += '<div style="background:#fff;border:1px solid #BDBDBD;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">ANULADAS</div><div style="font-size:18px;font-weight:800;color:#616161;margin-top:3px">'+_conteoEst.ANULADA+'</div></div>';
+    html += '</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 16px 14px;background:var(--cream);border-bottom:1px solid var(--line)">';
+    html += '<div style="background:#FFFBEB;border:1px solid #FCD34D;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#92400E;font-weight:700">TOTAL PENDIENTE (BORRADOR + ENVIADA)</div><div style="font-size:16px;font-weight:800;color:#92400E;margin-top:3px">'+_money(_totalPendiente)+'</div></div>';
+    html += '<div style="background:#ECFDF5;border:1px solid #6EE7B7;border-radius:6px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#065F46;font-weight:700">TOTAL APROBADO (AUTORIZADA + PAGADA)</div><div style="font-size:16px;font-weight:800;color:#065F46;margin-top:3px">'+_money(_totalAprobado)+'</div></div>';
     html += '</div>';
     html += '<div style="display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap">';
-    html += '<label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700">ESTATUS</label><select onchange="window._ocFiltroEstatus=this.value; window.renderPlanillaOCs()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"><option value="todas"'+(filtroEstatus==='todas'?' selected':'')+'>TODAS</option>';
+    html += '<label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700">ESTATUS RENGLÓN</label><select onchange="window._ocFiltroEstatus=this.value; window.renderPlanillaOCs()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px"><option value="todas"'+(filtroEstatus==='todas'?' selected':'')+'>TODAS</option>';
     ESTATUS_OPTS.forEach(s => { html += '<option value="'+s+'"'+(s===filtroEstatus?' selected':'')+'>'+s+'</option>'; });
     html += '</select><label style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700;margin-left:10px">BUSCAR OC #</label><input type="text" placeholder="ej: 14" value="'+_h(window._ocFiltroNumero||'')+'" oninput="window._ocFiltroNumero=this.value; window.renderPlanillaOCs()" style="padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px;width:120px"></div>';
     if (grupos.length === 0){
-      html += '<div class="empty" style="padding:40px;text-align:center;color:var(--mute);font-size:11px;letter-spacing:1px">SIN OCs REGISTRADAS · AGREGÁ LA PRIMERA</div>';
+      html += '<div class="empty" style="padding:40px;text-align:center;color:var(--mute);font-size:11px;letter-spacing:1px">SIN PLANILLAS OC REGISTRADAS · CREÁ LA PRIMERA</div>';
     } else {
+      const puedeAutorizar = _ocPlPuedeAutorizar();
       grupos.forEach(g => {
         const renglonesActivos = g.renglones.filter(r => r.estatus === 'ACTIVA').length;
         const renglonesTotal = g.renglones.length;
-        const todoCancelado = renglonesActivos === 0;
-        const headerBg = todoCancelado ? '#FAFAFA' : '#F3E5F5';
-        const headerColor = todoCancelado ? '#616161' : '#7B1FA2';
+        const estado = _ocPlEstadoGrupo(p, g);
+        const meta = _ocPlMeta(p, g.numero);
+        const total = _ocPlTotal(g);
+        const persona = _ocPlPersona(p, g);
+        const isBorrador = estado === 'BORRADOR';
+        const isEnviada  = estado === 'ENVIADA';
+        const isAutoriz  = estado === 'AUTORIZADA';
+        const isPagada   = estado === 'PAGADA';
+        const isAnulada  = estado === 'ANULADA';
+        const headerBg = isPagada ? '#E8F5E9' : isAutoriz ? '#E3F2FD' : isEnviada ? '#FFF3E0' : isAnulada ? '#FAFAFA' : '#FFF8E1';
+        const headerBr = isPagada ? '#A5D6A7' : isAutoriz ? '#90CAF9' : isEnviada ? '#FFCC80' : isAnulada ? '#E0E0E0' : '#FFE082';
         html += '<div style="border-bottom:1px solid var(--line)">';
-        html += '<div style="display:flex;align-items:center;gap:12px;padding:11px 16px;background:'+headerBg+';border-bottom:1px solid '+(todoCancelado?'#E0E0E0':'#E1BEE7')+'">';
-        html += '<div style="font-size:14px;font-weight:800;color:'+headerColor+';letter-spacing:.3px">OC #'+_h(g.numero||'?')+'</div>';
-        html += '<div style="flex:1;font-size:10px;color:#666;letter-spacing:.5px">'+renglonesTotal+' RENGLÓN'+(renglonesTotal!==1?'ES':'')+(renglonesActivos<renglonesTotal?' · '+renglonesActivos+' ACTIVO'+(renglonesActivos!==1?'S':''):'')+'</div>';
-        if (puedeEditar){
-          if (!todoCancelado){
-            html += '<button class="btn ghost sm" style="font-size:9.5px;color:#7B1FA2;border-color:#7B1FA2" onclick="window.agregarRenglonAOC(\''+_h(g.numero||'')+'\')">+ RENGLÓN</button> ';
-            html += '<button class="btn ghost sm" style="font-size:9.5px;color:#F57C00;border-color:#F57C00" onclick="window.darDeBajaOCNumero(\''+_h(g.numero||'')+'\')">DAR DE BAJA OC</button>';
-          } else {
-            html += '<button class="btn ghost sm" style="font-size:9.5px;color:#7B1FA2;border-color:#7B1FA2" onclick="window.reactivarOCNumero(\''+_h(g.numero||'')+'\')">REACTIVAR OC</button>';
+        // Línea 1: # + ESTADO + (derecha) TOTAL Q
+        html += '<div style="display:flex;align-items:center;gap:12px;padding:11px 16px;background:'+headerBg+';border-bottom:1px solid '+headerBr+'">';
+        html += '<div style="font-size:14px;font-weight:800;color:#0F172A;letter-spacing:.3px">PLANILLA OC #'+_h(g.numero||'?')+'</div>';
+        html += _ocPlBadge(estado);
+        html += '<div style="flex:1;font-size:11px;color:#475569"><strong>'+persona+'</strong> · '+renglonesTotal+' RENGLÓN'+(renglonesTotal!==1?'ES':'')+(renglonesActivos<renglonesTotal?' · '+renglonesActivos+' ACTIVO'+(renglonesActivos!==1?'S':''):'')+'</div>';
+        html += '<div style="font-size:14px;font-weight:800;color:#0F172A">'+_money(total)+'</div>';
+        html += '</div>';
+        // Línea 2: timestamps de cada transición
+        const tsLine = [];
+        if (meta.enviadaTs)   tsLine.push('ENVIADA '+(new Date(meta.enviadaTs).toLocaleDateString('es-GT'))+(meta.enviadaPor?' por '+_h(meta.enviadaPor):''));
+        if (meta.autorizadaTs)tsLine.push('AUTORIZADA '+(new Date(meta.autorizadaTs).toLocaleDateString('es-GT'))+(meta.autorizadaPor?' por '+_h(meta.autorizadaPor):''));
+        if (meta.pagadaTs)    tsLine.push('PAGADA '+(new Date(meta.pagadaTs).toLocaleDateString('es-GT'))+(meta.pagadaPor?' por '+_h(meta.pagadaPor):''));
+        if (tsLine.length){
+          html += '<div style="padding:5px 16px;font-size:10px;color:#64748B;background:rgba(255,255,255,.5);border-bottom:1px solid '+headerBr+'">'+tsLine.join(' · ')+'</div>';
+        }
+        // Línea 3: botones por estado
+        html += '<div style="display:flex;flex-wrap:wrap;gap:6px;padding:9px 16px;background:rgba(255,255,255,.4);border-bottom:1px solid '+headerBr+'">';
+        if (isBorrador && puedeEditar){
+          html += '<button class="btn ghost sm" style="font-size:9.5px;color:#7B1FA2;border-color:#7B1FA2" onclick="window.agregarRenglonAOC(\''+_h(g.numero||'')+'\')">+ RENGLÓN</button>';
+          if (renglonesActivos > 0) html += '<button class="btn sm" style="font-size:9.5px;background:#F57C00;border-color:#F57C00;color:#fff" onclick="window.enviarPlanillaOC(\''+_h(g.numero||'')+'\')">ENVIAR PLANILLA OC</button>';
+          html += '<button class="btn ghost sm" style="font-size:9.5px;color:#F57C00;border-color:#F57C00" onclick="window.darDeBajaOCNumero(\''+_h(g.numero||'')+'\')">DAR DE BAJA OC</button>';
+        }
+        if (isEnviada){
+          if (puedeAutorizar){
+            html += '<button class="btn sm" style="font-size:9.5px;background:#1565C0;border-color:#1565C0;color:#fff" onclick="window.autorizarPlanillaOC(\''+_h(g.numero||'')+'\')">AUTORIZAR PLANILLA OC</button>';
+          }
+          if (puedeEditar){
+            html += '<button class="btn ghost sm" style="font-size:9.5px;color:#64748B;border-color:#64748B" onclick="window.regresarBorradorOC(\''+_h(g.numero||'')+'\')">REGRESAR A BORRADOR</button>';
           }
         }
+        if (isAutoriz && puedeAutorizar){
+          html += '<button class="btn sm" style="font-size:9.5px;background:#2E7D32;border-color:#2E7D32;color:#fff" onclick="window.marcarPagadaPlanillaOC(\''+_h(g.numero||'')+'\')">MARCAR COMO PAGADA</button>';
+        }
+        if (isAnulada && puedeEditar){
+          html += '<button class="btn ghost sm" style="font-size:9.5px;color:#7B1FA2;border-color:#7B1FA2" onclick="window.reactivarOCNumero(\''+_h(g.numero||'')+'\')">REACTIVAR PLANILLA OC</button>';
+        }
         html += '</div>';
-        html += '<div class="tbl-wrap" style="border:none"><table class="tbl" style="border:none"><thead><tr><th style="width:40px;text-align:center">#</th><th>DESCRIPCIÓN</th><th style="width:80px;text-align:center">UNIDAD</th><th class="num" style="width:120px">PRECIO Q</th><th style="width:110px">ESTATUS</th>'+(puedeEditar?'<th style="width:170px"></th>':'')+'</tr></thead><tbody>';
+        // v446: solo se editan renglones en BORRADOR
+        const editableRenglones = puedeEditar && isBorrador;
+        html += '<div class="tbl-wrap" style="border:none"><table class="tbl" style="border:none"><thead><tr><th style="width:40px;text-align:center">#</th><th>DESCRIPCIÓN</th><th style="width:80px;text-align:center">UNIDAD</th><th class="num" style="width:75px">CANT</th><th class="num" style="width:110px">PRECIO Q</th><th class="num" style="width:120px">SUBTOTAL</th><th style="width:110px">ESTATUS</th>'+(editableRenglones?'<th style="width:170px"></th>':'')+'</tr></thead><tbody>';
         g.renglones.forEach((oc, idx) => {
           const estBadge = oc.estatus === 'ACTIVA' ? '<span class="planilla-badge" style="background:#F3E5F5;color:#7B1FA2;border:1px solid #7B1FA2">ACTIVA</span>' : '<span class="planilla-badge" style="background:#FFEBEE;color:#C62828;border:1px solid #C62828">CANCELADA</span>';
           const filaStyle = oc.estatus === 'CANCELADA' ? 'opacity:.55;background:#FAFAFA' : '';
-          html += '<tr style="'+filaStyle+'"><td style="text-align:center;font-size:10px;font-weight:700;color:#94A3B8">'+(idx+1)+'</td><td style="font-size:11px;line-height:1.4'+(oc.estatus==='CANCELADA'?';text-decoration:line-through':'')+'">'+_h(oc.descripcion||'—')+'</td><td style="text-align:center;font-size:10.5px;font-weight:700">'+_h(oc.unidad?_normUnidad(oc.unidad):'—')+'</td><td class="num" style="font-weight:800;color:#0F172A">'+_money(oc.precio)+'</td><td>'+estBadge+'</td>';
-          if (puedeEditar){
+          const cantR = Number(oc.cantidad)||1;
+          const subR = oc.estatus === 'ACTIVA' ? cantR * (Number(oc.precio)||0) : 0;
+          html += '<tr style="'+filaStyle+'"><td style="text-align:center;font-size:10px;font-weight:700;color:#94A3B8">'+(idx+1)+'</td><td style="font-size:11px;line-height:1.4'+(oc.estatus==='CANCELADA'?';text-decoration:line-through':'')+'">'+_h(oc.descripcion||'—')+'</td><td style="text-align:center;font-size:10.5px;font-weight:700">'+_h(oc.unidad?_normUnidad(oc.unidad):'—')+'</td><td class="num" style="font-weight:700">'+cantR+'</td><td class="num" style="font-weight:700;color:#0F172A">'+_money(oc.precio)+'</td><td class="num" style="font-weight:800;color:#0F172A">'+_money(subR)+'</td><td>'+estBadge+'</td>';
+          if (editableRenglones){
             html += '<td style="white-space:nowrap"><button class="btn ghost sm" onclick="window.editarOC(\''+_h(oc.id)+'\')" style="font-size:9px">EDITAR</button> ';
             if (oc.estatus === 'CANCELADA') html += '<button class="btn ghost sm" style="color:#7B1FA2;border-color:#7B1FA2;font-size:9px" onclick="window.reactivarOC(\''+_h(oc.id)+'\')">REACT.</button> ';
             else html += '<button class="btn ghost sm" style="color:#F57C00;border-color:#F57C00;font-size:9px" onclick="window.darDeBajaOC(\''+_h(oc.id)+'\')">CANCELAR</button> ';
@@ -37171,41 +37266,9 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   }
   function _formHTML(oc, lockNumero){ oc = oc || {}; window._ocCapturedForm = { numero: String(oc.numero||''), descripcion: String(oc.descripcion||''), unidad: _normUnidad(oc.unidad), precio: Number(oc.precio)||0, estatus: oc.estatus || 'ACTIVA', colaboradorId: String(oc.colaboradorId||''), cantidad: Number(oc.cantidad)||1 }; const numAttr = lockNumero ? ' readonly style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700;background:#F3E5F5;color:#7B1FA2;cursor:not-allowed"' : ' style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"'; const numLabel = lockNumero ? 'OC # (BLOQUEADO · AGREGANDO RENGLÓN)' : 'NÚMERO DE OC'; return '<div class="oc-catalog-form" style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;font-size:12px"><div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">PERSONA A PAGAR · OBRERO QUE COBRA ESTA OC</label><select id="ocCatalogColab" onchange="(window._ocCapturedForm=window._ocCapturedForm||{}).colaboradorId=this.value" style="width:100%;padding:10px 12px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:13px;font-weight:600;background:#fff"><option value="">— SELECCIONAR PERSONA —</option>'+_ocColabOpts(oc.colaboradorId||'')+'</select></div><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">'+numLabel+'</label><input id="ocNumero" type="text" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).numero=this.value.trim()" value="'+_h(oc.numero||'')+'" placeholder="ej: 14"'+numAttr+'></div><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">UNIDAD</label><select id="ocUnidad" onchange="(window._ocCapturedForm=window._ocCapturedForm||{}).unidad=this.value" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'+UNIDAD_OPTS.map(u => '<option value="'+u+'"'+(u===_normUnidad(oc.unidad)?' selected':'')+'>'+u+'</option>').join('')+'</select></div><div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">DESCRIPCIÓN DEL TRABAJO</label><textarea id="ocDescripcion" rows="2" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).descripcion=this.value.trim()" placeholder="ej: Dintel a una cara calibre 20..." style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;resize:vertical">'+_h(oc.descripcion||'')+'</textarea></div><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">CANTIDAD</label><input id="ocCantidad" type="number" step="0.01" min="0" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).cantidad=Number(this.value)||0" value="'+(oc.cantidad||1)+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"></div><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">PRECIO UNITARIO (Q)</label><input id="ocPrecio" type="number" step="0.01" min="0" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).precio=Number(this.value)||0" value="'+(oc.precio||0)+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"></div><div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">ESTATUS</label><select id="ocEstatus" onchange="(window._ocCapturedForm=window._ocCapturedForm||{}).estatus=this.value" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'+ESTATUS_OPTS.map(s => '<option value="'+s+'"'+(s===(oc.estatus||'ACTIVA')?' selected':'')+'>'+s+'</option>').join('')+'</select></div></div>'; }
 
-  // v444: si la OC del catalogo tiene PERSONA A PAGAR, también crea el pago
-  // correspondiente en p.planilla.ajustes para que aparezca en ARMAR PLANILLA.
-  function _ocCrearPagoEnPlanilla(p, form, ocNew){
-    if (!form.colaboradorId) return;
-    var colabs = (p.planilla && p.planilla.colaboradores) || [];
-    var colab = colabs.find(function(c){ return c.id === form.colaboradorId; });
-    var cantidad = Number(form.cantidad) || 1;
-    var subtotal = +(cantidad * Number(form.precio || 0)).toFixed(2);
-    if (!p.planilla) p.planilla = {};
-    if (!Array.isArray(p.planilla.ajustes)) p.planilla.ajustes = [];
-    p.planilla.ajustes.push({
-      id: 'aju-' + Date.now() + '-' + Math.random().toString(36).slice(2,6),
-      tipo: 'ORDEN_CAMBIO',
-      desc: ('OC #'+(form.numero||'?')+' · '+(form.descripcion||'')).toUpperCase(),
-      colaboradorId: form.colaboradorId,
-      colaboradorNombre: colab ? String(colab.nombre||'').toUpperCase() : '',
-      retencion: false,
-      lineas: [{
-        id: 'lin-' + Date.now(),
-        descripcion: String(form.descripcion||'').toUpperCase(),
-        unidad: form.unidad,
-        cantidad: cantidad,
-        precioUnit: Number(form.precio),
-        total: subtotal
-      }],
-      subtotal: subtotal,
-      retencionMonto: 0,
-      neto: subtotal,
-      monto: subtotal,
-      ts: Date.now(),
-      autorizado: false,
-      retencionPagada: false,
-      ocCatalogId: ocNew ? ocNew.id : null
-    });
-  }
+  // v446: ELIMINADO _ocCrearPagoEnPlanilla — las Planillas OC son ahora documentos
+  // independientes con su propio flujo BORRADOR → ENVIADA → AUTORIZADA → PAGADA.
+  // Ya NO se cuelan en p.planilla.ajustes ni en ARMAR PLANILLA REGULAR.
 
   // v402: agregar renglon a OC# existente
   window.agregarRenglonAOC = async function(ocNumero){
@@ -37221,16 +37284,13 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const ocs = _getOCs(p);
     const ocNew = Object.assign({ id:'oc-'+Date.now()+'-'+Math.random().toString(36).slice(2,8), creadoPor:(typeof window._getUserEmail==='function'?window._getUserEmail():''), ts:Date.now() }, form);
     ocs.push(ocNew);
-    // v444: tambien crear pago en planilla.ajustes si selecciono persona
-    try { _ocCrearPagoEnPlanilla(p, form, ocNew); } catch(e){ console.warn('_ocCrearPagoEnPlanilla:', e); }
+    // v446: NO crear pago en planilla regular. La Planilla OC vive aparte.
     try { if(typeof saveState==='function') saveState(); } catch(e){}
     try { if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
     _notifAdminOCChange('NUEVO RENGLÓN', ocNew);
     window._ocCapturedForm = null;
     window.renderPlanillaOCs();
-    try { if (typeof window.renderPlanillaAjustes === 'function') window.renderPlanillaAjustes(); } catch(e){}
-    const msg = form.colaboradorId ? ('RENGLÓN AGREGADO A OC #'+ocNumero+' · PAGO CREADO') : ('RENGLÓN AGREGADO A OC #'+ocNumero);
-    showT(msg,'green');
+    showT('RENGLÓN AGREGADO A PLANILLA OC #'+ocNumero,'green');
   };
 
   // v402: dar de baja TODOS los renglones de un OC#
@@ -37265,6 +37325,94 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   // v389: sin guardrail isAdmin — _notifyByPerm ya excluye al actor automáticamente.
   function _notifAdminOCChange(accion, oc){ try { if (typeof _notifyByPerm !== 'function') return; const u = (typeof currentUser !== 'undefined') ? currentUser : null; const actorName = ((u && (u.displayName || u.username || u.email)) || 'USUARIO').toUpperCase(); const proj = _activeProj(); const projName = proj ? proj.name : ''; const body = (projName ? projName + ' · ' : '') + 'OC #'+(oc.numero||'?')+' · '+_money(oc.precio)+'/'+oc.unidad+' · '+(oc.descripcion||'').slice(0,150); _notifyByPerm('users.manage', { type: 'oc-' + accion.toLowerCase().replace(/\s+/g,'-'), title: actorName + ' · OC ' + accion, body: body.slice(0, 300), projectId: proj ? proj.id : null }).catch(()=>{}); } catch(e){ console.warn('[v382] notif OC:', e); } }
 
+  // v446: helper para obtener nombre del actor que ejecuta una transicion
+  function _ocPlActorName(){ try { const u = (typeof currentUser !== 'undefined') ? currentUser : null; return ((u && (u.displayName || u.username || u.email)) || 'USUARIO').toUpperCase(); } catch(e){ return 'USUARIO'; } }
+  function _ocPlNotifPM(accion, numero, total){ try { if (typeof _notifyByPerm !== 'function') return; const proj = _activeProj(); const projName = proj ? proj.name : ''; const body = (projName ? projName + ' · ' : '') + 'PLANILLA OC #'+numero+' · '+_money(total||0); _notifyByPerm('users.manage', { type: 'oc-planilla-' + accion.toLowerCase().replace(/\s+/g,'-'), title: _ocPlActorName() + ' · ' + accion + ' PLANILLA OC #' + numero, body: body.slice(0, 300), projectId: proj ? proj.id : null }).catch(()=>{}); } catch(e){ console.warn('[v446] notif planilla OC:', e); } }
+
+  // v446: BORRADOR → ENVIADA (supervisor envia al gerente)
+  window.enviarPlanillaOC = async function(numero){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const p = _activeProj();
+    if (!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    const meta = _ocPlMeta(p, numero);
+    if (meta.estado !== 'BORRADOR'){ showT('SOLO SE PUEDE ENVIAR UNA PLANILLA EN BORRADOR','red'); return; }
+    const renglones = _getOCs(p).filter(x => _normNum(x.numero) === _normNum(numero) && x.estatus === 'ACTIVA');
+    if (renglones.length === 0){ showT('NO HAY RENGLONES ACTIVOS PARA ENVIAR','red'); return; }
+    const sinPersona = renglones.filter(r => !r.colaboradorId).length;
+    const total = renglones.reduce((s,r) => s + (Number(r.cantidad)||1) * (Number(r.precio)||0), 0);
+    let warn = '';
+    if (sinPersona > 0) warn = '<div style="margin-top:10px;padding:8px 10px;background:#FFF3E0;border:1px solid #FFCC80;border-radius:6px;color:#9A3412;font-size:11px">'+sinPersona+' renglón'+(sinPersona!==1?'es':'')+' SIN PERSONA asignada. Asigná a quién se le paga antes de enviar.</div>';
+    const body = '<div style="font-size:12.5px;color:#333;line-height:1.5"><div><strong>PLANILLA OC #'+numero+'</strong></div><div style="color:#475569;margin-top:4px">'+renglones.length+' renglón'+(renglones.length!==1?'es':'')+' · TOTAL '+_money(total)+'</div></div>'+warn+'<div style="margin-top:12px;font-size:11.5px;color:#444">La planilla quedará en estado <strong>ENVIADA</strong> esperando autorización de la Gerente de Proyectos. No vas a poder editar renglones hasta que regrese a BORRADOR.</div>';
+    const ok = await window.prConfirm({ title:'ENVIAR PLANILLA OC #'+numero, bodyHTML:body, okText:'ENVIAR PLANILLA OC', danger: sinPersona>0 });
+    if (!ok) return;
+    meta.estado = 'ENVIADA';
+    meta.enviadaTs = Date.now();
+    meta.enviadaPor = _ocPlActorName();
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _ocPlNotifPM('ENVIADA', numero, total);
+    window.renderPlanillaOCs();
+    showT('PLANILLA OC #'+numero+' ENVIADA AL GERENTE','green');
+  };
+
+  // v446: ENVIADA → AUTORIZADA (gerente/admin)
+  window.autorizarPlanillaOC = async function(numero){
+    if (!_ocPlPuedeAutorizar()){ showT('SOLO LA GERENTE DE PROYECTOS PUEDE AUTORIZAR','red'); return; }
+    const p = _activeProj();
+    if (!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    const meta = _ocPlMeta(p, numero);
+    if (meta.estado !== 'ENVIADA'){ showT('SOLO SE PUEDE AUTORIZAR UNA PLANILLA ENVIADA','red'); return; }
+    const renglones = _getOCs(p).filter(x => _normNum(x.numero) === _normNum(numero) && x.estatus === 'ACTIVA');
+    const total = renglones.reduce((s,r) => s + (Number(r.cantidad)||1) * (Number(r.precio)||0), 0);
+    const body = '<div style="font-size:12.5px;color:#333;line-height:1.5"><div><strong>PLANILLA OC #'+numero+'</strong></div><div style="color:#475569;margin-top:4px">'+renglones.length+' renglón'+(renglones.length!==1?'es':'')+' · TOTAL '+_money(total)+'</div></div><div style="margin-top:12px;font-size:11.5px;color:#444">Al autorizar, la planilla queda <strong>AUTORIZADA</strong> y lista para pago.</div>';
+    const ok = await window.prConfirm({ title:'AUTORIZAR PLANILLA OC #'+numero, bodyHTML:body, okText:'AUTORIZAR PLANILLA OC' });
+    if (!ok) return;
+    meta.estado = 'AUTORIZADA';
+    meta.autorizadaTs = Date.now();
+    meta.autorizadaPor = _ocPlActorName();
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _ocPlNotifPM('AUTORIZADA', numero, total);
+    window.renderPlanillaOCs();
+    showT('PLANILLA OC #'+numero+' AUTORIZADA','green');
+  };
+
+  // v446: AUTORIZADA → PAGADA (gerente/admin marca como pagada)
+  window.marcarPagadaPlanillaOC = async function(numero){
+    if (!_ocPlPuedeAutorizar()){ showT('SOLO LA GERENTE DE PROYECTOS PUEDE MARCAR PAGADA','red'); return; }
+    const p = _activeProj();
+    if (!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    const meta = _ocPlMeta(p, numero);
+    if (meta.estado !== 'AUTORIZADA'){ showT('SOLO SE PUEDE MARCAR PAGADA UNA PLANILLA AUTORIZADA','red'); return; }
+    const ok = await window.prConfirm({ title:'MARCAR PLANILLA OC #'+numero+' COMO PAGADA', body:'Esto deja la planilla cerrada y archivada. ¿Confirmar pago realizado?', okText:'SÍ, YA SE PAGÓ' });
+    if (!ok) return;
+    meta.estado = 'PAGADA';
+    meta.pagadaTs = Date.now();
+    meta.pagadaPor = _ocPlActorName();
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    _ocPlNotifPM('PAGADA', numero, 0);
+    window.renderPlanillaOCs();
+    showT('PLANILLA OC #'+numero+' MARCADA COMO PAGADA','green');
+  };
+
+  // v446: ENVIADA → BORRADOR (regresar para editar)
+  window.regresarBorradorOC = async function(numero){
+    if (!_puedeEditar()){ showT('SIN PERMISO','red'); return; }
+    const p = _activeProj();
+    if (!p){ showT('SIN PROYECTO ACTIVO','red'); return; }
+    const meta = _ocPlMeta(p, numero);
+    if (meta.estado !== 'ENVIADA'){ showT('SOLO SE PUEDE REGRESAR A BORRADOR UNA PLANILLA ENVIADA','red'); return; }
+    const ok = await window.prConfirm({ title:'REGRESAR PLANILLA OC #'+numero+' A BORRADOR', body:'La planilla vuelve a EDITABLE. La Gerente ya no podrá autorizarla hasta que la envíes de nuevo.', okText:'REGRESAR A BORRADOR', danger:true });
+    if (!ok) return;
+    meta.estado = 'BORRADOR';
+    meta.enviadaTs = null; meta.enviadaPor = null;
+    try { if(typeof saveState === 'function') saveState(); } catch(e){}
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    window.renderPlanillaOCs();
+    showT('PLANILLA OC #'+numero+' VOLVIÓ A BORRADOR','green');
+  };
+
   window.agregarOC = async function(){
     if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
     const p = _activeProj();
@@ -37283,17 +37431,13 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     }
     const ocNew = Object.assign({ id: 'oc-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), ts: Date.now() }, form);
     ocs.push(ocNew);
-    // v444: si selecciono PERSONA A PAGAR, también crear el pago en planilla.ajustes
-    // para que la OC aparezca en ARMAR PLANILLA Y ENVIAR AL GERENTE.
-    try { _ocCrearPagoEnPlanilla(p, form, ocNew); } catch(e){ console.warn('_ocCrearPagoEnPlanilla:', e); }
+    // v446: la Planilla OC nace en estado BORRADOR (default vía _ocPlMeta)
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
     _notifAdminOCChange('NUEVA', ocNew);
     window._ocCapturedForm = null;
     window.renderPlanillaOCs();
-    try { if (typeof window.renderPlanillaAjustes === 'function') window.renderPlanillaAjustes(); } catch(e){}
-    const msg = form.colaboradorId ? ('OC #'+form.numero+' REGISTRADA · PAGO CREADO PARA ARMAR PLANILLA') : ('OC #'+form.numero+' REGISTRADA');
-    showT(msg,'green');
+    showT('PLANILLA OC #'+form.numero+' CREADA EN BORRADOR','green');
   };
   window.editarOC = async function(id){
     if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
