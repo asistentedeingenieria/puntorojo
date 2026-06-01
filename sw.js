@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v447-preview-PDF-sin-botones-DESCARGAR-NUNCA';
+const CACHE_VERSION = 'v448-resumen-descuentos-desglosable-por-nombre';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
