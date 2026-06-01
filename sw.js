@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v443-OC-form-unificado-con-interfaz-planillas';
+const CACHE_VERSION = 'v444-catalogo-OC-con-PERSONA-A-PAGAR-y-crea-pago-en-planilla';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
