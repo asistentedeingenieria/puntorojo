@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v442-celdas-etapa-altura-fija-y-warning-span-2-cols';
+const CACHE_VERSION = 'v443-OC-form-unificado-con-interfaz-planillas';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
