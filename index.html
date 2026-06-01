@@ -2807,7 +2807,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v453</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v454</span>
   </footer>
 
 </div>
@@ -37097,10 +37097,17 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if (todosCancel) return 'ANULADA';
     return (_ocPlMeta(p, grupo.numero).estado || 'BORRADOR');
   }
+  // v454: total = cantidad × cantidad2 × precio (cantidad2 default 1 si renglon viejo no la tiene)
+  function _ocRenglonTotal(r){
+    const c1 = Number(r.cantidad)||1;
+    const c2 = Number(r.cantidad2)||1;
+    const px = Number(r.precio)||0;
+    return c1 * c2 * px;
+  }
   function _ocPlTotal(grupo){
     return grupo.renglones
       .filter(r => r.estatus === 'ACTIVA')
-      .reduce((s,r) => s + (Number(r.cantidad)||1) * (Number(r.precio)||0), 0);
+      .reduce((s,r) => s + _ocRenglonTotal(r), 0);
   }
   function _ocPlPersona(p, grupo){
     const colabs = (p.planilla && p.planilla.colaboradores) || [];
@@ -37227,24 +37234,99 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           html += '<button class="btn ghost sm" style="font-size:9.5px;color:#7B1FA2;border-color:#7B1FA2" onclick="window.reactivarOCNumero(\''+_h(g.numero||'')+'\')">REACTIVAR PLANILLA OC</button>';
         }
         html += '</div>';
-        // v446: solo se editan renglones en BORRADOR
+        // v454: render formato PDF — agrupar por trabajador → por grupo (TORRE) →
+        // renglones con fila título azul + fila datos. Subtotal por grupo,
+        // total por trabajador, gran total al final. Match con PDF VICINIA.
         const editableRenglones = puedeEditar && isBorrador;
-        html += '<div class="tbl-wrap" style="border:none"><table class="tbl" style="border:none"><thead><tr><th style="width:40px;text-align:center">#</th><th>DESCRIPCIÓN</th><th style="width:80px;text-align:center">UNIDAD</th><th class="num" style="width:75px">CANT</th><th class="num" style="width:110px">PRECIO Q</th><th class="num" style="width:120px">SUBTOTAL</th><th style="width:110px">ESTATUS</th>'+(editableRenglones?'<th style="width:170px"></th>':'')+'</tr></thead><tbody>';
-        g.renglones.forEach((oc, idx) => {
-          const estBadge = oc.estatus === 'ACTIVA' ? '<span class="planilla-badge" style="background:#F3E5F5;color:#7B1FA2;border:1px solid #7B1FA2">ACTIVA</span>' : '<span class="planilla-badge" style="background:#FFEBEE;color:#C62828;border:1px solid #C62828">CANCELADA</span>';
-          const filaStyle = oc.estatus === 'CANCELADA' ? 'opacity:.55;background:#FAFAFA' : '';
-          const cantR = Number(oc.cantidad)||1;
-          const subR = oc.estatus === 'ACTIVA' ? cantR * (Number(oc.precio)||0) : 0;
-          html += '<tr style="'+filaStyle+'"><td style="text-align:center;font-size:10px;font-weight:700;color:#94A3B8">'+(idx+1)+'</td><td style="font-size:11px;line-height:1.4'+(oc.estatus==='CANCELADA'?';text-decoration:line-through':'')+'">'+_h(oc.descripcion||'—')+'</td><td style="text-align:center;font-size:10.5px;font-weight:700">'+_h(oc.unidad?_normUnidad(oc.unidad):'—')+'</td><td class="num" style="font-weight:700">'+cantR+'</td><td class="num" style="font-weight:700;color:#0F172A">'+_money(oc.precio)+'</td><td class="num" style="font-weight:800;color:#0F172A">'+_money(subR)+'</td><td>'+estBadge+'</td>';
-          if (editableRenglones){
-            html += '<td style="white-space:nowrap"><button class="btn ghost sm" onclick="window.editarOC(\''+_h(oc.id)+'\')" style="font-size:9px">EDITAR</button> ';
-            if (oc.estatus === 'CANCELADA') html += '<button class="btn ghost sm" style="color:#7B1FA2;border-color:#7B1FA2;font-size:9px" onclick="window.reactivarOC(\''+_h(oc.id)+'\')">REACT.</button> ';
-            else html += '<button class="btn ghost sm" style="color:#F57C00;border-color:#F57C00;font-size:9px" onclick="window.darDeBajaOC(\''+_h(oc.id)+'\')">CANCELAR</button> ';
-            html += '<button class="btn ghost sm" style="color:var(--red);font-size:9px" onclick="window.eliminarOC(\''+_h(oc.id)+'\')">✕</button></td>';
-          }
-          html += '</tr>';
+        const _colabs = (p.planilla && p.planilla.colaboradores) || [];
+        const _nombreColab = (cid) => { const c = _colabs.find(x => x.id === cid); return (c && c.nombre) ? String(c.nombre).toUpperCase() : 'SIN PERSONA ASIGNADA'; };
+        // Agrupar renglones por colaboradorId
+        const _porColab = {}, _ordenColab = [];
+        g.renglones.forEach(r => {
+          const k = r.colaboradorId || '_SIN_';
+          if (!_porColab[k]) { _porColab[k] = []; _ordenColab.push(k); }
+          _porColab[k].push(r);
         });
-        html += '</tbody></table></div></div>';
+        const _maxTs = g.renglones.reduce((m,r) => Math.max(m, Number(r.ts)||0), 0);
+        const _fechaLiq = _maxTs ? new Date(_maxTs).toLocaleDateString('es-GT') : '—';
+        const _colsTotal = editableRenglones ? 8 : 7;
+        html += '<div class="tbl-wrap" style="border:none;overflow-x:auto"><table class="tbl ocpl-tbl" style="border:none;font-size:10.5px;width:100%;border-collapse:collapse">';
+        _ordenColab.forEach(cKey => {
+          const cRs = _porColab[cKey];
+          const cNombre = cKey === '_SIN_' ? 'SIN PERSONA ASIGNADA' : _nombreColab(cKey);
+          // Encabezado del trabajador
+          html += '<thead><tr style="background:#B6DDE8"><th colspan="'+(_colsTotal-1)+'" style="text-align:left;font-weight:800;padding:9px 14px;color:#0F172A;letter-spacing:.3px">'+_h(cNombre)+'</th><th style="text-align:right;font-weight:600;font-style:italic;padding:9px 14px;color:#0F172A;font-size:10px">Liquidación de trabajos del '+_h(_fechaLiq)+'</th></tr></thead>';
+          // Sub-agrupar por grupo (TORRE)
+          const _porGrupo = {}, _ordenGrupo = [];
+          cRs.forEach(r => {
+            const gk = String(r.grupo || '').trim() || '(SIN GRUPO)';
+            if (!_porGrupo[gk]) { _porGrupo[gk] = []; _ordenGrupo.push(gk); }
+            _porGrupo[gk].push(r);
+          });
+          let totalTrabajador = 0;
+          html += '<tbody>';
+          _ordenGrupo.forEach(gk => {
+            const rs = _porGrupo[gk];
+            let subtotalGrupo = 0;
+            rs.forEach(r => {
+              const isCancel = r.estatus === 'CANCELADA';
+              const c1 = Number(r.cantidad)||1;
+              const c2 = (r.cantidad2!==undefined && r.cantidad2!==null) ? Number(r.cantidad2) : 1;
+              const px = Number(r.precio)||0;
+              const subR = isCancel ? 0 : (c1 * c2 * px);
+              if (!isCancel) subtotalGrupo += subR;
+              const ubicacionTxt = (String(r.grupo||'') + (r.ubicacion ? ' - '+String(r.ubicacion) : '')).trim() || '(SIN UBICACIÓN)';
+              const lineStrike = isCancel ? ';text-decoration:line-through' : '';
+              const rowOp = isCancel ? 'opacity:.5;' : '';
+              // Fila título — azul claro, OC# a la izquierda + ubicación
+              html += '<tr style="'+rowOp+'">'
+                + '<td rowspan="2" style="width:60px;text-align:center;font-weight:700;color:'+(isCancel?'#999':'#5DADE2')+';background:#fff;padding:6px 8px;border:1px solid #E2E8F0;vertical-align:middle">OC # '+_h(g.numero||'?')+'</td>'
+                + '<td colspan="'+(_colsTotal-3)+'" style="font-weight:700;background:#D6EAF8;padding:7px 11px;color:#0F172A'+lineStrike+';border:1px solid #B6DDE8">'+_h(ubicacionTxt)+'</td>'
+                + '<td class="num" style="text-align:right;color:#999;background:#D6EAF8;padding:7px 11px;border:1px solid #B6DDE8;width:110px">Q —</td>'
+                + (editableRenglones ? '<td style="background:#D6EAF8;padding:7px 8px;border:1px solid #B6DDE8;width:170px"></td>' : '')
+                + '</tr>';
+              // Fila datos
+              html += '<tr style="'+rowOp+'">'
+                + '<td style="padding:6px 11px;font-size:10.5px;color:#475569;border:1px solid #E2E8F0;background:#fff'+lineStrike+'">'+_h(r.descripcion||'—')+'</td>'
+                + '<td style="text-align:center;font-size:10px;font-weight:600;padding:6px 8px;border:1px solid #E2E8F0;background:#fff;width:60px">'+_h(r.unidad?_normUnidad(r.unidad):'—')+'</td>'
+                + '<td class="num" style="text-align:center;font-weight:700;padding:6px 8px;border:1px solid #E2E8F0;background:#fff;width:60px">'+c1.toFixed(2)+'</td>'
+                + '<td class="num" style="text-align:center;font-weight:700;padding:6px 8px;border:1px solid #E2E8F0;background:#fff;width:60px">'+c2.toFixed(2)+'</td>'
+                + '<td class="num" style="text-align:right;font-weight:700;padding:6px 10px;border:1px solid #E2E8F0;background:#fff;width:90px">Q '+px.toFixed(2)+'</td>'
+                + '<td class="num" style="text-align:right;font-weight:800;padding:6px 10px;border:1px solid #E2E8F0;background:#fff;color:#0F172A;width:110px">Q '+subR.toFixed(2)+'</td>';
+              if (editableRenglones){
+                html += '<td style="white-space:nowrap;padding:6px 8px;border:1px solid #E2E8F0;background:#fff">'
+                  + '<button class="btn ghost sm" onclick="window.editarOC(\''+_h(r.id)+'\')" style="font-size:8.5px;padding:3px 6px">EDIT</button>';
+                if (isCancel) html += '<button class="btn ghost sm" style="color:#7B1FA2;border-color:#7B1FA2;font-size:8.5px;padding:3px 6px;margin-left:2px" onclick="window.reactivarOC(\''+_h(r.id)+'\')">RE-ACT</button>';
+                else html += '<button class="btn ghost sm" style="color:#F57C00;border-color:#F57C00;font-size:8.5px;padding:3px 6px;margin-left:2px" onclick="window.darDeBajaOC(\''+_h(r.id)+'\')">CANC</button>';
+                html += '<button class="btn ghost sm" style="color:var(--red);font-size:8.5px;padding:3px 6px;margin-left:2px" onclick="window.eliminarOC(\''+_h(r.id)+'\')">✕</button></td>';
+              }
+              html += '</tr>';
+            });
+            // Subtotal del grupo
+            totalTrabajador += subtotalGrupo;
+            html += '<tr>'
+              + '<td style="background:#fff;padding:6px 8px;border:1px solid #E2E8F0"></td>'
+              + '<td colspan="'+(_colsTotal-3)+'" style="text-align:right;font-weight:800;background:#6C7A89;color:#fff;padding:9px 14px;letter-spacing:.8px;border:1px solid #6C7A89">SUBTOTAL</td>'
+              + '<td class="num" style="text-align:right;font-weight:800;background:#6C7A89;color:#fff;padding:9px 14px;border:1px solid #6C7A89">Q '+subtotalGrupo.toFixed(2)+'</td>'
+              + (editableRenglones ? '<td style="background:#6C7A89;border:1px solid #6C7A89"></td>' : '')
+              + '</tr>';
+          });
+          // Total del trabajador
+          html += '<tr>'
+            + '<td style="background:#fff;padding:6px 8px;border:1px solid #E2E8F0"></td>'
+            + '<td colspan="'+(_colsTotal-3)+'" style="text-align:right;font-weight:800;background:#6C7A89;color:#fff;padding:9px 14px;letter-spacing:.8px;border:1px solid #6C7A89">TOTAL</td>'
+            + '<td class="num" style="text-align:right;font-weight:800;background:#6C7A89;color:#fff;padding:9px 14px;border:1px solid #6C7A89">Q '+totalTrabajador.toFixed(2)+'</td>'
+            + (editableRenglones ? '<td style="background:#6C7A89;border:1px solid #6C7A89"></td>' : '')
+            + '</tr>';
+          // Gran Total del trabajador (amarillo)
+          html += '<tr>'
+            + '<td colspan="'+(_colsTotal-2)+'" style="text-align:right;font-weight:900;background:#F1C40F;color:#0F172A;padding:10px 14px;letter-spacing:1px;font-size:11.5px;border:1px solid #F1C40F">GRAN TOTAL · '+_h(cNombre)+'</td>'
+            + '<td class="num" style="text-align:right;font-weight:900;background:#F1C40F;color:#0F172A;padding:10px 14px;font-size:12.5px;border:1px solid #F1C40F">Q '+totalTrabajador.toFixed(2)+'</td>'
+            + (editableRenglones ? '<td style="background:#F1C40F;border:1px solid #F1C40F"></td>' : '')
+            + '</tr>';
+          html += '</tbody>';
+        });
+        html += '</table></div></div>';
       });
     }
     html += '</div>';
@@ -37263,7 +37345,64 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       .slice().sort(function(a,b){ return String(a.nombre||'').localeCompare(String(b.nombre||'')); })
       .map(function(c){ return '<option value="'+_h(c.id)+'"'+(selectedId===c.id?' selected':'')+'>'+_h(c.nombre)+'</option>'; }).join('');
   }
-  function _formHTML(oc, lockNumero){ oc = oc || {}; window._ocCapturedForm = { numero: String(oc.numero||''), descripcion: String(oc.descripcion||''), unidad: _normUnidad(oc.unidad), precio: Number(oc.precio)||0, estatus: oc.estatus || 'ACTIVA', colaboradorId: String(oc.colaboradorId||''), cantidad: Number(oc.cantidad)||1 }; const numAttr = lockNumero ? ' readonly style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700;background:#F3E5F5;color:#7B1FA2;cursor:not-allowed"' : ' style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"'; const numLabel = lockNumero ? 'OC # (BLOQUEADO · AGREGANDO RENGLÓN)' : 'NÚMERO DE OC'; return '<div class="oc-catalog-form" style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;font-size:12px"><div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">PERSONA A PAGAR · OBRERO QUE COBRA ESTA OC</label><select id="ocCatalogColab" onchange="(window._ocCapturedForm=window._ocCapturedForm||{}).colaboradorId=this.value" style="width:100%;padding:10px 12px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:13px;font-weight:600;background:#fff"><option value="">— SELECCIONAR PERSONA —</option>'+_ocColabOpts(oc.colaboradorId||'')+'</select></div><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">'+numLabel+'</label><input id="ocNumero" type="text" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).numero=this.value.trim()" value="'+_h(oc.numero||'')+'" placeholder="ej: 14"'+numAttr+'></div><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">UNIDAD</label><select id="ocUnidad" onchange="(window._ocCapturedForm=window._ocCapturedForm||{}).unidad=this.value" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'+UNIDAD_OPTS.map(u => '<option value="'+u+'"'+(u===_normUnidad(oc.unidad)?' selected':'')+'>'+u+'</option>').join('')+'</select></div><div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">DESCRIPCIÓN DEL TRABAJO</label><textarea id="ocDescripcion" rows="2" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).descripcion=this.value.trim()" placeholder="ej: Dintel a una cara calibre 20..." style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;resize:vertical">'+_h(oc.descripcion||'')+'</textarea></div><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">CANTIDAD</label><input id="ocCantidad" type="number" step="0.01" min="0" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).cantidad=Number(this.value)||0" value="'+(oc.cantidad||1)+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"></div><div><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">PRECIO UNITARIO (Q)</label><input id="ocPrecio" type="number" step="0.01" min="0" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).precio=Number(this.value)||0" value="'+(oc.precio||0)+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"></div><div style="grid-column:1/-1"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">ESTATUS</label><select id="ocEstatus" onchange="(window._ocCapturedForm=window._ocCapturedForm||{}).estatus=this.value" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px">'+ESTATUS_OPTS.map(s => '<option value="'+s+'"'+(s===(oc.estatus||'ACTIVA')?' selected':'')+'>'+s+'</option>').join('')+'</select></div></div>'; }
+  function _formHTML(oc, lockNumero){
+    oc = oc || {};
+    // v454: agregados GRUPO, UBICACIÓN, CANTIDAD 2 (formato PDF planilla)
+    window._ocCapturedForm = {
+      numero: String(oc.numero||''),
+      grupo: String(oc.grupo||''),
+      ubicacion: String(oc.ubicacion||''),
+      descripcion: String(oc.descripcion||''),
+      unidad: _normUnidad(oc.unidad),
+      cantidad: Number(oc.cantidad)||1,
+      cantidad2: (oc.cantidad2!==undefined && oc.cantidad2!==null) ? Number(oc.cantidad2) : 1,
+      precio: Number(oc.precio)||0,
+      estatus: oc.estatus || 'ACTIVA',
+      colaboradorId: String(oc.colaboradorId||'')
+    };
+    const numAttr = lockNumero
+      ? ' readonly style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700;background:#F3E5F5;color:#7B1FA2;cursor:not-allowed"'
+      : ' style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px;font-weight:700"';
+    const numLabel = lockNumero ? 'OC # (BLOQUEADO · AGREGANDO RENGLÓN)' : 'NÚMERO DE OC';
+    const inputCss = 'width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px';
+    const lblCss = 'display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase';
+    return ''
+      + '<div class="oc-catalog-form" style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;font-size:12px">'
+        // Persona
+        + '<div style="grid-column:1/-1"><label style="'+lblCss+'">PERSONA A PAGAR · OBRERO QUE COBRA ESTA OC</label>'
+          + '<select id="ocCatalogColab" onchange="(window._ocCapturedForm=window._ocCapturedForm||{}).colaboradorId=this.value" style="width:100%;padding:10px 12px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:13px;font-weight:600;background:#fff">'
+          + '<option value="">— SELECCIONAR PERSONA —</option>'+_ocColabOpts(oc.colaboradorId||'')+'</select></div>'
+        // Número OC
+        + '<div><label style="'+lblCss+'">'+numLabel+'</label>'
+          + '<input id="ocNumero" type="text" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).numero=this.value.trim()" value="'+_h(oc.numero||'')+'" placeholder="ej: 14"'+numAttr+'></div>'
+        // Unidad
+        + '<div><label style="'+lblCss+'">UNIDAD</label>'
+          + '<select id="ocUnidad" onchange="(window._ocCapturedForm=window._ocCapturedForm||{}).unidad=this.value" style="'+inputCss+'">'
+          + UNIDAD_OPTS.map(u => '<option value="'+u+'"'+(u===_normUnidad(oc.unidad)?' selected':'')+'>'+u+'</option>').join('')+'</select></div>'
+        // Grupo (TORRE B)
+        + '<div><label style="'+lblCss+'">GRUPO · TORRE / SECCIÓN</label>'
+          + '<input id="ocGrupo" type="text" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).grupo=this.value.trim().toUpperCase()" value="'+_h(oc.grupo||'')+'" placeholder="ej: TORRE B" style="'+inputCss+';font-weight:700"></div>'
+        // Ubicación (APTO 301-C)
+        + '<div><label style="'+lblCss+'">UBICACIÓN · APTO / ZONA</label>'
+          + '<input id="ocUbicacion" type="text" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).ubicacion=this.value.trim().toUpperCase()" value="'+_h(oc.ubicacion||'')+'" placeholder="ej: APTO 301-C" style="'+inputCss+';font-weight:700"></div>'
+        // Descripción
+        + '<div style="grid-column:1/-1"><label style="'+lblCss+'">DESCRIPCIÓN DEL TRABAJO</label>'
+          + '<textarea id="ocDescripcion" rows="2" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).descripcion=this.value.trim()" placeholder="ej: Dintel a una cara calibre 20..." style="'+inputCss+';resize:vertical">'+_h(oc.descripcion||'')+'</textarea></div>'
+        // Cantidad 1
+        + '<div><label style="'+lblCss+'">CANTIDAD 1 · MEDIDA</label>'
+          + '<input id="ocCantidad" type="number" step="0.01" min="0" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).cantidad=Number(this.value)||0" value="'+(oc.cantidad||1)+'" style="'+inputCss+';font-weight:700"></div>'
+        // Cantidad 2
+        + '<div><label style="'+lblCss+'">CANTIDAD 2</label>'
+          + '<input id="ocCantidad2" type="number" step="0.01" min="0" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).cantidad2=Number(this.value)||0" value="'+((oc.cantidad2!==undefined&&oc.cantidad2!==null)?oc.cantidad2:1)+'" style="'+inputCss+';font-weight:700"></div>'
+        // Precio unitario
+        + '<div><label style="'+lblCss+'">PRECIO UNITARIO (Q)</label>'
+          + '<input id="ocPrecio" type="number" step="0.01" min="0" oninput="(window._ocCapturedForm=window._ocCapturedForm||{}).precio=Number(this.value)||0" value="'+(oc.precio||0)+'" style="'+inputCss+';font-weight:700"></div>'
+        // Estatus
+        + '<div><label style="'+lblCss+'">ESTATUS</label>'
+          + '<select id="ocEstatus" onchange="(window._ocCapturedForm=window._ocCapturedForm||{}).estatus=this.value" style="'+inputCss+'">'
+          + ESTATUS_OPTS.map(s => '<option value="'+s+'"'+(s===(oc.estatus||'ACTIVA')?' selected':'')+'>'+s+'</option>').join('')+'</select></div>'
+      + '</div>';
+  }
 
   // v446: ELIMINADO _ocCrearPagoEnPlanilla — las Planillas OC son ahora documentos
   // independientes con su propio flujo BORRADOR → ENVIADA → AUTORIZADA → PAGADA.

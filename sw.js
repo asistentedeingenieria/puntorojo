@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v453-OCs-NO-suman-al-RESUMEN-POR-PERSONA-regular';
+const CACHE_VERSION = 'v454-PLANILLA-OC-formato-PDF-con-grupo-ubicacion-cant2';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
