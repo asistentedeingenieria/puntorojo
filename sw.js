@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v454-PLANILLA-OC-formato-PDF-con-grupo-ubicacion-cant2';
+const CACHE_VERSION = 'v455-APP-CHECK-reCAPTCHA-v3-reactivado-con-kill-switch';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

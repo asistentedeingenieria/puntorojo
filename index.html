@@ -102,34 +102,57 @@ const FCM_VAPID_KEY = 'BBoq4vfdIDLjXLj4uOqPQBTN6MDAz1RwwXnpUl8r9PeJ_GRJ5auEUorWy
 try {
   firebase.initializeApp(FIREBASE_CONFIG);
 
-  // ── App Check (reCAPTCHA v3) ──
+  // ── App Check (reCAPTCHA v3) — RE-ACTIVADO en v455 ──
   // IMPORTANTE: el SDK de reCAPTCHA inyecta un <iframe> en document.body.
   // Si lo activamos antes de que body exista (porque el script vive en <head>),
-  // tira "Cannot read properties of null (reading 'appendChild')" y deja
-  // a App Check en un estado roto que le pisa requests a Firestore.
-  // Por eso lo deferreamos hasta DOMContentLoaded.
-  // ⚠️ APP CHECK DESACTIVADO TEMPORALMENTE — Estaba causando errores 400 que
-  // bloqueaban Firestore (notifs no llegaban, requests se trababan). La protección
-  // base sigue intacta: HTTPS, Firestore Rules, Auth, IAM. App Check era una capa
-  // EXTRA que requiere debug de configuración reCAPTCHA. Lo retomamos después.
+  // tira "Cannot read properties of null (reading 'appendChild')" y deja a
+  // App Check en un estado roto que le pisa requests a Firestore. Por eso
+  // defereamos hasta DOMContentLoaded.
+  //
+  // KILL SWITCH (si vuelve a romper Firestore):
+  //   En la consola del navegador correr:
+  //     localStorage.setItem('PR_DISABLE_APPCHECK', '1'); location.reload();
+  //   Eso lo desactiva en ese dispositivo sin redeployar nada.
+  //
+  // RE-ACTIVAR después del kill switch:
+  //     localStorage.removeItem('PR_DISABLE_APPCHECK'); location.reload();
+  //
+  // Antes de cambiar Firebase Console → App Check a modo ENFORCED, dejá unos
+  // días en MONITOR y revisá las métricas (deberían ser >95% verified).
   function _initAppCheck(){
-    /* desactivado — el bloque original quedó comentado abajo por si lo retomamos
     try {
-      if (!document.body) return;
-      if (!firebase.appCheck || typeof firebase.appCheck !== 'function') return;
       if (window.__pr_appCheckActivated) return;
+      // Kill switch local
+      try {
+        if (localStorage.getItem('PR_DISABLE_APPCHECK') === '1'){
+          console.warn('[App Check] DESACTIVADO por flag PR_DISABLE_APPCHECK en localStorage');
+          return;
+        }
+      } catch(_lsErr){ /* sandbox sin localStorage — seguir */ }
+      // Si body aún no existe, diferir
+      if (!document.body){
+        document.addEventListener('DOMContentLoaded', _initAppCheck, { once: true });
+        return;
+      }
+      if (!firebase.appCheck || typeof firebase.appCheck !== 'function'){
+        console.warn('[App Check] firebase.appCheck no disponible · SDK no cargado');
+        return;
+      }
       window.__pr_appCheckActivated = true;
       const appCheck = firebase.appCheck();
       appCheck.activate(
         new firebase.appCheck.ReCaptchaV3Provider(RECAPTCHA_V3_SITE_KEY),
-        true
+        true  // isTokenAutoRefreshEnabled — refresca el token automáticamente
       );
-    } catch(e) {
-      console.warn('App Check no se pudo activar:', e && e.message);
+      console.log('[App Check] reCAPTCHA v3 ACTIVADO · sitekey='+RECAPTCHA_V3_SITE_KEY.slice(0,12)+'…');
+    } catch(e){
+      console.warn('[App Check] activación falló:', e && e.message);
+      // No re-throw — si falla, el resto de Firebase sigue funcionando
     }
-    */
   }
-  // No registramos listeners — _initAppCheck queda como no-op por ahora.
+  // v455: arrancar App Check ahora (o cuando body exista)
+  if (document.body) _initAppCheck();
+  else document.addEventListener('DOMContentLoaded', _initAppCheck, { once: true });
 
   // Hacer que la sesión persista en este navegador hasta que el usuario haga logout.
   firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
@@ -2807,7 +2830,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v454</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v455</span>
   </footer>
 
 </div>
