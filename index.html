@@ -2834,7 +2834,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v458</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v459</span>
   </footer>
 
 </div>
@@ -8293,22 +8293,32 @@ window.v456LiberarEtapasMarcadas = async function(){
   const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
   const money = n => 'Q ' + (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 
+  // v459: resolver "número de apto" -> aptoId recorriendo la estructura del
+  // proyecto (p.towers[].levels[].aptos[]) y matchear los pagos por aptoId+stageIdx,
+  // EXACTAMENTE como getPaidPct. El aptoName del pago no siempre trae el número
+  // limpio, por eso el match por nombre solo encontraba 18 de 81.
+  const aptoIdByKey = {};
+  (p.towers || []).forEach(t => {
+    const tNum = digits(t.name);
+    (t.levels || []).forEach(l => (l.aptos || []).forEach(a => {
+      const aNum = digits(a.name);
+      if (tNum && aNum){ const k = tNum + '|' + aNum; if (!aptoIdByKey[k]) aptoIdByKey[k] = a.id; }
+    }));
+  });
+
   // Construir objetivos torre+apto+stageIdx
   const objetivos = [];
   LISTA.forEach(it => it.etapas.forEach(e => objetivos.push({torre:it.torre, apto:it.apto, stageIdx:e-1, etapa:e})));
 
-  const liberar = [];   // {torre,apto,etapa,pagos:[...],bruto,colabs}
+  const liberar = [];    // {obj, pagos, bruto, colabs}
   const enPlanilla = []; // matched pero en planilla armada → NO tocar
-  const noEnc = [];      // sin pago
+  const noEnc = [];      // {obj, reason}
 
   objetivos.forEach(obj => {
-    const matches = pagos.filter(pg =>
-      pg && pg.tipo === 'ETAPA' &&
-      digits(pg.towerName) === String(obj.torre) &&
-      digits(pg.aptoName) === obj.apto &&
-      Number(pg.stageIdx) === obj.stageIdx
-    );
-    if (!matches.length) { noEnc.push({obj}); return; }  // v458: envolver en {obj} igual que enPlanilla/liberar
+    const aid = aptoIdByKey[String(obj.torre) + '|' + obj.apto];
+    if (!aid) { noEnc.push({obj, reason:'apto no está en el proyecto'}); return; }
+    const matches = pagos.filter(pg => pg && pg.tipo === 'ETAPA' && pg.aptoId === aid && Number(pg.stageIdx) === obj.stageIdx);
+    if (!matches.length) { noEnc.push({obj, reason:'sin pago marcado para esa etapa'}); return; }
     if (matches.some(m => armedIds.has(m.id))) { enPlanilla.push({obj, pagos:matches}); return; }
     const bruto = matches.reduce((s,m)=>s+Number(m.bruto||0),0);
     const colabs = Array.from(new Set(matches.map(m => String(m.colaborador||'—').toUpperCase()))).join(', ');
@@ -8345,7 +8355,7 @@ window.v456LiberarEtapasMarcadas = async function(){
   }
   if (noEnc.length){
     html += '<div style="font-weight:700;color:#64748B;margin:12px 0 4px;font-size:11px;letter-spacing:.5px">NO ENCONTRADAS (no existe pago marcado para esa etapa):</div>';
-    html += '<div style="font-size:10px;color:#64748B;padding:4px 8px;background:#F8FAFC;border-radius:6px">'+noEnc.map(x=>'T'+x.obj.torre+'·'+esc(x.obj.apto)+'·E'+x.obj.etapa).join('   ')+'</div>';
+    html += '<div style="font-size:10px;color:#64748B;padding:4px 8px;background:#F8FAFC;border-radius:6px">'+noEnc.map(x=>'T'+x.obj.torre+'·'+esc(x.obj.apto)+'·E'+x.obj.etapa+(x.reason?' ('+esc(x.reason)+')':'')).join('   ')+'</div>';
   }
   html += '</div>';
 
