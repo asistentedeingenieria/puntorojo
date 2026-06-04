@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v459-matcher-por-aptoId-igual-que-getPaidPct';
+const CACHE_VERSION = 'v460-marcador-version-en-modal-y-diagnostico-consola';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
