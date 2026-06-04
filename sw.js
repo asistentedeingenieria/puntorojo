@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v457-blindar-liberar-etapas-con-try-catch-y-feedback-inmediato';
+const CACHE_VERSION = 'v458-fix-bug-noEnc-shape-en-liberar-etapas';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
