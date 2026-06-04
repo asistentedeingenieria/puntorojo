@@ -2333,6 +2333,10 @@ table{max-width:100%}
           <span class="ki-emoji"></span>
           <span class="ki-label">Limpieza selectiva</span>
         </button>
+        <button class="kebab-item" data-perm="users.manage" onclick="kebabAction(function(){ window.v456LiberarEtapasMarcadas && window.v456LiberarEtapasMarcadas(); })" title="Analiza y libera la lista de etapas marcadas a mano (Essenza Torre 3 y 4) para que vuelvan a quedar disponibles de pago. Analiza primero, no borra sin confirmar.">
+          <span class="ki-emoji"></span>
+          <span class="ki-label">Liberar etapas marcadas (lista)</span>
+        </button>
         <button class="kebab-item kebab-danger" data-perm="data.import" onclick="kebabAction(resetToFactory)" title="Restablecer datos de fábrica">
           <span class="ki-emoji"></span>
           <span class="ki-label">Reset a fábrica</span>
@@ -2830,7 +2834,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v455</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v456</span>
   </footer>
 
 </div>
@@ -8228,6 +8232,147 @@ window.liberarEspacioLocal = async function(){
     console.error('liberarEspacioLocal:', e);
     showToast('NO SE PUDO LIBERAR ESPACIO · INTENTÁ DE NUEVO', 'red');
   }
+};
+
+/* ════════════ v456: LIBERAR ETAPAS MARCADAS A MANO (lista del usuario) ════════════
+   Herramienta de admin, UNA SOLA VEZ. El usuario marcó a mano (en otra sesión)
+   ciertas etapas como ya pagadas — etapas pagadas por fuera de la app, históricas.
+   Ahora quiere LIBERARLAS (volverlas disponibles de pago) sin tocar las que se
+   pagaron normalmente con la app.
+
+   MECÁNICA: "pagado" = existe un registro en p.planilla.pagos[] con tipo:'ETAPA',
+   ese aptoId+stageIdx y targetPct. "Liberar" = borrar esos registros → getPaidPct
+   vuelve a 0 → la etapa queda disponible.
+
+   SEGURIDAD (analyze-first):
+   1. Matchea la lista EXACTA del usuario (torre+apto+etapa) contra los pagos.
+   2. HARD-EXCLUYE cualquier pago que pertenezca a una planilla ARMADA
+      (pl.pagosIds) — esos son app-paid, NO se tocan, solo se reportan.
+   3. Muestra un modal de análisis (solo lectura) con todo lo que se va a liberar,
+      lo que se salta (en planilla) y lo que no se encontró.
+   4. Solo tras DOS confirmaciones del usuario borra los registros.
+
+   Lista confirmada por el usuario el 2026-06-03 (proyecto ESSENZA FASE 2). */
+window.v456LiberarEtapasMarcadas = async function(){
+  if (typeof can !== 'function' || !can('users.manage')) { showToast('SOLO ADMIN', 'red'); return; }
+  const p = (typeof activeProj === 'function') ? activeProj() : null;
+  if (!p || !p.planilla) { showToast('SIN PROYECTO ACTIVO', 'red'); return; }
+
+  // Lista confirmada: {torre, apto, etapas:[1..5]}
+  const LISTA = [
+    {torre:3, apto:'705', etapas:[5]}, {torre:3, apto:'803', etapas:[5]},
+    {torre:3, apto:'103', etapas:[5]}, {torre:3, apto:'801', etapas:[5]},
+    {torre:3, apto:'804', etapas:[5]}, {torre:3, apto:'805', etapas:[5]},
+    {torre:3, apto:'806', etapas:[5]}, {torre:3, apto:'807', etapas:[5]},
+    {torre:3, apto:'808', etapas:[5]},
+    {torre:3, apto:'903', etapas:[2,3,4]}, {torre:3, apto:'904', etapas:[2,3,4]},
+    {torre:3, apto:'906', etapas:[2,3,4]}, {torre:3, apto:'905', etapas:[2,3]},
+    {torre:3, apto:'907', etapas:[2,3,4]}, {torre:3, apto:'901', etapas:[2,3,4]},
+    {torre:3, apto:'902', etapas:[2,3,4]}, {torre:3, apto:'908', etapas:[2,3]},
+    {torre:3, apto:'1003', etapas:[1]}, {torre:3, apto:'1005', etapas:[1]},
+    {torre:3, apto:'1203', etapas:[1]}, {torre:3, apto:'1204', etapas:[1]},
+    {torre:3, apto:'1206', etapas:[1]},
+    {torre:3, apto:'1006', etapas:[2,3,4]}, {torre:3, apto:'1007', etapas:[2,3,4]},
+    {torre:3, apto:'1008', etapas:[2,3,4]}, {torre:3, apto:'1001', etapas:[2,3,4]},
+    {torre:4, apto:'701', etapas:[5]}, {torre:4, apto:'702', etapas:[5]},
+    {torre:4, apto:'703', etapas:[5]}, {torre:4, apto:'704', etapas:[5]},
+    {torre:4, apto:'705', etapas:[2,3,4,5]}, {torre:4, apto:'707', etapas:[5]},
+    {torre:4, apto:'708', etapas:[5]},
+    {torre:4, apto:'801', etapas:[2,3,4]}, {torre:4, apto:'802', etapas:[2,3,4]},
+    {torre:4, apto:'803', etapas:[2,3,4]}, {torre:4, apto:'807', etapas:[2,3,4]},
+    {torre:4, apto:'808', etapas:[2,3,4]}, {torre:4, apto:'706', etapas:[2,3,4]},
+    {torre:4, apto:'804', etapas:[2,3,4]}, {torre:4, apto:'1204', etapas:[1]}
+  ];
+
+  const pagos = Array.isArray(p.planilla.pagos) ? p.planilla.pagos : [];
+  const armedIds = new Set();
+  (p.planilla.planillasArmadas || []).forEach(pl => (pl.pagosIds || []).forEach(id => armedIds.add(id)));
+  const digits = s => String(s == null ? '' : s).replace(/\D/g, '');
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  const money = n => 'Q ' + (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+  // Construir objetivos torre+apto+stageIdx
+  const objetivos = [];
+  LISTA.forEach(it => it.etapas.forEach(e => objetivos.push({torre:it.torre, apto:it.apto, stageIdx:e-1, etapa:e})));
+
+  const liberar = [];   // {torre,apto,etapa,pagos:[...],bruto,colabs}
+  const enPlanilla = []; // matched pero en planilla armada → NO tocar
+  const noEnc = [];      // sin pago
+
+  objetivos.forEach(obj => {
+    const matches = pagos.filter(pg =>
+      pg && pg.tipo === 'ETAPA' &&
+      digits(pg.towerName) === String(obj.torre) &&
+      digits(pg.aptoName) === obj.apto &&
+      Number(pg.stageIdx) === obj.stageIdx
+    );
+    if (!matches.length) { noEnc.push(obj); return; }
+    if (matches.some(m => armedIds.has(m.id))) { enPlanilla.push({obj, pagos:matches}); return; }
+    const bruto = matches.reduce((s,m)=>s+Number(m.bruto||0),0);
+    const colabs = Array.from(new Set(matches.map(m => String(m.colaborador||'—').toUpperCase()))).join(', ');
+    liberar.push({obj, pagos:matches, bruto, colabs});
+  });
+
+  const totalEtapasLib = liberar.length;
+  const totalRegistros = liberar.reduce((s,x)=>s+x.pagos.length,0);
+  const totalBruto = liberar.reduce((s,x)=>s+x.bruto,0);
+
+  // ── Modal de ANÁLISIS (solo lectura) ──
+  let html = '<div style="font-size:12px;line-height:1.5">';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">';
+  html += '<div style="background:#ECFDF5;border:1px solid #6EE7B7;border-radius:6px;padding:8px 10px"><div style="font-size:9px;letter-spacing:1px;color:#065F46;font-weight:700">A LIBERAR</div><div style="font-size:18px;font-weight:800;color:#065F46">'+totalEtapasLib+'</div></div>';
+  html += '<div style="background:#FFF7ED;border:1px solid #FED7AA;border-radius:6px;padding:8px 10px"><div style="font-size:9px;letter-spacing:1px;color:#9A3412;font-weight:700">EN PLANILLA (SE SALTAN)</div><div style="font-size:18px;font-weight:800;color:#9A3412">'+enPlanilla.length+'</div></div>';
+  html += '<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;padding:8px 10px"><div style="font-size:9px;letter-spacing:1px;color:#64748B;font-weight:700">NO ENCONTRADAS</div><div style="font-size:18px;font-weight:800;color:#64748B">'+noEnc.length+'</div></div>';
+  html += '</div>';
+  html += '<div style="padding:8px 10px;background:#FEF2F2;border:1px solid #FCA5A5;border-radius:6px;color:#991B1B;font-size:11px;margin-bottom:12px">Proyecto: <strong>'+esc(p.name||'')+'</strong>. Al liberar, el BRUTO baja '+money(totalBruto)+'. Las etapas vuelven a quedar disponibles de pago.</div>';
+
+  if (totalEtapasLib){
+    html += '<div style="font-weight:700;color:#065F46;margin:6px 0 4px;font-size:11px;letter-spacing:.5px">SE VAN A LIBERAR ('+totalEtapasLib+'):</div>';
+    html += '<div style="max-height:240px;overflow:auto;border:1px solid #E2E8F0;border-radius:6px">';
+    liberar.forEach((x,i) => {
+      html += '<div style="display:grid;grid-template-columns:auto 1fr auto;gap:8px;padding:5px 10px;'+(i%2?'background:#FAFAFA':'')+';font-size:10.5px;align-items:center">'
+        + '<span style="font-weight:700;color:#0F172A;min-width:96px">T'+x.obj.torre+' · APTO '+esc(x.obj.apto)+'</span>'
+        + '<span style="color:#475569">ETAPA '+x.obj.etapa+' · '+esc(x.colabs)+'</span>'
+        + '<span style="font-weight:700;color:#C62828">'+money(x.bruto)+'</span></div>';
+    });
+    html += '</div>';
+  }
+  if (enPlanilla.length){
+    html += '<div style="font-weight:700;color:#9A3412;margin:12px 0 4px;font-size:11px;letter-spacing:.5px">⚠ SE SALTAN — ESTÁN EN UNA PLANILLA ARMADA (no se tocan):</div>';
+    html += '<div style="font-size:10px;color:#9A3412;padding:4px 8px;background:#FFF7ED;border-radius:6px">'+enPlanilla.map(x=>'T'+x.obj.torre+'·'+esc(x.obj.apto)+'·E'+x.obj.etapa).join('   ')+'</div>';
+  }
+  if (noEnc.length){
+    html += '<div style="font-weight:700;color:#64748B;margin:12px 0 4px;font-size:11px;letter-spacing:.5px">NO ENCONTRADAS (no existe pago marcado para esa etapa):</div>';
+    html += '<div style="font-size:10px;color:#64748B;padding:4px 8px;background:#F8FAFC;border-radius:6px">'+noEnc.map(x=>'T'+x.obj.torre+'·'+esc(x.obj.apto)+'·E'+x.obj.etapa).join('   ')+'</div>';
+  }
+  html += '</div>';
+
+  const ok = await window.prConfirm({
+    title: 'ANÁLISIS · LIBERAR ETAPAS MARCADAS',
+    bodyHTML: html,
+    okText: totalEtapasLib ? ('LIBERAR '+totalEtapasLib+' ETAPAS') : 'CERRAR',
+    cancelText: totalEtapasLib ? 'CANCELAR' : '',
+    wide: true
+  });
+  if (!ok || !totalEtapasLib) return;
+
+  const ok2 = await window.prConfirm({
+    title: 'CONFIRMAR LIBERACIÓN',
+    body: 'Se van a borrar '+totalRegistros+' registro(s) de pago de '+totalEtapasLib+' etapa(s). El BRUTO baja '+money(totalBruto)+'. Las etapas quedan disponibles de pago otra vez. ¿Confirmar?',
+    okText: 'SÍ, LIBERAR',
+    cancelText: 'CANCELAR',
+    danger: true
+  });
+  if (!ok2) return;
+
+  const idsToRemove = new Set();
+  liberar.forEach(x => x.pagos.forEach(pg => idsToRemove.add(pg.id)));
+  p.planilla.pagos = pagos.filter(pg => !idsToRemove.has(pg.id));
+  try { if (typeof logActivity === 'function') logActivity('delete','Etapas liberadas (lista manual)', p.name+' · '+totalEtapasLib+' etapas · '+idsToRemove.size+' registros · '+money(totalBruto)); } catch(e){}
+  try { if (typeof saveState === 'function') saveState(); } catch(e){}
+  try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  try { if (typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+  showToast('LIBERADAS '+totalEtapasLib+' ETAPAS · '+idsToRemove.size+' REGISTROS BORRADOS', 'green');
 };
 
 /* Estimar uso de localStorage. Navegadores típicamente dan 5-10 MB por origen */

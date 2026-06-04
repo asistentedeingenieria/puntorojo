@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v455-APP-CHECK-reCAPTCHA-v3-reactivado-con-kill-switch';
+const CACHE_VERSION = 'v456-boton-LIBERAR-etapas-marcadas-lista-analyze-first';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
