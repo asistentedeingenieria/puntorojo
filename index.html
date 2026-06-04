@@ -2337,6 +2337,10 @@ table{max-width:100%}
           <span class="ki-emoji"></span>
           <span class="ki-label">Liberar etapas marcadas (lista)</span>
         </button>
+        <button class="kebab-item" data-perm="users.manage" onclick="kebabAction(function(){ window.v460LiberarUnaEtapa && window.v460LiberarUnaEtapa(); })" title="Liberar UNA etapa especifica (escribis torre, apto y etapa) para que vuelva a quedar disponible de pago. Solo admin.">
+          <span class="ki-emoji"></span>
+          <span class="ki-label">Liberar UNA etapa (torre · apto · etapa)</span>
+        </button>
         <button class="kebab-item kebab-danger" data-perm="data.import" onclick="kebabAction(resetToFactory)" title="Restablecer datos de fábrica">
           <span class="ki-emoji"></span>
           <span class="ki-label">Reset a fábrica</span>
@@ -2834,7 +2838,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v460</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v461</span>
   </footer>
 
 </div>
@@ -8397,6 +8401,78 @@ window.v456LiberarEtapasMarcadas = async function(){
   console.error('v456LiberarEtapasMarcadas:', err);
   try { showToast('ERROR: '+(err && err.message ? err.message : err), 'red'); } catch(e){}
   try { if (window.prAlert) window.prAlert({ title:'ERROR AL LIBERAR ETAPAS', body: String(err && err.message ? err.message : err) }); } catch(e){}
+ }
+};
+
+/* ════════════ v460: LIBERAR UNA ETAPA ESPECÍFICA (genérico, admin) ════════════
+   Para pedidos ad-hoc tipo "liberame torre 4 apto 606 etapa 5". Mismo motor
+   seguro: resuelve aptoId por la estructura del proyecto, matchea por
+   aptoId+stageIdx (igual que getPaidPct), muestra qué encontró y libera con
+   confirmación. Opera sobre el PROYECTO ACTIVO. */
+window.v460LiberarUnaEtapa = async function(prefTorre, prefApto, prefEtapa){
+ try {
+  if (typeof can !== 'function' || !can('users.manage')) { showToast('SOLO ADMIN', 'red'); return; }
+  const p = (typeof activeProj === 'function') ? activeProj() : null;
+  if (!p || !p.planilla) { showToast('SIN PROYECTO ACTIVO', 'red'); return; }
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  const digits = s => String(s == null ? '' : s).replace(/\D/g, '');
+  const money = n => 'Q ' + (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+  // Form de captura (oninput en tiempo real)
+  window._v460UnaForm = { torre: String(prefTorre||''), apto: String(prefApto||''), etapa: String(prefEtapa||'') };
+  const inC = 'width:100%;padding:9px 11px;border:1px solid #DDD;border-radius:6px;font:inherit;font-size:14px;font-weight:700';
+  const lbC = 'display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase';
+  const formHTML = ''
+    + '<div style="font-size:11.5px;color:#475569;margin-bottom:12px">Proyecto activo: <strong>'+esc(p.name||'')+'</strong> · HERRAMIENTA v460</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">'
+    + '<div><label style="'+lbC+'">TORRE</label><input id="v460Torre" type="text" value="'+esc(prefTorre||'')+'" placeholder="ej: 4" oninput="(window._v460UnaForm=window._v460UnaForm||{}).torre=this.value" style="'+inC+'"></div>'
+    + '<div><label style="'+lbC+'">APTO</label><input id="v460Apto" type="text" value="'+esc(prefApto||'')+'" placeholder="ej: 606" oninput="(window._v460UnaForm=window._v460UnaForm||{}).apto=this.value" style="'+inC+'"></div>'
+    + '<div><label style="'+lbC+'">ETAPA (1-5)</label><input id="v460Etapa" type="number" min="1" max="5" value="'+esc(prefEtapa||'')+'" placeholder="ej: 5" oninput="(window._v460UnaForm=window._v460UnaForm||{}).etapa=this.value" style="'+inC+'"></div>'
+    + '</div>'
+    + '<div style="font-size:10.5px;color:#94A3B8;margin-top:10px">Etapas: 1=TABIQUES · 2=REFUERZOS MADERA · 3=FORRO 2DA CARA · 4=ESTRUCTURA+FORRO CIELO · 5=MASILLA</div>';
+  const ok = await window.prConfirm({ title:'LIBERAR UNA ETAPA', bodyHTML: formHTML, okText:'ANALIZAR', cancelText:'CANCELAR' });
+  if (!ok) return;
+
+  const f = window._v460UnaForm || {};
+  const torre = digits(f.torre), apto = digits(f.apto), etapa = parseInt(f.etapa, 10);
+  if (!torre || !apto || !(etapa >= 1 && etapa <= 5)) { showToast('COMPLETÁ TORRE, APTO Y ETAPA (1-5)', 'red'); return; }
+  const stageIdx = etapa - 1;
+
+  // Resolver aptoId por estructura
+  const aptoIdByKey = {};
+  (p.towers || []).forEach(t => { const tN = digits(t.name); (t.levels || []).forEach(l => (l.aptos || []).forEach(a => { const aN = digits(a.name); if (tN && aN){ const k = tN+'|'+aN; if (!aptoIdByKey[k]) aptoIdByKey[k] = a.id; } })); });
+  const aid = aptoIdByKey[torre + '|' + apto];
+  if (!aid) { await window.prAlert({ title:'APTO NO ENCONTRADO', body:'No existe el apto '+apto+' en la torre '+torre+' del proyecto '+(p.name||'')+'.' }); return; }
+
+  const pagos = Array.isArray(p.planilla.pagos) ? p.planilla.pagos : [];
+  const armedIds = new Set();
+  (p.planilla.planillasArmadas || []).forEach(pl => (pl.pagosIds || []).forEach(id => armedIds.add(id)));
+  const matches = pagos.filter(pg => pg && pg.tipo === 'ETAPA' && pg.aptoId === aid && Number(pg.stageIdx) === stageIdx);
+  if (!matches.length) { await window.prAlert({ title:'SIN PAGO MARCADO', body:'No hay ningún pago de etapa para T'+torre+' · APTO '+apto+' · ETAPA '+etapa+'. (Tal vez ya está disponible de pago.)' }); return; }
+
+  const armed = matches.some(m => armedIds.has(m.id));
+  const colabs = Array.from(new Set(matches.map(m => String(m.colaborador||'—').toUpperCase()))).join(', ');
+  const bruto = matches.reduce((s,m)=>s+Number(m.bruto||0),0);
+  let body = '<div style="font-size:12.5px;color:#333;line-height:1.6">'
+    + '<div><strong>T'+torre+' · APTO '+esc(apto)+' · ETAPA '+etapa+'</strong></div>'
+    + '<div style="color:#475569;margin-top:4px">Persona: '+esc(colabs)+' · Monto: '+money(bruto)+' · '+matches.length+' registro(s)</div>';
+  if (armed) body += '<div style="margin-top:12px;padding:10px;background:#FEF2F2;border:1px solid #FCA5A5;border-radius:6px;color:#991B1B;font-size:11px">⚠ Esta etapa está dentro de una PLANILLA ARMADA. Si se pagó con la app, liberarla puede afectar esa planilla. Confirmá solo si estás seguro.</div>';
+  body += '<div style="margin-top:10px;font-size:11.5px;color:#444">Al liberar, la etapa queda disponible de pago otra vez.</div></div>';
+
+  const ok2 = await window.prConfirm({ title:'CONFIRMAR LIBERACIÓN', bodyHTML: body, okText:'SÍ, LIBERAR', cancelText:'CANCELAR', danger:true });
+  if (!ok2) return;
+
+  const ids = new Set(matches.map(m => m.id));
+  p.planilla.pagos = pagos.filter(pg => !ids.has(pg.id));
+  try { if (typeof logActivity === 'function') logActivity('delete','Etapa liberada (manual)', p.name+' · T'+torre+' apto '+apto+' etapa '+etapa+' · '+ids.size+' registro(s) · '+money(bruto)); } catch(e){}
+  try { if (typeof saveState === 'function') saveState(); } catch(e){}
+  try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  try { if (typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+  showToast('LIBERADA · T'+torre+' APTO '+apto+' ETAPA '+etapa+' · YA PODÉS GENERAR EL PAGO', 'green');
+ } catch(err){
+  console.error('v460LiberarUnaEtapa:', err);
+  try { showToast('ERROR: '+(err && err.message ? err.message : err), 'red'); } catch(e){}
+  try { if (window.prAlert) window.prAlert({ title:'ERROR AL LIBERAR ETAPA', body: String(err && err.message ? err.message : err) }); } catch(e){}
  }
 };
 
