@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v461-liberar-UNA-etapa-generico-torre-apto-etapa';
+const CACHE_VERSION = 'v462-liberar-UNA-etapa-doble-senal-aptoId-o-nombre';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
