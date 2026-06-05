@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v470-RE-ACTIVAR-resync-auto-DIFERIDO-sin-chocar-con-guardado';
+const CACHE_VERSION = 'v471-diagnostico-tamano-datos-Firestore-1MB-limit';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

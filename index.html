@@ -2349,6 +2349,10 @@ table{max-width:100%}
           <span class="ki-emoji"></span>
           <span class="ki-label">Mover etapa a otra torre</span>
         </button>
+        <button class="kebab-item" data-perm="users.manage" onclick="kebabAction(function(){ window.v471VerTamanoDatos && window.v471VerTamanoDatos(); })" title="Ver cuanto pesan los datos en la nube (limite 1 MB de Firestore) y que pieza ocupa mas. Si se paso de 1 MB, no se guarda nada. Solo admin.">
+          <span class="ki-emoji"></span>
+          <span class="ki-label">Ver tamaño de datos (nube)</span>
+        </button>
         <button class="kebab-item" data-perm="users.manage" onclick="kebabAction(function(){ if(window.resyncDescuentosAbiertas){ window.resyncDescuentosAbiertas({force:true}); if(typeof showT==='function') showT('DESCUENTOS RE-SINCRONIZADOS','green'); } })" title="Recalcula los descuentos (polizas/anticipos) de TODAS las planillas abiertas contra el catalogo actual, y dedup de polizas entre proyectos. Solo admin.">
           <span class="ki-emoji"></span>
           <span class="ki-label">Re-sincronizar descuentos</span>
@@ -2850,7 +2854,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v470</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v471</span>
   </footer>
 
 </div>
@@ -8609,6 +8613,70 @@ window.v464MoverEtapaDeTorre = async function(){
   console.error('v464MoverEtapaDeTorre:', err);
   try { showToast('ERROR: '+(err && err.message ? err.message : err), 'red'); } catch(e){}
   try { if (window.prAlert) window.prAlert({ title:'ERROR AL MOVER ETAPA', body: String(err && err.message ? err.message : err) }); } catch(e){}
+ }
+};
+
+/* ════════════ v471: DIAGNÓSTICO DE TAMAÑO DE DATOS (NUBE) ════════════
+   Firestore tiene un límite DURO de 1 MB (1,048,576 bytes) por documento, y
+   toda la app guarda el estado en UN solo documento (appState/main). Cuando se
+   pasa de 1 MB, TODA escritura a la nube falla y los cambios no se guardan.
+   Esta herramienta (solo lectura) mide qué pieza pesa más para saber qué
+   recortar. No borra nada. */
+window.v471VerTamanoDatos = async function(){
+ try {
+  if (typeof can !== 'function' || !can('users.manage')) { showToast('SOLO ADMIN', 'red'); return; }
+  const _s = (typeof state !== 'undefined') ? state : window.state;
+  if (!_s) { showToast('SIN STATE', 'red'); return; }
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  const sz = o => { try { return new Blob([JSON.stringify(o)]).size; } catch(e){ try { return (JSON.stringify(o)||'').length; } catch(_){ return 0; } } };
+  const fmt = n => n >= 1024 ? (n/1024).toFixed(1)+' KB' : n+' B';
+  const LIMIT = 1048576;
+  const total = sz(_s);
+
+  // base64 fotos embebidas
+  let full = '';
+  try { full = JSON.stringify(_s); } catch(e){ full = ''; }
+  let b64bytes = 0, b64count = 0;
+  try { const re = /data:image\/[a-zA-Z+]+;base64,[^"\\]*/g; let m; while ((m = re.exec(full))){ b64bytes += m[0].length; b64count++; } } catch(e){}
+
+  const pieces = [];
+  pieces.push(['Actividad (historial)', sz(_s.activity||[])]);
+  pieces.push(['Pólizas (catálogo)', sz(_s.polizasGlobales||[])]);
+  pieces.push(['Anticipos (catálogo)', sz(_s.anticiposGlobales||[])]);
+  (_s.projects||[]).forEach(pr => {
+    const pl = pr.planilla || {};
+    const pagosSz = sz(pl.pagos||[]);
+    const armSz = sz(pl.planillasArmadas||[]);
+    const towersSz = sz(pr.towers||[]);
+    const nm = pr.name || pr.id || 'proyecto';
+    pieces.push(['['+nm+'] pagos de etapa', pagosSz]);
+    pieces.push(['['+nm+'] planillas armadas', armSz]);
+    pieces.push(['['+nm+'] torres/aptos', towersSz]);
+    pieces.push(['['+nm+'] resto (cobro/avance/materiales/fotos)', Math.max(0, sz(pr) - pagosSz - armSz - towersSz)]);
+  });
+  pieces.sort((a,b)=>b[1]-a[1]);
+
+  const overBy = total - LIMIT;
+  let html = '<div style="font-size:12px;line-height:1.6">';
+  html += '<div style="padding:10px;border-radius:8px;background:'+(total>LIMIT?'#FEF2F2':'#ECFDF5')+';border:1px solid '+(total>LIMIT?'#FCA5A5':'#6EE7B7')+';margin-bottom:12px">';
+  html += '<div style="font-size:9px;letter-spacing:1px;font-weight:700;color:'+(total>LIMIT?'#991B1B':'#065F46')+'">TAMAÑO TOTAL EN LA NUBE</div>';
+  html += '<div style="font-size:20px;font-weight:800;color:'+(total>LIMIT?'#C62828':'#065F46')+'">'+fmt(total)+' / 1024.0 KB (límite)</div>';
+  html += total>LIMIT
+    ? '<div style="font-size:11px;color:#991B1B;margin-top:4px;font-weight:700">⚠ PASADO POR '+fmt(overBy)+' — por eso NO se guarda nada en la nube. Hay que bajar de 1024 KB.</div>'
+    : '<div style="font-size:11px;color:#065F46;margin-top:4px">OK · margen libre '+fmt(LIMIT-total)+'</div>';
+  html += '</div>';
+  if (b64count > 0){
+    html += '<div style="padding:8px 10px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:6px;color:#9A3412;font-size:11px;margin-bottom:10px"><strong>'+b64count+' foto(s) en base64</strong> ocupando ≈ <strong>'+fmt(b64bytes)+'</strong>. Apretá «Liberar espacio» (3 puntitos) para subirlas a la nube y sacarlas del documento.</div>';
+  }
+  html += '<div style="font-weight:700;font-size:11px;color:#475569;margin:6px 0 4px;letter-spacing:.5px">QUÉ PESA MÁS:</div>';
+  html += '<div style="border:1px solid #E2E8F0;border-radius:6px;max-height:260px;overflow:auto">';
+  pieces.forEach((x,i) => { if (x[1] <= 0) return; const pct = total>0?Math.round(x[1]/total*100):0; html += '<div style="display:grid;grid-template-columns:1fr auto auto;gap:10px;padding:6px 10px;'+(i%2?'background:#FAFAFA':'')+';font-size:10.5px;align-items:center"><span style="color:#0F172A">'+esc(x[0])+'</span><span style="color:#64748B">'+pct+'%</span><span style="font-weight:700;color:#0F172A;min-width:70px;text-align:right">'+fmt(x[1])+'</span></div>'; });
+  html += '</div></div>';
+
+  await window.prConfirm({ title:'TAMAÑO DE DATOS EN LA NUBE', bodyHTML: html, okText:'CERRAR', cancelText:'', wide:true });
+ } catch(err){
+  console.error('v471VerTamanoDatos:', err);
+  try { showToast('ERROR: '+(err && err.message ? err.message : err), 'red'); } catch(e){}
  }
 };
 
