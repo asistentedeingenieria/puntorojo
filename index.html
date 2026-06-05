@@ -2842,7 +2842,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v466</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v467</span>
   </footer>
 
 </div>
@@ -8422,49 +8422,68 @@ window.v460LiberarUnaEtapa = async function(prefTorre, prefApto, prefEtapa){
   const digits = s => String(s == null ? '' : s).replace(/\D/g, '');
   const money = n => 'Q ' + (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 
-  // Form de captura (oninput en tiempo real)
-  window._v460UnaForm = { torre: String(prefTorre||''), apto: String(prefApto||''), etapa: String(prefEtapa||'') };
+  const norm = s => String(s == null ? '' : s).toUpperCase().replace(/\s+/g,' ').trim();
+
+  // Form de captura (oninput en tiempo real). v467: + NIVEL y soporte de PASILLOS (texto).
+  window._v460UnaForm = { torre: String(prefTorre||''), apto: String(prefApto||''), nivel:'', etapa: String(prefEtapa||'') };
   const inC = 'width:100%;padding:9px 11px;border:1px solid #DDD;border-radius:6px;font:inherit;font-size:14px;font-weight:700';
   const lbC = 'display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase';
   const formHTML = ''
-    + '<div style="font-size:11.5px;color:#475569;margin-bottom:12px">Proyecto activo: <strong>'+esc(p.name||'')+'</strong> · HERRAMIENTA v460</div>'
-    + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">'
+    + '<div style="font-size:11.5px;color:#475569;margin-bottom:12px">Proyecto activo: <strong>'+esc(p.name||'')+'</strong> · HERRAMIENTA v467</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
     + '<div><label style="'+lbC+'">TORRE</label><input id="v460Torre" type="text" value="'+esc(prefTorre||'')+'" placeholder="ej: 4" oninput="(window._v460UnaForm=window._v460UnaForm||{}).torre=this.value" style="'+inC+'"></div>'
-    + '<div><label style="'+lbC+'">APTO</label><input id="v460Apto" type="text" value="'+esc(prefApto||'')+'" placeholder="ej: 606" oninput="(window._v460UnaForm=window._v460UnaForm||{}).apto=this.value" style="'+inC+'"></div>'
+    + '<div><label style="'+lbC+'">APTO o PASILLO</label><input id="v460Apto" type="text" value="'+esc(prefApto||'')+'" placeholder="ej: 606 o PASILLO" oninput="(window._v460UnaForm=window._v460UnaForm||{}).apto=this.value" style="'+inC+'"></div>'
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+    + '<div><label style="'+lbC+'">NIVEL (obligatorio si es pasillo)</label><input id="v460Nivel" type="text" placeholder="ej: 5" oninput="(window._v460UnaForm=window._v460UnaForm||{}).nivel=this.value" style="'+inC+'"></div>'
     + '<div><label style="'+lbC+'">ETAPA (1-5)</label><input id="v460Etapa" type="number" min="1" max="5" value="'+esc(prefEtapa||'')+'" placeholder="ej: 5" oninput="(window._v460UnaForm=window._v460UnaForm||{}).etapa=this.value" style="'+inC+'"></div>'
     + '</div>'
-    + '<div style="font-size:10.5px;color:#94A3B8;margin-top:10px">Etapas: 1=TABIQUES · 2=REFUERZOS MADERA · 3=FORRO 2DA CARA · 4=ESTRUCTURA+FORRO CIELO · 5=MASILLA</div>';
+    + '<div style="font-size:10.5px;color:#94A3B8;margin-top:10px">Para un APTO escribí el número (ej: 606) — el nivel no hace falta. Para un PASILLO escribí "PASILLO" y poné el NIVEL (hay uno por nivel).</div>'
+    + '<div style="font-size:10.5px;color:#94A3B8;margin-top:6px">Etapas: 1=TABIQUES · 2=REFUERZOS MADERA · 3=FORRO 2DA CARA · 4=ESTRUCTURA+FORRO CIELO · 5=MASILLA</div>';
   const ok = await window.prConfirm({ title:'LIBERAR ETAPAS MARCADAS', bodyHTML: formHTML, okText:'ANALIZAR', cancelText:'CANCELAR' });
   if (!ok) return;
 
   const f = window._v460UnaForm || {};
-  const torre = digits(f.torre), apto = digits(f.apto), etapa = parseInt(f.etapa, 10);
-  if (!torre || !apto || !(etapa >= 1 && etapa <= 5)) { showToast('COMPLETÁ TORRE, APTO Y ETAPA (1-5)', 'red'); return; }
+  const torre = digits(f.torre);
+  const aptoRaw = String(f.apto||'').trim();
+  const nivel = digits(f.nivel);
+  const etapa = parseInt(f.etapa, 10);
+  if (!torre || !aptoRaw || !(etapa >= 1 && etapa <= 5)) { showToast('COMPLETÁ TORRE, APTO/PASILLO Y ETAPA (1-5)', 'red'); return; }
   const stageIdx = etapa - 1;
+  const aptoDigits = digits(aptoRaw);
+  const esNumerico = aptoDigits.length > 0 && /^\d+$/.test(aptoRaw.replace(/\s/g,''));
+  const aptoNorm = norm(aptoRaw);
+  if (!esNumerico && !nivel) { showToast('PARA UN PASILLO INDICÁ EL NIVEL', 'red'); return; }
 
-  // Resolver aptoId por estructura
-  const aptoIdByKey = {};
-  (p.towers || []).forEach(t => { const tN = digits(t.name); (t.levels || []).forEach(l => (l.aptos || []).forEach(a => { const aN = digits(a.name); if (tN && aN){ const k = tN+'|'+aN; if (!aptoIdByKey[k]) aptoIdByKey[k] = a.id; } })); });
-  const aid = aptoIdByKey[torre + '|' + apto];  // puede ser undefined; usamos doble señal abajo
+  // Resolver aptoIds objetivo por estructura (apto por número, o pasillo por nombre+nivel)
+  const targetAptoIds = new Set();
+  (p.towers || []).forEach(t => { const tN = digits(t.name); if (tN !== torre) return; (t.levels || []).forEach(l => { const lN = digits(l.name); (l.aptos || []).forEach(a => {
+    let m;
+    if (esNumerico) { m = (digits(a.name) === aptoDigits); }
+    else { m = (norm(a.name).indexOf(aptoNorm) !== -1) && (!nivel || lN === nivel); }
+    if (m) targetAptoIds.add(a.id);
+  }); }); });
 
   const pagos = Array.isArray(p.planilla.pagos) ? p.planilla.pagos : [];
   const armedIds = new Set();
   (p.planilla.planillasArmadas || []).forEach(pl => (pl.pagosIds || []).forEach(id => armedIds.add(id)));
-  // v462: doble señal — matchea por aptoId resuelto O por nombre (towerName+aptoName en dígitos).
-  // Asi encuentra el pago aunque una de las dos señales falle.
+  // doble señal: por aptoId resuelto O por nombre (apto=dígitos, pasillo=texto) + torre (+nivel si se dio)
   const matches = pagos.filter(pg => {
     if (!pg || pg.tipo !== 'ETAPA' || Number(pg.stageIdx) !== stageIdx) return false;
-    if (aid && pg.aptoId === aid) return true;
-    if (digits(pg.aptoName) === apto && digits(pg.towerName) === torre) return true;
-    return false;
+    if (targetAptoIds.has(pg.aptoId)) return true;
+    if (digits(pg.towerName) !== torre) return false;
+    if (nivel && digits(pg.levelName) !== nivel) return false;
+    if (esNumerico) return digits(pg.aptoName) === aptoDigits;
+    return norm(pg.aptoName).indexOf(aptoNorm) !== -1;
   });
-  if (!matches.length) { await window.prAlert({ title:'SIN PAGO MARCADO', body:'No hay ningún pago de etapa para T'+torre+' · APTO '+apto+' · ETAPA '+etapa+' en el proyecto '+(p.name||'')+'. (Tal vez ya está disponible de pago, o el apto/torre no existe en este proyecto.)' }); return; }
+  if (!matches.length) { await window.prAlert({ title:'SIN PAGO MARCADO', body:'No hay ningún pago de etapa para T'+torre+(nivel?' · NIVEL '+nivel:'')+' · '+esc(aptoRaw)+' · ETAPA '+etapa+' en el proyecto '+(p.name||'')+'. (Tal vez ya está disponible, o no existe esa ubicación en este proyecto.)' }); return; }
 
   const armed = matches.some(m => armedIds.has(m.id));
   const colabs = Array.from(new Set(matches.map(m => String(m.colaborador||'—').toUpperCase()))).join(', ');
   const bruto = matches.reduce((s,m)=>s+Number(m.bruto||0),0);
+  const ubicTxt = Array.from(new Set(matches.map(m => 'T'+digits(m.towerName)+(m.levelName?' · '+String(m.levelName).toUpperCase():'')+' · '+String(m.aptoName||'').toUpperCase()))).join(' | ');
   let body = '<div style="font-size:12.5px;color:#333;line-height:1.6">'
-    + '<div><strong>T'+torre+' · APTO '+esc(apto)+' · ETAPA '+etapa+'</strong></div>'
+    + '<div><strong>'+esc(ubicTxt)+' · ETAPA '+etapa+'</strong></div>'
     + '<div style="color:#475569;margin-top:4px">Persona: '+esc(colabs)+' · Monto: '+money(bruto)+' · '+matches.length+' registro(s)</div>';
   if (armed) body += '<div style="margin-top:12px;padding:10px;background:#FEF2F2;border:1px solid #FCA5A5;border-radius:6px;color:#991B1B;font-size:11px">⚠ Esta etapa está dentro de una PLANILLA ARMADA. Si se pagó con la app, liberarla puede afectar esa planilla. Confirmá solo si estás seguro.</div>';
   body += '<div style="margin-top:10px;font-size:11.5px;color:#444">Al liberar, la etapa queda disponible de pago otra vez.</div></div>';
@@ -8474,11 +8493,11 @@ window.v460LiberarUnaEtapa = async function(prefTorre, prefApto, prefEtapa){
 
   const ids = new Set(matches.map(m => m.id));
   p.planilla.pagos = pagos.filter(pg => !ids.has(pg.id));
-  try { if (typeof logActivity === 'function') logActivity('delete','Etapa liberada (manual)', p.name+' · T'+torre+' apto '+apto+' etapa '+etapa+' · '+ids.size+' registro(s) · '+money(bruto)); } catch(e){}
+  try { if (typeof logActivity === 'function') logActivity('delete','Etapa liberada (manual)', p.name+' · T'+torre+(nivel?' N'+nivel:'')+' · '+aptoRaw+' etapa '+etapa+' · '+ids.size+' registro(s) · '+money(bruto)); } catch(e){}
   try { if (typeof saveState === 'function') saveState(); } catch(e){}
   try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
   try { if (typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
-  showToast('LIBERADA · T'+torre+' APTO '+apto+' ETAPA '+etapa+' · YA PODÉS GENERAR EL PAGO', 'green');
+  showToast('LIBERADA · T'+torre+(nivel?' N'+nivel:'')+' '+aptoRaw.toUpperCase()+' ETAPA '+etapa+' · '+ids.size+' REGISTRO(S)', 'green');
  } catch(err){
   console.error('v460LiberarUnaEtapa:', err);
   try { showToast('ERROR: '+(err && err.message ? err.message : err), 'red'); } catch(e){}
