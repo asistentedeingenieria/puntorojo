@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v468-DESACTIVAR-AppCheck-arreglar-escrituras-Firestore-polizas';
+const CACHE_VERSION = 'v469-FIX-editar-poliza-combobox-no-pisa-nombre-validacion-lenient';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
