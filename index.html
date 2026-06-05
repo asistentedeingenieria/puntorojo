@@ -2341,6 +2341,10 @@ table{max-width:100%}
           <span class="ki-emoji"></span>
           <span class="ki-label">Mover etapa a otra torre</span>
         </button>
+        <button class="kebab-item" data-perm="users.manage" onclick="kebabAction(function(){ if(window.resyncDescuentosAbiertas){ window.resyncDescuentosAbiertas(); if(typeof showT==='function') showT('DESCUENTOS RE-SINCRONIZADOS','green'); } })" title="Recalcula los descuentos (polizas/anticipos) de TODAS las planillas abiertas contra el catalogo actual, y dedup de polizas entre proyectos. Solo admin.">
+          <span class="ki-emoji"></span>
+          <span class="ki-label">Re-sincronizar descuentos</span>
+        </button>
         <button class="kebab-item kebab-danger" data-perm="data.import" onclick="kebabAction(resetToFactory)" title="Restablecer datos de fábrica">
           <span class="ki-emoji"></span>
           <span class="ki-label">Reset a fábrica</span>
@@ -2838,7 +2842,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v464</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v465</span>
   </footer>
 
 </div>
@@ -32990,13 +32994,50 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(btn){ btn.disabled = count === 0; btn.style.opacity = count===0?'.5':'1'; }
   };
 
+  // v465: llave de normalización compartida (misma que usa _v411 internamente)
+  function _v464NormKey(s){
+    return String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+  }
+  // v465: estados de planilla ABIERTOS (editables, no pagadas/archivadas)
+  const _V465_OPEN = { pendiente_pm:1, aprobada_inicial:1, pendiente_pm_final:1 };
+  // v465: mapa persona(normalizada) -> planillaId DUEÑA de la póliza.
+  // Dueña = planilla ABIERTA (de cualquier proyecto) con fechaEnvio más antigua
+  // que incluye a esa persona. Tie-break determinístico por projectId+planillaId.
+  function _v464PolizaOwnerMap(){
+    const _s = (typeof state !== 'undefined') ? state : window.state;
+    const best = {}; // key -> { owner:planillaId, sort:composite }
+    (_s && _s.projects || []).forEach(pr => {
+      const pagos = (pr.planilla && pr.planilla.pagos) || [];
+      (pr.planilla && pr.planilla.planillasArmadas || []).forEach(pl => {
+        if (!_V465_OPEN[pl.estado]) return;
+        const t = Date.parse(pl.fechaEnvio || pl.fechaCreacion || '');
+        const sortNum = isFinite(t) ? t : 0;
+        const composite = String(sortNum).padStart(16,'0') + '|' + String(pr.id||'') + '|' + String(pl.id||'');
+        const personas = new Set();
+        pagos.forEach(pg => {
+          if (!Array.isArray(pl.pagosIds) || !pl.pagosIds.includes(pg.id)) return;
+          const k = _v464NormKey(pg.colaborador);
+          if (!k || k.replace(/[\s\-_]/g,'') === 'PREAPP') return;
+          personas.add(k);
+        });
+        personas.forEach(k => { if (!best[k] || composite < best[k].sort) best[k] = { owner: pl.id, sort: composite }; });
+      });
+    });
+    const owner = {};
+    Object.keys(best).forEach(k => { owner[k] = best[k].owner; });
+    return owner;
+  }
+  window._v464PolizaOwnerMap = _v464PolizaOwnerMap;
+
   // ════════════════════════════════════════════════════════════════
   // v412: AUTO-APLICAR DESCUENTOS INLINE (mirror desde puntorojo.html)
   // Self-contained — sin dependencia de módulos externos.
+  // v465: recibe polizaOwnerByPersona para el dedup de pólizas entre proyectos.
   // ════════════════════════════════════════════════════════════════
-  function _v411AplicarDescuentosInline(pl, p){
+  function _v411AplicarDescuentosInline(pl, p, polizaOwnerByPersona){
     try {
       if (!pl || !p) return { applied:0, reason:'no pl/p' };
+      if (!polizaOwnerByPersona){ try { polizaOwnerByPersona = _v464PolizaOwnerMap(); } catch(e){ polizaOwnerByPersona = {}; } }
       if (!Array.isArray(pl.descuentosPlanilla)) pl.descuentosPlanilla = [];
       const _s = (typeof state !== 'undefined') ? state : window.state;
       if (!_s){ console.warn('[v411] state no disponible'); return { applied:0, reason:'no state' }; }
@@ -33006,7 +33047,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         console.warn('[v411] catálogo vacío al auto-aplicar planilla', pl.id);
         return { applied:0, reason:'catalogo vacio' };
       }
-      const _normKey = s => String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[\s  ​]+/g,' ').trim();
+      const _normKey = _v464NormKey; // v465: misma normalización que el owner map
       const colabsMap = new Map();
       const debugColabs = [];
       (p.planilla && p.planilla.pagos || []).forEach(pg => {
@@ -33044,7 +33085,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           return matchColab(po.aCargoDeNombre);
         });
         console.log('[v412 mobile] colab', c.nombre, '· pólizas activas encontradas:', polizas.length);
-        if (polizas.length > 0){
+        // v465: dedup — la póliza solo se aplica en la planilla DUEÑA de esta persona.
+        // Red de seguridad: si no hay dueña registrada (ej. planilla no entró al mapa), se aplica igual.
+        const _esDuenaPoliza = (polizaOwnerByPersona[c.key] === pl.id) || !polizaOwnerByPersona[c.key];
+        if (polizas.length > 0 && _esDuenaPoliza){
           const montoTotal = +(polizas.length * montoUnitPoliza).toFixed(2);
           const desc = polizas.length === 1
             ? 'PÓLIZA SEGURO · ' + (polizas[0].aseguradoNombre || '')
@@ -33099,6 +33143,55 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     } catch(e){ console.error('[v412 mobile] error:', e); return { applied:0, reason:'exception', error: String(e) }; }
   }
   window._v411AplicarDescuentosInline = _v411AplicarDescuentosInline;
+
+  // v465: re-sincroniza los descuentos de TODAS las planillas ABIERTAS contra el
+  // catálogo actual de pólizas/anticipos. Notifica a la gerente solo cuando ENTRA
+  // o SALE un descuento (no por cambios solo de monto). No toca cerradas/pagadas.
+  window.resyncDescuentosAbiertas = function(){
+    try {
+      const _s = (typeof state !== 'undefined') ? state : window.state;
+      if (!_s || !Array.isArray(_s.projects)) return;
+      const ownerMap = _v464PolizaOwnerMap();
+      const descKey = d => String(d.subtipo||'') + '|' + _v464NormKey(d.colaboradorNombre) + '|' + (d.anticipoId || (Array.isArray(d.polizaIds) ? d.polizaIds.slice().sort().join(',') : ''));
+      let dirtyCount = 0;
+      _s.projects.forEach(pr => {
+        (pr.planilla && pr.planilla.planillasArmadas || []).forEach(pl => {
+          if (!_V465_OPEN[pl.estado]) return;
+          const autoBefore = (pl.descuentosPlanilla||[]).filter(d => d.autoAplicado);
+          const beforeJSON = JSON.stringify(autoBefore.map(d => [descKey(d), d.monto]).sort());
+          const beforeKeys = new Set(autoBefore.map(descKey));
+          _v411AplicarDescuentosInline(pl, pr, ownerMap);
+          const autoAfter = (pl.descuentosPlanilla||[]).filter(d => d.autoAplicado);
+          const afterJSON = JSON.stringify(autoAfter.map(d => [descKey(d), d.monto]).sort());
+          const afterKeys = new Set(autoAfter.map(descKey));
+          if (beforeJSON === afterJSON) return; // nada cambió (ni monto)
+          dirtyCount++;
+          pl._resyncTs = Date.now();
+          let entraSale = beforeKeys.size !== afterKeys.size;
+          if (!entraSale){ afterKeys.forEach(k => { if (!beforeKeys.has(k)) entraSale = true; }); }
+          if (!entraSale){ beforeKeys.forEach(k => { if (!afterKeys.has(k)) entraSale = true; }); }
+          if (entraSale){
+            try {
+              if (typeof window.prAddNotif === 'function'){
+                window.prAddNotif({
+                  toPerms: ['planilla.authorize'],
+                  title: 'DESCUENTOS ACTUALIZADOS',
+                  body: (typeof _planillaTituloUpper === 'function' ? _planillaTituloUpper(pl) : ('PLANILLA '+(pl.numero||''))) + ' · cambió el catálogo de pólizas/anticipos.',
+                  type: 'planilla.descuentos-resync'
+                });
+              }
+            } catch(e){ console.warn('[v465] notif resync:', e); }
+          }
+        });
+      });
+      if (dirtyCount > 0){
+        try { if (typeof saveState === 'function') saveState(); } catch(e){}
+        try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+        try { if (typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+        try { showT('PLANILLAS ABIERTAS ACTUALIZADAS: '+dirtyCount, 'green'); } catch(e){}
+      }
+    } catch(e){ console.error('resyncDescuentosAbiertas:', e); }
+  };
 
   window._v226Enviar = async function(){
     const p = _activeProj();
@@ -33162,7 +33255,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
     // v412: AUTO-APLICAR DESCUENTOS INLINE (mirror desde puntorojo.html)
     try {
-      const r412 = _v411AplicarDescuentosInline(planilla, p);
+      const r412 = _v411AplicarDescuentosInline(planilla, p, _v464PolizaOwnerMap()); // v465: dedup póliza al enviar
       console.log('[v412 mobile] auto-aplicados en envío:', r412);
       if (r412 && r412.applied > 0){
         setTimeout(() => { try { showT('DESCUENTOS AUTO-APLICADOS: '+r412.applied, 'green'); } catch(e){} }, 1500);
@@ -36701,6 +36794,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     }
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow){ CloudSync.forceUploadNow().catch(()=>{}); } } catch(e){}
+    try { if (window.resyncDescuentosAbiertas) window.resyncDescuentosAbiertas(); } catch(e){ console.warn('[v465] resync hook anticipo:', e); }
     // v379: notif admin al REGISTRAR anticipo NUEVO. v389: sin guardrail isAdmin (_notifyByPerm excluye al actor automáticamente).
     if (!existente) {
       try {
@@ -36738,6 +36832,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     ants.splice(idx, 1);
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow){ CloudSync.forceUploadNow().catch(()=>{}); } } catch(e){}
+    try { if (window.resyncDescuentosAbiertas) window.resyncDescuentosAbiertas(); } catch(e){ console.warn('[v465] resync hook elim anticipo:', e); }
     window.renderPlanillaAnticipos();
     showT('ANTICIPO ELIMINADO','green');
   };
@@ -37245,6 +37340,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     else { polFinal = Object.assign({ id: 'pol-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), ts: Date.now() }, data); polizas.push(polFinal); }
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    try { if (window.resyncDescuentosAbiertas) window.resyncDescuentosAbiertas(); } catch(e){ console.warn('[v465] resync hook poliza:', e); }
     _notifyAdminPolizaChange(existente ? 'EDITADA' : 'NUEVA', polFinal, '');
     window._polCapturedForm = null;
     window.renderPlanillaPolizas();
@@ -37283,6 +37379,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     polizas.splice(idx, 1);
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    try { if (window.resyncDescuentosAbiertas) window.resyncDescuentosAbiertas(); } catch(e){ console.warn('[v465] resync hook elim poliza:', e); }
     window.renderPlanillaPolizas();
     showT('PÓLIZA ELIMINADA','green');
   };
@@ -37308,6 +37405,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if (motivo) po.observaciones = motivo;
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    try { if (window.resyncDescuentosAbiertas) window.resyncDescuentosAbiertas(); } catch(e){ console.warn('[v465] resync hook baja poliza:', e); }
     _notifyAdminPolizaChange('DADA DE BAJA', po, motivo ? ('Obs: ' + motivo) : '');
     window.renderPlanillaPolizas();
     showT('PÓLIZA DADA DE BAJA','green');
@@ -37325,6 +37423,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     po.estatus = 'ACTIVA'; delete po.fechaBaja;
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    try { if (window.resyncDescuentosAbiertas) window.resyncDescuentosAbiertas(); } catch(e){ console.warn('[v465] resync hook react poliza:', e); }
     _notifyAdminPolizaChange('REACTIVADA', po, '');
     window.renderPlanillaPolizas();
     showT('PÓLIZA REACTIVADA','green');

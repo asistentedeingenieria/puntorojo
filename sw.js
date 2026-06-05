@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v464-mover-etapa-de-torre-a-otra-relabel';
+const CACHE_VERSION = 'v465-resync-descuentos-abiertas-y-dedup-polizas-entre-proyectos';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
