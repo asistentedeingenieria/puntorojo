@@ -2353,6 +2353,10 @@ table{max-width:100%}
           <span class="ki-emoji"></span>
           <span class="ki-label">Ver tamaño de datos (nube)</span>
         </button>
+        <button class="kebab-item" data-perm="users.manage" onclick="kebabAction(function(){ window.v472HacerEspacio && window.v472HacerEspacio(); })" title="Libera espacio en la nube sin perder data: sube fotos a Storage, quita campos vacios/nulos y recorta el historial. Destapa el limite de 1 MB. Solo admin.">
+          <span class="ki-emoji"></span>
+          <span class="ki-label">Hacer espacio (destapar nube)</span>
+        </button>
         <button class="kebab-item" data-perm="users.manage" onclick="kebabAction(function(){ if(window.resyncDescuentosAbiertas){ window.resyncDescuentosAbiertas({force:true}); if(typeof showT==='function') showT('DESCUENTOS RE-SINCRONIZADOS','green'); } })" title="Recalcula los descuentos (polizas/anticipos) de TODAS las planillas abiertas contra el catalogo actual, y dedup de polizas entre proyectos. Solo admin.">
           <span class="ki-emoji"></span>
           <span class="ki-label">Re-sincronizar descuentos</span>
@@ -2854,7 +2858,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v471</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v472</span>
   </footer>
 
 </div>
@@ -6195,7 +6199,7 @@ function logActivity(type, title, desc){
   };
   if (!state.activity) state.activity = [];
   state.activity.unshift(ev);
-  if (state.activity.length > 200) state.activity = state.activity.slice(0, 200);
+  if (state.activity.length > 60) state.activity = state.activity.slice(0, 60); // v472: bajado de 200 a 60 para no inflar appState/main (limite 1MB Firestore)
   saveState();
   updateActivityBadge();
   // ⚠️ AUTO-NOTIFICACIÓN A ADMINS DESACTIVADA — los admins ya no reciben notif
@@ -8252,6 +8256,94 @@ window.liberarEspacioLocal = async function(){
     console.error('liberarEspacioLocal:', e);
     showToast('NO SE PUDO LIBERAR ESPACIO · INTENTÁ DE NUEVO', 'red');
   }
+};
+
+/* ════════════ v472: HACER ESPACIO EN LA NUBE (destapar el límite de 1 MB) ════════════
+   Todo el estado vive en UN documento Firestore (appState/main) con tope DURO de
+   1 MB. Si se pasa, NINGUNA escritura a la nube funciona (los cambios se guardan
+   local pero no suben, y al recargar desaparecen). Esta herramienta libera espacio
+   SIN perder data real:
+     1) Sube las fotos base64 a Storage (las saca del documento; quedan en la nube).
+     2) Limpieza sin pérdida: quita campos vacíos/nulos ("", null, undefined) de TODOS
+        los registros. NO toca números (0), banderas (false) ni data real.
+     3) Recorta el historial de actividad a 60 (es de auditoría, no financiero).
+   Luego guarda y sube. Reporta el tamaño final y si quedó bajo el límite. */
+function _v472Clean(v){
+  if (Array.isArray(v)) return v.map(_v472Clean);
+  if (v && typeof v === 'object'){
+    const out = {};
+    for (const k in v){
+      if (!Object.prototype.hasOwnProperty.call(v, k)) continue;
+      const cv = v[k];
+      if (cv === null || cv === undefined || cv === '') continue; // basura: ocupa espacio, no aporta
+      out[k] = _v472Clean(cv);
+    }
+    return out;
+  }
+  return v;
+}
+window.v472HacerEspacio = async function(){
+ const LIMIT = 1048576;
+ const sz = o => { try { return new Blob([JSON.stringify(o)]).size; } catch(e){ return 0; } };
+ try {
+  const before = sz(state);
+  const okGo = await window.prConfirm({
+    title:'HACER ESPACIO EN LA NUBE',
+    bodyHTML:'<div style="font-size:13px;line-height:1.6;color:#0F172A">'
+      +'Tamaño actual: <strong>'+(before/1024).toFixed(1)+' KB</strong> de 1024 KB (límite de la nube).<br><br>'
+      +'Voy a liberar espacio <strong>sin borrar nada importante</strong>:<br>'
+      +'• Subir las fotos a la nube (Storage) y sacarlas del documento.<br>'
+      +'• Quitar campos vacíos/nulos de los registros (basura que ocupa lugar).<br>'
+      +'• Recortar el historial de actividad a las últimas 60 acciones.<br><br>'
+      +'Tus <strong>planillas, pagos, pólizas y anticipos NO se tocan</strong>. ¿Procedo?'
+      +'</div>',
+    okText:'SÍ, HACER ESPACIO', cancelText:'CANCELAR'
+  });
+  if (!okGo) return;
+  showToast('LIBERANDO ESPACIO... NO CIERRES LA APP', '');
+
+  // 1) Fotos base64 -> Storage (las saca del documento)
+  let fotos = { migrated:0, errors:0 };
+  try { if (typeof migrateBase64PhotosToStorage === 'function') fotos = await migrateBase64PhotosToStorage(); }
+  catch(e){ console.error('v472 fotos:', e); }
+
+  // 2) Limpieza sin pérdida (quitar vacíos/nulos) + 3) recorte de actividad
+  try {
+    if (Array.isArray(state.activity)) state.activity = _v472Clean(state.activity).slice(0, 60);
+    if (Array.isArray(state.polizasGlobales))   state.polizasGlobales   = _v472Clean(state.polizasGlobales);
+    if (Array.isArray(state.anticiposGlobales)) state.anticiposGlobales = _v472Clean(state.anticiposGlobales);
+    (state.projects || []).forEach(function(p){
+      const cp = _v472Clean(p);
+      for (const k in p){ if (Object.prototype.hasOwnProperty.call(p,k) && !(k in cp)) delete p[k]; }
+      Object.assign(p, cp);
+    });
+  } catch(e){ console.error('v472 limpieza:', e); }
+
+  const after = sz(state);
+  const freed = before - after;
+  const bajoLimite = after < LIMIT;
+
+  // Guardar local + intentar subir a la nube
+  try { saveState(); } catch(e){ console.error('v472 saveState:', e); }
+  try {
+    if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) await CloudSync.forceUploadNow();
+  } catch(e){ console.error('v472 upload:', e); }
+
+  const html = '<div style="font-size:13px;line-height:1.7;color:#0F172A">'
+    + '<div style="padding:10px 12px;border-radius:8px;margin-bottom:10px;'+(bajoLimite?'background:#ECFDF5;border:1px solid #6EE7B7;color:#065F46':'background:#FEF2F2;border:1px solid #FECACA;color:#991B1B')+'">'
+    +   '<strong>'+(bajoLimite?'DESTAPADO':'TODAVÍA ARRIBA DEL LÍMITE')+'</strong><br>'
+    +   'Antes: '+(before/1024).toFixed(1)+' KB · Ahora: <strong>'+(after/1024).toFixed(1)+' KB</strong> / 1024 KB<br>'
+    +   'Liberado: '+(freed/1024).toFixed(1)+' KB · Fotos subidas: '+(fotos.migrated||0)
+    + '</div>'
+    + (bajoLimite
+        ? '<div>Ya cabe en la nube. <strong>Recargá la página</strong> (Ctrl+R) y volvé a probar guardar tus planillas: ya debería guardar todo.</div>'
+        : '<div>Sigue por encima de 1024 KB. Hace falta recortar más data (un proyecto que no uses, o planillas viejas archivadas). Avisame y armo el recorte exacto, o pasamos al arreglo de fondo (partir los datos en varios documentos).</div>')
+    + '</div>';
+  await window.prConfirm({ title:'RESULTADO', bodyHTML: html, okText:'CERRAR', cancelText:'', wide:true });
+ } catch(err){
+  console.error('v472HacerEspacio:', err);
+  try { showToast('ERROR: '+(err && err.message ? err.message : err), 'red'); } catch(e){}
+ }
 };
 
 /* ════════════ v456: LIBERAR ETAPAS MARCADAS A MANO (lista del usuario) ════════════

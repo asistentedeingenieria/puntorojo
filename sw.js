@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v471-diagnostico-tamano-datos-Firestore-1MB-limit';
+const CACHE_VERSION = 'v472-hacer-espacio-destapar-nube-1MB-sin-perdida';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
