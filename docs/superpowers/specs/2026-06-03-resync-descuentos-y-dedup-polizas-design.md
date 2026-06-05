@@ -33,10 +33,10 @@ Dos correcciones al sistema de descuentos de planilla:
 | # | Decisión | Elección |
 |---|---|---|
 | 1 | Alcance del resync | **Solo planillas ABIERTAS** (pendiente_pm, aprobada_inicial, pendiente_pm_final). Nunca aprobada/archivada/rechazada. |
-| 2 | Dedup de póliza | **Primera planilla abierta armada** (menor fechaEnvio/creación) se queda la póliza; las demás la saltan. |
+| 2 | Dedup de póliza | **Primera planilla abierta por FECHA DE ENVÍO** (`fechaEnvio` más antigua) se queda la póliza; las demás la saltan. |
 | 3 | Disparador | **Al guardar el catálogo** (póliza o anticipo: alta/edición/baja). |
 | 4 | Quites manuales | **El catálogo manda** — recompute completo sobreescribe; ignora quites manuales de anticipos. Pólizas siempre forzadas. |
-| 5 | Aviso | **Notificar a la gerente** cuando una planilla abierta cambia por resync. |
+| 5 | Aviso | **Notificar a la gerente SOLO cuando ENTRA o SALE un descuento** de la planilla (no por cambios solo de monto, ej. 1 centavo). |
 
 ## Arquitectura
 
@@ -57,13 +57,15 @@ la póliza se agrega solo si `planilla.id === polizaOwnerByPersona[persona]`.
 
 1. Recolecta todas las planillas ABIERTAS de todos los `state.projects`.
 2. Construye `polizaOwnerByPersona`: para cada persona, entre sus planillas
-   abiertas (todos los proyectos), la de menor `(fechaEnvio || fechaCreacion)`
-   es la dueña. Tie-break determinístico por `projectId + planillaId`.
+   abiertas (todos los proyectos), la de **`fechaEnvio` más antigua** es la
+   dueña. Tie-break determinístico por `projectId + planillaId` (para planillas
+   con misma o sin `fechaEnvio`).
 3. Para cada planilla abierta: calcula `_computeDescuentosPlanilla(...)`,
-   compara con `descuentosPlanilla` previo; si cambió, reemplaza y marca la
-   planilla como "cambiada".
+   compara con `descuentosPlanilla` previo. Detecta si **entró o salió** algún
+   descuento (cambió el conjunto de ítems, no solo montos). Si el array cambió
+   en algo, reemplaza; marca `cambioEntraSale=true` solo si entró/salió un ítem.
 4. Persiste (`saveState`), sube (`CloudSync.forceUploadNow`), y por cada
-   planilla cambiada notifica a la gerente.
+   planilla con `cambioEntraSale` notifica a la gerente.
 
 ### Hooks de catálogo
 
@@ -79,9 +81,18 @@ póliza NO se duplique desde el inicio (no solo en el resync).
 
 ### Notificación
 
-Por cada planilla cambiada: `_notifyByPerm('planilla.authorize'/'users.manage',
-{ title:'DESCUENTOS ACTUALIZADOS', body: proyecto + planilla + resumen del
-cambio })`.
+Solo se notifica cuando **ENTRA o SALE** un descuento de la planilla — es
+decir, cuando el *conjunto* de descuentos cambia (se agrega o se quita un
+ítem). Un cambio que solo modifica el monto de un descuento ya presente (ej.
+ajuste de 1 centavo) **NO** dispara notificación.
+
+Por cada planilla con `cambioEntraSale`: `_notifyByPerm('planilla.authorize'/
+'users.manage', { title:'DESCUENTOS ACTUALIZADOS', body: proyecto + planilla +
+qué entró/salió })`.
+
+Comparación entrada/salida: comparar el set de "claves de descuento" antes vs
+después. Clave = `subtipo + '|' + colaboradorNombre + '|' + (anticipoId ||
+polizaIds.join(','))`. Si el set de claves difiere → entró/salió → notificar.
 
 ## Edge cases y riesgos
 
