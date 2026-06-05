@@ -2337,6 +2337,10 @@ table{max-width:100%}
           <span class="ki-emoji"></span>
           <span class="ki-label">Liberar etapas marcadas</span>
         </button>
+        <button class="kebab-item" data-perm="users.manage" onclick="kebabAction(function(){ window.v464MoverEtapaDeTorre && window.v464MoverEtapaDeTorre(); })" title="Mover una etapa pagada de una torre a otra (corrige la torre sin cambiar monto ni persona). Libera la torre origen y marca la destino. Solo admin.">
+          <span class="ki-emoji"></span>
+          <span class="ki-label">Mover etapa a otra torre</span>
+        </button>
         <button class="kebab-item kebab-danger" data-perm="data.import" onclick="kebabAction(resetToFactory)" title="Restablecer datos de fábrica">
           <span class="ki-emoji"></span>
           <span class="ki-label">Reset a fábrica</span>
@@ -2834,7 +2838,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v463</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v464</span>
   </footer>
 
 </div>
@@ -8475,6 +8479,105 @@ window.v460LiberarUnaEtapa = async function(prefTorre, prefApto, prefEtapa){
   console.error('v460LiberarUnaEtapa:', err);
   try { showToast('ERROR: '+(err && err.message ? err.message : err), 'red'); } catch(e){}
   try { if (window.prAlert) window.prAlert({ title:'ERROR AL LIBERAR ETAPA', body: String(err && err.message ? err.message : err) }); } catch(e){}
+ }
+};
+
+/* ════════════ v464: MOVER UNA ETAPA DE UNA TORRE A OTRA (genérico, admin) ════════════
+   Para corregir pagos que quedaron en la torre equivocada. Ej: OTO RENE tiene
+   apto 1005/1006 etapa 1 marcados en Torre 3 pero corresponden a Torre 4.
+   MECÁNICA: re-etiqueta el registro de pago existente (towerId/towerName/levelId/
+   levelName/aptoId/aptoName/detalle) hacia el apto equivalente de la torre destino.
+   En UN paso libera la torre origen (queda sin pago -> disponible) y marca la
+   torre destino como pagada (mismo monto, misma persona, misma planilla).
+   Resuelve el apto destino por la estructura del proyecto. Analyze-first. */
+window.v464MoverEtapaDeTorre = async function(){
+ try {
+  if (typeof can !== 'function' || !can('users.manage')) { showToast('SOLO ADMIN', 'red'); return; }
+  const p = (typeof activeProj === 'function') ? activeProj() : null;
+  if (!p || !p.planilla) { showToast('SIN PROYECTO ACTIVO', 'red'); return; }
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  const digits = s => String(s == null ? '' : s).replace(/\D/g, '');
+  const money = n => 'Q ' + (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const normP = s => String(s == null ? '' : s).toUpperCase().replace(/\s+/g, ' ').trim();
+
+  window._v464Form = { persona:'', apto:'', etapa:'', deTorre:'', aTorre:'' };
+  const inC = 'width:100%;padding:9px 11px;border:1px solid #DDD;border-radius:6px;font:inherit;font-size:14px;font-weight:700';
+  const lbC = 'display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase';
+  const formHTML = ''
+    + '<div style="font-size:11.5px;color:#475569;margin-bottom:12px">Proyecto activo: <strong>'+esc(p.name||'')+'</strong> · HERRAMIENTA v464</div>'
+    + '<div style="margin-bottom:10px"><label style="'+lbC+'">PERSONA (nombre, opcional pero recomendado)</label><input id="v464Persona" type="text" placeholder="ej: OTO RENE HERNANDEZ" oninput="(window._v464Form=window._v464Form||{}).persona=this.value" style="'+inC+'"></div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
+    + '<div><label style="'+lbC+'">APTO</label><input id="v464Apto" type="text" placeholder="ej: 1005" oninput="(window._v464Form=window._v464Form||{}).apto=this.value" style="'+inC+'"></div>'
+    + '<div><label style="'+lbC+'">ETAPA (1-5)</label><input id="v464Etapa" type="number" min="1" max="5" placeholder="ej: 1" oninput="(window._v464Form=window._v464Form||{}).etapa=this.value" style="'+inC+'"></div>'
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+    + '<div><label style="'+lbC+'">TORRE ORIGEN (de dónde)</label><input id="v464DeT" type="text" placeholder="ej: 3" oninput="(window._v464Form=window._v464Form||{}).deTorre=this.value" style="'+inC+'"></div>'
+    + '<div><label style="'+lbC+'">TORRE DESTINO (a dónde)</label><input id="v464AT" type="text" placeholder="ej: 4" oninput="(window._v464Form=window._v464Form||{}).aTorre=this.value" style="'+inC+'"></div>'
+    + '</div>';
+  const ok = await window.prConfirm({ title:'MOVER ETAPA A OTRA TORRE', bodyHTML: formHTML, okText:'ANALIZAR', cancelText:'CANCELAR' });
+  if (!ok) return;
+
+  const f = window._v464Form || {};
+  const persona = String(f.persona||'').trim();
+  const apto = digits(f.apto), etapa = parseInt(f.etapa, 10), deT = digits(f.deTorre), aT = digits(f.aTorre);
+  if (!apto || !(etapa >= 1 && etapa <= 5) || !deT || !aT) { showToast('COMPLETÁ APTO, ETAPA, TORRE ORIGEN Y DESTINO', 'red'); return; }
+  if (deT === aT) { showToast('LA TORRE ORIGEN Y DESTINO SON IGUALES', 'red'); return; }
+  const stageIdx = etapa - 1;
+
+  // Resolver info de apto por torre+numero
+  const infoByKey = {};
+  (p.towers || []).forEach(t => { const tN = digits(t.name); (t.levels || []).forEach(l => (l.aptos || []).forEach(a => { const aN = digits(a.name); if (tN && aN){ const k = tN+'|'+aN; if (!infoByKey[k]) infoByKey[k] = {aptoId:a.id, aptoName:a.name, levelId:l.id, levelName:l.name, towerId:t.id, towerName:t.name}; } })); });
+  const dest = infoByKey[aT + '|' + apto];
+  if (!dest) { await window.prAlert({ title:'APTO DESTINO NO EXISTE', body:'No existe el apto '+apto+' en la torre '+aT+' del proyecto '+(p.name||'')+'. No se puede mover.' }); return; }
+  const srcInfo = infoByKey[deT + '|' + apto];
+
+  const pagos = Array.isArray(p.planilla.pagos) ? p.planilla.pagos : [];
+  const personaN = normP(persona);
+  const matches = pagos.filter(pg => {
+    if (!pg || pg.tipo !== 'ETAPA' || Number(pg.stageIdx) !== stageIdx) return false;
+    const matchOrigen = (srcInfo && pg.aptoId === srcInfo.aptoId) || (digits(pg.aptoName) === apto && digits(pg.towerName) === deT);
+    if (!matchOrigen) return false;
+    if (personaN){ const c = normP(pg.colaborador); if (c.indexOf(personaN) === -1 && personaN.indexOf(c) === -1) return false; }
+    return true;
+  });
+  if (!matches.length) { await window.prAlert({ title:'NO ENCONTRADO', body:'No hay pago de etapa para '+(persona?esc(persona)+' · ':'')+'T'+deT+' · APTO '+apto+' · ETAPA '+etapa+' en el proyecto '+(p.name||'')+'.' }); return; }
+
+  // Estado de la planilla de cada pago
+  const plById = {};
+  (p.planilla.planillasArmadas || []).forEach(pl => (pl.pagosIds || []).forEach(id => { if (!plById[id]) plById[id] = pl; }));
+  let body = '<div style="font-size:12.5px;color:#333;line-height:1.6">';
+  body += '<div style="font-weight:700;margin-bottom:8px">Se van a MOVER '+matches.length+' registro(s): <span style="color:#C62828">T'+deT+'</span> → <span style="color:#2E7D32">T'+aT+'</span> · APTO '+esc(apto)+' · ETAPA '+etapa+'</div>';
+  let algunaArchivada = false;
+  matches.forEach(m => {
+    const pl = plById[m.id];
+    const estado = pl ? (pl.estado || '—') : 'sin planilla';
+    if (pl && (pl.estado === 'archivada' || pl.estado === 'aprobada')) algunaArchivada = true;
+    body += '<div style="padding:6px 10px;border:1px solid #E2E8F0;border-radius:6px;margin-bottom:6px;font-size:11px">'
+      + '<strong>'+esc(m.colaborador||'—')+'</strong> · '+money(m.neto||m.bruto||0)+' · planilla: '+esc(estado)+'</div>';
+  });
+  if (algunaArchivada) body += '<div style="margin-top:6px;padding:10px;background:#FEF2F2;border:1px solid #FCA5A5;border-radius:6px;color:#991B1B;font-size:11px">⚠ Hay registros en una planilla ya aprobada/archivada. Mover corrige el registro histórico (solo cambia la torre, no el monto). Confirmá solo si es lo que querés.</div>';
+  body += '<div style="margin-top:8px;font-size:11.5px;color:#444">Resultado: Torre '+deT+' queda libre (disponible de pago) y Torre '+aT+' queda marcada como pagada, con el mismo monto y persona.</div></div>';
+
+  const ok2 = await window.prConfirm({ title:'CONFIRMAR MOVIMIENTO', bodyHTML: body, okText:'MOVER A TORRE '+aT, cancelText:'CANCELAR', danger:true });
+  if (!ok2) return;
+
+  matches.forEach(pg => {
+    pg.towerId = dest.towerId; pg.towerName = dest.towerName;
+    pg.levelId = dest.levelId; pg.levelName = dest.levelName;
+    pg.aptoId = dest.aptoId; pg.aptoName = dest.aptoName;
+    pg.stageName = pg.stageName || '';
+    pg.detalle = dest.towerName + ' · ' + dest.aptoName + ' · ETAPA ' + (Number(pg.stageIdx)+1) + (pg.stageName ? ' · ' + pg.stageName : '');
+    pg.movidoDeTorre = 'T'+deT; pg.movidoTs = Date.now();
+  });
+  try { if (typeof logActivity === 'function') logActivity('update','Etapa movida de torre', p.name+' · '+(persona||'')+' · APTO '+apto+' ETAPA '+etapa+' · T'+deT+'→T'+aT+' · '+matches.length+' registro(s)'); } catch(e){}
+  try { if (typeof saveState === 'function') saveState(); } catch(e){}
+  try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  try { if (typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
+  showToast('MOVIDO · APTO '+apto+' ETAPA '+etapa+' · T'+deT+'→T'+aT+' · '+matches.length+' registro(s)', 'green');
+ } catch(err){
+  console.error('v464MoverEtapaDeTorre:', err);
+  try { showToast('ERROR: '+(err && err.message ? err.message : err), 'red'); } catch(e){}
+  try { if (window.prAlert) window.prAlert({ title:'ERROR AL MOVER ETAPA', body: String(err && err.message ? err.message : err) }); } catch(e){}
  }
 };
 

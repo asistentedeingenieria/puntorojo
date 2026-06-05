@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v463-dejar-solo-LIBERAR-ETAPAS-MARCADAS-quitar-lista';
+const CACHE_VERSION = 'v464-mover-etapa-de-torre-a-otra-relabel';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
