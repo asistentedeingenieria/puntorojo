@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v469-FIX-editar-poliza-combobox-no-pisa-nombre-validacion-lenient';
+const CACHE_VERSION = 'v470-RE-ACTIVAR-resync-auto-DIFERIDO-sin-chocar-con-guardado';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
