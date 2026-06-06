@@ -1315,6 +1315,8 @@ html.ios-standalone .pedido-meta dd{font-size:11px}
 /* ═════════════════════════ MODALS ═════════════════════════ */
 .modal-bg{position:fixed;inset:0;background:rgba(28,25,23,.5);display:none;align-items:center;justify-content:center;z-index:100;padding:20px;backdrop-filter:blur(2px)}
 .modal-bg.show{display:flex}
+/* v476: bloqueo UNIVERSAL del scroll de fondo cuando hay cualquier modal/recuadro abierto */
+html.pr-scroll-locked,html.pr-scroll-locked body{overflow:hidden!important}
 .modal{background:var(--white);border-radius:4px;padding:28px;max-width:500px;width:100%;max-height:90vh;max-height:90dvh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)}
 .modal h3{font-family:'Inter',sans-serif;color:var(--ink);font-size:22px;font-weight:400;letter-spacing:-.5px;margin-bottom:6px;text-transform:uppercase}
 .modal .desc{font-size:12px;color:var(--mute);margin-bottom:22px}
@@ -2858,7 +2860,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v475</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v476</span>
   </footer>
 
 </div>
@@ -32769,6 +32771,44 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if (typeof window._prLockScroll !== 'function'){
       window._prLockScroll = function(){ try { const b = document.body; if (!b._prLockCount){ b._prLockCount = 0; b._prLockPrev = b.style.overflow; b._prLockPrevHtml = document.documentElement.style.overflow; } b._prLockCount++; if (b._prLockCount === 1){ b.style.overflow = 'hidden'; document.documentElement.style.overflow = 'hidden'; } } catch(e){} };
       window._prUnlockScroll = function(){ try { const b = document.body; if (!b._prLockCount) return; b._prLockCount--; if (b._prLockCount <= 0){ b._prLockCount = 0; b.style.overflow = b._prLockPrev || ''; document.documentElement.style.overflow = b._prLockPrevHtml || ''; } } catch(e){} };
+    }
+    // v476: BLOQUEO UNIVERSAL de scroll de fondo cuando hay CUALQUIER recuadro/modal abierto.
+    // v364 solo cubria prConfirm y colaborador; el preview PDF (#v229PreviewModal) y los
+    // .modal-bg (editar proyecto, etc.) dejaban filtrar el scroll al fondo. Un MutationObserver
+    // detecta cualquier overlay visible y bloquea html+body via clase con !important. Es ADITIVO:
+    // los locks existentes (_prLockScroll) siguen funcionando igual.
+    if (!window._prScrollLockObserver){
+      const _prAnyOverlayOpen = function(){
+        try {
+          // .modal-bg.show = modales estandar abiertos; overlays full-screen con .show;
+          // #v229PreviewModal = preview PDF (existe en el DOM solo cuando esta abierto);
+          // .pr-lock-bg = convencion para cualquier modal futuro.
+          if (document.querySelector('.modal-bg.show, .photo-viewer-bg.show, .pr-bio-lock.show, .pr-tour-overlay.show, #v229PreviewModal, .pr-lock-bg')) return true;
+          const nz = document.querySelector('.pr-notifs-modal-overlay');
+          if (nz){ const cs = window.getComputedStyle(nz); if (cs.display !== 'none' && cs.visibility !== 'hidden') return true; }
+        } catch(e){}
+        return false;
+      };
+      const _prSyncScrollLock = function(){
+        try {
+          const de = document.documentElement;
+          if (_prAnyOverlayOpen()) de.classList.add('pr-scroll-locked');
+          else de.classList.remove('pr-scroll-locked');
+        } catch(e){}
+      };
+      let _prSyncPend = false;
+      const _prScheduleSync = function(){
+        if (_prSyncPend) return;
+        _prSyncPend = true;
+        requestAnimationFrame(function(){ _prSyncPend = false; _prSyncScrollLock(); });
+      };
+      try {
+        const _mo = new MutationObserver(_prScheduleSync);
+        _mo.observe(document.documentElement, { childList:true, subtree:true, attributes:true, attributeFilter:['class','style'] });
+        window._prScrollLockObserver = _mo;
+        window._prSyncScrollLock = _prSyncScrollLock;
+        _prScheduleSync(); // estado inicial
+      } catch(e){}
     }
     window.prConfirm = function(opts){
       opts = opts || {};

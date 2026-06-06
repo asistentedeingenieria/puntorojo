@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v475-quitar-detalle-pagos-etapa-reconstruido-en-render';
+const CACHE_VERSION = 'v476-bloqueo-universal-scroll-fondo-con-modal-abierto';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
