@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v493-liberar-pago-y-mover-con-solicitud';
+const CACHE_VERSION = 'v494-anticipos-sin-cuotas-fuera-de-app';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
