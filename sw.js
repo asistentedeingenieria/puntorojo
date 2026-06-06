@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v482-design-system-fase1-tokens-botones-tablas-inputs-cards';
+const CACHE_VERSION = 'v483-design-system-fase2-hover-ghost-tabular-badges';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
