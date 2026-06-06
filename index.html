@@ -2859,7 +2859,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v490</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v491</span>
   </footer>
 
 </div>
@@ -7750,7 +7750,9 @@ function saveState(){
    ═══════════════════════════════════════════════════════════════ */
 const CloudSync = {
   enabled: false,
-  ref: null,                 // Doc reference: /appState/main
+  ref: null,                 // Doc reference: /appState/main (legacy / respaldo, ya no se reescribe)
+  coreRef: null,             // v491: /appState/core — globals livianos + lista de proyectos
+  _projHashes: null,         // v491: hash por proyecto para no reescribir los que no cambian
   unsubscribe: null,         // Para cancelar el listener al cerrar sesión
   pendingWrite: null,        // setTimeout handle para debounce
   pendingRemoteData: null,   // Datos remotos esperando que el usuario termine de editar
@@ -7764,32 +7766,41 @@ const CloudSync = {
       return;
     }
     this.initialized = true;
-    this.ref = firebase.firestore().collection('appState').doc('main');
+    const db = firebase.firestore();
+    this.ref = db.collection('appState').doc('main');     // legacy / respaldo
+    this.coreRef = db.collection('appState').doc('core');  // v491: modelo multi-doc
+    this._projHashes = {};
 
     try {
-      const snap = await this.ref.get();
-      if (!snap.exists) {
-        // Primera vez: subir el state actual (de localStorage) como punto de partida.
-        await this.uploadCurrent();
-        showToast('DATOS SUBIDOS A LA NUBE · COMPARTIDOS CON EL EQUIPO', 'green');
-      } else {
-        // Ya hay datos en la nube: aplicarlos al state local.
-        this.applyRemote(snap.data(), { initial: true });
+      const coreSnap = await this.coreRef.get();
+      if (!coreSnap.exists) {
+        // Aun no migrado al modelo multi-doc.
+        const mainSnap = await this.ref.get();
+        if (mainSnap.exists) {
+          // v491: MIGRACION — partir appState/main en core + un doc por proyecto.
+          // appState/main queda INTACTO como respaldo. Transaccion = a prueba de carrera.
+          await this._migrateFromMain(mainSnap.data());
+          try { showToast('DATOS REORGANIZADOS · ESPACIO ILIMITADO', 'green'); } catch(e){}
+        } else {
+          // Primera vez absoluta: subir el state local como modelo multi-doc.
+          await this.uploadCurrent();
+          try { showToast('DATOS SUBIDOS A LA NUBE · COMPARTIDOS CON EL EQUIPO', 'green'); } catch(e){}
+        }
       }
+      const data = await this.downloadAll();
+      if (data) this.applyRemote(data, { initial: true });
       this.enabled = true;
       try { setSyncStatus('synced'); } catch(e){}
 
-      // Listener de cambios futuros (en tiempo real)
-      this.unsubscribe = this.ref.onSnapshot(
-        (s) => {
-          // Ignorar si es un eco de NUESTRA propia escritura
-          if (s.metadata.hasPendingWrites) return;
-          if (!s.exists) return;
-          this.applyRemote(s.data(), { initial: false });
+      // v491: UN listener sobre TODA la coleccion appState (core + proj_*). Maneja
+      // alta/baja de proyectos automaticamente, sin re-suscribir nada.
+      this.unsubscribe = db.collection('appState').onSnapshot(
+        (snap) => {
+          if (snap.metadata.hasPendingWrites) return; // eco de NUESTRA escritura
+          const d = this._assembleFromSnap(snap);
+          if (d) this.applyRemote(d, { initial: false });
         },
-        (err) => {
-          console.error('CloudSync onSnapshot error:', err);
-        }
+        (err) => { console.error('CloudSync onSnapshot error:', err); }
       );
 
       // Si el usuario "se libera" (cierra modal, sale de input), aplicar cambios pendientes
@@ -7850,28 +7861,91 @@ const CloudSync = {
      seguridad hace un .get() fresco contra Firestore.
      No-op si hay escrituras locales pendientes (preservamos lo del usuario). */
   async refreshFromCloud(){
-    if (!this.enabled || !this.ref) return;
+    if (!this.enabled) return;
     if (this.pendingWrite || this.uploadingNow) return;
     try { this.flushPendingRender(); } catch(e){}
     try {
-      const snap = await this.ref.get();
-      if (snap && snap.exists) {
-        this.applyRemote(snap.data(), { initial: false });
-      }
+      const data = await this.downloadAll();
+      if (data) this.applyRemote(data, { initial: false });
     } catch(e) {
-      console.warn('[v334] CloudSync.refreshFromCloud:', e);
+      console.warn('[v491] CloudSync.refreshFromCloud:', e);
     }
   },
 
+  /* v491: sube el state PARTIDO en core + un doc por proyecto. Cada doc << 1MB.
+     Solo reescribe los proyectos que cambiaron (hash). appState/main NO se toca. */
   async uploadCurrent(){
-    if (!this.ref) return;
-    const data = this.stripLocal(state);
-    data._lastUpdate = {
-      ts: Date.now(),
-      by: (currentUser && (currentUser.email || currentUser.username)) || 'sistema'
-    };
+    if (!this.coreRef) return;
+    const db = firebase.firestore();
+    const data = this.stripLocal(state);              // clon sin base64 ni activeProjectId
+    const projects = Array.isArray(data.projects) ? data.projects : [];
+    delete data.projects;
+    const stamp = { ts: Date.now(), by: (currentUser && (currentUser.email || currentUser.username)) || 'sistema' };
+    data._projectIds = projects.map(p => p && p.id).filter(Boolean);
+    data._lastUpdate = stamp;
+    if (!this._projHashes) this._projHashes = {};
+    const batch = db.batch();
+    batch.set(this.coreRef, data);                    // core siempre (es chico)
+    const seen = {};
+    projects.forEach(p => {
+      if (!p || !p.id) return;
+      seen[p.id] = true;
+      const json = JSON.stringify(p);
+      if (this._projHashes[p.id] === json) return;    // sin cambios -> no reescribir
+      this._projHashes[p.id] = json;
+      batch.set(db.collection('appState').doc('proj_' + p.id), { p: p, _lastUpdate: stamp });
+    });
+    Object.keys(this._projHashes).forEach(id => {     // borrar docs de proyectos eliminados
+      if (!seen[id]) { batch.delete(db.collection('appState').doc('proj_' + id)); delete this._projHashes[id]; }
+    });
     this.lastUploadAt = Date.now();
-    await this.ref.set(data);
+    await batch.commit();
+  },
+
+  /* v491: reensambla el state (forma del doc unico viejo) desde core + proj_*. */
+  _assembleFromSnap(snap){
+    if (!snap) return null;
+    let core = null; const projById = {};
+    snap.forEach(doc => {
+      if (doc.id === 'core') core = doc.data();
+      else if (doc.id.indexOf('proj_') === 0) { const d = doc.data(); if (d && d.p) projById[doc.id.slice(5)] = d.p; }
+    });
+    if (!core) return null;
+    const ids = Array.isArray(core._projectIds) ? core._projectIds.slice() : [];
+    Object.keys(projById).forEach(id => { if (ids.indexOf(id) === -1) ids.push(id); });
+    const projects = []; const newHashes = {};
+    ids.forEach(id => { if (projById[id]) { projects.push(projById[id]); newHashes[id] = JSON.stringify(projById[id]); } });
+    this._projHashes = newHashes;
+    const data = Object.assign({}, core);
+    delete data._projectIds; delete data._lastUpdate; delete data._migratedFrom;
+    data.projects = projects;
+    return data;
+  },
+
+  /* v491: lee toda la coleccion appState una vez y reensambla. */
+  async downloadAll(){
+    const snap = await firebase.firestore().collection('appState').get();
+    return this._assembleFromSnap(snap);
+  },
+
+  /* v491: migracion idempotente y a prueba de carrera: appState/main -> core + proj.
+     Transaccion: si otro dispositivo ya creo core, no hace nada. main queda INTACTO. */
+  async _migrateFromMain(mainData){
+    const db = firebase.firestore();
+    const src = JSON.parse(JSON.stringify(mainData || {}));
+    delete src.activeProjectId;
+    const projects = Array.isArray(src.projects) ? src.projects : [];
+    delete src.projects;
+    const stamp = { ts: Date.now(), by: 'migracion-v491' };
+    src._projectIds = projects.map(p => p && p.id).filter(Boolean);
+    src._lastUpdate = stamp;
+    src._migratedFrom = 'main';
+    await db.runTransaction(async (tx) => {
+      const c = await tx.get(this.coreRef);
+      if (c.exists) return; // ya migrado por otro dispositivo
+      tx.set(this.coreRef, src);
+      projects.forEach(p => { if (p && p.id) tx.set(db.collection('appState').doc('proj_' + p.id), { p: p, _lastUpdate: stamp }); });
+    });
   },
 
   /* Recibe datos remotos y los aplica al state local + re-renderiza.
