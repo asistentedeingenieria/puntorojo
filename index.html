@@ -2354,9 +2354,13 @@ table{max-width:100%}
           <span class="ki-emoji"></span>
           <span class="ki-label">Liberar etapas marcadas</span>
         </button>
-        <button class="kebab-item" data-perm="users.manage" onclick="kebabAction(function(){ window.v464MoverEtapaDeTorre && window.v464MoverEtapaDeTorre(); })" title="Mover una etapa pagada de una torre a otra (corrige la torre sin cambiar monto ni persona). Libera la torre origen y marca la destino. Solo admin.">
+        <button class="kebab-item" id="kbMoverEtapa" style="display:none" onclick="kebabAction(function(){ window.v464MoverEtapaDeTorre && window.v464MoverEtapaDeTorre(); })" title="Mover una etapa pagada de una torre a otra (corrige la torre sin cambiar monto ni persona). El subgerente envía solicitud; la gerente la autoriza.">
           <span class="ki-emoji"></span>
           <span class="ki-label">Mover etapa a otra torre</span>
+        </button>
+        <button class="kebab-item" id="kbSolMover" style="display:none" onclick="kebabAction(function(){ window.verSolicitudesMover && window.verSolicitudesMover(); })" title="Ver y autorizar las solicitudes de movimiento de etapa enviadas por el subgerente.">
+          <span class="ki-emoji"></span>
+          <span class="ki-label">Solicitudes de movimiento</span>
         </button>
         <button class="kebab-item" data-perm="users.manage" onclick="kebabAction(function(){ window.v471VerTamanoDatos && window.v471VerTamanoDatos(); })" title="Ver cuanto pesan los datos en la nube (limite 1 MB de Firestore) y que pieza ocupa mas. Si se paso de 1 MB, no se guarda nada. Solo admin.">
           <span class="ki-emoji"></span>
@@ -2859,7 +2863,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v492</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v493</span>
   </footer>
 
 </div>
@@ -5118,6 +5122,14 @@ function applyPermissions(){
       el.classList.remove('locked');
     }
   });
+
+  // v493: visibilidad OR para Mover etapa (subgerente+gerente+admin) y Solicitudes de movimiento (gerente+admin)
+  try {
+    const _mv = document.getElementById('kbMoverEtapa');
+    if (_mv) _mv.style.display = (can('planilla.generate') || can('planilla.authorize') || can('users.manage')) ? '' : 'none';
+    const _sm = document.getElementById('kbSolMover');
+    if (_sm) _sm.style.display = (can('planilla.authorize') || can('users.manage')) ? '' : 'none';
+  } catch(e){}
 
   // Ocultar separadores ".kebab-divider" huérfanos: si entre dos divisores
   // consecutivos no hay ningún kebab-item visible, escondemos el divisor
@@ -8767,7 +8779,10 @@ window.v460LiberarUnaEtapa = async function(prefTorre, prefApto, prefEtapa){
    Resuelve el apto destino por la estructura del proyecto. Analyze-first. */
 window.v464MoverEtapaDeTorre = async function(){
  try {
-  if (typeof can !== 'function' || !can('users.manage')) { showToast('SOLO ADMIN', 'red'); return; }
+  // v493: la gerente/admin mueve directo; el subgerente (genera) envía una SOLICITUD a autorizar.
+  const _esGerMov = (typeof can==='function') && (can('planilla.authorize') || can('users.manage'));
+  const _puedeMov = (typeof can==='function') && (can('planilla.generate') || can('planilla.authorize') || can('users.manage'));
+  if (!_puedeMov) { showToast('SIN PERMISO PARA MOVER ETAPAS', 'red'); return; }
   const p = (typeof activeProj === 'function') ? activeProj() : null;
   if (!p || !p.planilla) { showToast('SIN PROYECTO ACTIVO', 'red'); return; }
   const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
@@ -8833,6 +8848,27 @@ window.v464MoverEtapaDeTorre = async function(){
   if (algunaArchivada) body += '<div style="margin-top:6px;padding:10px;background:#FEF2F2;border:1px solid #FCA5A5;border-radius:6px;color:#991B1B;font-size:11px">⚠ Hay registros en una planilla ya aprobada/archivada. Mover corrige el registro histórico (solo cambia la torre, no el monto). Confirmá solo si es lo que querés.</div>';
   body += '<div style="margin-top:8px;font-size:11.5px;color:#444">Resultado: Torre '+deT+' queda libre (disponible de pago) y Torre '+aT+' queda marcada como pagada, con el mismo monto y persona.</div></div>';
 
+  if (!_esGerMov){
+    // ── SUBGERENTE: no mueve, ENVÍA SOLICITUD a la gerente ──
+    body += '<div style="margin-top:10px;padding:10px;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:6px;color:#1E40AF;font-size:11px">Como subgerente, este movimiento se enviará como SOLICITUD a la gerente de proyectos para que lo autorice.</div>';
+    const okS = await window.prConfirm({ title:'ENVIAR SOLICITUD DE MOVIMIENTO', bodyHTML: body, okText:'ENVIAR SOLICITUD', cancelText:'CANCELAR' });
+    if (!okS) return;
+    if (!Array.isArray(p.solicitudesMover)) p.solicitudesMover = [];
+    const _by = (typeof window._getUserEmail==='function' ? (window._getUserEmail()||'') : '');
+    const _byN = (typeof window._getUserDisplayName==='function' ? (window._getUserDisplayName()||'') : '');
+    p.solicitudesMover.push({
+      id:'mov_'+Date.now()+'_'+Math.floor(Math.random()*100000),
+      apto:apto, etapa:etapa, deT:deT, aT:aT, persona:persona,
+      resumen: matches.length+' registro(s) · T'+deT+'→T'+aT+' · APTO '+apto+' · ETAPA '+etapa,
+      by:_by, byNombre:_byN, ts:Date.now(), estado:'PENDIENTE'
+    });
+    try { if (typeof logActivity === 'function') logActivity('request','Solicitud mover etapa', p.name+' · APTO '+apto+' ETAPA '+etapa+' · T'+deT+'→T'+aT); } catch(e){}
+    try { if (typeof saveState === 'function') saveState(); } catch(e){}
+    try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    await window.prAlert({ title:'SOLICITUD ENVIADA', body:'Tu solicitud para mover la etapa fue enviada a la gerente de proyectos. Ella la verá en SOLICITUDES DE MOVIMIENTO y decidirá si la autoriza.' });
+    return;
+  }
+
   const ok2 = await window.prConfirm({ title:'CONFIRMAR MOVIMIENTO', bodyHTML: body, okText:'MOVER A TORRE '+aT, cancelText:'CANCELAR', danger:true });
   if (!ok2) return;
 
@@ -8855,6 +8891,122 @@ window.v464MoverEtapaDeTorre = async function(){
   try { if (window.prAlert) window.prAlert({ title:'ERROR AL MOVER ETAPA', body: String(err && err.message ? err.message : err) }); } catch(e){}
  }
 };
+
+/* ════════════ v493: SOLICITUDES DE MOVIMIENTO DE ETAPA ════════════
+   El subgerente (planilla.generate) puede pedir mover una etapa; la gerente
+   (planilla.authorize) o admin la autoriza. Se guarda en p.solicitudesMover. */
+window._v493AplicarMovimientoEtapa = function(p, params){
+  const digits = s => String(s == null ? '' : s).replace(/\D/g, '');
+  const normP = s => String(s == null ? '' : s).toUpperCase().replace(/\s+/g, ' ').trim();
+  const apto = digits(params.apto), stageIdx = parseInt(params.etapa,10)-1, deT = digits(params.deT), aT = digits(params.aT);
+  const persona = String(params.persona||'').trim();
+  if (!apto || isNaN(stageIdx) || stageIdx < 0 || !deT || !aT) return { ok:false, error:'DATOS INCOMPLETOS' };
+  if (!p || !p.planilla) return { ok:false, error:'SIN PLANILLA' };
+  const infoByKey = {};
+  (p.towers||[]).forEach(t => { const tN = digits(t.name); (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => { const aN = digits(a.name); if (tN && aN){ const k = tN+'|'+aN; if (!infoByKey[k]) infoByKey[k] = {aptoId:a.id, aptoName:a.name, levelId:l.id, levelName:l.name, towerId:t.id, towerName:t.name}; } })); });
+  const dest = infoByKey[aT+'|'+apto];
+  if (!dest) return { ok:false, error:'APTO DESTINO NO EXISTE (T'+aT+' · '+apto+')' };
+  const srcInfo = infoByKey[deT+'|'+apto];
+  const pagos = Array.isArray(p.planilla.pagos) ? p.planilla.pagos : [];
+  const personaN = normP(persona);
+  const matches = pagos.filter(pg => {
+    if (!pg || pg.tipo !== 'ETAPA' || Number(pg.stageIdx) !== stageIdx) return false;
+    const matchOrigen = (srcInfo && pg.aptoId === srcInfo.aptoId) || (digits(pg.aptoName) === apto && digits(pg.towerName) === deT);
+    if (!matchOrigen) return false;
+    if (personaN){ const c = normP(pg.colaborador); if (c.indexOf(personaN) === -1 && personaN.indexOf(c) === -1) return false; }
+    return true;
+  });
+  if (!matches.length) return { ok:false, error:'NO HAY PAGO DE ETAPA PARA ESOS DATOS' };
+  matches.forEach(pg => {
+    pg.towerId = dest.towerId; pg.towerName = dest.towerName;
+    pg.levelId = dest.levelId; pg.levelName = dest.levelName;
+    pg.aptoId = dest.aptoId; pg.aptoName = dest.aptoName;
+    pg.stageName = pg.stageName || '';
+    pg.detalle = dest.towerName + ' · ' + dest.aptoName + ' · ETAPA ' + (Number(pg.stageIdx)+1) + (pg.stageName ? ' · ' + pg.stageName : '');
+    pg.movidoDeTorre = 'T'+deT; pg.movidoTs = Date.now();
+  });
+  return { ok:true, count:matches.length };
+};
+window._v493SolMoverPendientes = function(){
+  const p = (typeof activeProj==='function') ? activeProj() : null;
+  if (!p) return [];
+  if (!Array.isArray(p.solicitudesMover)) p.solicitudesMover = [];
+  return p.solicitudesMover.filter(s => s.estado === 'PENDIENTE');
+};
+window.autorizarMover = async function(solId){
+  if (!(can('planilla.authorize') || can('users.manage'))){ showToast('SOLO LA GERENTE PUEDE AUTORIZAR','red'); return; }
+  const p = (typeof activeProj==='function') ? activeProj() : null;
+  if (!p || !Array.isArray(p.solicitudesMover)) return;
+  const sol = p.solicitudesMover.find(s => s.id === solId);
+  if (!sol || sol.estado !== 'PENDIENTE'){ showToast('SOLICITUD NO ENCONTRADA O YA PROCESADA','red'); return; }
+  const res = window._v493AplicarMovimientoEtapa(p, sol);
+  if (!res.ok){ showToast('NO SE PUDO MOVER: '+(res.error||''),'red'); return; }
+  sol.estado = 'APROBADA';
+  sol.procesadoPor = (typeof window._getUserEmail==='function' ? window._getUserEmail() : '') || '';
+  sol.fechaProceso = new Date().toISOString();
+  sol.registros = res.count;
+  try { if (typeof logActivity==='function') logActivity('update','Movimiento de etapa autorizado', p.name+' · APTO '+sol.apto+' ETAPA '+sol.etapa+' · T'+sol.deT+'→T'+sol.aT+' · '+res.count+' registro(s)'); } catch(e){}
+  try { if (typeof saveState==='function') saveState(); } catch(e){}
+  try { if (typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  try { if (typeof renderPlanilla==='function') renderPlanilla(); } catch(e){}
+  showToast('MOVIMIENTO AUTORIZADO · '+res.count+' registro(s)','green');
+};
+window.rechazarMover = async function(solId){
+  if (!(can('planilla.authorize') || can('users.manage'))){ showToast('SOLO LA GERENTE PUEDE RECHAZAR','red'); return; }
+  const p = (typeof activeProj==='function') ? activeProj() : null;
+  if (!p || !Array.isArray(p.solicitudesMover)) return;
+  const sol = p.solicitudesMover.find(s => s.id === solId);
+  if (!sol || sol.estado !== 'PENDIENTE'){ showToast('SOLICITUD NO ENCONTRADA O YA PROCESADA','red'); return; }
+  const motivo = await window.prPrompt({ title:'RECHAZAR SOLICITUD', body:'Motivo del rechazo (opcional)', placeholder:'ej: La torre destino no es correcta', required:false });
+  if (motivo === null) return;
+  sol.estado = 'RECHAZADA';
+  sol.motivoRechazo = motivo || '';
+  sol.procesadoPor = (typeof window._getUserEmail==='function' ? window._getUserEmail() : '') || '';
+  sol.fechaProceso = new Date().toISOString();
+  try { if (typeof saveState==='function') saveState(); } catch(e){}
+  try { if (typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  showToast('SOLICITUD RECHAZADA','green');
+};
+window.verSolicitudesMover = async function(){
+  const p = (typeof activeProj==='function') ? activeProj() : null;
+  if (!p){ showToast('SIN PROYECTO ACTIVO','red'); return; }
+  if (!Array.isArray(p.solicitudesMover)) p.solicitudesMover = [];
+  const esGer = can('planilla.authorize') || can('users.manage');
+  const esc = s => String(s==null?'':s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  const fFecha = iso => { try { const d = new Date(iso); return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear(); } catch(e){ return ''; } };
+  const sols = p.solicitudesMover.slice();
+  const pend = sols.filter(s => s.estado === 'PENDIENTE');
+  const proc = sols.filter(s => s.estado !== 'PENDIENTE').sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,15);
+  let body = '<div style="font-size:12px;color:#1F2937;line-height:1.5;margin-bottom:14px">'+(esGer?'Solicitudes de movimiento del subgerente. Autorizá o rechazá.':'Tus solicitudes de movimiento y su estado.')+'</div>';
+  if (!pend.length) body += '<div style="padding:18px;text-align:center;background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;color:#15803D;font-weight:700;margin-bottom:14px">SIN PENDIENTES</div>';
+  else {
+    body += '<div style="border:1px solid #FCD34D;border-radius:8px;margin-bottom:14px;background:#FFFBEB"><div style="padding:10px 14px;font-size:11px;font-weight:700;color:#92400E;background:#FEF3C7;border-bottom:1px solid #FCD34D;letter-spacing:.6px;border-radius:8px 8px 0 0">PENDIENTES · '+pend.length+'</div><div style="padding:10px 14px">';
+    pend.forEach(s => {
+      body += '<div data-mov-card="'+esc(s.id)+'" style="background:#fff;border:1px solid #FCD34D;border-radius:6px;padding:10px 12px;margin-bottom:8px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:4px"><strong style="font-size:12px;color:#0F172A">APTO '+esc(s.apto)+' · ETAPA '+esc(s.etapa)+'</strong><span style="font-size:9.5px;color:#64748B">'+esc(s.byNombre||s.by||'—')+' · '+esc(fFecha(s.ts))+'</span></div><div style="font-size:11.5px;color:#475569">Torre <strong style="color:#C62828">'+esc(s.deT)+'</strong> → <strong style="color:#2E7D32">'+esc(s.aT)+'</strong>'+(s.persona?' · '+esc(s.persona):'')+'</div><div style="font-size:10.5px;color:#94A3B8;margin-top:2px">'+esc(s.resumen||'')+'</div>';
+      if (esGer) body += '<div style="display:flex;gap:8px;margin-top:10px;justify-content:flex-end"><button class="btn ghost sm" data-action="rechazarMov" data-id="'+esc(s.id)+'" style="color:#DC2626;border-color:#FCA5A5;font-size:10px">RECHAZAR</button><button class="btn sm" data-action="autorizarMov" data-id="'+esc(s.id)+'" style="background:#15803D;border-color:#15803D;color:#fff;font-size:10px">AUTORIZAR</button></div>';
+      body += '</div>';
+    });
+    body += '</div></div>';
+  }
+  if (proc.length){
+    body += '<div style="border:1px solid #E2E8F0;border-radius:8px;background:#F8FAFC"><div style="padding:10px 14px;font-size:11px;font-weight:700;color:#475569;background:#F1F5F9;border-bottom:1px solid #E2E8F0;letter-spacing:.6px;border-radius:8px 8px 0 0">HISTORIAL · ÚLTIMAS '+proc.length+'</div><div style="padding:8px 14px">';
+    proc.forEach(s => {
+      const estBadge = s.estado==='APROBADA' ? '<span class="planilla-badge" style="background:#DCFCE7;color:#15803D;border:1px solid #86EFAC;font-size:8.5px">APROBADA</span>' : '<span class="planilla-badge" style="background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;font-size:8.5px">RECHAZADA</span>';
+      body += '<div style="padding:6px 0;border-bottom:1px solid #E2E8F0;font-size:10.5px;color:#475569;display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center"><div>'+estBadge+'</div><div>APTO '+esc(s.apto)+' E'+esc(s.etapa)+' · T'+esc(s.deT)+'→T'+esc(s.aT)+'</div><div style="font-size:9.5px;color:#94A3B8">'+esc(s.byNombre||s.by||'')+(s.motivoRechazo?' · "'+esc(s.motivoRechazo)+'"':'')+'</div></div>';
+    });
+    body += '</div></div>';
+  }
+  await window.prConfirm({ title:'SOLICITUDES DE MOVIMIENTO', bodyHTML:body, okText:'CERRAR', cancelText:'', wide:true });
+};
+if (!window._solMovDelegateInstalled){
+  document.body.addEventListener('click', function(ev){
+    const aBtn = ev.target.closest && ev.target.closest('button[data-action="autorizarMov"]');
+    const rBtn = ev.target.closest && ev.target.closest('button[data-action="rechazarMov"]');
+    if (aBtn){ const id = aBtn.getAttribute('data-id'); if (id){ aBtn.disabled = true; aBtn.textContent = 'Autorizando...'; Promise.resolve(window.autorizarMover(id)).then(()=>{ const card = aBtn.closest('[data-mov-card]'); if (card){ card.style.opacity='.5'; setTimeout(()=>card.remove(),300); } }).catch(()=>{}); } }
+    if (rBtn){ const id = rBtn.getAttribute('data-id'); if (id) Promise.resolve(window.rechazarMover(id)).then(()=>{ const card = rBtn.closest('[data-mov-card]'); if (card){ card.style.opacity='.5'; setTimeout(()=>card.remove(),300); } }).catch(()=>{}); }
+  });
+  window._solMovDelegateInstalled = true;
+}
 
 /* ════════════ v471: DIAGNÓSTICO DE TAMAÑO DE DATOS (NUBE) ════════════
    Firestore tiene un límite DURO de 1 MB (1,048,576 bytes) por documento, y
@@ -30656,7 +30808,10 @@ window.addEventListener('load', () => {
                 // v371: regla secuencial reactivada para niveles configurados + nuevos proyectos
                 const requierePrev = (i > 0) && _v371RequiereSecuencial(p, l.id) && !_v371PrevStagesAllComplete(p, a, i);
                 // v341: NO bloquear por falta de persona — la validacion es al click.
-                const disabled=(!canGen || total<=0 || !opts.length || requierePrev);
+                // v493: el subgerente (genera pero no autoriza) solo paga etapas LIBERADAS por la gerente
+                const _lib = !!(a.libEtapas && a.libEtapas[i]);
+                const _bloqLib = (canGen && !canAuth) && !_lib && paid<=0 && total>0;
+                const disabled=(!canGen || total<=0 || !opts.length || requierePrev || _bloqLib);
                 const etapaName = (ETAPAS_PROJ[i] && ETAPAS_PROJ[i].name) || ('ETAPA '+(i+1));
                 // v241: titulo de la etapa visible SIEMPRE en cada celda
                 // v344: si total<=0 celda EMPTY; chip de etapa min-height 38px para altura uniforme
@@ -30666,8 +30821,14 @@ window.addEventListener('load', () => {
                 html += `<div class="stage-info"><div class="stage-money">${total>0?fQ(total):'SIN MONTO'}</div>${total>0?`<div class="stage-pct">PAGADO: <strong>${paid}%</strong></div>`:''}${(!roleAllowed && colRole!=='SIN DEFINIR' && total>0)?`<div class="stage-pct" style="color:var(--mute);font-size:7.8px">${h(roleMsg)}</div>`:''}</div>`;
                 if(requierePrev){
                   html += `<div class="planilla-stage-actions" style="display:flex;align-items:center;justify-content:center;color:#9A3412;font-size:8.8px;font-weight:600;background:#FFF7ED;padding:8px 6px;text-align:center;letter-spacing:.3px;line-height:1.3">⚠ COMPLETAR ETAPA ${i} AL 100%</div>`;
+                } else if(_bloqLib){
+                  html += `<div class="planilla-stage-actions" style="display:flex;align-items:center;justify-content:center;gap:5px;color:#92400E;font-size:8.4px;font-weight:700;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:8px 6px;text-align:center;letter-spacing:.3px;line-height:1.3"><span style="font-size:10px">🔒</span>ESPERA LIBERACIÓN</div>`;
                 } else {
                   html += `<div class="planilla-stage-actions"><select id="pct-${h(a.id)}-${i}" ${disabled?'disabled':''}>${opts.map(x=>`<option value="${x}" ${x===next?'selected':''}>${x}%</option>`).join('')}</select><button class="btn primary sm" ${disabled?'disabled':''} onclick="pagarEtapaPlanilla('${h(t.id)}','${h(l.id)}','${h(a.id)}',${i})">PAGAR</button></div>`;
+                }
+                // v493: la gerente/admin puede LIBERAR cada etapa para que el subgerente la pague esa quincena
+                if(canAuth && total>0 && paid<100){
+                  html += `<button onclick="event.stopPropagation();window.toggleLiberarPago('${h(a.id)}',${i})" title="${_lib?'Quitar liberación':'Liberar esta etapa para pago del subgerente'}" style="margin-top:5px;width:100%;padding:5px 6px;font-size:8px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;border-radius:6px;cursor:pointer;transition:all .15s;border:1px solid ${_lib?'#86EFAC':'#CBD5E1'};background:${_lib?'#F0FDF4':'#fff'};color:${_lib?'#15803D':'#64748B'}">${_lib?'✓ LIBERADA':'LIBERAR PAGO'}</button>`;
                 }
                 html += `</div>`;
               }
@@ -30720,6 +30881,27 @@ window.addEventListener('load', () => {
     return Number(planillaStageIdx) + 1;
   }
 
+  // v493: la GERENTE/admin libera una etapa para que el SUBGERENTE pueda pagarla esa quincena.
+  // Estado por apartamento: a.libEtapas = { [stageIdx]: { by, ts } }. Toggle on/off.
+  window.toggleLiberarPago = function(aptoId, stageIdx){
+    if(!(can('planilla.authorize') || can('users.manage'))){ showToast('SOLO LA GERENTE PUEDE LIBERAR ETAPAS','red'); return; }
+    const p = activeProj(); if(!p) return;
+    let apto = null;
+    (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => { if(a.id===aptoId) apto = a; })));
+    if(!apto){ showToast('APARTAMENTO NO ENCONTRADO','red'); return; }
+    if(!apto.libEtapas) apto.libEtapas = {};
+    const yaLib = !!apto.libEtapas[stageIdx];
+    if(yaLib){ delete apto.libEtapas[stageIdx]; }
+    else {
+      let _by = '';
+      try { _by = (typeof currentUserEmail!=='undefined' && currentUserEmail) ? currentUserEmail : ((typeof _getUserEmail==='function') ? (_getUserEmail()||'') : ''); } catch(e){}
+      apto.libEtapas[stageIdx] = { by:_by, ts:Date.now() };
+    }
+    try{ saveState(); }catch(e){}
+    try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); }catch(e){}
+    try{ if(typeof renderPlanillaEtapas==='function') renderPlanillaEtapas(); }catch(e){}
+    showToast(yaLib ? 'LIBERACIÓN QUITADA · ETAPA BLOQUEADA' : 'ETAPA LIBERADA PARA PAGO', yaLib ? 'info' : 'green');
+  };
   window.pagarEtapaPlanilla = async function(tid,lid,aid,stageIdx){
     if(!can('planilla.generate') && !can('users.manage')) return showToast('SIN PERMISO','red');
     const p=activeProj(); normalizarPlanilla5(p,true);
@@ -30729,6 +30911,16 @@ window.addEventListener('load', () => {
     if(stageIdx<0 || stageIdx>=N_ETAPAS) return showToast('ETAPA NO VÁLIDA PARA PLANILLA','red');
     // v371: regla secuencial reactivada para niveles configurados + nuevos proyectos
     const t=(p.towers||[]).find(x=>x.id===tid); const l=t&&(t.levels||[]).find(x=>x.id===lid); const a=l&&(l.aptos||[]).find(x=>x.id===aid); if(!a) return;
+    // v493: enforcement de liberación — el subgerente (genera pero NO autoriza) solo paga etapas
+    // que la gerente liberó. Gerente/admin pueden pagar siempre. Etapas ya iniciadas no se bloquean.
+    {
+      const _esGer493 = can('planilla.authorize') || can('users.manage');
+      const _paid493 = (typeof paidPct5==='function') ? paidPct5(p, a.id, stageIdx) : 0;
+      const _lib493 = !!(a.libEtapas && a.libEtapas[stageIdx]);
+      if (!_esGer493 && !_lib493 && _paid493 <= 0){
+        return showToast('ETAPA BLOQUEADA · LA GERENTE DEBE LIBERARLA PARA PAGO','red');
+      }
+    }
     if (stageIdx > 0 && _v371RequiereSecuencial(p, lid) && !_v371PrevStagesAllComplete(p, a, stageIdx)){
       return showToast('COMPLETÁ LA ETAPA ANTERIOR AL 100% ANTES DE PAGAR LA ETAPA '+(stageIdx+1),'red');
     }
