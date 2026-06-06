@@ -2858,7 +2858,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v472</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v473</span>
   </footer>
 
 </div>
@@ -8282,6 +8282,51 @@ function _v472Clean(v){
   }
   return v;
 }
+/* v473: reduce el peso de un logo base64 SIN cambiarlo a URL (sigue siendo base64
+   para que el PDF lo siga aceptando: _addProjLogoToPDF usa doc.addImage con el
+   dataURL). Lo redibuja a menor resolución (máx ~200px). Con transparencia => PNG;
+   opaco => JPEG (mucho más liviano). En pantalla y en el PDF van pequeños, no se nota. */
+function _v473ShrinkDataUrl(dataUrl, maxDim, jpegQ){
+  return new Promise(function(resolve){
+    try {
+      const im = new Image();
+      im.onload = function(){
+        try {
+          let w = im.naturalWidth || im.width, h = im.naturalHeight || im.height;
+          if (!w || !h){ resolve(dataUrl); return; }
+          const scale = Math.min(1, maxDim / Math.max(w, h));
+          const nw = Math.max(1, Math.round(w * scale)), nh = Math.max(1, Math.round(h * scale));
+          const cv = document.createElement('canvas');
+          cv.width = nw; cv.height = nh;
+          const ctx = cv.getContext('2d');
+          ctx.drawImage(im, 0, 0, nw, nh);
+          let hasAlpha = false;
+          try {
+            const data = ctx.getImageData(0, 0, nw, nh).data;
+            for (let i = 3; i < data.length; i += 4){ if (data[i] < 250){ hasAlpha = true; break; } }
+          } catch(e){ hasAlpha = true; } // si falla, conservador: PNG
+          const out = hasAlpha ? cv.toDataURL('image/png') : cv.toDataURL('image/jpeg', jpegQ);
+          resolve((out && out.length < dataUrl.length) ? out : dataUrl);
+        } catch(e){ resolve(dataUrl); }
+      };
+      im.onerror = function(){ resolve(dataUrl); };
+      im.src = dataUrl;
+    } catch(e){ resolve(dataUrl); }
+  });
+}
+async function _v473OptimizarLogos(){
+  let freed = 0, count = 0;
+  for (const p of (state.projects || [])){
+    const lu = p.logoUrl;
+    if (typeof lu !== 'string' || lu.slice(0,5) !== 'data:') continue;
+    const beforeLen = lu.length;
+    try {
+      const small = await _v473ShrinkDataUrl(lu, 200, 0.78);
+      if (small && small.length < beforeLen){ p.logoUrl = small; freed += (beforeLen - small.length); count++; }
+    } catch(e){ console.error('v473 logo', e); }
+  }
+  return { count: count, freedKB: Math.round(freed / 1024) };
+}
 window.v472HacerEspacio = async function(){
  const LIMIT = 1048576;
  const sz = o => { try { return new Blob([JSON.stringify(o)]).size; } catch(e){ return 0; } };
@@ -8292,6 +8337,7 @@ window.v472HacerEspacio = async function(){
     bodyHTML:'<div style="font-size:13px;line-height:1.6;color:#0F172A">'
       +'Tamaño actual: <strong>'+(before/1024).toFixed(1)+' KB</strong> de 1024 KB (límite de la nube).<br><br>'
       +'Voy a liberar espacio <strong>sin borrar nada importante</strong>:<br>'
+      +'• Optimizar (achicar) los logos de los proyectos sin perderlos.<br>'
       +'• Subir las fotos a la nube (Storage) y sacarlas del documento.<br>'
       +'• Quitar campos vacíos/nulos de los registros (basura que ocupa lugar).<br>'
       +'• Recortar el historial de actividad a las últimas 60 acciones.<br><br>'
@@ -8301,6 +8347,11 @@ window.v472HacerEspacio = async function(){
   });
   if (!okGo) return;
   showToast('LIBERANDO ESPACIO... NO CIERRES LA APP', '');
+
+  // 0) Optimizar logos base64 de los proyectos (siguen base64, solo más livianos)
+  let logos = { count:0, freedKB:0 };
+  try { logos = await _v473OptimizarLogos(); }
+  catch(e){ console.error('v472 logos:', e); }
 
   // 1) Fotos base64 -> Storage (las saca del documento)
   let fotos = { migrated:0, errors:0 };
@@ -8333,7 +8384,7 @@ window.v472HacerEspacio = async function(){
     + '<div style="padding:10px 12px;border-radius:8px;margin-bottom:10px;'+(bajoLimite?'background:#ECFDF5;border:1px solid #6EE7B7;color:#065F46':'background:#FEF2F2;border:1px solid #FECACA;color:#991B1B')+'">'
     +   '<strong>'+(bajoLimite?'DESTAPADO':'TODAVÍA ARRIBA DEL LÍMITE')+'</strong><br>'
     +   'Antes: '+(before/1024).toFixed(1)+' KB · Ahora: <strong>'+(after/1024).toFixed(1)+' KB</strong> / 1024 KB<br>'
-    +   'Liberado: '+(freed/1024).toFixed(1)+' KB · Fotos subidas: '+(fotos.migrated||0)
+    +   'Liberado: '+(freed/1024).toFixed(1)+' KB · Logos optimizados: '+(logos.count||0)+' (−'+(logos.freedKB||0)+' KB) · Fotos subidas: '+(fotos.migrated||0)
     + '</div>'
     + (bajoLimite
         ? '<div>Ya cabe en la nube. <strong>Recargá la página</strong> (Ctrl+R) y volvé a probar guardar tus planillas: ya debería guardar todo.</div>'

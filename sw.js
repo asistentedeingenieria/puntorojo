@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v472-hacer-espacio-destapar-nube-1MB-sin-perdida';
+const CACHE_VERSION = 'v473-optimizar-logos-base64-en-hacer-espacio';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
