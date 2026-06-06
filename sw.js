@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v486-crema-frio-profesional-kpis-pestanas';
+const CACHE_VERSION = 'v487-bloquear-autofill-chrome-en-toda-la-app';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
