@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v480-pagos-etapa-estilo-minimalista-claro';
+const CACHE_VERSION = 'v481-pagos-etapa-header-claro-celdas-refinadas';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
