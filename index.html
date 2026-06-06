@@ -2863,7 +2863,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v494</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v495</span>
   </footer>
 
 </div>
@@ -7764,7 +7764,7 @@ const CloudSync = {
   enabled: false,
   ref: null,                 // Doc reference: /appState/main (legacy / respaldo, ya no se reescribe)
   coreRef: null,             // v491: /appState/core — globals livianos + lista de proyectos
-  _projHashes: null,         // v491: hash por proyecto para no reescribir los que no cambian
+  _projHashes: null,         // v491: hash por proyecto para no reescribir los que no cambian (se recalcula en applyRemote)
   unsubscribe: null,         // Para cancelar el listener al cerrar sesión
   pendingWrite: null,        // setTimeout handle para debounce
   pendingRemoteData: null,   // Datos remotos esperando que el usuario termine de editar
@@ -7925,9 +7925,13 @@ const CloudSync = {
     if (!core) return null;
     const ids = Array.isArray(core._projectIds) ? core._projectIds.slice() : [];
     Object.keys(projById).forEach(id => { if (ids.indexOf(id) === -1) ids.push(id); });
-    const projects = []; const newHashes = {};
-    ids.forEach(id => { if (projById[id]) { projects.push(projById[id]); newHashes[id] = JSON.stringify(projById[id]); } });
-    this._projHashes = newHashes;
+    const projects = [];
+    ids.forEach(id => { if (projById[id]) { projects.push(projById[id]); } });
+    // v495: el path de DESCARGA (_assembleFromSnap) NO toca this._projHashes. Antes (v491) lo
+    // reescribia en CADA snapshot, incluso cuando applyRemote NO aplicaba el remoto (usuario
+    // editando / escritura local pendiente), y el siguiente uploadCurrent borraba de Firestore
+    // proyectos validos (perdida de proyecto ajeno). Los hashes se recalculan en applyRemote
+    // SOLO al aplicar de verdad, derivados del remoteData aplicado (atomico, sin slot global).
     const data = Object.assign({}, core);
     delete data._projectIds; delete data._lastUpdate; delete data._migratedFrom;
     data.projects = projects;
@@ -8007,6 +8011,14 @@ const CloudSync = {
     } catch(e) { console.warn('ensureDataV9 falló en applyRemote:', e); }
 
     state = merged;
+    // v495: recalcular _projHashes desde el remoteData REALMENTE aplicado en esta llamada.
+    // Solo se llega aqui tras los early-return (pendingWrite / isUserBusy) — es decir, solo
+    // cuando el remoto se aplica de verdad. Como state===merged proviene de remoteData, el
+    // set de ids de _projHashes SIEMPRE coincide con el state aplicado, asi que uploadCurrent
+    // nunca borra un proyecto que sigue existiendo (cierra el bug v491 y su residual del slot
+    // global, que podia divergir si flushPendingRender aplicaba datos viejos). Se derivan de
+    // remoteData.projects (pre-ensureDataV9) para que needsResync siga resubiendo el limpio.
+    { const _nh = {}; (remoteData.projects || []).forEach(pp => { if (pp && pp.id) _nh[pp.id] = JSON.stringify(pp); }); this._projHashes = _nh; }
     // v235: restaurar el proyecto activo LOCAL del usuario (no compartir entre sesiones).
     if (localActivePID && (state.projects||[]).some(pp => pp.id === localActivePID)) {
       state.activeProjectId = localActivePID;
