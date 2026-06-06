@@ -2847,7 +2847,7 @@ table{max-width:100%}
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
     <span id="lastUpdateFooter">ÚLTIMA ACTUALIZACIÓN: —</span>
-    <span style="opacity:.5;margin-left:10px;font-size:9px">v497</span>
+    <span style="opacity:.5;margin-left:10px;font-size:9px">v498</span>
   </footer>
 
 </div>
@@ -7895,22 +7895,35 @@ const CloudSync = {
       }
     } catch(e){}
     if (!this._projHashes) this._projHashes = {};
-    const batch = db.batch();
-    batch.set(this.coreRef, data);                    // core siempre (es chico)
+    // v498: armar la lista de operaciones y trocear en lotes <=450 (Firestore rechaza batches >500).
+    // Los hashes/borrados se aplican a _projHashes SOLO tras el commit exitoso de SU lote: si un
+    // commit falla (red, limite), el cambio se reintenta en la proxima subida (no queda un hash
+    // "ya subido" para un proyecto que en realidad no se subio). El core va siempre primero.
+    const ops = [];
+    ops.push({ kind: 'set', ref: this.coreRef, data: data });   // core siempre (es chico)
     const seen = {};
     projects.forEach(p => {
       if (!p || !p.id) return;
       seen[p.id] = true;
       const json = JSON.stringify(p);
-      if (this._projHashes[p.id] === json) return;    // sin cambios -> no reescribir
-      this._projHashes[p.id] = json;
-      batch.set(db.collection('appState').doc('proj_' + p.id), { p: p, _lastUpdate: stamp });
+      if (this._projHashes[p.id] === json) return;              // sin cambios -> no reescribir
+      ops.push({ kind: 'set', ref: db.collection('appState').doc('proj_' + p.id), data: { p: p, _lastUpdate: stamp }, _setId: p.id, _setJson: json });
     });
-    Object.keys(this._projHashes).forEach(id => {     // borrar docs de proyectos eliminados
-      if (!seen[id]) { batch.delete(db.collection('appState').doc('proj_' + id)); delete this._projHashes[id]; }
+    Object.keys(this._projHashes).forEach(id => {               // borrar docs de proyectos eliminados
+      if (!seen[id]) ops.push({ kind: 'del', ref: db.collection('appState').doc('proj_' + id), _delId: id });
     });
+    const CHUNK = 450;
+    for (let i = 0; i < ops.length; i += CHUNK) {
+      const slice = ops.slice(i, i + CHUNK);
+      const batch = db.batch();
+      slice.forEach(op => { if (op.kind === 'del') batch.delete(op.ref); else batch.set(op.ref, op.data); });
+      await batch.commit();
+      slice.forEach(op => {                                     // aplicar _projHashes SOLO tras confirmar este lote
+        if (op._setId) this._projHashes[op._setId] = op._setJson;
+        if (op._delId) delete this._projHashes[op._delId];
+      });
+    }
     this.lastUploadAt = Date.now();
-    await batch.commit();
   },
 
   /* v491: reensambla el state (forma del doc unico viejo) desde core + proj_*. */
@@ -8336,186 +8349,6 @@ async function migrateBase64PhotosToStorage(){
   return { migrated, errors };
 }
 
-/* v422: acción manual para LIBERAR ESPACIO del cache local. Sube las fotos
-   viejas (base64) a la nube y deja solo el link. La migración ya corre sola al
-   iniciar sesión, pero este botón le da control al usuario para hacerlo cuando
-   quiera y ver bajar la barra de "Datos locales". No borra nada: las fotos
-   quedan a salvo en la nube. */
-window.liberarEspacioLocal = async function(){
-  try {
-    if (typeof firebase === 'undefined' || !firebase.storage){
-      showToast('SIN CONEXIÓN A LA NUBE · INTENTÁ CON INTERNET', 'red');
-      return;
-    }
-    showToast('REVISANDO FOTOS PARA SUBIR A LA NUBE...', '');
-    const r = await migrateBase64PhotosToStorage();
-    try { updateStorageIndicator(); } catch(e){}
-    // migrateBase64PhotosToStorage ya muestra su propio toast si migró o falló.
-    if (r && r.migrated === 0 && r.errors === 0){
-      showToast('TODO LIMPIO · NO HAY FOTOS PENDIENTES DE SUBIR', 'green');
-    }
-  } catch(e){
-    console.error('liberarEspacioLocal:', e);
-    showToast('NO SE PUDO LIBERAR ESPACIO · INTENTÁ DE NUEVO', 'red');
-  }
-};
-
-/* ════════════ v472: HACER ESPACIO EN LA NUBE (destapar el límite de 1 MB) ════════════
-   Todo el estado vive en UN documento Firestore (appState/main) con tope DURO de
-   1 MB. Si se pasa, NINGUNA escritura a la nube funciona (los cambios se guardan
-   local pero no suben, y al recargar desaparecen). Esta herramienta libera espacio
-   SIN perder data real:
-     1) Sube las fotos base64 a Storage (las saca del documento; quedan en la nube).
-     2) Limpieza sin pérdida: quita campos vacíos/nulos ("", null, undefined) de TODOS
-        los registros. NO toca números (0), banderas (false) ni data real.
-     3) Recorta el historial de actividad a 60 (es de auditoría, no financiero).
-   Luego guarda y sube. Reporta el tamaño final y si quedó bajo el límite. */
-function _v472Clean(v){
-  if (Array.isArray(v)) return v.map(_v472Clean);
-  if (v && typeof v === 'object'){
-    const out = {};
-    for (const k in v){
-      if (!Object.prototype.hasOwnProperty.call(v, k)) continue;
-      const cv = v[k];
-      if (cv === null || cv === undefined || cv === '') continue; // basura: ocupa espacio, no aporta
-      out[k] = _v472Clean(cv);
-    }
-    return out;
-  }
-  return v;
-}
-/* v473: reduce el peso de un logo base64 SIN cambiarlo a URL (sigue siendo base64
-   para que el PDF lo siga aceptando: _addProjLogoToPDF usa doc.addImage con el
-   dataURL). Lo redibuja a menor resolución (máx ~200px). Con transparencia => PNG;
-   opaco => JPEG (mucho más liviano). En pantalla y en el PDF van pequeños, no se nota. */
-function _v473ShrinkDataUrl(dataUrl, maxDim, jpegQ){
-  return new Promise(function(resolve){
-    try {
-      const im = new Image();
-      im.onload = function(){
-        try {
-          let w = im.naturalWidth || im.width, h = im.naturalHeight || im.height;
-          if (!w || !h){ resolve(dataUrl); return; }
-          const scale = Math.min(1, maxDim / Math.max(w, h));
-          const nw = Math.max(1, Math.round(w * scale)), nh = Math.max(1, Math.round(h * scale));
-          const cv = document.createElement('canvas');
-          cv.width = nw; cv.height = nh;
-          const ctx = cv.getContext('2d');
-          ctx.drawImage(im, 0, 0, nw, nh);
-          let hasAlpha = false;
-          try {
-            const data = ctx.getImageData(0, 0, nw, nh).data;
-            for (let i = 3; i < data.length; i += 4){ if (data[i] < 250){ hasAlpha = true; break; } }
-          } catch(e){ hasAlpha = true; } // si falla, conservador: PNG
-          const out = hasAlpha ? cv.toDataURL('image/png') : cv.toDataURL('image/jpeg', jpegQ);
-          resolve((out && out.length < dataUrl.length) ? out : dataUrl);
-        } catch(e){ resolve(dataUrl); }
-      };
-      im.onerror = function(){ resolve(dataUrl); };
-      im.src = dataUrl;
-    } catch(e){ resolve(dataUrl); }
-  });
-}
-async function _v473OptimizarLogos(){
-  let freed = 0, count = 0;
-  for (const p of (state.projects || [])){
-    const lu = p.logoUrl;
-    if (typeof lu !== 'string' || lu.slice(0,5) !== 'data:') continue;
-    const beforeLen = lu.length;
-    try {
-      const small = await _v473ShrinkDataUrl(lu, 200, 0.78);
-      if (small && small.length < beforeLen){ p.logoUrl = small; freed += (beforeLen - small.length); count++; }
-    } catch(e){ console.error('v473 logo', e); }
-  }
-  return { count: count, freedKB: Math.round(freed / 1024) };
-}
-window.v472HacerEspacio = async function(){
- const LIMIT = 1048576;
- const sz = o => { try { return new Blob([JSON.stringify(o)]).size; } catch(e){ return 0; } };
- try {
-  const before = sz(state);
-  const okGo = await window.prConfirm({
-    title:'HACER ESPACIO EN LA NUBE',
-    bodyHTML:'<div style="font-size:13px;line-height:1.6;color:#0F172A">'
-      +'Tamaño actual: <strong>'+(before/1024).toFixed(1)+' KB</strong> de 1024 KB (límite de la nube).<br><br>'
-      +'Voy a liberar espacio <strong>sin borrar nada importante</strong>:<br>'
-      +'• Optimizar (achicar) los logos de los proyectos sin perderlos.<br>'
-      +'• Subir las fotos a la nube (Storage) y sacarlas del documento.<br>'
-      +'• Quitar campos vacíos/nulos de los registros (basura que ocupa lugar).<br>'
-      +'• Recortar el historial de actividad a las últimas 60 acciones.<br><br>'
-      +'Tus <strong>planillas, pagos, pólizas y anticipos NO se tocan</strong>. ¿Procedo?'
-      +'</div>',
-    okText:'SÍ, HACER ESPACIO', cancelText:'CANCELAR'
-  });
-  if (!okGo) return;
-  showToast('LIBERANDO ESPACIO... NO CIERRES LA APP', '');
-
-  // 0) Optimizar logos base64 de los proyectos (siguen base64, solo más livianos)
-  let logos = { count:0, freedKB:0 };
-  try { logos = await _v473OptimizarLogos(); }
-  catch(e){ console.error('v472 logos:', e); }
-
-  // 1) Fotos base64 -> Storage (las saca del documento)
-  let fotos = { migrated:0, errors:0 };
-  try { if (typeof migrateBase64PhotosToStorage === 'function') fotos = await migrateBase64PhotosToStorage(); }
-  catch(e){ console.error('v472 fotos:', e); }
-
-  // 2) Limpieza sin pérdida (quitar vacíos/nulos) + 3) recorte de actividad
-  try {
-    if (Array.isArray(state.activity)) state.activity = _v472Clean(state.activity).slice(0, 60);
-    if (Array.isArray(state.polizasGlobales))   state.polizasGlobales   = _v472Clean(state.polizasGlobales);
-    if (Array.isArray(state.anticiposGlobales)) state.anticiposGlobales = _v472Clean(state.anticiposGlobales);
-    (state.projects || []).forEach(function(p){
-      const cp = _v472Clean(p);
-      for (const k in p){ if (Object.prototype.hasOwnProperty.call(p,k) && !(k in cp)) delete p[k]; }
-      Object.assign(p, cp);
-    });
-  } catch(e){ console.error('v472 limpieza:', e); }
-
-  // 4) v474: quitar campo MUERTO generadoPorNombre de cada pago. Verificado: se
-  //    escribe en 6 sitios pero NUNCA se lee (el scoping y render usan el email
-  //    generadoPor + generadoPorUsername). Denormalizado redundante. Lossless.
-  // 5) v475: quitar detalle de pagos ETAPA. Solo se lee en 2 sitios; el render
-  //    (L22691) ahora lo RECONSTRUYE desde towerName/aptoName/stageIdx, y el export
-  //    (L34397) usa aptoName (siempre presente en ETAPA). Al no guardarse, no re-infla.
-  let deadFields = 0;
-  try {
-    (state.projects || []).forEach(function(p){
-      const pagos = p && p.planilla && p.planilla.pagos;
-      if (Array.isArray(pagos)) pagos.forEach(function(pg){
-        if (!pg) return;
-        if (Object.prototype.hasOwnProperty.call(pg, 'generadoPorNombre')){ delete pg.generadoPorNombre; deadFields++; }
-        if (pg.tipo === 'ETAPA' && Object.prototype.hasOwnProperty.call(pg, 'detalle')){ delete pg.detalle; deadFields++; }
-      });
-    });
-  } catch(e){ console.error('v474/v475 campos muertos:', e); }
-
-  const after = sz(state);
-  const freed = before - after;
-  const bajoLimite = after < LIMIT;
-
-  // Guardar local + intentar subir a la nube
-  try { saveState(); } catch(e){ console.error('v472 saveState:', e); }
-  try {
-    if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) await CloudSync.forceUploadNow();
-  } catch(e){ console.error('v472 upload:', e); }
-
-  const html = '<div style="font-size:13px;line-height:1.7;color:#0F172A">'
-    + '<div style="padding:10px 12px;border-radius:8px;margin-bottom:10px;'+(bajoLimite?'background:#ECFDF5;border:1px solid #6EE7B7;color:#065F46':'background:#FEF2F2;border:1px solid #FECACA;color:#991B1B')+'">'
-    +   '<strong>'+(bajoLimite?'DESTAPADO':'TODAVÍA ARRIBA DEL LÍMITE')+'</strong><br>'
-    +   'Antes: '+(before/1024).toFixed(1)+' KB · Ahora: <strong>'+(after/1024).toFixed(1)+' KB</strong> / 1024 KB<br>'
-    +   'Liberado: '+(freed/1024).toFixed(1)+' KB · Logos optimizados: '+(logos.count||0)+' (−'+(logos.freedKB||0)+' KB) · Fotos subidas: '+(fotos.migrated||0)+' · Campos muertos quitados: '+deadFields
-    + '</div>'
-    + (bajoLimite
-        ? '<div>Ya cabe en la nube. <strong>Recargá la página</strong> (Ctrl+R) y volvé a probar guardar tus planillas: ya debería guardar todo.</div>'
-        : '<div>Sigue por encima de 1024 KB. Hace falta recortar más data (un proyecto que no uses, o planillas viejas archivadas). Avisame y armo el recorte exacto, o pasamos al arreglo de fondo (partir los datos en varios documentos).</div>')
-    + '</div>';
-  await window.prConfirm({ title:'RESULTADO', bodyHTML: html, okText:'CERRAR', cancelText:'', wide:true });
- } catch(err){
-  console.error('v472HacerEspacio:', err);
-  try { showToast('ERROR: '+(err && err.message ? err.message : err), 'red'); } catch(e){}
- }
-};
 
 /* ════════════ v456: LIBERAR ETAPAS MARCADAS A MANO (lista del usuario) ════════════
    Herramienta de admin, UNA SOLA VEZ. El usuario marcó a mano (en otra sesión)
@@ -9019,69 +8852,6 @@ if (!window._solMovDelegateInstalled){
   window._solMovDelegateInstalled = true;
 }
 
-/* ════════════ v471: DIAGNÓSTICO DE TAMAÑO DE DATOS (NUBE) ════════════
-   Firestore tiene un límite DURO de 1 MB (1,048,576 bytes) por documento, y
-   toda la app guarda el estado en UN solo documento (appState/main). Cuando se
-   pasa de 1 MB, TODA escritura a la nube falla y los cambios no se guardan.
-   Esta herramienta (solo lectura) mide qué pieza pesa más para saber qué
-   recortar. No borra nada. */
-window.v471VerTamanoDatos = async function(){
- try {
-  if (typeof can !== 'function' || !can('users.manage')) { showToast('SOLO ADMIN', 'red'); return; }
-  const _s = (typeof state !== 'undefined') ? state : window.state;
-  if (!_s) { showToast('SIN STATE', 'red'); return; }
-  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
-  const sz = o => { try { return new Blob([JSON.stringify(o)]).size; } catch(e){ try { return (JSON.stringify(o)||'').length; } catch(_){ return 0; } } };
-  const fmt = n => n >= 1024 ? (n/1024).toFixed(1)+' KB' : n+' B';
-  const LIMIT = 1048576;
-  const total = sz(_s);
-
-  // base64 fotos embebidas
-  let full = '';
-  try { full = JSON.stringify(_s); } catch(e){ full = ''; }
-  let b64bytes = 0, b64count = 0;
-  try { const re = /data:image\/[a-zA-Z+]+;base64,[^"\\]*/g; let m; while ((m = re.exec(full))){ b64bytes += m[0].length; b64count++; } } catch(e){}
-
-  const pieces = [];
-  pieces.push(['Actividad (historial)', sz(_s.activity||[])]);
-  pieces.push(['Pólizas (catálogo)', sz(_s.polizasGlobales||[])]);
-  pieces.push(['Anticipos (catálogo)', sz(_s.anticiposGlobales||[])]);
-  (_s.projects||[]).forEach(pr => {
-    const pl = pr.planilla || {};
-    const pagosSz = sz(pl.pagos||[]);
-    const armSz = sz(pl.planillasArmadas||[]);
-    const towersSz = sz(pr.towers||[]);
-    const nm = pr.name || pr.id || 'proyecto';
-    pieces.push(['['+nm+'] pagos de etapa', pagosSz]);
-    pieces.push(['['+nm+'] planillas armadas', armSz]);
-    pieces.push(['['+nm+'] torres/aptos', towersSz]);
-    pieces.push(['['+nm+'] resto (cobro/avance/materiales/fotos)', Math.max(0, sz(pr) - pagosSz - armSz - towersSz)]);
-  });
-  pieces.sort((a,b)=>b[1]-a[1]);
-
-  const overBy = total - LIMIT;
-  let html = '<div style="font-size:12px;line-height:1.6">';
-  html += '<div style="padding:10px;border-radius:8px;background:'+(total>LIMIT?'#FEF2F2':'#ECFDF5')+';border:1px solid '+(total>LIMIT?'#FCA5A5':'#6EE7B7')+';margin-bottom:12px">';
-  html += '<div style="font-size:9px;letter-spacing:1px;font-weight:700;color:'+(total>LIMIT?'#991B1B':'#065F46')+'">TAMAÑO TOTAL EN LA NUBE</div>';
-  html += '<div style="font-size:20px;font-weight:800;color:'+(total>LIMIT?'#C62828':'#065F46')+'">'+fmt(total)+' / 1024.0 KB (límite)</div>';
-  html += total>LIMIT
-    ? '<div style="font-size:11px;color:#991B1B;margin-top:4px;font-weight:700">⚠ PASADO POR '+fmt(overBy)+' — por eso NO se guarda nada en la nube. Hay que bajar de 1024 KB.</div>'
-    : '<div style="font-size:11px;color:#065F46;margin-top:4px">OK · margen libre '+fmt(LIMIT-total)+'</div>';
-  html += '</div>';
-  if (b64count > 0){
-    html += '<div style="padding:8px 10px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:6px;color:#9A3412;font-size:11px;margin-bottom:10px"><strong>'+b64count+' foto(s) en base64</strong> ocupando ≈ <strong>'+fmt(b64bytes)+'</strong>. Apretá «Liberar espacio» (3 puntitos) para subirlas a la nube y sacarlas del documento.</div>';
-  }
-  html += '<div style="font-weight:700;font-size:11px;color:#475569;margin:6px 0 4px;letter-spacing:.5px">QUÉ PESA MÁS:</div>';
-  html += '<div style="border:1px solid #E2E8F0;border-radius:6px;max-height:260px;overflow:auto">';
-  pieces.forEach((x,i) => { if (x[1] <= 0) return; const pct = total>0?Math.round(x[1]/total*100):0; html += '<div style="display:grid;grid-template-columns:1fr auto auto;gap:10px;padding:6px 10px;'+(i%2?'background:#FAFAFA':'')+';font-size:10.5px;align-items:center"><span style="color:#0F172A">'+esc(x[0])+'</span><span style="color:#64748B">'+pct+'%</span><span style="font-weight:700;color:#0F172A;min-width:70px;text-align:right">'+fmt(x[1])+'</span></div>'; });
-  html += '</div></div>';
-
-  await window.prConfirm({ title:'TAMAÑO DE DATOS EN LA NUBE', bodyHTML: html, okText:'CERRAR', cancelText:'', wide:true });
- } catch(err){
-  console.error('v471VerTamanoDatos:', err);
-  try { showToast('ERROR: '+(err && err.message ? err.message : err), 'red'); } catch(e){}
- }
-};
 
 /* Estimar uso de localStorage. Navegadores típicamente dan 5-10 MB por origen */
 const STORAGE_LIMIT_BYTES = 5 * 1024 * 1024; // 5MB conservador
