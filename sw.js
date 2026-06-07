@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v509-gerente-paga-directo-bloqueo-silencioso';
+const CACHE_VERSION = 'v510-apto-header-consistente-y-etapas-full-width';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
