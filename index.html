@@ -19493,6 +19493,63 @@ function torreSheetToTowerId(sheetName, towers){
   });
   return byName ? byName.id : null;
 }
+function parseRecetaWorkbook(sheets, towers){
+  const ETAPAS = ['1RA ETAPA','2DA ETAPA','3RA ETAPA','4TA ETAPA'];
+  const recetaV2 = { version:2, etapas: ETAPAS.slice(), niveles:{} };
+  const precios = {};
+  const avisos = [];
+  const etapaIdxDe = txt => {
+    const s = String(txt||'').toUpperCase().replace(/\s+/g,' ').trim();
+    if (/^1\s*RA/.test(s)) return 0;
+    if (/^2\s*(DA|NDA)/.test(s)) return 1;
+    if (/^3\s*(RA|ERA)/.test(s)) return 2;
+    if (/^4\s*TA/.test(s)) return 3;
+    return -1;
+  };
+  const ensureNivel = lid => { if (!recetaV2.niveles[lid]) recetaV2.niveles[lid] = [[],[],[],[]]; return recetaV2.niveles[lid]; };
+  const nivelExiste = (towers, lid) => (towers||[]).some(t => (t.levels||[]).some(l => l.id === lid));
+  Object.keys(sheets || {}).forEach(name => {
+    const aoa = sheets[name] || [];
+    if (/^PRECIOS$/i.test(name)){
+      for (let i = 1; i < aoa.length; i++){
+        const row = aoa[i] || [];
+        const prodRaw = String(row[0]||'').trim();
+        if (!prodRaw) continue;
+        const prod = normProducto(prodRaw);
+        precios[prod] = { proveedor: String(row[2]||'').trim(), precio: Number(row[3])||0, unidad: String(row[1]||'U').trim()||'U', proveedorId:'' };
+      }
+      return;
+    }
+    if (!/^T\d+$/i.test(String(name).trim())) return;
+    const towerId = torreSheetToTowerId(name, towers);
+    if (!towerId){ avisos.push('Hoja "'+name+'": no existe esa torre en el proyecto; se ignoró.'); return; }
+    const header = aoa[0] || [];
+    const nivelCols = [];
+    header.forEach((h, c) => { const mm = String(h||'').toUpperCase().match(/NIVEL\s*(\d+)/); if (mm) nivelCols.push({ col:c, nivel: parseInt(mm[1],10) }); });
+    const nivelesFaltantes = {};
+    for (let i = 1; i < aoa.length; i++){
+      const row = aoa[i] || [];
+      const eIdx = etapaIdxDe(row[0]);
+      const material = String(row[1]||'').trim();
+      const unidad = String(row[2]||'U').trim() || 'U';
+      if (eIdx < 0 || !material) continue;
+      nivelCols.forEach(nc => {
+        const val = Number(row[nc.col]);
+        if (!val || val <= 0) return;
+        const lid = towerId + '-n' + nc.nivel;
+        if (!nivelExiste(towers, lid)){ nivelesFaltantes[lid] = true; return; }
+        ensureNivel(lid)[eIdx].push({ m: material, u: unidad, c: val });
+        const prod = normProducto(material);
+        if (!precios[prod]) precios[prod] = { proveedor:'', precio:0, unidad, proveedorId:'' };
+      });
+    }
+    const falt = Object.keys(nivelesFaltantes);
+    if (falt.length) avisos.push('Torre '+name+': niveles sin equivalente en el proyecto (ignorados): '+falt.join(', '));
+  });
+  const sinPrecio = Object.keys(precios).filter(k => !(precios[k].precio > 0));
+  if (sinPrecio.length) avisos.push(sinPrecio.length+' producto(s) sin precio (se pueden llenar en el catálogo).');
+  return { recetaV2, precios, avisos };
+}
 // ===RECETA-PURE-END===
 </script>
 <script>
