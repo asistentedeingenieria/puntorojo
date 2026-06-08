@@ -13686,6 +13686,7 @@ function renderMateriales(){
   // RECETA — al entrar a la vista de materiales, la receta es el tab default,
   // pero su contenido no se renderiza solo. Aseguramos que se renderice.
   try { if (typeof renderReceta === 'function') renderReceta(); } catch(e) { console.warn('renderReceta failed:', e); }
+  try { if (typeof renderRecetaV2 === 'function') renderRecetaV2(); } catch(e) { console.warn('renderRecetaV2 failed:', e); }
 
   // v452: badge sin alerta de BAJO MÍNIMO
   document.getElementById('badgeMat').textContent = items.length || '—';
@@ -19598,6 +19599,87 @@ function aplicarOperacionReceta(recetaV2, precios, op){
 // ===RECETA-PURE-END===
 </script>
 <script>
+let recetaV2TorreSel = null, recetaV2NivelSel = null;
+window.setRecetaV2Sel = function(torreId, levelId){ recetaV2TorreSel = torreId; recetaV2NivelSel = levelId; renderRecetaV2(); };
+function _recetaV2LegacyEls(){
+  const card = document.getElementById('mat-receta');
+  const els = [document.getElementById('recetaStageTabs'), document.getElementById('recetaContent')];
+  if (card){
+    const hd = card.querySelector('.card-hd'); if (hd) els.push(hd);
+    const intro = card.querySelector('.receta-intro'); if (intro) els.push(intro);
+  }
+  const pedir = document.getElementById('recetaPedirContent');
+  if (pedir){ const pc = pedir.closest('.card'); if (pc) els.push(pc); }
+  return els.filter(Boolean);
+}
+window.renderRecetaV2 = function(){
+  const p = activeProj();
+  const wrap = document.getElementById('recetaV2Wrap');
+  const cont = document.getElementById('recetaV2Content');
+  if (!wrap || !cont) return;
+  const rv = p.materiales && p.materiales.recetaV2;
+  const legacyEls = _recetaV2LegacyEls();
+  const pend = (p.solicitudesReceta||[]).filter(s => s.estado==='PENDIENTE').length;
+  const bSol = document.getElementById('btnVerSolReceta');
+  if (bSol){ bSol.style.display = pend>0 ? '' : 'none'; bSol.textContent = 'SOLICITUDES ('+pend+')'; }
+  if (!rv || !rv.niveles || !Object.keys(rv.niveles).length){
+    legacyEls.forEach(el => { el.style.display=''; });
+    cont.innerHTML = '<div style="padding:18px;text-align:center;background:#F8FAFC;border:1px dashed #CBD5E1;border-radius:8px;color:#64748B;font-size:12px">No hay receta cargada. Usá <strong>CARGAR RECETA (EXCEL)</strong> con la plantilla del proyecto.</div>';
+    return;
+  }
+  legacyEls.forEach(el => { el.style.display='none'; });
+  const esc = s => String(s==null?'':s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  const money = n => 'Q' + (Number(n)||0).toLocaleString('es-GT',{minimumFractionDigits:2, maximumFractionDigits:2});
+  const precios = p.materiales.precios || {};
+  const torres = (p.towers||[]).filter(t => (t.levels||[]).some(l => rv.niveles[l.id]));
+  if (!recetaV2TorreSel || !torres.some(t=>t.id===recetaV2TorreSel)) recetaV2TorreSel = torres[0] ? torres[0].id : null;
+  const torre = torres.find(t => t.id===recetaV2TorreSel);
+  const niveles = torre ? (torre.levels||[]).filter(l => rv.niveles[l.id]) : [];
+  if (!recetaV2NivelSel || !niveles.some(l=>l.id===recetaV2NivelSel)) recetaV2NivelSel = niveles[0] ? niveles[0].id : null;
+  const chips = arr => arr.map(it => '<button class="btn ghost sm" style="font-size:11px;'+(it.active?'background:var(--cafe);color:#fff;border-color:var(--cafe)':'')+'" onclick="'+it.onclick+'">'+esc(it.label)+'</button>').join(' ');
+  let html = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">'
+    + chips(torres.map(t => ({ label:t.name, active:t.id===recetaV2TorreSel, onclick:"setRecetaV2Sel('"+t.id+"', null)" }))) + '</div>';
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">'
+    + chips(niveles.map(l => ({ label:l.name, active:l.id===recetaV2NivelSel, onclick:"setRecetaV2Sel('"+recetaV2TorreSel+"','"+l.id+"')" }))) + '</div>';
+  const puedeEditar = can('receta.edit') || can('users.manage');
+  const fills = ['#FDE9E7','#E7F0FD','#E9F7E9','#FBF4E1'];
+  const etapas = rv.niveles[recetaV2NivelSel] || [[],[],[],[]];
+  let totalNivel = 0;
+  etapas.forEach((lineas, ei) => {
+    let totalEtapa = 0;
+    html += '<div style="border:1px solid #E5E7EB;border-radius:8px;margin-bottom:12px;overflow:hidden">';
+    html += '<div style="padding:8px 12px;font-size:11px;font-weight:700;letter-spacing:.5px;background:'+fills[ei]+';color:#374151">'+esc(rv.etapas[ei])
+      + (puedeEditar ? '<button class="btn ghost sm" style="float:right;font-size:10px;padding:2px 8px" onclick="recetaV2Op(\''+recetaV2NivelSel+'\','+ei+',\'agregar\')">+ AGREGAR</button>' : '')
+      + '</div>';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="color:#6B7280;font-size:10px"><th style="text-align:left;padding:6px 12px">MATERIAL</th><th style="padding:6px 6px">U</th><th style="text-align:right;padding:6px 6px">CANT</th><th style="text-align:right;padding:6px 6px">P.U.</th><th style="text-align:right;padding:6px 12px">SUBTOTAL</th><th></th></tr></thead><tbody>';
+    if (!lineas.length) html += '<tr><td colspan="6" style="padding:10px 12px;color:#9CA3AF">— sin materiales —</td></tr>';
+    lineas.forEach(l => {
+      const prod = normProducto(l.m);
+      const pu = precios[prod] && precios[prod].precio ? precios[prod].precio : 0;
+      const sub = pu * (Number(l.c)||0);
+      totalEtapa += sub;
+      const accion = puedeEditar ? 'recetaV2Op' : 'recetaV2Solicitar';
+      const matArg = esc(l.m).replace(/'/g,"\\'");
+      html += '<tr style="border-top:1px solid #F1F5F9">'
+        + '<td style="padding:6px 12px">'+esc(l.m)+'</td>'
+        + '<td style="text-align:center;color:#6B7280">'+esc(l.u)+'</td>'
+        + '<td style="text-align:right;font-variant-numeric:tabular-nums">'+(Number(l.c)||0).toLocaleString('es-GT')+'</td>'
+        + '<td style="text-align:right;color:'+(pu?'#374151':'#D1D5DB')+'">'+(pu?money(pu):'—')+'</td>'
+        + '<td style="text-align:right;font-variant-numeric:tabular-nums">'+(pu?money(sub):'—')+'</td>'
+        + '<td style="text-align:right;white-space:nowrap;padding-right:8px">'
+          + '<button class="btn-icon" title="Editar cantidad" onclick="'+accion+'(\''+recetaV2NivelSel+'\','+ei+',\'cantidad\',\''+matArg+'\')">✎</button>'
+          + '<button class="btn-icon danger" title="Quitar" onclick="'+accion+'(\''+recetaV2NivelSel+'\','+ei+',\'quitar\',\''+matArg+'\')">✕</button>'
+        + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    html += '<div style="text-align:right;padding:6px 12px;font-size:11px;color:#6B7280;background:#FAFAFA">Subtotal etapa: <strong style="color:#374151">'+money(totalEtapa)+'</strong></div>';
+    html += '</div>';
+    totalNivel += totalEtapa;
+  });
+  html += '<div style="text-align:right;font-size:13px;font-weight:700;color:var(--cafe);padding:6px 4px">TOTAL NIVEL: '+money(totalNivel)+'</div>';
+  cont.innerHTML = html;
+  if (typeof applyPermissions==='function') applyPermissions();
+};
 window.importarRecetaExcel = async function(ev){
   const file = ev && ev.target && ev.target.files && ev.target.files[0];
   if (ev && ev.target) ev.target.value = '';
