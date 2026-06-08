@@ -2725,6 +2725,17 @@ table{max-width:100%}
             <p style="margin-top:8px"><strong>O subí un PDF</strong> con la receta tabular del cliente (formato: TORRE X, NIVEL Y, columnas por apto, filas por material agrupadas en etapas). La app detecta TODOS los datos automáticamente y los carga aquí.</p>
           </div>
 
+<div id="recetaV2Wrap" style="margin-bottom:14px">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+    <div style="font-size:12px;font-weight:700;letter-spacing:.5px;color:var(--cafe)">RECETA DE MATERIAL</div>
+    <div style="display:flex;gap:8px">
+      <button class="btn ghost sm" id="btnVerSolReceta" onclick="verSolicitudesReceta()" style="display:none">SOLICITUDES (0)</button>
+      <button class="btn cafe sm" id="btnCargarReceta" data-perm="receta.edit" onclick="document.getElementById('inpRecetaExcel').click()">CARGAR RECETA (EXCEL)</button>
+    </div>
+  </div>
+  <input type="file" id="inpRecetaExcel" accept=".xlsx,.xls" style="display:none" onchange="importarRecetaExcel(event)">
+  <div id="recetaV2Content"></div>
+</div>
           <div class="receta-stage-tabs" id="recetaStageTabs"></div>
 
           <div id="recetaContent"></div>
@@ -19587,6 +19598,48 @@ function aplicarOperacionReceta(recetaV2, precios, op){
 // ===RECETA-PURE-END===
 </script>
 <script>
+window.importarRecetaExcel = async function(ev){
+  const file = ev && ev.target && ev.target.files && ev.target.files[0];
+  if (ev && ev.target) ev.target.value = '';
+  if (!file) return;
+  if (!(can('receta.edit') || can('users.manage'))) return showToast('SIN PERMISO PARA CARGAR RECETA','red');
+  if (typeof XLSX === 'undefined' || !XLSX.read) return showToast('NO SE PUDO LEER EL EXCEL (XLSX no disponible)','red');
+  const p = activeProj();
+  try {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type:'array' });
+    const sheets = {};
+    wb.SheetNames.forEach(sn => { sheets[sn] = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header:1, defval:'', raw:true, blankrows:false }); });
+    const tieneTorre = wb.SheetNames.some(sn => /^T\d+$/i.test(sn.trim()));
+    if (!tieneTorre && !wb.SheetNames.some(sn => /^PRECIOS$/i.test(sn))) {
+      return window.prAlert({ title:'ARCHIVO NO VÁLIDO', body:'El archivo no parece la plantilla de receta (faltan hojas T1/T2/... y PRECIOS).' });
+    }
+    const { recetaV2, precios, avisos } = parseRecetaWorkbook(sheets, p.towers || []);
+    const nNiv = Object.keys(recetaV2.niveles).length;
+    let nLineas = 0; Object.values(recetaV2.niveles).forEach(et => et.forEach(l => nLineas += l.length));
+    let body = '<div style="font-size:12px;line-height:1.6;color:#1F2937">'
+      + '<div>Niveles con receta: <strong>'+nNiv+'</strong></div>'
+      + '<div>Líneas de material: <strong>'+nLineas+'</strong></div>'
+      + '<div>Productos en precios: <strong>'+Object.keys(precios).length+'</strong></div>';
+    if (avisos.length) body += '<div style="margin-top:10px;padding:10px;background:#FFFBEB;border:1px solid #FCD34D;border-radius:6px;color:#92400E;font-size:11px">'+avisos.map(a=>'• '+a.replace(/[&<>]/g,'')).join('<br>')+'</div>';
+    body += '<div style="margin-top:10px;color:#991B1B;font-size:11px">Esto REEMPLAZA la receta y los precios actuales del proyecto.</div></div>';
+    const ok = await window.prConfirm({ title:'CARGAR RECETA', bodyHTML:body, okText:'CARGAR', cancelText:'CANCELAR' });
+    if (!ok) return;
+    p.materiales.recetaV2 = recetaV2;
+    recetaV2.fuente = file.name.replace(/\.(xlsx|xls)$/i,'');
+    recetaV2.importadoTs = Date.now();
+    recetaV2.importadoPor = (typeof window._getUserEmail==='function' ? (window._getUserEmail()||'') : '');
+    p.materiales.precios = precios;
+    try { if (typeof logActivity==='function') logActivity('update','Receta de material cargada', p.name+' · '+nNiv+' niveles · '+nLineas+' líneas'); } catch(e){}
+    saveState();
+    try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    showToast('RECETA CARGADA','green');
+    if (typeof renderRecetaV2==='function') renderRecetaV2();
+  } catch(err){
+    console.error('importarRecetaExcel:', err);
+    window.prAlert({ title:'ERROR AL LEER EL EXCEL', body:String(err && err.message ? err.message : err) });
+  }
+};
 function renderReceta(){
   const p = activeProj();
   if (!Array.isArray(p.materiales.receta)) p.materiales.receta = [{},{},{},{},{},{}];
