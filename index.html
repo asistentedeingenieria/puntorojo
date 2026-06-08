@@ -19842,39 +19842,77 @@ if (!window._solRecDelegateInstalled){
   window._solRecDelegateInstalled = true;
 }
 window.verCatalogoPreciosReceta = async function(){
-  if (!(can('receta.edit') || can('users.manage'))) return showToast('SIN PERMISO','red');
   const p = activeProj();
-  const precios = p.materiales.precios || (p.materiales.precios = {});
-  const provs = (p.materiales.proveedores||[]).map(pr => pr.nombre).filter(Boolean);
+  const rv = p.materiales && p.materiales.recetaV2;
+  if (!rv || !rv.niveles) return showToast('CARGÁ UNA RECETA PRIMERO','red');
+  const esAdmin = can('users.manage');
   const esc = s => String(s==null?'':s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
-  const keys = Object.keys(precios).sort((a,b)=>a.localeCompare(b));
-  const sinPrecio = keys.filter(k => !(precios[k].precio>0)).length;
-  let body = '<div style="font-size:11.5px;color:#475569;margin-bottom:10px">Definí <strong>1 proveedor + 1 precio</strong> por producto. '+(sinPrecio?('<span style="color:#B45309">Faltan '+sinPrecio+' con precio.</span>'):'Todos tienen precio.')+'</div>';
-  const dlId = 'dlProvReceta';
-  body += '<datalist id="'+dlId+'">'+provs.map(pr=>'<option value="'+esc(pr)+'">').join('')+'</datalist>';
-  body += '<div style="max-height:50vh;overflow:auto;border:1px solid #E5E7EB;border-radius:8px">';
-  body += '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="position:sticky;top:0;background:#374151;color:#fff;font-size:10px"><th style="text-align:left;padding:6px 8px">PRODUCTO</th><th style="padding:6px 4px">U</th><th style="padding:6px 4px">PROVEEDOR</th><th style="padding:6px 8px">PRECIO Q</th></tr></thead><tbody>';
-  keys.forEach(k => {
-    const e = precios[k];
-    body += '<tr style="border-top:1px solid #F1F5F9">'
-      + '<td style="padding:5px 8px">'+esc(k)+'</td>'
-      + '<td style="text-align:center;color:#6B7280">'+esc(e.unidad||'U')+'</td>'
-      + '<td style="padding:3px 4px"><input list="'+dlId+'" value="'+esc(e.proveedor||'')+'" style="width:150px;font-size:11px;padding:3px 6px;border:1px solid #D1D5DB;border-radius:5px" oninput="setPrecioReceta(\''+esc(k).replace(/'/g,"\\'")+'\',\'proveedor\',this.value)"></td>'
-      + '<td style="padding:3px 8px;text-align:right"><input type="number" step="0.01" value="'+(e.precio||0)+'" style="width:90px;font-size:11px;padding:3px 6px;border:1px solid '+(e.precio>0?'#D1D5DB':'#FBBF24')+';border-radius:5px;text-align:right" oninput="setPrecioReceta(\''+esc(k).replace(/'/g,"\\'")+'\',\'precio\',this.value)"></td>'
-      + '</tr>';
+  const money = n => 'Q' + (Number(n)||0).toLocaleString('es-GT',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const provs = (p.materiales.proveedores||[]);
+  const set = new Map();
+  Object.values(rv.niveles).forEach(etapas => etapas.forEach(lineas => lineas.forEach(l => {
+    const key = matchKeyProducto(l.m);
+    if (!set.has(key)) set.set(key, { nombre: normProducto(l.m), unidad: l.u||'' });
+  })));
+  const prods = [...set.values()].sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  const sinPrecio = prods.filter(x => !precioDeProductoReceta(p, x.nombre)).length;
+  let body = '<div style="font-size:11.5px;color:#475569;margin-bottom:10px">Los precios salen del <strong>catálogo de proveedores</strong>. '+(sinPrecio?('<span style="color:#B45309">'+sinPrecio+' sin precio.</span>'):'Todos con precio.')+'</div>';
+  if (esAdmin && !provs.length) body += '<div style="margin-bottom:10px;padding:10px;background:#FFFBEB;border:1px solid #FCD34D;border-radius:6px;color:#92400E;font-size:11px">No hay proveedores. Creá uno en el catálogo para poder asignar precios.</div>';
+  body += '<div style="max-height:55vh;overflow:auto;border:1px solid #E5E7EB;border-radius:8px"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="position:sticky;top:0;background:#374151;color:#fff;font-size:10px"><th style="text-align:left;padding:6px 8px">PRODUCTO</th><th style="padding:6px 4px">PROVEEDOR</th><th style="text-align:right;padding:6px 8px">PRECIO Q</th></tr></thead><tbody>';
+  prods.forEach(x => {
+    const info = precioDeProductoReceta(p, x.nombre);
+    const pn = esc(x.nombre).replace(/'/g,"\\'");
+    const un = esc(x.unidad).replace(/'/g,"\\'");
+    let provCell, precioCell;
+    if (esAdmin){
+      const opts = '<option value="">— elegir —</option>' + provs.map(pr => '<option value="'+esc(pr.id)+'"'+(info && info.proveedorId===pr.id?' selected':'')+'>'+esc(pr.nombre)+'</option>').join('');
+      provCell = '<select onchange="setProvRecetaProducto(\''+pn+'\',\''+un+'\',this.value)" style="font-size:11px;padding:3px 6px;border:1px solid #D1D5DB;border-radius:5px;max-width:150px">'+opts+'</select>';
+      precioCell = '<input type="number" step="0.01" value="'+(info?info.precio:0)+'" oninput="setPrecioRecetaProducto(\''+pn+'\',this.value)" style="width:90px;font-size:11px;padding:3px 6px;border:1px solid '+(info && info.precio>0?'#D1D5DB':'#FBBF24')+';border-radius:5px;text-align:right">';
+    } else {
+      provCell = '<span style="color:'+(info?'#374151':'#B45309')+'">'+(info?esc(info.proveedor):'SIN PRECIO')+'</span>';
+      precioCell = info?money(info.precio):'—';
+    }
+    body += '<tr style="border-top:1px solid #F1F5F9"><td style="padding:5px 8px">'+esc(x.nombre)+'</td><td style="padding:3px 4px;text-align:center">'+provCell+'</td><td style="padding:3px 8px;text-align:right">'+precioCell+'</td></tr>';
   });
   body += '</tbody></table></div>';
-  await window.prConfirm({ title:'CATÁLOGO DE PRECIOS', bodyHTML:body, okText:'CERRAR', cancelText:'', wide:true });
-  saveState();
+  if (esAdmin) body += '<div style="margin-top:10px;text-align:right"><button class="btn ghost sm" onclick="openCatalogoProveedores()">ABRIR CATÁLOGO DE PROVEEDORES</button></div>';
+  await window.prConfirm({ title:'PRECIOS DE LA RECETA', bodyHTML:body, okText:'CERRAR', cancelText:'', wide:true });
   try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
   if (typeof renderRecetaV2==='function') renderRecetaV2();
 };
-window.setPrecioReceta = function(producto, campo, valor){
+window._findCatProducto = function(p, nombre){
+  const key = matchKeyProducto(nombre);
+  for (const prv of (p.materiales.proveedores||[])){
+    const arr = prv.productos||[];
+    for (let i=0;i<arr.length;i++){ if (matchKeyProducto(arr[i].nombre)===key) return { prv, idx:i }; }
+  }
+  return null;
+};
+window.setProvRecetaProducto = function(nombre, unidad, proveedorId){
+  if (!can('users.manage')) return showToast('SOLO ADMIN','red');
   const p = activeProj();
-  if (!p.materiales.precios[producto]) p.materiales.precios[producto] = { proveedor:'', precio:0, unidad:'U', proveedorId:'' };
-  const e = p.materiales.precios[producto];
-  if (campo === 'precio') e.precio = Number(valor)||0;
-  else { e.proveedor = String(valor||'').trim(); const pr = (p.materiales.proveedores||[]).find(x=>x.nombre===e.proveedor); e.proveedorId = pr ? pr.id : ''; }
+  if (!proveedorId) return;
+  const target = (p.materiales.proveedores||[]).find(x => x.id===proveedorId);
+  if (!target) return showToast('PROVEEDOR NO ENCONTRADO','red');
+  if (!Array.isArray(target.productos)) target.productos = [];
+  const cur = window._findCatProducto(p, nombre);
+  if (cur){
+    if (cur.prv.id === target.id) return;
+    const prod = cur.prv.productos.splice(cur.idx,1)[0];
+    target.productos.push(prod);
+  } else {
+    target.productos.push({ nombre: String(nombre), unidad: String(unidad||''), precio: 0 });
+  }
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  showToast('PROVEEDOR ASIGNADO','green');
+};
+window.setPrecioRecetaProducto = function(nombre, valor){
+  if (!can('users.manage')) return;
+  const p = activeProj();
+  const cur = window._findCatProducto(p, nombre);
+  if (!cur){ showToast('ELEGÍ PROVEEDOR PRIMERO','red'); return; }
+  cur.prv.productos[cur.idx].precio = Number(valor)||0;
   saveState();
 };
 window.importarRecetaExcel = async function(ev){
