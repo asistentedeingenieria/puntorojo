@@ -19680,6 +19680,73 @@ window.renderRecetaV2 = function(){
   cont.innerHTML = html;
   if (typeof applyPermissions==='function') applyPermissions();
 };
+window._recetaV2PedirDatos = async function(levelId, etapaIdx, tipo, material){
+  const p = activeProj();
+  const lista = (p.materiales.recetaV2.niveles[levelId] || [[],[],[],[]])[etapaIdx] || [];
+  if (tipo === 'cantidad'){
+    const line = lista.find(l => l.m === material);
+    const actual = line ? line.c : 0;
+    const v = await window.prPrompt({ title:'CAMBIAR CANTIDAD', body:material+'\nCantidad actual: '+actual, placeholder:'nueva cantidad', defaultValue:String(actual), required:true });
+    if (v === null) return null;
+    const c = Number(String(v).replace(/[^\d.]/g,''));
+    if (!(c >= 0)) { showToast('CANTIDAD INVÁLIDA','red'); return null; }
+    return { material, unidad: line ? line.u : 'U', cantidadNueva: c, cantidadActual: actual };
+  }
+  if (tipo === 'quitar'){
+    const okq = await window.prConfirm({ title:'QUITAR MATERIAL', bodyHTML:'<div style="font-size:12px">¿Quitar <strong>'+material.replace(/[&<>]/g,'')+'</strong> de esta etapa?</div>', okText:'QUITAR', cancelText:'CANCELAR', danger:true });
+    if (!okq) return null;
+    return { material, unidad:'U', cantidadNueva:0, cantidadActual:0 };
+  }
+  if (tipo === 'agregar'){
+    const nombre = await window.prPrompt({ title:'AGREGAR MATERIAL', body:'Nombre del material', placeholder:'ej: Tornillo de 1" pf', required:true });
+    if (nombre === null || !String(nombre).trim()) return null;
+    const unidad = await window.prPrompt({ title:'UNIDAD', body:'Unidad (U, LB, ...)', placeholder:'U', defaultValue:'U', required:true });
+    if (unidad === null) return null;
+    const v = await window.prPrompt({ title:'CANTIDAD', body:'Cantidad total del nivel', placeholder:'0', required:true });
+    if (v === null) return null;
+    const c = Number(String(v).replace(/[^\d.]/g,''));
+    if (!(c >= 0)) { showToast('CANTIDAD INVÁLIDA','red'); return null; }
+    return { material:String(nombre).trim(), unidad:String(unidad).trim()||'U', cantidadNueva:c, cantidadActual:null };
+  }
+  return null;
+};
+window.recetaV2Op = async function(levelId, etapaIdx, tipo, material){
+  if (!(can('receta.edit') || can('users.manage'))) return showToast('SIN PERMISO','red');
+  const p = activeProj();
+  const datos = await window._recetaV2PedirDatos(levelId, etapaIdx, tipo, material);
+  if (!datos) return;
+  const res = aplicarOperacionReceta(p.materiales.recetaV2, p.materiales.precios, { tipo, levelId, etapaIdx, material:datos.material, unidad:datos.unidad, cantidadNueva:datos.cantidadNueva });
+  if (!res.ok) return showToast('NO SE PUDO: '+(res.error||''),'red');
+  try { if (typeof logActivity==='function') logActivity('update','Receta editada', p.name+' · '+tipo+' · '+datos.material); } catch(e){}
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  showToast('RECETA ACTUALIZADA','green');
+  renderRecetaV2();
+};
+window.recetaV2Solicitar = async function(levelId, etapaIdx, tipo, material){
+  const p = activeProj();
+  const datos = await window._recetaV2PedirDatos(levelId, etapaIdx, tipo, material);
+  if (!datos) return;
+  if (!Array.isArray(p.solicitudesReceta)) p.solicitudesReceta = [];
+  const torre = (p.towers||[]).find(t => (t.levels||[]).some(l => l.id===levelId));
+  const lvl = torre && (torre.levels||[]).find(l => l.id===levelId);
+  const etiqueta = (torre?torre.name:'')+' · '+(lvl?lvl.name:'')+' · '+(p.materiales.recetaV2.etapas[etapaIdx]||('ETAPA '+(etapaIdx+1)));
+  const verbo = tipo==='cantidad' ? (datos.cantidadActual+' → '+datos.cantidadNueva) : (tipo==='agregar' ? ('AGREGAR · '+datos.cantidadNueva+' '+datos.unidad) : 'QUITAR');
+  p.solicitudesReceta.push({
+    id:'rec_'+Date.now()+'_'+Math.floor(Math.random()*100000),
+    tipo, levelId, etapaIdx, material:datos.material, unidad:datos.unidad,
+    cantidadActual:datos.cantidadActual, cantidadNueva:datos.cantidadNueva,
+    resumen: etiqueta+' · '+datos.material+' · '+verbo,
+    by:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''),
+    byNombre:(typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):''),
+    ts:Date.now(), estado:'PENDIENTE', procesadoPor:'', fechaProceso:'', motivoRechazo:''
+  });
+  try { if (typeof logActivity==='function') logActivity('request','Solicitud cambio receta', p.name+' · '+tipo+' · '+datos.material); } catch(e){}
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  await window.prAlert({ title:'SOLICITUD ENVIADA', body:'Tu solicitud de cambio fue enviada. Admin o gerente de proyectos la autorizará.' });
+  renderRecetaV2();
+};
 window.importarRecetaExcel = async function(ev){
   const file = ev && ev.target && ev.target.files && ev.target.files[0];
   if (ev && ev.target) ev.target.value = '';
