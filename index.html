@@ -2731,6 +2731,7 @@ table{max-width:100%}
     <div style="display:flex;gap:8px">
       <button class="btn ghost sm" id="btnVerSolReceta" onclick="verSolicitudesReceta()" style="display:none">SOLICITUDES (0)</button>
       <button class="btn cafe sm" id="btnCargarReceta" data-perm="receta.edit" onclick="document.getElementById('inpRecetaExcel').click()">CARGAR RECETA (EXCEL)</button>
+      <button class="btn ghost sm" id="btnPreciosReceta" data-perm="receta.edit" onclick="verCatalogoPreciosReceta()">PRECIOS</button>
     </div>
   </div>
   <input type="file" id="inpRecetaExcel" accept=".xlsx,.xls" style="display:none" onchange="importarRecetaExcel(event)">
@@ -19820,6 +19821,42 @@ if (!window._solRecDelegateInstalled){
   });
   window._solRecDelegateInstalled = true;
 }
+window.verCatalogoPreciosReceta = async function(){
+  if (!(can('receta.edit') || can('users.manage'))) return showToast('SIN PERMISO','red');
+  const p = activeProj();
+  const precios = p.materiales.precios || (p.materiales.precios = {});
+  const provs = (p.materiales.proveedores||[]).map(pr => pr.nombre).filter(Boolean);
+  const esc = s => String(s==null?'':s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  const keys = Object.keys(precios).sort((a,b)=>a.localeCompare(b));
+  const sinPrecio = keys.filter(k => !(precios[k].precio>0)).length;
+  let body = '<div style="font-size:11.5px;color:#475569;margin-bottom:10px">Definí <strong>1 proveedor + 1 precio</strong> por producto. '+(sinPrecio?('<span style="color:#B45309">Faltan '+sinPrecio+' con precio.</span>'):'Todos tienen precio.')+'</div>';
+  const dlId = 'dlProvReceta';
+  body += '<datalist id="'+dlId+'">'+provs.map(pr=>'<option value="'+esc(pr)+'">').join('')+'</datalist>';
+  body += '<div style="max-height:50vh;overflow:auto;border:1px solid #E5E7EB;border-radius:8px">';
+  body += '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="position:sticky;top:0;background:#374151;color:#fff;font-size:10px"><th style="text-align:left;padding:6px 8px">PRODUCTO</th><th style="padding:6px 4px">U</th><th style="padding:6px 4px">PROVEEDOR</th><th style="padding:6px 8px">PRECIO Q</th></tr></thead><tbody>';
+  keys.forEach(k => {
+    const e = precios[k];
+    body += '<tr style="border-top:1px solid #F1F5F9">'
+      + '<td style="padding:5px 8px">'+esc(k)+'</td>'
+      + '<td style="text-align:center;color:#6B7280">'+esc(e.unidad||'U')+'</td>'
+      + '<td style="padding:3px 4px"><input list="'+dlId+'" value="'+esc(e.proveedor||'')+'" style="width:150px;font-size:11px;padding:3px 6px;border:1px solid #D1D5DB;border-radius:5px" oninput="setPrecioReceta(\''+esc(k).replace(/'/g,"\\'")+'\',\'proveedor\',this.value)"></td>'
+      + '<td style="padding:3px 8px;text-align:right"><input type="number" step="0.01" value="'+(e.precio||0)+'" style="width:90px;font-size:11px;padding:3px 6px;border:1px solid '+(e.precio>0?'#D1D5DB':'#FBBF24')+';border-radius:5px;text-align:right" oninput="setPrecioReceta(\''+esc(k).replace(/'/g,"\\'")+'\',\'precio\',this.value)"></td>'
+      + '</tr>';
+  });
+  body += '</tbody></table></div>';
+  await window.prConfirm({ title:'CATÁLOGO DE PRECIOS', bodyHTML:body, okText:'CERRAR', cancelText:'', wide:true });
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  if (typeof renderRecetaV2==='function') renderRecetaV2();
+};
+window.setPrecioReceta = function(producto, campo, valor){
+  const p = activeProj();
+  if (!p.materiales.precios[producto]) p.materiales.precios[producto] = { proveedor:'', precio:0, unidad:'U', proveedorId:'' };
+  const e = p.materiales.precios[producto];
+  if (campo === 'precio') e.precio = Number(valor)||0;
+  else { e.proveedor = String(valor||'').trim(); const pr = (p.materiales.proveedores||[]).find(x=>x.nombre===e.proveedor); e.proveedorId = pr ? pr.id : ''; }
+  saveState();
+};
 window.importarRecetaExcel = async function(ev){
   const file = ev && ev.target && ev.target.files && ev.target.files[0];
   if (ev && ev.target) ev.target.value = '';
