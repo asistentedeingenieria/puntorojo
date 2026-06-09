@@ -19713,6 +19713,75 @@ function parseRecetaPorApto(sheets, towers){
   });
   return { recetaV2, avisos };
 }
+function _resumenNum(v){
+  if (typeof v === 'number') return v;
+  const n = parseFloat(String(v==null?'':v).replace(/[^\d.\-]/g,''));
+  return isNaN(n) ? 0 : n;
+}
+function _resumenFecha(v){
+  if (v == null || v === '') return '';
+  if (typeof v === 'number'){
+    if (v <= 0) return '';
+    const d = new Date(Math.round((v - 25569) * 86400000));
+    if (isNaN(d.getTime())) return '';
+    return String(d.getUTCDate()).padStart(2,'0')+'/'+String(d.getUTCMonth()+1).padStart(2,'0')+'/'+d.getUTCFullYear();
+  }
+  let s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return String(m[3]).padStart(2,'0')+'/'+String(m[2]).padStart(2,'0')+'/'+m[1];
+  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
+  if (m){ let yy=m[3]; if(yy.length===2) yy='20'+yy; return String(m[1]).padStart(2,'0')+'/'+String(m[2]).padStart(2,'0')+'/'+yy; }
+  return s;
+}
+function parseResumenPR(aoa){
+  const rows = Array.isArray(aoa) ? aoa : [];
+  const avisos = [];
+  const nrm = s => String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+  let hi = -1; const col = {};
+  for (let i=0;i<rows.length;i++){
+    const cells = (rows[i]||[]).map(nrm);
+    const di = cells.findIndex(c => c.indexOf('DESCRIPCION')!==-1);
+    const mi = cells.findIndex(c => c.indexOf('MONTO')!==-1 && c.indexOf('IVA')!==-1);
+    if (di!==-1 && mi!==-1){
+      hi = i; col.d = di; col.m = mi;
+      col.ff  = cells.findIndex(c => c.indexOf('FECHA')!==-1 && c.indexOf('FACTURA')!==-1);
+      col.fp  = cells.findIndex(c => c.indexOf('FECHA')!==-1 && c.indexOf('PAGO')!==-1);
+      col.fac = cells.findIndex(c => c.indexOf('FACTURA')!==-1 && (c.indexOf('NO')!==-1 || c.indexOf('NUM')!==-1 || c.indexOf('#')!==-1));
+      col.est = cells.findIndex(c => c.indexOf('ESTADO')!==-1);
+      col.tipo= cells.findIndex(c => c.indexOf('TIPO')!==-1);
+      break;
+    }
+  }
+  if (hi === -1) return { rows: [], avisos: ['No se encontró el encabezado (DESCRIPCIÓN / MONTO CON IVA) en la hoja RESUMEN PR.'] };
+  const out = [];
+  for (let i=hi+1;i<rows.length;i++){
+    const r = rows[i]||[];
+    const d = String(r[col.d]==null?'':r[col.d]).trim();
+    if (!d) continue;
+    const vp = _resumenNum(col.m>=0 ? r[col.m] : '');
+    const estado = nrm(col.est>=0 ? r[col.est] : '');
+    const tipo = nrm(col.tipo>=0 ? r[col.tipo] : '');
+    const fac = col.fac>=0 ? String(r[col.fac]==null?'':r[col.fac]).trim() : '';
+    let sc = 'PENDIENTE';
+    if (estado.indexOf('PAGAD')!==-1) sc='PAGADO';
+    else if (estado.indexOf('AUTORIZ')!==-1) sc='EN AUTORIZACIÓN';
+    const o = {
+      id: 'rpr'+out.length,
+      f: col.ff>=0 ? _resumenFecha(r[col.ff]) : '',
+      d: d.toUpperCase(),
+      vp_ci: vp,
+      sf: (fac || sc==='PAGADO') ? 'EMITIDA' : 'PENDIENTE',
+      sc: sc,
+      fp: col.fp>=0 ? _resumenFecha(r[col.fp]) : '',
+      factura: fac
+    };
+    if (tipo.indexOf('ANTICIPO')!==-1) o.isAnticipo = true;
+    if (tipo.indexOf('SIN AMORT')!==-1 || tipo.indexOf('NO AMORT')!==-1) o.noAmort = true;
+    out.push(o);
+  }
+  if (!out.length) avisos.push('La hoja RESUMEN PR no tenía filas con datos.');
+  return { rows: out, avisos };
+}
 // ===RECETA-PURE-END===
 // v524: accessor del catálogo GLOBAL de proveedores. Top-level (global) para que lo alcancen OCs, recetas y catálogo.
 function _getProveedores(){ try { if (typeof state !== 'undefined' && state) { if (!Array.isArray(state.proveedoresGlobales)) state.proveedoresGlobales = []; return state.proveedoresGlobales; } } catch(e){} return []; }
@@ -22138,6 +22207,20 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     event.target.value = '';
   };
 
+  // Lee SOLO la hoja estándar "RESUMEN PR" si existe; devuelve {rows,avisos} o null.
+  async function _parseResumenPRFromFile(file){
+    if (typeof XLSX === 'undefined' || !XLSX.read) return null;
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type:'array', cellDates:false, cellNF:false, cellText:false });
+      const nrm = s => String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+      const sn = (wb.SheetNames||[]).find(n => { const x=nrm(n); return x.indexOf('RESUMEN PR')!==-1 || x.indexOf('RESUMEN PUNTO ROJO')!==-1 || x==='PUNTO ROJO'; });
+      if (!sn) return null;
+      const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header:1, defval:'', raw:true, blankrows:true });
+      return parseResumenPR(aoa);
+    } catch(e){ console.warn('[RESUMEN PR] error leyendo:', e); return null; }
+  }
+
   // Helper: parsea un .xlsx a un array de filas (cada fila = array de strings/numbers)
   async function _parseXlsxToRows(file){
     // PATH 1: usar SheetJS si está disponible (más robusto, soporta más formatos).
@@ -22582,6 +22665,36 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         return;
       }
       // ──────── FIN PATH PDF ────────
+
+      // ──────── PRIORIDAD: hoja estándar "RESUMEN PR" ────────
+      const _resPR = await _parseResumenPRFromFile(file);
+      if (_resPR){
+        if (!can('cobro.edit') && !can('users.manage')){ showToast('SIN PERMISO PARA EDITAR COBRO','red'); event.target.value=''; return; }
+        const _pP = activeProj();
+        if (!_resPR.rows.length){
+          await window.prAlert({ title:'HOJA RESUMEN PR VACÍA', bodyHTML:'<div>Se encontró la hoja <strong>RESUMEN PR</strong> pero sin filas con datos.</div>'+(_resPR.avisos.length?'<div style="margin-top:8px;color:#92400E;font-size:12px">'+_resPR.avisos.map(a=>'· '+String(a).replace(/[&<>]/g,'')).join('<br>')+'</div>':'') });
+          event.target.value=''; return;
+        }
+        const _pag = _resPR.rows.filter(r=>r.sc==='PAGADO').length;
+        const _suma = _resPR.rows.reduce((s,r)=>s+(Number(r.vp_ci)||0),0);
+        const _okPR = await window.prConfirm({
+          title:'CARGAR DESDE "RESUMEN PR"',
+          bodyHTML:'<div style="font-size:11.5px;color:#666;margin-bottom:10px">'+String(_pP&&_pP.name||'').toUpperCase()+'</div>'
+            +'<div>Se leyó la hoja <strong>RESUMEN PR</strong>. Esto va a <strong>REEMPLAZAR</strong> el cobro con:</div>'
+            +'<div style="margin-top:10px;font-size:12.5px;color:#444"><strong>'+_resPR.rows.length+'</strong> filas · <strong>'+_pag+'</strong> pagadas · suma Q '+_suma.toLocaleString('es-GT',{minimumFractionDigits:2})+'</div>'
+            +(_resPR.avisos.length?'<div style="margin-top:8px;color:#92400E;font-size:12px">'+_resPR.avisos.map(a=>'· '+String(a).replace(/[&<>]/g,'')).join('<br>')+'</div>':''),
+          okText:'REEMPLAZAR', cancelText:'CANCELAR'
+        });
+        if (!_okPR){ event.target.value=''; return; }
+        if (!_pP.cobro) _pP.cobro = { rows: [] };
+        _pP.cobro.rows = _resPR.rows.map(r => { const x = Object.assign({}, r); x.id = uid(); return x; });
+        try { if (typeof logActivity==='function') logActivity('update','Cobro actualizado (RESUMEN PR)', (_pP.name||'')+' · '+_resPR.rows.length+' filas'); } catch(e){}
+        saveState();
+        try { if (typeof CloudSync!=='undefined' && CloudSync.ref) await CloudSync.uploadCurrent(); } catch(e){}
+        if (typeof renderCobro==='function') renderCobro();
+        showToast('COBRO ACTUALIZADO ('+_resPR.rows.length+' FILAS)','green');
+        event.target.value=''; return;
+      }
 
       let rows = [];
       if (lname.endsWith('.xlsx') || lname.endsWith('.xls')) {

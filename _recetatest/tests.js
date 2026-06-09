@@ -98,4 +98,26 @@ module.exports = function (t) {
   const rpVic = t.api.parseRecetaPorApto(sheetsVic, towVic);
   t.ok('vic.byid', !!rpVic.recetaV2.niveles['va-n2']);
   eq('vic.qty', (rpVic.recetaV2.niveles['va-n2'][0][0].aptos||{})['va-n2-a1'], 19);
+  // --- RESUMEN PR ---
+  const _prAoa = [
+    ['RESUMEN PR','','','','','',''],
+    ['DESCRIPCIÓN','MONTO CON IVA','FECHA FACTURA','FECHA PAGO','NO. FACTURA','ESTADO','TIPO'],
+    ['ANTICIPO',2437425.46,'02/02/2026','02/02/2026','657080367','PAGADO','ANTICIPO'],
+    ['ESTIMACIÓN #1',189986.77,'02/02/2026','13/02/2026','1305890722','PAGADO',''],
+    ['ESTIMACIÓN #9','Q325,000.00','08/05/2026','16/05/2026','577916391','PAGADO','SIN AMORT'],
+    ['ESTIMACIÓN #12',696654.69,'','','','PENDIENTE',''],
+    ['','','','','','','']
+  ];
+  const _pr = t.api.parseResumenPR(_prAoa);
+  eq('pr.count', _pr.rows.length, 4);
+  eq('pr.antic', _pr.rows[0].isAnticipo, true);
+  eq('pr.monto', _pr.rows[1].vp_ci, 189986.77);
+  eq('pr.montoStrip', _pr.rows[2].vp_ci, 325000);
+  eq('pr.noAmort', _pr.rows[2].noAmort, true);
+  eq('pr.pagado', _pr.rows[1].sc, 'PAGADO');
+  eq('pr.pend', _pr.rows[3].sc, 'PENDIENTE');
+  eq('pr.factura', _pr.rows[0].factura, '657080367');
+  eq('pr.fSerial', t.api._resumenFecha(25569), '01/01/1970');
+  eq('pr.fISO', t.api._resumenFecha('2026-02-02'), '02/02/2026');
+  eq('pr.fDMY', t.api._resumenFecha('2/2/2026'), '02/02/2026');
 };
