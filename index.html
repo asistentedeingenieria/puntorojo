@@ -2082,6 +2082,7 @@ table{max-width:100%}
 .pr-bell-btn{transition:color .12s, background .12s;border-radius:50%}
 .pr-bell-btn:hover{color:var(--ink) !important;background:rgba(0,0,0,.05) !important}
 .pr-bell-btn.has-unread{color:var(--ink)}
+@keyframes prUploadSpin{to{transform:rotate(360deg)}}
 @keyframes prBellWiggle{
   0%,82%,100%{transform:rotate(0)}
   84%{transform:rotate(-12deg)}
@@ -2855,6 +2856,15 @@ table{max-width:100%}
     </section>
 
   </main>
+
+  <!-- v531: overlay de carga/procesamiento de archivos -->
+  <div id="prUploadOverlay" style="position:fixed;inset:0;z-index:100050;display:none;align-items:center;justify-content:center;background:rgba(15,23,42,.55);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)">
+    <div style="background:#fff;border-radius:14px;padding:26px 32px;display:flex;flex-direction:column;align-items:center;gap:14px;box-shadow:0 24px 60px rgba(0,0,0,.35);max-width:300px;text-align:center">
+      <div style="width:46px;height:46px;border:4px solid #E5E7EB;border-top-color:#C8141C;border-radius:50%;animation:prUploadSpin .8s linear infinite"></div>
+      <div id="prUploadOverlayMsg" style="font-size:13px;font-weight:700;color:#1F2937;letter-spacing:.5px">PROCESANDO ARCHIVO…</div>
+      <div style="font-size:11px;color:#6B7280;line-height:1.4">Esperá un momento — no cierres ni recargues la página.</div>
+    </div>
+  </div>
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
@@ -9902,14 +9912,16 @@ async function uploadFacturaPDF(event, rowId) {
   if (!can('cobro.edit')) return showToast('SIN PERMISO', 'red');
   const file = event.target.files && event.target.files[0];
   if (!file) return;
+  window._prUploadShow('PROCESANDO ARCHIVO…');
   if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
     showToast('SOLO PDFs', 'red');
     event.target.value = '';
+    try{ window._prUploadHide(); }catch(e){}
     return;
   }
   const p = activeProj();
   const r = p.cobro.rows.find(x => x.id === rowId);
-  if (!r) return;
+  if (!r) { try{ window._prUploadHide(); }catch(e){} return; }
 
   showToast('SUBIENDO FACTURA...', '');
   try {
@@ -9970,6 +9982,8 @@ async function uploadFacturaPDF(event, rowId) {
   } catch (e) {
     console.error('Error subiendo factura:', e);
     showToast('ERROR: ' + (e.message || e), 'red');
+  } finally {
+    try{ window._prUploadHide(); }catch(e){}
   }
   event.target.value = '';
 }
@@ -20125,6 +20139,7 @@ window.importarRecetaExcel = async function(ev){
   if (!(can('receta.edit') || can('users.manage'))) return showToast('SIN PERMISO PARA CARGAR RECETA','red');
   if (typeof XLSX === 'undefined' || !XLSX.read) return showToast('NO SE PUDO LEER EL EXCEL (XLSX no disponible)','red');
   const p = activeProj();
+  window._prUploadShow('PROCESANDO ARCHIVO…');
   try {
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, { type:'array' });
@@ -20157,6 +20172,8 @@ window.importarRecetaExcel = async function(ev){
   } catch(err){
     console.error('importarRecetaExcel:', err);
     window.prAlert({ title:'ERROR AL LEER EL EXCEL', body:String(err && err.message ? err.message : err) });
+  } finally {
+    try{ window._prUploadHide(); }catch(e){}
   }
 };
 function renderReceta(){
@@ -22097,6 +22114,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       // (si no hay permiso específico, lo dejamos pasar al admin)
     }
     showToast('LEYENDO PDF...', '');
+    window._prUploadShow('PROCESANDO ARCHIVO…');
     let lines;
     try {
       lines = await _parsePDFToLines(file);
@@ -22104,11 +22122,13 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       console.error('Error leyendo PDF:', e);
       showToast('NO SE PUDO LEER EL PDF · ' + (e.message || ''), 'red');
       event.target.value = '';
+      try{ window._prUploadHide(); }catch(_e){}
       return;
     }
     if (!lines || lines.length === 0) {
       showToast('PDF VACÍO O ILEGIBLE', 'red');
       event.target.value = '';
+      try{ window._prUploadHide(); }catch(_e){}
       return;
     }
 
@@ -22150,6 +22170,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     if (niveles.length === 0) {
       showToast('NO SE DETECTARON NIVELES NI APTOS · REVISÁ EL FORMATO DEL PDF', 'red');
       event.target.value = '';
+      try{ window._prUploadHide(); }catch(_e){}
       return;
     }
 
@@ -22158,7 +22179,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
 
     // Decidir qué hacer si el proyecto YA tiene torres
     const p = activeProj();
-    if (!p) { showToast('SIN PROYECTO ACTIVO', 'red'); event.target.value = ''; return; }
+    if (!p) { showToast('SIN PROYECTO ACTIVO', 'red'); event.target.value = ''; try{ window._prUploadHide(); }catch(_e){} return; }
     const tieneEstructura = (p.towers || []).length > 0;
 
     let modo = 'crear';
@@ -22173,7 +22194,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         okText: 'AGREGAR COMO TORRE NUEVA',
         cancelText: 'NO IMPORTAR'
       });
-      if (!choice) { event.target.value = ''; return; }
+      if (!choice) { event.target.value = ''; try{ window._prUploadHide(); }catch(_e){} return; }
       modo = 'agregar';
     }
 
@@ -22206,6 +22227,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       console.error('Error guardando estructura:', e);
       showToast('ERROR GUARDANDO · ' + (e.message || ''), 'red');
       event.target.value = '';
+      try{ window._prUploadHide(); }catch(_e){}
       return;
     }
 
@@ -22221,6 +22243,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       `${p.name} · ${towerName} · ${totalNiveles} niveles, ${totalAptos} aptos · archivo ${file.name}`
     );
     event.target.value = '';
+    try{ window._prUploadHide(); }catch(_e){}
   };
 
   // Lee SOLO la hoja estándar "RESUMEN PR" si existe; devuelve {rows,avisos} o null.
@@ -22534,6 +22557,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   window.uploadEstimacionCobro = async function(event){
     const file = event.target.files && event.target.files[0];
     if (!file) return;
+    window._prUploadShow('PROCESANDO ARCHIVO…');
     const lname = file.name.toLowerCase();
     try {
       // ──────── PATH PDF ────────
@@ -23361,6 +23385,8 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
                    <div style="margin-top:10px;font-size:11.5px;color:#666;line-height:1.5">Si se requiere ayuda, abrir la consola (F12) y enviar un screenshot.</div>`,
         danger: true
       });
+    } finally {
+      try{ window._prUploadHide(); }catch(e){}
     }
     event.target.value = '';
   };
@@ -32376,6 +32402,9 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   window.prCountUnread = function(){
     return window.prGetUserNotifs().filter(n => !window.prIsNotifReadByMe(n)).length;
   };
+
+  window._prUploadShow = function(msg){ try { const o=document.getElementById('prUploadOverlay'); if(!o) return; const m=document.getElementById('prUploadOverlayMsg'); if(m) m.textContent = msg || 'PROCESANDO ARCHIVO…'; o.style.display='flex'; } catch(e){} };
+  window._prUploadHide = function(){ try { const o=document.getElementById('prUploadOverlay'); if(o) o.style.display='none'; } catch(e){} };
 
   function renderBell(){
     const badge = document.getElementById('prBellBadge');
