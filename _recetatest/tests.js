@@ -120,4 +120,13 @@ module.exports = function (t) {
   eq('pr.fSerial', t.api._resumenFecha(25569), '01/01/1970');
   eq('pr.fISO', t.api._resumenFecha('2026-02-02'), '02/02/2026');
   eq('pr.fDMY', t.api._resumenFecha('2/2/2026'), '02/02/2026');
+  const _prT = t.api.parseResumenPR([
+    ['DESCRIPCIÓN','MONTO CON IVA','ESTADO'],
+    ['ANTICIPO',100,'PAGADO'],
+    ['TOTAL',999,''],
+    ['LÍQUIDO A RECIBIR',888,''],
+    ['SUBTOTAL',777,''],
+    ['ESTIMACIÓN #1',50,'PENDIENTE']
+  ]);
+  eq('pr.skipTotales', _prT.rows.length, 2);
 };
