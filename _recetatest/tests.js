@@ -139,4 +139,20 @@ module.exports = function (t) {
   eq('pr.minNoSc', _prMin.rows[1].sc, undefined);
   eq('pr.minNoId', _prMin.rows[1].id, undefined);
   eq('pr.skipTotales', _prT.rows.length, 2);
+  const _avTw = [{ id:'t4', name:'TORRE 4', levels:[
+    { id:'t4n1', name:'NIVEL 1', aptos:[{id:'a101',name:'APARTAMENTO 101'},{id:'aCine',name:'CINE'},{id:'aPas',name:'PASILLO'}] }
+  ]}];
+  const _avSheets = { 'ESTIMACIÓN': [
+    [],[],[],[],[],[],[],
+    ['','','','% EJECUTADO A LA FECHA'],
+    ['','TORRE 4','',0.9],
+    ['','NIVEL 1','',0.93],
+    ['','Apartamento 101','',1],
+    ['','Cine','',0.5],
+    ['','Pasillo','',0.75]
+  ]};
+  const _av = t.api.parseAvanceExcel(_avSheets, _avTw);
+  eq('av.101', _av.avance['a101'], 100);
+  eq('av.cine', _av.avance['aCine'], 50);
+  eq('av.pas', _av.avance['aPas'], 75);
 };

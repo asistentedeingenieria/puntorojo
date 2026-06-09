@@ -19812,6 +19812,53 @@ function parseResumenPR(aoa){
   if (!out.length) avisos.push('La hoja RESUMEN PR no tenía filas con datos.');
   return { rows: out, avisos };
 }
+function parseAvanceExcel(sheets, towers){
+  const nrm = s => String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+  let target = null;
+  const names = Object.keys(sheets||{});
+  for (let i=0;i<names.length && !target;i++){
+    const aoa = sheets[names[i]]||[];
+    for (let r=0;r<aoa.length && r<80 && !target;r++){
+      const row = aoa[r]||[];
+      for (let c=0;c<row.length;c++){
+        const t = nrm(row[c]);
+        if (t.indexOf('EJECUTADO A LA FECHA')!==-1 || t.indexOf('% EJECUTADO')!==-1){ target={aoa,pctCol:c,headerRow:r}; break; }
+      }
+    }
+  }
+  if (!target) return { avance:{}, avisos:['No se encontró la columna "% EJECUTADO A LA FECHA".'] };
+  const aoa = target.aoa, pctCol = target.pctCol;
+  const labelRe = /^(TORRE|NIVEL|SOTANO|APARTAMENTO|APTO|PENTHOUSE|PASILLO|LOBBY|LOCAL|GIMNASIO|GIMANSIO|GAME|COWORKING|CINEMA|CINE|SALON|AREA|KIDS|SANITARIO|FACHADA)/;
+  const colScores = {};
+  for (let r=target.headerRow+1; r<aoa.length && r<target.headerRow+500; r++){
+    const row = aoa[r]||[];
+    for (let c=0;c<pctCol;c++){ if (labelRe.test(nrm(row[c]))) colScores[c]=(colScores[c]||0)+1; }
+  }
+  let nameCol=0, best=-1;
+  Object.keys(colScores).forEach(c=>{ if(colScores[c]>best){ best=colScores[c]; nameCol=+c; } });
+  const avance = {}; const avisos = [];
+  let curTorre=null, curNivel=null;
+  const findTorre = nm => { const b=nrm(nm); return (towers||[]).find(t=>{ const a=nrm(t.name); const la=a.split(' ').pop(), lb=b.split(' ').pop(); return a===b||la===lb||a.indexOf(b)!==-1||b.indexOf(a)!==-1; }); };
+  const findNivel = nm => { if(!curTorre) return null; const b=nrm(nm); return (curTorre.levels||[]).find(l=>{ const a=nrm(l.name); return a===b||a.indexOf(b)!==-1||b.indexOf(a)!==-1; }); };
+  const findApto = nm => { if(!curNivel) return null; const b=nrm(nm); const num=b.match(/(\d+)/);
+    return (curNivel.aptos||[]).find(a=>{ const an=nrm(a.name); if(an===b) return true; if(num && new RegExp('\\b'+num[1]+'\\b').test(an)) return true; const bt=b.replace(/^(APARTAMENTO|APTO)\s+/,'').trim(); return bt.length>1 && (an.indexOf(bt)!==-1||bt.indexOf(an)!==-1); }); };
+  for (let r=target.headerRow+1; r<aoa.length; r++){
+    const row = aoa[r]||[];
+    const nm = String(row[nameCol]==null?'':row[nameCol]).trim();
+    if (!nm) continue;
+    const N = nrm(nm);
+    if (/^TORRE\b/.test(N)){ curTorre=findTorre(nm); curNivel=null; continue; }
+    if (/^(NIVEL|SOTANO)\b/.test(N)){ curNivel=findNivel(nm); continue; }
+    const pv = row[pctCol];
+    if (pv===''||pv==null) continue;
+    let pct = Number(pv); if (isNaN(pct)) continue;
+    if (pct<=1.0001) pct = pct*100;
+    pct = Math.max(0, Math.min(100, Math.round(pct*100)/100));
+    const apto = findApto(nm);
+    if (apto) avance[apto.id] = pct;
+  }
+  return { avance, avisos };
+}
 // ===RECETA-PURE-END===
 // v524: accessor del catálogo GLOBAL de proveedores. Top-level (global) para que lo alcancen OCs, recetas y catálogo.
 function _getProveedores(){ try { if (typeof state !== 'undefined' && state) { if (!Array.isArray(state.proveedoresGlobales)) state.proveedoresGlobales = []; return state.proveedoresGlobales; } } catch(e){} return []; }
@@ -22246,6 +22293,17 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     try{ window._prUploadHide(); }catch(_e){}
   };
 
+  async function _parseAvanceFromFile(file, towers){
+    if (typeof XLSX === 'undefined' || !XLSX.read) return null;
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type:'array', cellDates:false, cellNF:false, cellText:false });
+      const sheets = {};
+      (wb.SheetNames||[]).forEach(sn => { sheets[sn] = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header:1, defval:'', raw:true, blankrows:true }); });
+      return parseAvanceExcel(sheets, towers||[]);
+    } catch(e){ console.warn('[AVANCE] error leyendo:', e); return null; }
+  }
+
   // Lee SOLO la hoja estándar "RESUMEN PR" si existe; devuelve {rows,avisos} o null.
   async function _parseResumenPRFromFile(file){
     if (typeof XLSX === 'undefined' || !XLSX.read) return null;
@@ -22743,7 +22801,22 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         saveState();
         try { if (typeof CloudSync!=='undefined' && CloudSync.ref) await CloudSync.uploadCurrent(); } catch(e){}
         if (typeof renderCobro==='function') renderCobro();
-        showToast('COBRO ACTUALIZADO ('+_resPR.rows.length+' FILAS)','green');
+        let _avN = 0;
+        try {
+          const _av = await _parseAvanceFromFile(file, _pP.towers||[]);
+          if (_av && _av.avance && Object.keys(_av.avance).length){
+            if (!_pP.cobro.avanceAptos) _pP.cobro.avanceAptos = {};
+            Object.keys(_av.avance).forEach(aid => {
+              if (!_pP.cobro.avanceAptos[aid]) _pP.cobro.avanceAptos[aid] = { stages:[0,0,0,0,0,0] };
+              _pP.cobro.avanceAptos[aid].pdfCumulativo = _av.avance[aid];
+              _pP.cobro.avanceAptos[aid].porEstimacion = {};
+            });
+            _avN = Object.keys(_av.avance).length;
+            saveState();
+            try { if (typeof CloudSync!=='undefined' && CloudSync.ref) await CloudSync.uploadCurrent(); } catch(e){}
+          }
+        } catch(e){ console.warn('[AVANCE excel]', e); }
+        showToast('COBRO ACTUALIZADO ('+_resPR.rows.length+' FILAS'+(_avN?' · '+_avN+' APTOS AVANCE':'')+')','green');
         event.target.value=''; return;
       }
 
