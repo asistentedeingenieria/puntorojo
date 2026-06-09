@@ -2748,7 +2748,7 @@ table{max-width:100%}
       <div class="mat-tabs" style="margin-bottom:18px">
         <button class="mat-tab active" data-perstab="lista" onclick="setPersonalSubTab('lista')">COLABORADORES</button>
         <button class="mat-tab" data-perstab="asistencia" onclick="setPersonalSubTab('asistencia')">ASISTENCIA</button>
-        <button class="mat-tab" data-perstab="polizas" onclick="setPersonalSubTab('polizas')" data-perm="planilla.descuentos">PÓLIZAS</button>
+        <button class="mat-tab" data-perstab="polizas" onclick="setPersonalSubTab('polizas')" data-perm="polizas.edit">PÓLIZAS</button>
       </div>
       <div class="kpi-grid" id="persKpis" data-perm="kpis.personal"></div>
 
@@ -4294,6 +4294,7 @@ const PERMS_DISPONIBLES = [
   { key: 'personal.edit',    label: 'Editar colaboradores',    group: 'EDICIÓN PERSONAL' },
   { key: 'personal.asistencia', label: 'Marcar asistencia',    group: 'EDICIÓN PERSONAL' },
   { key: 'personal.asistenciaPdf', label: 'Descargar PDF de asistencia', group: 'EDICIÓN PERSONAL' },
+  { key: 'polizas.edit',     label: 'Ver y editar pólizas (con solicitud)', group: 'EDICIÓN PERSONAL' },
   { key: 'projects.create',  label: 'Crear proyectos nuevos',  group: 'ADMINISTRACIÓN' },
   { key: 'data.import',      label: 'Importar/resetear datos', group: 'ADMINISTRACIÓN' },
   { key: 'users.manage',     label: 'Gestionar usuarios',      group: 'ADMINISTRACIÓN' },
@@ -38622,10 +38623,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   function _getConfig(_p){ try { if (typeof state !== 'undefined' && state) { if (!state.polizasConfig || typeof state.polizasConfig !== 'object') state.polizasConfig = { montoDefault: 44.95 }; if (typeof state.polizasConfig.montoDefault !== 'number') state.polizasConfig.montoDefault = 44.95; return state.polizasConfig; } } catch(e){} return { montoDefault: 44.95 }; }
   // v352: colaboradores GLOBALES (todos los proyectos, dedupe por nombre).
   function _allColabsGlobal(){ const seen = {}; const list = []; try { const projs = (typeof state !== 'undefined' && state && Array.isArray(state.projects)) ? state.projects : []; projs.forEach(pr => { const cs = (pr && pr.planilla && Array.isArray(pr.planilla.colaboradores)) ? pr.planilla.colaboradores : []; cs.forEach(c => { const k = String(c.nombre||'').trim().toUpperCase(); if (!k) return; if (k.replace(/[\s\-_]/g,'') === 'PREAPP') return; /* v400: ocultar PRE-APP */ if (!seen[k]) { seen[k] = { id: c.id, nombre: c.nombre, _projId: pr.id, _projName: pr.name }; list.push(seen[k]); } }); }); } catch(e){} return list.sort((a,b) => String(a.nombre||'').localeCompare(String(b.nombre||''))); }
-  function _puedeEditar(){ try { return typeof can === 'function' && (can('users.manage') || can('planilla.descuentos')); } catch(e){ return false; } }
+  function _puedeEditar(){ try { return typeof can === 'function' && (can('users.manage') || can('polizas.edit')); } catch(e){ return false; } }
   // v377: admin vs solicitante para pólizas
   function _esAdminPol(){ try { return typeof can === 'function' && can('users.manage'); } catch(e){ return false; } }
-  function _puedeSolicitarPol(){ try { return typeof can === 'function' && can('planilla.descuentos') && !can('users.manage'); } catch(e){ return false; } }
+  function _puedeSolicitarPol(){ try { return typeof can === 'function' && can('polizas.edit') && !can('users.manage'); } catch(e){ return false; } }
   function _getSolicitudesPol(){ try { if (typeof state !== 'undefined' && state){ if (!Array.isArray(state.solicitudesPolizas)) state.solicitudesPolizas = []; return state.solicitudesPolizas; } } catch(e){} return []; }
   function _solicitudesPolPendientes(){ return _getSolicitudesPol().filter(s => s.estado === 'PENDIENTE'); }
   function _crearSolicitudPol(tipo, poliza, cambios){
@@ -38937,9 +38938,23 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   }
   function _hookCaptureForm(){ const okBtn = document.getElementById('prConfOk'); if (!okBtn) { setTimeout(_hookCaptureForm, 50); return; } if (okBtn.dataset._polHooked === '1') return; okBtn.dataset._polHooked = '1'; const prev = okBtn.onclick; okBtn.onclick = function(ev){ try { /* v354: A CARGO DE es texto libre */ const _prevPolForm = window._polCapturedForm || {}; const _asegIn = (document.getElementById('polAseg')?.value || '').trim().toUpperCase(); const aCargoNombre = ((document.getElementById('polACargo')?.value || '').trim().toUpperCase()) || (_prevPolForm.aCargoDeNombre || ''); window._polCapturedForm = { aseguradoNombre: _asegIn || (_prevPolForm.aseguradoNombre || ''), aseguradoPuesto: document.getElementById('polPuesto')?.value || 'OTRO', aCargoDeColabId: '', aCargoDeNombre: aCargoNombre, noCertificado: (document.getElementById('polCert')?.value || '').trim(), noPoliza: (document.getElementById('polNo')?.value || '').trim(), aseguradora: (document.getElementById('polAseguradora')?.value || '').trim().toUpperCase(), fechaInicio: document.getElementById('polFInicio')?.value || '', fechaVencimiento: document.getElementById('polFVence')?.value || '', monto: Number(document.getElementById('polMonto')?.value) || 0, estatus: document.getElementById('polEstatus')?.value || 'ACTIVA', observaciones: (document.getElementById('polObs')?.value || '').trim() }; } catch(e){ console.warn('[v347] captura form póliza:', e); } if (typeof prev === 'function') prev.call(this, ev); }; }
   window.agregarPoliza = async function(){ if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; } /* v354: ya no validamos colabs */ window._polCapturedForm = null; setTimeout(_hookCaptureForm, 80); const ok = await window.prConfirm({ title:'AGREGAR PÓLIZA DE SEGURO', bodyHTML:_formHTML(null, null), okText:'GUARDAR PÓLIZA', wide:true }); if (!ok) { window._polCapturedForm = null; return; } _guardarDesdeCaptura(window._polCapturedForm || {}, null); };
-  // v379: EDITAR vuelve a directo (no requiere admin). Solo ELIMINAR pide aprobación.
-  window.editarPoliza = async function(id){ if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; } const po = _getPolizas().find(x => x.id === id); if (!po) { showT('PÓLIZA NO ENCONTRADA','red'); return; } window._polCapturedForm = { aseguradoNombre: (po.aseguradoNombre||''), aCargoDeNombre: (po.aCargoDeNombre||'') }; /* v469: seed para no perder nombres del combobox */ setTimeout(_hookCaptureForm, 80); const ok = await window.prConfirm({ title:'EDITAR PÓLIZA', bodyHTML:_formHTML(po, null), okText:'GUARDAR CAMBIOS', wide:true }); if (!ok) { window._polCapturedForm = null; return; } _guardarDesdeCaptura(window._polCapturedForm || {}, po); };
-  function _guardarDesdeCaptura(form, existente){
+  // feat/polizas-permiso-solicitud: EDITAR enruta no-admin por solicitud.
+  window.editarPoliza = async function(id){
+    if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
+    const po = _getPolizas().find(x => x.id === id);
+    if (!po) { showT('PÓLIZA NO ENCONTRADA','red'); return; }
+    const esAdminPol = _esAdminPol();
+    const yaPendPol = _solicitudesPolPendientes().find(s => s.polizaId === id);
+    if (yaPendPol && !esAdminPol){ await window.prAlert({ title:'YA HAY UNA SOLICITUD PENDIENTE', body:'Esta póliza tiene una solicitud de '+yaPendPol.tipo+' esperando aprobación del admin.' }); return; }
+    const isPendingPol = !esAdminPol && _puedeSolicitarPol();
+    window._polCapturedForm = { aseguradoNombre: (po.aseguradoNombre||''), aCargoDeNombre: (po.aCargoDeNombre||'') }; /* v469: seed para no perder nombres del combobox */
+    setTimeout(_hookCaptureForm, 80);
+    const hintHTML = isPendingPol ? '<div style="margin-bottom:12px;padding:10px 12px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:6px;font-size:11px;color:#9A3412">Los cambios <strong>NO se aplican de inmediato</strong>. Se envía una solicitud al admin para aprobar.</div>' : '';
+    const ok = await window.prConfirm({ title: isPendingPol ? 'EDITAR PÓLIZA (ENVÍA SOLICITUD AL ADMIN)' : 'EDITAR PÓLIZA', bodyHTML: hintHTML + _formHTML(po, null), okText: isPendingPol ? 'ENVIAR SOLICITUD' : 'GUARDAR CAMBIOS', wide:true });
+    if (!ok) { window._polCapturedForm = null; return; }
+    _guardarDesdeCaptura(window._polCapturedForm || {}, po, isPendingPol);
+  };
+  function _guardarDesdeCaptura(form, existente, asSolicitud){
     if (!form.aseguradoNombre) { showT('SELECCIONÁ UN ASEGURADO DEL CATÁLOGO','red'); return; }
     let aCargoNombre = String(form.aCargoDeNombre||'').trim();
     if (!aCargoNombre) { showT('SELECCIONÁ A QUIÉN SE LE DESCUENTA','red'); return; }
@@ -38958,6 +38973,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     }
     const polizas = _getPolizas();
     const data = { aseguradoNombre: form.aseguradoNombre, aseguradoPuesto: form.aseguradoPuesto, aCargoDeColabId: '', aCargoDeNombre: aCargoNombre, noCertificado: form.noCertificado, noPoliza: form.noPoliza, aseguradora: form.aseguradora, fechaInicio: form.fechaInicio, fechaVencimiento: form.fechaVencimiento, monto: form.monto || _getConfig().montoDefault, estatus: form.estatus, observaciones: form.observaciones || '' };
+    if (asSolicitud && existente){ _crearSolicitudPol('EDITAR', existente, data); window._polCapturedForm = null; window.renderPlanillaPolizas(); showT('SOLICITUD DE EDICIÓN ENVIADA · ESPERANDO ADMIN','green'); return; }
     let polFinal;
     if (existente) { Object.assign(existente, data); polFinal = existente; }
     else { polFinal = Object.assign({ id: 'pol-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), ts: Date.now() }, data); polizas.push(polFinal); }
@@ -39011,19 +39027,25 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
   // v350: dar de baja / reactivar póliza (no eliminan, solo cambian estatus)
   // v352: las pólizas son globales — no requiere proyecto activo.
-  // v379: DAR DE BAJA vuelve a directo (no requiere admin)
+  // feat/polizas-permiso-solicitud: no-admin enruta por solicitud
   window.darDeBajaPoliza = async function(id){
     if (!_puedeEditar()) { showT('SIN PERMISO','red'); return; }
     const po = _getPolizas().find(x => x.id === id);
     if (!po) { showT('PÓLIZA NO ENCONTRADA','red'); return; }
+    const esAdminPol = _esAdminPol();
+    const yaPendBaja = _solicitudesPolPendientes().find(s => s.polizaId === id);
+    if (yaPendBaja && !esAdminPol){ await window.prAlert({ title:'YA HAY UNA SOLICITUD PENDIENTE', body:'Esta póliza tiene una solicitud de '+yaPendBaja.tipo+' esperando aprobación del admin.' }); return; }
+    const isPendingPol = !esAdminPol && _puedeSolicitarPol();
     const hoy = new Date().toISOString().slice(0,10);
+    const hintBajaHTML = isPendingPol ? '<div style="margin-bottom:12px;padding:10px 12px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:6px;font-size:11px;color:#9A3412">La baja <strong>NO se aplica de inmediato</strong>. Se envía una solicitud al admin para aprobar.</div>' : '';
     const ok = await window.prConfirm({
-      title:'Dar de baja póliza',
-      bodyHTML: '<div style="font-size:12.5px;color:#333;line-height:1.5"><div><strong>'+_h(po.aseguradoNombre)+'</strong> ('+_h(po.aseguradoPuesto||'—')+')</div><div style="color:var(--mute);margin-top:4px">A cargo de: '+_h(po.aCargoDeNombre)+'</div><div style="margin-top:4px">Certificado '+_h(po.noCertificado||'—')+' · '+_money(po.monto)+'</div></div><div style="margin-top:14px;padding:10px 12px;background:#FFF3E0;border:1px solid #FFCC80;border-radius:6px;color:#9A3412;font-size:11.5px">La póliza se marcará como <strong>CANCELADA</strong> con fecha de baja <strong>'+_h(_fmtFecha(hoy))+'</strong>. El registro NO se elimina — queda en el historial.</div><div style="margin-top:12px"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">OBSERVACIÓN DE BAJA (OPCIONAL)</label><input id="polBajaMotivo" type="text" placeholder="ej: AVISO DE BAJA · CAMBIO DE PERSONAL" value="'+_h(po.observaciones||'')+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>',
-      okText:'DAR DE BAJA', danger:true
+      title: isPendingPol ? 'DAR DE BAJA PÓLIZA (ENVÍA SOLICITUD AL ADMIN)' : 'Dar de baja póliza',
+      bodyHTML: hintBajaHTML + '<div style="font-size:12.5px;color:#333;line-height:1.5"><div><strong>'+_h(po.aseguradoNombre)+'</strong> ('+_h(po.aseguradoPuesto||'—')+')</div><div style="color:var(--mute);margin-top:4px">A cargo de: '+_h(po.aCargoDeNombre)+'</div><div style="margin-top:4px">Certificado '+_h(po.noCertificado||'—')+' · '+_money(po.monto)+'</div></div><div style="margin-top:14px;padding:10px 12px;background:#FFF3E0;border:1px solid #FFCC80;border-radius:6px;color:#9A3412;font-size:11.5px">La póliza se marcará como <strong>CANCELADA</strong> con fecha de baja <strong>'+_h(_fmtFecha(hoy))+'</strong>. El registro NO se elimina — queda en el historial.</div><div style="margin-top:12px"><label style="display:block;font-size:9.5px;letter-spacing:1.2px;color:#888;font-weight:700;margin-bottom:4px;text-transform:uppercase">OBSERVACIÓN DE BAJA (OPCIONAL)</label><input id="polBajaMotivo" type="text" placeholder="ej: AVISO DE BAJA · CAMBIO DE PERSONAL" value="'+_h(po.observaciones||'')+'" style="width:100%;padding:8px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:12px"></div>',
+      okText: isPendingPol ? 'ENVIAR SOLICITUD' : 'DAR DE BAJA', danger: !isPendingPol
     });
     if (!ok) return;
     const motivo = (document.getElementById('polBajaMotivo')?.value || '').trim();
+    if (isPendingPol){ _crearSolicitudPol('DAR_DE_BAJA', po, { fechaBaja: hoy, observaciones: motivo || po.observaciones || '' }); window.renderPlanillaPolizas(); showT('SOLICITUD DE BAJA ENVIADA · ESPERANDO ADMIN','green'); return; }
     po.estatus = 'CANCELADA'; po.fechaBaja = hoy;
     if (motivo) po.observaciones = motivo;
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
