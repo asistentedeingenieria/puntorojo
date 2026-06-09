@@ -7145,6 +7145,11 @@ function ensureDataV9(data){
     if (p.materiales.recetaV2 && typeof p.materiales.recetaV2 === 'object' && (p.materiales.recetaV2.version||2) < 3) {
       p.materiales.recetaV2._needsReimport = true;
     }
+    // v3.1: Firestore no soporta arrays anidados -> niveles[lid] de array a objeto {0..3}
+    if (p.materiales.recetaV2 && p.materiales.recetaV2.niveles && typeof p.materiales.recetaV2.niveles === 'object'){
+      const _nv = p.materiales.recetaV2.niveles;
+      Object.keys(_nv).forEach(lid => { if (Array.isArray(_nv[lid])){ _nv[lid] = {0:_nv[lid][0]||[],1:_nv[lid][1]||[],2:_nv[lid][2]||[],3:_nv[lid][3]||[]}; } });
+    }
     /* v9 → v10: Receta v2 con tipologías + altura por nivel + parser CAD.
        p.materiales.receta original (6 etapas, por apto genérico) se mantiene
        intacta por compatibilidad pero ya no se usa para nuevas funciones.
@@ -19515,7 +19520,7 @@ function parseRecetaWorkbook(sheets, towers){
     if (/^4\s*TA/.test(s)) return 3;
     return -1;
   };
-  const ensureNivel = lid => { if (!recetaV2.niveles[lid]) recetaV2.niveles[lid] = [[],[],[],[]]; return recetaV2.niveles[lid]; };
+  const ensureNivel = lid => { if (!recetaV2.niveles[lid]) recetaV2.niveles[lid] = {0:[],1:[],2:[],3:[]}; return recetaV2.niveles[lid]; };
   const nivelExiste = (towers, lid) => (towers||[]).some(t => (t.levels||[]).some(l => l.id === lid));
   Object.keys(sheets || {}).forEach(name => {
     const aoa = sheets[name] || [];
@@ -19571,7 +19576,7 @@ function parseRecetaWorkbook(sheets, towers){
 function aplicarOperacionReceta(recetaV2, precios, op){
   if (!recetaV2 || !recetaV2.niveles) return { ok:false, error:'SIN RECETA' };
   if (!op || op.etapaIdx == null || !op.levelId) return { ok:false, error:'DATOS INCOMPLETOS' };
-  if (!recetaV2.niveles[op.levelId]) recetaV2.niveles[op.levelId] = [[],[],[],[]];
+  if (!recetaV2.niveles[op.levelId]) recetaV2.niveles[op.levelId] = {0:[],1:[],2:[],3:[]};
   const lista = recetaV2.niveles[op.levelId][op.etapaIdx];
   if (!Array.isArray(lista)) return { ok:false, error:'ETAPA INVÁLIDA' };
   const material = String(op.material||'').trim();
@@ -19624,6 +19629,7 @@ function resolveAptoId(level, label){
   const a = level.aptos.find(x => _aptoNorm(x.name).indexOf(key) !== -1);
   return a ? a.id : null;
 }
+function _etapas(x){ return [0,1,2,3].map(i => (x && x[i]) || []); }
 function totalMaterialNivel(item){
   if (!item || !item.aptos) return 0;
   let s = 0; for (const k in item.aptos) s += Number(item.aptos[k])||0; return s;
@@ -19650,7 +19656,7 @@ function parseRecetaPorApto(sheets, towers){
     const aptoCols = [];
     header.forEach((h,c) => { const hh=_aptoNorm(h); if(['ETAPA','MATERIAL','UNIDAD','TOTAL','TOTAL NIVEL'].indexOf(hh)!==-1) return;
       const aid = resolveAptoId(level, h); if(aid) aptoCols.push({col:c, aptoId:aid}); else if(String(h||'').trim()) avisos.push(name+': apto "'+h+'" sin equivalente.'); });
-    if (!recetaV2.niveles[lid]) recetaV2.niveles[lid] = [[],[],[],[]];
+    if (!recetaV2.niveles[lid]) recetaV2.niveles[lid] = {0:[],1:[],2:[],3:[]};
     for (let i=1;i<aoa.length;i++){
       const row = aoa[i]||[];
       const eIdx = etapaIdxDe(row[0]); const material=String(row[1]||'').trim(); const unidad=String(row[2]||'U').trim()||'U';
@@ -19701,7 +19707,7 @@ window.renderRecetaV2 = function(){
   const niveles = torre ? (torre.levels||[]).filter(l => rv.niveles[l.id]) : [];
   if (!recetaV2NivelSel || !niveles.some(l=>l.id===recetaV2NivelSel)) recetaV2NivelSel = niveles[0] ? niveles[0].id : null;
   const level = niveles.find(l => l.id===recetaV2NivelSel);
-  const etapas = rv.niveles[recetaV2NivelSel] || [[],[],[],[]];
+  const etapas = _etapas(rv.niveles[recetaV2NivelSel]);
   const aptoIdsEnReceta = new Set();
   etapas.forEach(lineas => lineas.forEach(l => { for (const k in (l.aptos||{})) aptoIdsEnReceta.add(k); }));
   const aptosNivel = (level && level.aptos || []).filter(a => aptoIdsEnReceta.has(a.id));
@@ -19758,7 +19764,7 @@ window.renderRecetaV2 = function(){
 };
 window._recetaV2PedirDatos = async function(levelId, etapaIdx, tipo, material, aptoId){
   const p = activeProj();
-  const lista = (p.materiales.recetaV2.niveles[levelId] || [[],[],[],[]])[etapaIdx] || [];
+  const lista = (p.materiales.recetaV2.niveles[levelId] || {0:[],1:[],2:[],3:[]})[etapaIdx] || [];
   if (tipo === 'cantidad'){
     const line = lista.find(l => l.m === material);
     const actual = line && line.aptos ? (Number(line.aptos[aptoId])||0) : 0;
@@ -19904,7 +19910,7 @@ window.verCatalogoPreciosReceta = async function(){
   const money = n => 'Q' + (Number(n)||0).toLocaleString('es-GT',{minimumFractionDigits:2,maximumFractionDigits:2});
   const provs = (p.materiales.proveedores||[]);
   const set = new Map();
-  Object.values(rv.niveles).forEach(etapas => etapas.forEach(lineas => lineas.forEach(l => {
+  Object.values(rv.niveles).forEach(etapas => _etapas(etapas).forEach(lineas => lineas.forEach(l => {
     const key = matchKeyProducto(l.m);
     if (!set.has(key)) set.set(key, { nombre: normProducto(l.m), unidad: l.u||'' });
   })));
@@ -19998,7 +20004,7 @@ window.importarRecetaExcel = async function(ev){
     }
     const { recetaV2, avisos } = parseRecetaPorApto(sheets, p.towers || []);
     const nNiv = Object.keys(recetaV2.niveles).length;
-    let nLineas = 0; Object.values(recetaV2.niveles).forEach(et => et.forEach(l => nLineas += l.length));
+    let nLineas = 0; Object.values(recetaV2.niveles).forEach(et => _etapas(et).forEach(l => nLineas += l.length));
     let body = '<div style="font-size:12px;line-height:1.6;color:#1F2937">'
       + '<div>Niveles con receta: <strong>'+nNiv+'</strong></div>'
       + '<div>Líneas de material: <strong>'+nLineas+'</strong></div>';
