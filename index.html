@@ -2878,7 +2878,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v556</span>
+    <span style="opacity:.5;font-size:9px">v557</span>
   </footer>
 
 </div>
@@ -22760,6 +22760,43 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     return { tipo: 'matriz', aptoCol, estColumns, dataRows: rows.slice(headerIdx + 1) };
   }
 
+  // Quita las pestañas RESUMEN PR / AVANCE PR del .xlsx a nivel ZIP — preserva colores/orden/formato originales.
+  window._limpiarExcelEstimacion = async function(file){
+    if (typeof JSZip === 'undefined') return null;
+    try {
+      const zip = await JSZip.loadAsync(file);
+      const wbF = zip.file('xl/workbook.xml'); const relsF = zip.file('xl/_rels/workbook.xml.rels'); const ctF = zip.file('[Content_Types].xml');
+      if (!wbF || !relsF || !ctF) return null;
+      const nrm = s => String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+      const esRem = n => { const N=nrm(n); return N.indexOf('RESUMEN PR')!==-1 || N.indexOf('AVANCE PR')!==-1 || N.indexOf('PUNTO ROJO')!==-1; };
+      const parser = new DOMParser(); const ser = new XMLSerializer();
+      const wbDoc = parser.parseFromString(await wbF.async('string'), 'application/xml');
+      const relsDoc = parser.parseFromString(await relsF.async('string'), 'application/xml');
+      const ctDoc = parser.parseFromString(await ctF.async('string'), 'application/xml');
+      const RNS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+      const sheets = Array.from(wbDoc.getElementsByTagName('sheet'));
+      const targets = []; let removed = 0;
+      sheets.forEach(sh => {
+        if (!esRem(sh.getAttribute('name'))) return;
+        const rid = sh.getAttribute('r:id') || sh.getAttributeNS(RNS,'id');
+        const rel = Array.from(relsDoc.getElementsByTagName('Relationship')).find(r => r.getAttribute('Id')===rid);
+        if (rel){ const t = rel.getAttribute('Target')||''; const full = t.charAt(0)==='/'? t.slice(1) : ('xl/'+t); targets.push(full); rel.parentNode.removeChild(rel); }
+        sh.parentNode.removeChild(sh); removed++;
+      });
+      if (!removed) return null;
+      const removeOverride = (part) => { const ov = Array.from(ctDoc.getElementsByTagName('Override')).find(o => o.getAttribute('PartName')==='/'+part); if (ov) ov.parentNode.removeChild(ov); };
+      targets.forEach(full => { zip.remove(full); removeOverride(full); });
+      if (zip.file('xl/calcChain.xml')){
+        zip.remove('xl/calcChain.xml'); removeOverride('xl/calcChain.xml');
+        const cc = Array.from(relsDoc.getElementsByTagName('Relationship')).find(r => (r.getAttribute('Target')||'').indexOf('calcChain')!==-1);
+        if (cc) cc.parentNode.removeChild(cc);
+      }
+      zip.file('xl/workbook.xml', ser.serializeToString(wbDoc));
+      zip.file('xl/_rels/workbook.xml.rels', ser.serializeToString(relsDoc));
+      zip.file('[Content_Types].xml', ser.serializeToString(ctDoc));
+      return await zip.generateAsync({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    } catch(e){ console.warn('[_limpiarExcelEstimacion]', e); return null; }
+  };
   window.descargarEstimacionExcel = async function(){
     const p = (typeof activeProj==='function') ? activeProj() : null;
     const ex = p && p.cobro && p.cobro.estimacionExcel;
@@ -23010,16 +23047,9 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
           }
         } catch(e){ console.warn('[AVANCE excel]', e); }
         try {
-          if (typeof XLSX !== 'undefined' && XLSX.read && typeof firebase !== 'undefined' && firebase.storage) {
-            const _xbuf = await file.arrayBuffer();
-            const _xwb = XLSX.read(_xbuf, { type:'array' });
-            const _xnrm = s => String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
-            const _xkeep = (_xwb.SheetNames||[]).filter(n => { const N=_xnrm(n); return N.indexOf('RESUMEN PR')===-1 && N.indexOf('AVANCE PR')===-1 && N.indexOf('PUNTO ROJO')===-1; });
-            if (_xkeep.length) {
-              const _xout = XLSX.utils.book_new();
-              _xkeep.forEach(n => XLSX.utils.book_append_sheet(_xout, _xwb.Sheets[n], n));
-              const _xarr = XLSX.write(_xout, { bookType:'xlsx', type:'array' });
-              const _xblob = new Blob([_xarr], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+          if (typeof window._limpiarExcelEstimacion === 'function' && typeof firebase !== 'undefined' && firebase.storage) {
+            const _xblob = await window._limpiarExcelEstimacion(file);
+            if (_xblob) {
               const _xref = firebase.storage().ref('estimaciones/' + _pP.id + '.xlsx');
               await _xref.put(_xblob, { contentType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
               const _xurl = await _xref.getDownloadURL();
