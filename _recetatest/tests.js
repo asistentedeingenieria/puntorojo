@@ -155,4 +155,14 @@ module.exports = function (t) {
   eq('av.101', _av.avance['a101'], 100);
   eq('av.cine', _av.avance['aCine'], 50);
   eq('av.pas', _av.avance['aPas'], 75);
+  // AVANCE PR (pestaña estándar, header "% AVANCE")
+  const _avPR = t.api.parseAvanceExcel({ 'AVANCE PR': [
+    ['NOMBRE','% AVANCE'],
+    ['TORRE 4', 0.9],
+    ['NIVEL 1', 0.93],
+    ['Apartamento 101', 1],
+    ['Cine', 0.5]
+  ]}, _avTw);
+  eq('avpr.101', _avPR.avance['a101'], 100);
+  eq('avpr.cine', _avPR.avance['aCine'], 50);
 };
