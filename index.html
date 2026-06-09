@@ -2466,6 +2466,7 @@ table{max-width:100%}
       <div class="card" id="cobro-avance-panel" style="display:none">
         <div class="card-hd">
           <h3>AVANCE DE COBRO POR APARTAMENTO</h3>
+          <button class="btn olive sm" onclick="descargarAvancePDF()">DESCARGAR PDF</button>
         </div>
         <p class="receta-intro">EL AVANCE SE ACTUALIZA SOLO AL SUBIR EL EXCEL DE ESTIMACIÓN (CON LA PESTAÑA "AVANCE PR") EN LA SUB-PESTAÑA ESTIMACIONES.</p>
         <div id="cobroAvanceApto"></div>
@@ -2878,7 +2879,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v558</span>
+    <span style="opacity:.5;font-size:9px">v559</span>
   </footer>
 
 </div>
@@ -21340,6 +21341,58 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     if (tab === 'avance') renderCobroAvanceApto();
   };
 
+  window.descargarAvancePDF = function(){
+    const p = activeProj(); if(!p) return;
+    try { if (typeof ensureEnhancedData==='function') ensureEnhancedData(); } catch(e){}
+    const av = (p.cobro && p.cobro.avanceAptos) || {};
+    const allAptos = [];
+    (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
+      const rec = av[a.id] || {}; let cumul;
+      if (rec.pdfCumulativo != null && rec.pdfCumulativo > 0) cumul = Number(rec.pdfCumulativo) || 0;
+      else { const por = rec.porEstimacion || {}; cumul = Object.values(por).reduce((s,v)=>s+(Number(v)||0),0); }
+      allAptos.push({ torre:t, level:l, apto:a, cumul: Math.min(100, cumul) });
+    })));
+    if (!allAptos.length){ showToast('SIN APARTAMENTOS PARA EL AVANCE','red'); return; }
+    if (typeof window.jspdf==='undefined' || !window.jspdf.jsPDF){ showToast('JSPDF NO CARGÓ — RECARGAR LA APP','red'); return; }
+    const etapaDe = c => c<=0?'SIN COBRAR' : c<25?'ESTRUCTURA' : c<50?'TABIQUES A UNA CARA' : c<75?'TABIQUES A DOS CARAS' : c<100?'ESTRUCTURA + FORRO DE CIELOS' : 'MASILLA + LIJA · APTO TERMINADO';
+    const total=allAptos.length, sinIniciar=allAptos.filter(x=>x.cumul===0).length, cobrado=allAptos.filter(x=>x.cumul>=100).length;
+    const enProceso=total-sinIniciar-cobrado, avG = total ? Math.round(allAptos.reduce((s,x)=>s+x.cumul,0)/total) : 0;
+    const { jsPDF }=window.jspdf;
+    const doc=new jsPDF({ unit:'pt', format:'a4', orientation:'portrait' });
+    const W=doc.internal.pageSize.width, Hh=doc.internal.pageSize.height;
+    doc.setFontSize(14); doc.setFont(undefined,'bold');
+    doc.text('AVANCE DE COBRO POR APTO · '+String(p.name||'').toUpperCase(), W/2, 40, {align:'center'});
+    doc.setFontSize(9); doc.setFont(undefined,'normal');
+    doc.text('SIN INICIAR: '+sinIniciar+'    ·    EN PROCESO: '+enProceso+'    ·    COBRADO: '+cobrado+'    ·    AVANCE GENERAL: '+avG+'%', W/2, 58, {align:'center'});
+    let y=78;
+    (p.towers||[]).forEach(t => {
+      const filas = allAptos.filter(x=>x.torre.id===t.id);
+      if (!filas.length) return;
+      const prom = Math.round(filas.reduce((s,x)=>s+x.cumul,0)/filas.length);
+      if (y > Hh-70){ doc.addPage(); y=40; }
+      doc.setFontSize(10); doc.setFont(undefined,'bold');
+      doc.text(String(t.name||'TORRE').toUpperCase()+'  ·  PROMEDIO '+prom+'%', 40, y);
+      const rows = filas.map(x => [ String(x.level.name||''), String(x.apto.name||''), Math.round(x.cumul)+'%', etapaDe(x.cumul) ]);
+      doc.autoTable({
+        startY: y+6,
+        head: [['NIVEL','APARTAMENTO','% AVANCE','ETAPA']],
+        body: rows, theme:'striped',
+        styles:{ fontSize:8.5, valign:'middle' },
+        headStyles:{ fillColor:[200,20,28], textColor:255, fontStyle:'bold', halign:'center' },
+        columnStyles:{ 2:{halign:'center'} },
+        didParseCell: function(d){
+          if (d.section==='body' && d.column.index===2){
+            const c = parseInt(String(d.cell.raw).replace('%',''))||0;
+            if (c>=100){ d.cell.styles.fillColor=[30,107,30]; d.cell.styles.textColor=255; d.cell.styles.fontStyle='bold'; }
+            else if (c>=25){ d.cell.styles.fillColor=[200,20,28]; d.cell.styles.textColor=255; d.cell.styles.fontStyle='bold'; }
+            else if (c>0){ d.cell.styles.fillColor=[244,181,187]; }
+          }
+        }
+      });
+      y = doc.lastAutoTable.finalY + 16;
+    });
+    doc.save('AVANCE COBRO '+String(p.name||'').replace(/[^\w\s-]/g,'').trim()+'.pdf');
+  };
   window.renderCobroAvanceApto = function(){
     const p = activeProj(); ensureEnhancedData();
     const cont = document.getElementById('cobroAvanceApto');
