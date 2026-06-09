@@ -38,7 +38,12 @@ recetaV2.niveles[levelId][etapaIdx] = [
 
 - **Formato:** **una hoja por nivel** (`T4-N1` … `T3-N12`), columnas `ETAPA | MATERIAL | UNIDAD | <apto1> <apto2> … | TOTAL`. Espejo del PDF (verificable por nivel). El `TOTAL` es informativo (la app recalcula = suma).
 - **Generación (una vez, la hace Claude):** combino el por-apto del PDF (individuales) con los **nombres renombrados** del Excel del usuario (mapeo **por posición**, verificado por los totales de los materiales que NO cambió de unidad) y **normalizo a individuales** la inconsistencia T4/T3. Entrego el archivo; el usuario lo sube. *(Editar después es en la app; el Excel es para la carga.)*
-- **Caveat de nombres (a confirmar en la revisión del spec):** los materiales nombrados `CIENTO DE…` quedan con cantidad **individual** (1600). Recomendación: en la receta usar nombre de **consumo** (`TORNILLO…`) y manejar `CIENTO DE TORNILLO` como **producto de compra con rendimiento 100** en el catálogo (Fase 3, la OC convierte). Por defecto se **preservan los nombres del usuario**.
+- **Nombres (DECIDIDO):** los materiales `CIENTO DE…` se **renombran a su unidad de consumo** quitando el prefijo `CIENTO DE ` y con cantidad **individual**:
+  - `CIENTO DE TORNILLO DE ½" PUNTA FINA` → `TORNILLO DE ½" PUNTA FINA` (1600)
+  - `CIENTO DE TORNILLO DE 1" PUNTA FINA` → `TORNILLO DE 1" PUNTA FINA` (13600)
+  - `CIENTO DE TACHUELON DE 1"` → `TACHUELON DE 1"` (420)
+  
+  `CIENTO DE TORNILLO` será el **producto de compra (rinde 100)** en el catálogo en Fase 3 (la OC convierte). El resto de los nombres del usuario se preservan tal cual.
 
 ---
 
@@ -112,7 +117,7 @@ Por cada hoja `T<t>-N<n>`:
 
 ---
 
-## 13. Riesgos / decisiones abiertas
-- **Nombres `CIENTO DE…`:** preservados con cantidad individual; a confirmar si se renombran a consumo (recomendado) — afecta claridad de la vista y la OC de Fase 3.
+## 13. Riesgos / decisiones
+- **Nombres `CIENTO DE…`:** DECIDIDO — se renombran a consumo (quitar `CIENTO DE `), cantidad individual; el `ciento` pasa a ser unidad de compra con rendimiento en el catálogo (Fase 3).
 - **Modelo nuevo (v3) vs proyectos con v2:** se pide recarga; no hay reparto automático de `c` a aptos.
 - **Volumen:** ~24 niveles × ~38 materiales × ~8 aptos ≈ 7.000 datos; va dentro del proyecto (texto), sincroniza normal.
