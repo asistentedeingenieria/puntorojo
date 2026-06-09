@@ -2435,6 +2435,7 @@ table{max-width:100%}
       <div class="card" id="cobro-estimaciones-card">
         <div class="card-hd">
           <h3>ESTIMACIONES</h3>
+          <button class="btn ghost sm" style="margin-right:8px" onclick="descargarEstimacionExcel()" title="Descargar el Excel de estimación (sin las pestañas RESUMEN PR / AVANCE PR)">DESCARGAR EXCEL</button>
           <label class="btn primary sm" style="cursor:pointer;margin:0" data-perm="cobro.subirExcel">
             SUBIR EXCEL DE ESTIMACIONES
             <input type="file" accept=".xlsx,.xls" style="display:none" onchange="uploadEstimacionExcel(event)">
@@ -22759,6 +22760,17 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     return { tipo: 'matriz', aptoCol, estColumns, dataRows: rows.slice(headerIdx + 1) };
   }
 
+  window.descargarEstimacionExcel = async function(){
+    const p = (typeof activeProj==='function') ? activeProj() : null;
+    const ex = p && p.cobro && p.cobro.estimacionExcel;
+    if (!ex || !ex.url){ showToast('AÚN NO SE HA SUBIDO UN EXCEL DE ESTIMACIÓN','red'); return; }
+    try {
+      const r = await fetch(ex.url); const b = await r.blob(); const u = URL.createObjectURL(b);
+      const a = document.createElement('a'); a.href = u; a.download = ex.nombre || 'ESTIMACION.xlsx';
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>{ try{ URL.revokeObjectURL(u); }catch(e){} }, 3000);
+    } catch(e){ try { window.open(ex.url, '_blank'); } catch(e2){ showToast('NO SE PUDO DESCARGAR','red'); } }
+  };
+
   // Wrappers que validan tipo de archivo + delegan al uploader principal:
   // - uploadEstimacionExcel: solo .xlsx/.xls (pestaña ESTIMACIONES)
   // - uploadAvancePDF: solo .pdf (pestaña AVANCE DE COBRO POR APTO)
@@ -22997,6 +23009,26 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
             try { if (typeof CloudSync!=='undefined' && CloudSync.ref) await CloudSync.uploadCurrent(); } catch(e){}
           }
         } catch(e){ console.warn('[AVANCE excel]', e); }
+        try {
+          if (typeof XLSX !== 'undefined' && XLSX.read && typeof firebase !== 'undefined' && firebase.storage) {
+            const _xbuf = await file.arrayBuffer();
+            const _xwb = XLSX.read(_xbuf, { type:'array' });
+            const _xnrm = s => String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+            const _xkeep = (_xwb.SheetNames||[]).filter(n => { const N=_xnrm(n); return N.indexOf('RESUMEN PR')===-1 && N.indexOf('AVANCE PR')===-1 && N.indexOf('PUNTO ROJO')===-1; });
+            if (_xkeep.length) {
+              const _xout = XLSX.utils.book_new();
+              _xkeep.forEach(n => XLSX.utils.book_append_sheet(_xout, _xwb.Sheets[n], n));
+              const _xarr = XLSX.write(_xout, { bookType:'xlsx', type:'array' });
+              const _xblob = new Blob([_xarr], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+              const _xref = firebase.storage().ref('estimaciones/' + _pP.id + '.xlsx');
+              await _xref.put(_xblob, { contentType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+              const _xurl = await _xref.getDownloadURL();
+              if (!_pP.cobro) _pP.cobro = {};
+              _pP.cobro.estimacionExcel = { url:_xurl, nombre:('ESTIMACION ' + (_pP.name||'') + '.xlsx'), ts: Date.now() };
+              saveState(); try { if (typeof CloudSync!=='undefined' && CloudSync.uploadCurrent) await CloudSync.uploadCurrent(); } catch(e){}
+            }
+          }
+        } catch(e){ console.warn('[estimacion excel limpio]', e); }
         showToast('COBRO ACTUALIZADO ('+_resPR.rows.length+' FILAS'+(_avN?' · '+_avN+' APTOS AVANCE':'')+')','green');
         event.target.value=''; return;
       }
