@@ -19641,16 +19641,24 @@ function parseRecetaPorApto(sheets, towers){
   const etapaIdxDe = txt => { const s=String(txt||'').toUpperCase().replace(/\s+/g,' ').trim();
     if(/^1\s*RA/.test(s))return 0; if(/^2\s*(DA|NDA)/.test(s))return 1; if(/^3\s*(RA|ERA)/.test(s))return 2; if(/^4\s*TA/.test(s))return 3; return -1; };
   Object.keys(sheets||{}).forEach(name => {
-    const mm = String(name).trim().match(/^T(\d+)-N(\d+)$/i);
-    if (!mm) return;
+    const raw = String(name).trim();
+    const snorm = raw.toLowerCase();
+    let tower=null, level=null;
+    // primario: el nombre de la hoja ES el id de un nivel (cualquier torre)
+    (towers||[]).forEach(t => (t.levels||[]).forEach(l => { if(!level && String(l.id||'').trim().toLowerCase()===snorm){ tower=t; level=l; } }));
+    // fallback: T<n>-N<n> (ESSENZA)
+    if(!level){
+      const mm = raw.match(/^T(\d+)-N(\d+)$/i);
+      if(!mm) return;
+      const towerId = torreSheetToTowerId('T'+mm[1], towers);
+      tower = (towers||[]).find(t => t.id===towerId);
+      if(!tower){ avisos.push('Hoja "'+raw+'": torre no existe.'); return; }
+      const nivelNum = parseInt(mm[2],10);
+      level = (tower.levels||[]).find(l => _aptoNorm(l.name)===('NIVEL '+nivelNum)) ||
+              (tower.levels||[]).find(l => { const x=String(l.name||'').match(/(\d+)/); return x && parseInt(x[1],10)===nivelNum; });
+    }
+    if (!level){ avisos.push('Hoja "'+raw+'": nivel no existe.'); return; }
     const aoa = sheets[name] || [];
-    const towerId = torreSheetToTowerId('T'+mm[1], towers);
-    const tower = (towers||[]).find(t => t.id===towerId);
-    if (!tower){ avisos.push('Hoja "'+name+'": torre no existe.'); return; }
-    const nivelNum = parseInt(mm[2],10);
-    const level = (tower.levels||[]).find(l => _aptoNorm(l.name)===('NIVEL '+nivelNum)) ||
-                  (tower.levels||[]).find(l => { const x=String(l.name||'').match(/(\d+)/); return x && parseInt(x[1],10)===nivelNum; });
-    if (!level){ avisos.push('Hoja "'+name+'": nivel '+nivelNum+' no existe.'); return; }
     const lid = level.id;
     const header = aoa[0] || [];
     const aptoCols = [];
@@ -19998,7 +20006,8 @@ window.importarRecetaExcel = async function(ev){
     const wb = XLSX.read(buf, { type:'array' });
     const sheets = {};
     wb.SheetNames.forEach(sn => { sheets[sn] = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header:1, defval:'', raw:true, blankrows:false }); });
-    const tieneApto = wb.SheetNames.some(sn => /^T\d+-N\d+$/i.test(String(sn).trim()));
+    const _lids = new Set(); (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => _lids.add(String(l.id||'').trim().toLowerCase())));
+    const tieneApto = wb.SheetNames.some(n => /^T\d+-N\d+$/i.test(String(n).trim()) || _lids.has(String(n).trim().toLowerCase()));
     if (!tieneApto) {
       return window.prAlert({ title:'ARCHIVO NO VÁLIDO', body:'El archivo no parece la plantilla por apto (faltan hojas T#-N#).' });
     }
