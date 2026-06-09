@@ -2771,8 +2771,9 @@ table{max-width:100%}
         <div class="card-hd"><h3>ASISTENCIA</h3>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <input type="date" id="asistFecha" class="inline" onchange="setAsistFecha(this.value)">
-            <select id="asistEmpresaFilter" class="inline" onchange="setPersEmpresaFilter(this.value)" style="min-width:150px"></select>
+            <input id="asistBuscar" class="inline" placeholder="Buscar persona…" oninput="setAsistBuscar(this.value)" style="min-width:200px">
             <button class="btn ghost sm" data-perm="personal.asistencia" onclick="markAllPresentGlobal()">TODOS PRESENTES</button>
+            <button class="btn olive sm" onclick="descargarAsistenciaPDF()">DESCARGAR PDF</button>
           </div>
         </div>
         <div class="asist-grid" id="asistGrid"></div>
@@ -16133,6 +16134,14 @@ function _persListaFiltrada(){
 function setPersEmpresaFilter(v){ _persEmpresaFilter=v||''; renderPersonal(); }
 function setPersBuscar(v){ _persBuscar=v||''; renderPersonal(); }
 function setAsistFecha(v){ _asistFecha=v||''; renderPersonal(); }
+let _asistBuscar='';
+function setAsistBuscar(v){ _asistBuscar=v||''; renderPersonal(); }
+function _asistListaFiltrada(){
+  const all=_getPersonal();
+  const q=_persNorm(_asistBuscar);
+  const res=q?all.filter(p=>_persNorm(p.nombre).includes(q)||_persNorm(p.cargo).includes(q)):all;
+  return res.slice().sort((a,b)=>_persNorm(a.nombre).localeCompare(_persNorm(b.nombre),'es',{sensitivity:'base'}));
+}
 
 function renderPersonal(){
   const personal=_getPersonal();
@@ -16150,7 +16159,7 @@ function renderPersonal(){
     <div class="kpi green"><div class="lbl">Presentes</div><div class="val green">${presentes}</div><div class="sub">${fecha}</div></div>`;
   const empOpts=['<option value="">TODAS LAS EMPRESAS</option>'].concat(empresas.map(e=>`<option value="${e}"${e===_persEmpresaFilter?' selected':''}>${e}</option>`)).join('');
   const fe1=document.getElementById('persEmpresaFilter'); if(fe1) fe1.innerHTML=empOpts;
-  const fe2=document.getElementById('asistEmpresaFilter'); if(fe2) fe2.innerHTML=empOpts;
+  /* asistEmpresaFilter removed — no longer in DOM */
   const fi=document.getElementById('asistFecha'); if(fi&&!fi.value) fi.value=fecha;
   const body=document.getElementById('persBody');
   if(body){
@@ -16168,13 +16177,14 @@ function renderPersonal(){
   }
   const grid=document.getElementById('asistGrid');
   if(grid){
-    if(!lista.length){ grid.innerHTML=`<div class="empty"><p>No hay personal para registrar asistencia.</p></div>`; }
+    const asistLista=_asistListaFiltrada();
+    if(!asistLista.length){ grid.innerHTML=`<div class="empty"><p>No hay personal para registrar asistencia.</p></div>`; }
     else { const projs=(typeof state!=='undefined'&&state&&Array.isArray(state.projects))?state.projects:[];
-      grid.innerHTML=lista.map(c=>{ const a=dia[c.id]||{}; const on=a.presente===true; const obraId=a.obraId||'';
+      grid.innerHTML=asistLista.map(c=>{ const a=dia[c.id]||{}; const on=a.presente===true; const obraId=a.obraId||'';
         const opt=['<option value="">— OBRA —</option>'].concat(projs.map(pr=>`<option value="${pr.id}"${pr.id===obraId?' selected':''}>${String(pr.name||'').toUpperCase()}</option>`)).concat([`<option value="OTRA"${obraId==='OTRA'?' selected':''}>OTRA…</option>`]).join('');
         const otra=obraId==='OTRA'?`<input class="inline" style="margin-top:4px" placeholder="¿Dónde?" value="${String(a.obraDesc||'').replace(/"/g,'&quot;')}" ${canAsist?'':'disabled'} onchange="setAsistenciaObraDesc('${c.id}',this.value)">`:'';
         return `<div class="asist-row" style="grid-template-columns:1.4fr 1.2fr auto auto;align-items:center">
-          <div><div style="font-weight:700;color:var(--ink);font-size:13px">${c.nombre}</div><div style="font-size:10px;color:var(--mute);text-transform:uppercase;margin-top:2px">${c.cargo||'—'}${c.empresa?(' · '+c.empresa):''}</div></div>
+          <div><div style="font-weight:700;color:var(--ink);font-size:13px">${c.nombre}</div><div style="font-size:10px;color:var(--mute);text-transform:uppercase;margin-top:2px">${c.cargo||'—'}</div></div>
           <div><select class="inline" ${canAsist&&on?'':'disabled'} onchange="setAsistenciaObra('${c.id}',this.value)">${opt}</select>${otra}</div>
           <div style="font-size:11px;color:${on?'var(--green-dark)':'var(--mute)'};font-weight:600">${on?'● PRESENTE':'○ AUSENTE'}</div>
           <div class="asist-chk ${on?'on':''}" ${canAsist?`onclick="toggleAsistenciaGlobal('${c.id}')"` :''}></div>
@@ -16207,7 +16217,26 @@ function eliminarPersonaGlobal(id){ const c=_personaById(id); if(!c) return; prC
 function toggleAsistenciaGlobal(id){ const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; const cur=A[f][id]||{}; if(cur.presente===true){ delete A[f][id]; } else { A[f][id]={presente:true,obraId:cur.obraId||'',obraDesc:cur.obraDesc||''}; } saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
 function setAsistenciaObra(id,obraId){ const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; if(!A[f][id])A[f][id]={presente:true}; A[f][id].obraId=obraId; if(obraId!=='OTRA')A[f][id].obraDesc=''; saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
 function setAsistenciaObraDesc(id,desc){ const f=_asistFechaActual(); const A=_getAsistencia(); if(A[f]&&A[f][id]){ A[f][id].obraDesc=desc; saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} } }
-function markAllPresentGlobal(){ const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; _persListaFiltrada().forEach(c=>{ if(!A[f][c.id])A[f][c.id]={presente:true,obraId:'',obraDesc:''}; else A[f][c.id].presente=true; }); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
+function markAllPresentGlobal(){ const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; _asistListaFiltrada().forEach(c=>{ if(!A[f][c.id])A[f][c.id]={presente:true,obraId:'',obraDesc:''}; else A[f][c.id].presente=true; }); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
+
+function descargarAsistenciaPDF(){
+  const fecha=_asistFechaActual();
+  const A=_getAsistencia(); const dia=A[fecha]||{};
+  const projs=(typeof state!=='undefined'&&state&&Array.isArray(state.projects))?state.projects:[];
+  const nombreObra=(a)=>{ if(!a) return '—'; if(a.obraId==='OTRA') return 'OTRA: '+(a.obraDesc||''); const pr=projs.find(x=>x.id===a.obraId); return pr?String(pr.name||'').toUpperCase():'—'; };
+  const presentes=_getPersonal().filter(pn=>dia[pn.id]&&dia[pn.id].presente)
+    .sort((x,y)=>_persNorm(x.nombre).localeCompare(_persNorm(y.nombre),'es',{sensitivity:'base'}));
+  if(!presentes.length){ showToast('NADIE MARCADO PRESENTE ESE DÍA','red'); return; }
+  if(typeof window.jspdf==='undefined'||!window.jspdf.jsPDF){ showToast('JSPDF NO CARGÓ — RECARGAR LA APP','red'); return; }
+  const { jsPDF }=window.jspdf;
+  const doc=new jsPDF({ unit:'pt', format:'a4', orientation:'portrait' });
+  const pageW=doc.internal.pageSize.width;
+  doc.setFontSize(14); doc.setFont(undefined,'bold');
+  doc.text('ASISTENCIA · '+fecha, pageW/2, 50, {align:'center'});
+  const rows=presentes.map((pn,i)=>[String(i+1), pn.nombre, pn.cargo||'', nombreObra(dia[pn.id])]);
+  doc.autoTable({ startY:70, head:[['#','NOMBRE','CARGO','OBRA']], body:rows, theme:'striped', styles:{fontSize:9}, headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold'} });
+  doc.save('ASISTENCIA '+fecha+'.pdf');
+}
 
 function agregarPersonaGlobal(){ _personaModalGlobal(null); }
 function editarPersonaGlobal(id){ const c=_personaById(id); if(c) _personaModalGlobal(c); }
