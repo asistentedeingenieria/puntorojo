@@ -19665,8 +19665,8 @@ function parseRecetaPorApto(sheets, towers){
 // ===RECETA-PURE-END===
 </script>
 <script>
-let recetaV2TorreSel = null, recetaV2NivelSel = null;
-window.setRecetaV2Sel = function(torreId, levelId){ recetaV2TorreSel = torreId; recetaV2NivelSel = levelId; renderRecetaV2(); };
+let recetaV2TorreSel = null, recetaV2NivelSel = null, recetaV2AptoSel = 'TOTAL';
+window.setRecetaV2Sel = function(torreId, levelId, aptoSel){ recetaV2TorreSel=torreId; recetaV2NivelSel=levelId; recetaV2AptoSel=(aptoSel===undefined?'TOTAL':aptoSel); renderRecetaV2(); };
 function _recetaV2LegacyEls(){
   const els = [document.getElementById('recetaStageTabs'), document.getElementById('recetaContent')];
   const pedir = document.getElementById('recetaPedirContent');
@@ -19683,9 +19683,13 @@ window.renderRecetaV2 = function(){
   const pend = (p.solicitudesReceta||[]).filter(s => s.estado==='PENDIENTE').length;
   const bSol = document.getElementById('btnVerSolReceta');
   if (bSol){ bSol.style.display = pend>0 ? '' : 'none'; bSol.textContent = 'SOLICITUDES ('+pend+')'; }
-  if (!rv || !rv.niveles || !Object.keys(rv.niveles).length){
+  const hayApto = rv && rv.version>=3 && rv.niveles && Object.keys(rv.niveles).length;
+  if (!hayApto){
     legacyEls.forEach(el => { el.style.display=''; });
-    cont.innerHTML = '<div style="padding:18px;text-align:center;background:#F8FAFC;border:1px dashed #CBD5E1;border-radius:8px;color:#64748B;font-size:12px">No hay receta cargada. Usá <strong>CARGAR RECETA (EXCEL)</strong> con la plantilla del proyecto.</div>';
+    const msg = (rv && (rv._needsReimport || (rv.version||2)<3))
+      ? 'La receta de este proyecto es de un formato anterior. Cargá la <strong>plantilla por apto</strong> para activar el desglose por apartamento.'
+      : 'No hay receta cargada. Usá <strong>CARGAR RECETA (EXCEL)</strong> con la plantilla por apto del proyecto.';
+    cont.innerHTML = '<div style="padding:18px;text-align:center;background:#F8FAFC;border:1px dashed #CBD5E1;border-radius:8px;color:#64748B;font-size:12px">'+msg+'</div>';
     return;
   }
   legacyEls.forEach(el => { el.style.display='none'; });
@@ -19696,47 +19700,57 @@ window.renderRecetaV2 = function(){
   const torre = torres.find(t => t.id===recetaV2TorreSel);
   const niveles = torre ? (torre.levels||[]).filter(l => rv.niveles[l.id]) : [];
   if (!recetaV2NivelSel || !niveles.some(l=>l.id===recetaV2NivelSel)) recetaV2NivelSel = niveles[0] ? niveles[0].id : null;
-  const chips = arr => arr.map(it => '<button class="btn ghost sm" style="font-size:11px;'+(it.active?'background:var(--cafe);color:#fff;border-color:var(--cafe)':'')+'" onclick="'+it.onclick+'">'+esc(it.label)+'</button>').join(' ');
-  let html = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">'
-    + chips(torres.map(t => ({ label:t.name, active:t.id===recetaV2TorreSel, onclick:"setRecetaV2Sel('"+t.id+"', null)" }))) + '</div>';
-  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">'
-    + chips(niveles.map(l => ({ label:l.name, active:l.id===recetaV2NivelSel, onclick:"setRecetaV2Sel('"+recetaV2TorreSel+"','"+l.id+"')" }))) + '</div>';
-  const puedeEditar = can('receta.edit') || can('users.manage');
-  const fills = ['#FDE9E7','#E7F0FD','#E9F7E9','#FBF4E1'];
+  const level = niveles.find(l => l.id===recetaV2NivelSel);
   const etapas = rv.niveles[recetaV2NivelSel] || [[],[],[],[]];
+  const aptoIdsEnReceta = new Set();
+  etapas.forEach(lineas => lineas.forEach(l => { for (const k in (l.aptos||{})) aptoIdsEnReceta.add(k); }));
+  const aptosNivel = (level && level.aptos || []).filter(a => aptoIdsEnReceta.has(a.id));
+  if (recetaV2AptoSel !== 'TOTAL' && !aptosNivel.some(a=>a.id===recetaV2AptoSel)) recetaV2AptoSel = 'TOTAL';
+  const chip = (label, active, onclick) => '<button class="btn ghost sm" style="font-size:11px;'+(active?'background:var(--cafe);color:#fff;border-color:var(--cafe)':'')+'" onclick="'+onclick+'">'+esc(label)+'</button>';
+  let html = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">'
+    + torres.map(t => chip(t.name, t.id===recetaV2TorreSel, "setRecetaV2Sel('"+t.id+"', null)")).join(' ') + '</div>';
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">'
+    + niveles.map(l => chip(l.name, l.id===recetaV2NivelSel, "setRecetaV2Sel('"+recetaV2TorreSel+"','"+l.id+"','TOTAL')")).join(' ') + '</div>';
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">'
+    + chip('TOTAL', recetaV2AptoSel==='TOTAL', "setRecetaV2Sel('"+recetaV2TorreSel+"','"+recetaV2NivelSel+"','TOTAL')")
+    + ' ' + aptosNivel.map(a => chip(a.name.replace(/^APARTAMENTO\s+/i,''), a.id===recetaV2AptoSel, "setRecetaV2Sel('"+recetaV2TorreSel+"','"+recetaV2NivelSel+"','"+a.id+"')")).join(' ') + '</div>';
+  const esTotal = recetaV2AptoSel==='TOTAL';
+  const puedeEditar = can('receta.edit') || can('users.manage');
+  const precios = p.materiales.precios || {};
+  const fills = ['#FDE9E7','#E7F0FD','#E9F7E9','#FBF4E1'];
   let totalNivel = 0;
   etapas.forEach((lineas, ei) => {
     let totalEtapa = 0;
     html += '<div style="border:1px solid #E5E7EB;border-radius:8px;margin-bottom:12px;overflow:hidden">';
     html += '<div style="padding:8px 12px;font-size:11px;font-weight:700;letter-spacing:.5px;background:'+fills[ei]+';color:#374151">'+esc(rv.etapas[ei])
-      + '<button class="btn ghost sm" style="float:right;font-size:10px;padding:2px 8px" onclick="'+(puedeEditar?'recetaV2Op':'recetaV2Solicitar')+'(\''+recetaV2NivelSel+'\','+ei+',\'agregar\')">+ AGREGAR</button>'
+      + (puedeEditar ? '<button class="btn ghost sm" style="float:right;font-size:10px;padding:2px 8px" onclick="'+(puedeEditar?'recetaV2Op':'recetaV2Solicitar')+'(\''+recetaV2NivelSel+'\','+ei+',\'agregar\')">+ AGREGAR</button>' : '')
       + '</div>';
-    html += '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="color:#6B7280;font-size:10px"><th style="text-align:left;padding:6px 12px">MATERIAL</th><th style="padding:6px 6px">U</th><th style="text-align:right;padding:6px 6px">CANT</th><th style="text-align:right;padding:6px 6px">P.U.</th><th style="text-align:right;padding:6px 12px">SUBTOTAL</th><th></th></tr></thead><tbody>';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="color:#6B7280;font-size:10px"><th style="text-align:left;padding:6px 12px">MATERIAL</th><th style="padding:6px 6px">U</th><th style="text-align:right;padding:6px 6px">'+(esTotal?'TOTAL':'CANT')+'</th><th style="text-align:right;padding:6px 6px">P.U.</th><th style="text-align:right;padding:6px 12px">SUBTOTAL</th><th></th></tr></thead><tbody>';
     if (!lineas.length) html += '<tr><td colspan="6" style="padding:10px 12px;color:#9CA3AF">— sin materiales —</td></tr>';
     lineas.forEach(l => {
+      const qty = esTotal ? totalMaterialNivel(l) : (Number((l.aptos||{})[recetaV2AptoSel])||0);
       const info = precioDeProductoReceta(p, l.m);
       const pu = info ? info.precio : 0;
-      const sub = pu * (Number(l.c)||0);
+      const sub = pu * qty;
       totalEtapa += sub;
-      const accion = puedeEditar ? 'recetaV2Op' : 'recetaV2Solicitar';
       const matArg = esc(l.m).replace(/'/g,"\\'");
+      const accion = puedeEditar ? 'recetaV2Op' : 'recetaV2Solicitar';
       html += '<tr style="border-top:1px solid #F1F5F9">'
         + '<td style="padding:6px 12px">'+esc(l.m)+'</td>'
         + '<td style="text-align:center;color:#6B7280">'+esc(l.u)+'</td>'
-        + '<td style="text-align:right;font-variant-numeric:tabular-nums">'+(Number(l.c)||0).toLocaleString('es-GT')+'</td>'
+        + '<td style="text-align:right;font-variant-numeric:tabular-nums">'+qty.toLocaleString('es-GT')+'</td>'
         + '<td style="text-align:right;color:'+(pu?'#374151':'#D1D5DB')+'">'+(pu?money(pu):'—')+'</td>'
         + '<td style="text-align:right;font-variant-numeric:tabular-nums">'+(pu?money(sub):'—')+'</td>'
         + '<td style="text-align:right;white-space:nowrap;padding-right:8px">'
-          + '<button class="btn-icon" title="Editar cantidad" onclick="'+accion+'(\''+recetaV2NivelSel+'\','+ei+',\'cantidad\',\''+matArg+'\')">✎</button>'
-          + '<button class="btn-icon danger" title="Quitar" onclick="'+accion+'(\''+recetaV2NivelSel+'\','+ei+',\'quitar\',\''+matArg+'\')">✕</button>'
+          + (esTotal ? '' : '<button class="btn-icon" title="Editar cantidad del apto" onclick="'+accion+'(\''+recetaV2NivelSel+'\','+ei+',\'cantidad\',\''+matArg+'\',\''+recetaV2AptoSel+'\')">✎</button>')
+          + '<button class="btn-icon danger" title="Quitar material del nivel" onclick="'+accion+'(\''+recetaV2NivelSel+'\','+ei+',\'quitar\',\''+matArg+'\')">✕</button>'
         + '</td></tr>';
     });
     html += '</tbody></table>';
-    html += '<div style="text-align:right;padding:6px 12px;font-size:11px;color:#6B7280;background:#FAFAFA">Subtotal etapa: <strong style="color:#374151">'+money(totalEtapa)+'</strong></div>';
-    html += '</div>';
+    html += '<div style="text-align:right;padding:6px 12px;font-size:11px;color:#6B7280;background:#FAFAFA">Subtotal etapa: <strong style="color:#374151">'+money(totalEtapa)+'</strong></div></div>';
     totalNivel += totalEtapa;
   });
-  html += '<div style="text-align:right;font-size:13px;font-weight:700;color:var(--cafe);padding:6px 4px">TOTAL NIVEL: '+money(totalNivel)+'</div>';
+  html += '<div style="text-align:right;font-size:13px;font-weight:700;color:var(--cafe);padding:6px 4px">'+(esTotal?'TOTAL NIVEL':'SUBTOTAL APTO')+': '+money(totalNivel)+'</div>';
   cont.innerHTML = html;
   if (typeof applyPermissions==='function') applyPermissions();
 };
