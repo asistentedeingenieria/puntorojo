@@ -7362,6 +7362,24 @@ function ensureDataV9(data){
     }
   } catch(e) { console.warn('[v355] migración anticipos:', e && e.message); }
 
+    // v524: PROVEEDORES GLOBALES — migrar de p.materiales.proveedores a state.proveedoresGlobales.
+    if (!Array.isArray(data.proveedoresGlobales)) data.proveedoresGlobales = [];
+    {
+      const _seenPrv = new Set(data.proveedoresGlobales.map(pr => pr && pr.id).filter(Boolean));
+      (data.projects || []).forEach(pr => {
+        const arr = pr && pr.materiales && pr.materiales.proveedores;
+        if (Array.isArray(arr)) arr.forEach(prv => {
+          if (prv && prv.id && !_seenPrv.has(prv.id)) {
+            if (!Array.isArray(prv.productos)) prv.productos = [];
+            data.proveedoresGlobales.push(prv); _seenPrv.add(prv.id);
+          }
+        });
+      });
+      if (!data.proveedoresGlobales.length) data.proveedoresGlobales.push({ id:'prv-sistegua', nombre:'SISTEGUA, S.A.', contacto:'', telefono:'', productos:[] });
+      data.proveedoresGlobales.forEach(prv => { if (!Array.isArray(prv.productos)) prv.productos = []; });
+      (data.projects || []).forEach(pr => { if (pr && pr.materiales) pr.materiales.proveedores = []; });
+    }
+
   // v355: Carga inicial de los 27 anticipos del PDF "ANTICIPOS". Idempotente.
   try {
     if (!data._anticiposPDFSeedLoadedV355 && Array.isArray(data.anticiposGlobales)) {
@@ -7615,15 +7633,6 @@ function migrateData(data){
           .filter(n => n < 33000); // descartar counters heredados
         p.materiales.ordenCounter = existingNums.length ? Math.max(...existingNums) : 0;
       }
-      if (!Array.isArray(p.materiales.proveedores)) {
-        p.materiales.proveedores = [
-          {id:'prv-sistegua',nombre:'SISTEGUA, S.A.',contacto:'',telefono:'',productos:[]}
-        ];
-      }
-      // Asegurar que cada proveedor tenga array de productos
-      p.materiales.proveedores.forEach(prv => {
-        if (!Array.isArray(prv.productos)) prv.productos = [];
-      });
       if (!Array.isArray(p.materiales.direccionesEntrega)) {
         p.materiales.direccionesEntrega = [
           {id:'dir-oficina',label:'OFICINAS PUNTO ROJO', direccion:'4TA AVENIDA 20-51 ZONA 14', contacto:'SERGIO HERNÁNDEZ', telefono:'4703 6295'}
@@ -14851,7 +14860,7 @@ function findCatalogProductForProvider(itemName, proveedor){
 
 function findBestProviderForItem(itemName){
   const p = activeProj();
-  const proveedores = p.materiales.proveedores || [];
+  const proveedores = _getProveedores();
   const matches = proveedores.map(prv => {
     const prod = findCatalogProductForProvider(itemName, prv);
     return prod ? { proveedor: prv, producto: prod, precio: Number(prod.precio) || 0 } : null;
@@ -14880,7 +14889,7 @@ function pedidoOcsResumen(pdId){
 
 function buildOcProviderOptions(selected){
   const p = activeProj();
-  const proveedores = p.materiales.proveedores || [];
+  const proveedores = _getProveedores();
   return '<option value="">— ASIGNAR —</option>' + proveedores.map(pr =>
     `<option value="${pr.id}"${pr.id === selected ? ' selected' : ''}>${pr.nombre}</option>`
   ).join('');
@@ -14963,7 +14972,7 @@ async function openOrdenCompra(){
   document.getElementById('ocArea').value = (pd.nivel || '') + (pd.apto ? ' · ' + pd.apto : '');
 
   const provSel = document.getElementById('ocProveedor');
-  provSel.innerHTML = '<option value="">— NO APLICAR A TODOS —</option>' + (p.materiales.proveedores || []).map(pr =>
+  provSel.innerHTML = '<option value="">— NO APLICAR A TODOS —</option>' + _getProveedores().map(pr =>
     `<option value="${pr.id}">${pr.nombre}</option>`
   ).join('');
 
@@ -14997,7 +15006,7 @@ async function openOrdenCompra(){
 function renderOcItems(){
   const cont = document.getElementById('ocItemsList');
   const p = activeProj();
-  const proveedores = p.materiales.proveedores || [];
+  const proveedores = _getProveedores();
   if (proveedores.length === 0) {
     cont.innerHTML = `<div class="empty" style="padding:30px;text-align:center;color:var(--mute)">NO HAY PROVEEDORES REGISTRADOS. AGREGAR PROVEEDORES ANTES DE GENERAR ÓRDENES.</div>`;
     updateOcTotal();
@@ -15050,7 +15059,7 @@ function updateOcItemProveedor(idx, provId){
   item.autoAssigned = false;
   if (provId) {
     const p = activeProj();
-    const prov = (p.materiales.proveedores || []).find(x => x.id === provId);
+    const prov = _getProveedores().find(x => x.id === provId);
     const prod = findCatalogProductForProvider(item.name, prov);
     if (prod && Number(prod.precio) > 0) {
       item.precio = Number(prod.precio) || 0;
@@ -15119,7 +15128,7 @@ function numeroALetras(num){
 
 function applyOcProveedor(provId){
   const p = activeProj();
-  const prv = (p.materiales.proveedores || []).find(x => x.id === provId);
+  const prv = _getProveedores().find(x => x.id === provId);
   if (!prv) return;
   let matched = 0;
   ocWorkingItems.forEach(it => {
@@ -15162,12 +15171,10 @@ function saveNewProveedor(){
   const contacto = document.getElementById('newProvContacto').value.trim().toUpperCase();
   const telefono = document.getElementById('newProvTel').value.trim();
 
-  if (!Array.isArray(p.materiales.proveedores)) p.materiales.proveedores = [];
-
   let provId;
   // ¿Editando?
   if (window._catProvEditingId) {
-    const existing = p.materiales.proveedores.find(x => x.id === window._catProvEditingId);
+    const existing = _getProveedores().find(x => x.id === window._catProvEditingId);
     if (existing) {
       existing.nombre = nombre;
       existing.contacto = contacto;
@@ -15184,7 +15191,7 @@ function saveNewProveedor(){
       telefono,
       productos: []
     };
-    p.materiales.proveedores.push(prov);
+    _getProveedores().push(prov);
     provId = prov.id;
     logActivity('create', `Proveedor agregado: ${nombre}`, p.name);
   }
@@ -15194,7 +15201,7 @@ function saveNewProveedor(){
   // Refrescar el select del modal OC si está abierto
   const sel = document.getElementById('ocProveedor');
   if (sel) {
-    sel.innerHTML = p.materiales.proveedores.map(pr =>
+    sel.innerHTML = _getProveedores().map(pr =>
       `<option value="${pr.id}"${pr.id === provId ? ' selected' : ''}>${pr.nombre}</option>`
     ).join('');
   }
@@ -15293,7 +15300,7 @@ async function generarOrdenCompra(){
   const created = [];
 
   providerIds.forEach((provId, idx) => {
-    const prov = (p.materiales.proveedores || []).find(x => x.id === provId);
+    const prov = _getProveedores().find(x => x.id === provId);
     if (!prov) return;
     const items = groups[provId];
     const subtotal = items.reduce((s,it) => s + ((Number(it.qty)||0) * (Number(it.precio)||0)), 0);
@@ -18711,7 +18718,7 @@ async function ejecutarLimpiezaSelectiva(){
       p.materiales.receta = [{},{},{},{},{},{}];
     }
     if (opciones.precios) {
-      (p.materiales.proveedores || []).forEach(prv => {
+      _getProveedores().forEach(prv => {
         totalAfectados += (prv.productos || []).length;
         prv.productos = [];
       });
@@ -19605,9 +19612,9 @@ function aplicarOperacionReceta(recetaV2, precios, op){
   return { ok:false, error:'TIPO DESCONOCIDO' };
 }
 function matchKeyProducto(nombre){ return normProducto(nombre).trim().toUpperCase(); }
-function precioDeProductoReceta(p, materialNombre){
+function precioDeProductoReceta(proveedores, materialNombre){
   const key = matchKeyProducto(materialNombre);
-  const provs = (p && p.materiales && p.materiales.proveedores) || [];
+  const provs = proveedores || [];
   for (const prv of provs){
     for (const prod of (prv.productos||[])){
       if (matchKeyProducto(prod.nombre) === key)
@@ -19743,7 +19750,7 @@ window.renderRecetaV2 = function(){
     if (!lineas.length) html += '<tr><td colspan="6" style="padding:10px 12px;color:#9CA3AF">— sin materiales —</td></tr>';
     lineas.forEach(l => {
       const qty = esTotal ? totalMaterialNivel(l) : (Number((l.aptos||{})[recetaV2AptoSel])||0);
-      const info = precioDeProductoReceta(p, l.m);
+      const info = precioDeProductoReceta(_getProveedores(), l.m);
       const rend = info && info.rendimiento ? info.rendimiento : 1;
       const tienePrecio = info && info.precio>0;
       const sub = tienePrecio ? (qty / rend) * info.precio : 0;
@@ -19916,19 +19923,19 @@ window.verCatalogoPreciosReceta = async function(){
   const esAdmin = can('users.manage');
   const esc = s => String(s==null?'':s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
   const money = n => 'Q' + (Number(n)||0).toLocaleString('es-GT',{minimumFractionDigits:2,maximumFractionDigits:2});
-  const provs = (p.materiales.proveedores||[]);
+  const provs = _getProveedores();
   const set = new Map();
   Object.values(rv.niveles).forEach(etapas => _etapas(etapas).forEach(lineas => lineas.forEach(l => {
     const key = matchKeyProducto(l.m);
     if (!set.has(key)) set.set(key, { nombre: normProducto(l.m), unidad: l.u||'' });
   })));
   const prods = [...set.values()].sort((a,b)=>a.nombre.localeCompare(b.nombre));
-  const sinPrecio = prods.filter(x => !precioDeProductoReceta(p, x.nombre)).length;
+  const sinPrecio = prods.filter(x => !precioDeProductoReceta(_getProveedores(), x.nombre)).length;
   let body = '<div style="font-size:11.5px;color:#475569;margin-bottom:10px">Los precios salen del <strong>catálogo de proveedores</strong>. '+(sinPrecio?('<span style="color:#B45309">'+sinPrecio+' sin precio.</span>'):'Todos con precio.')+'</div>';
   if (esAdmin && !provs.length) body += '<div style="margin-bottom:10px;padding:10px;background:#FFFBEB;border:1px solid #FCD34D;border-radius:6px;color:#92400E;font-size:11px">No hay proveedores. Creá uno en el catálogo para poder asignar precios.</div>';
   body += '<div style="max-height:55vh;overflow:auto;border:1px solid #E5E7EB;border-radius:8px"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="position:sticky;top:0;background:#374151;color:#fff;font-size:10px"><th style="text-align:left;padding:6px 8px">PRODUCTO</th><th style="padding:6px 4px">PROVEEDOR</th><th style="text-align:right;padding:6px 8px">PRECIO Q</th><th style="padding:6px 4px">RINDE</th></tr></thead><tbody>';
   prods.forEach(x => {
-    const info = precioDeProductoReceta(p, x.nombre);
+    const info = precioDeProductoReceta(_getProveedores(), x.nombre);
     const pn = esc(x.nombre).replace(/'/g,"\\'");
     const un = esc(x.unidad).replace(/'/g,"\\'");
     let provCell, precioCell;
@@ -19953,7 +19960,7 @@ window.verCatalogoPreciosReceta = async function(){
 };
 window._findCatProducto = function(p, nombre){
   const key = matchKeyProducto(nombre);
-  for (const prv of (p.materiales.proveedores||[])){
+  for (const prv of (_getProveedores())){
     const arr = prv.productos||[];
     for (let i=0;i<arr.length;i++){ if (matchKeyProducto(arr[i].nombre)===key) return { prv, idx:i }; }
   }
@@ -19963,7 +19970,7 @@ window.setProvRecetaProducto = function(nombre, unidad, proveedorId){
   if (!can('users.manage')) return showToast('SOLO ADMIN','red');
   const p = activeProj();
   if (!proveedorId) return;
-  const target = (p.materiales.proveedores||[]).find(x => x.id===proveedorId);
+  const target = (_getProveedores()).find(x => x.id===proveedorId);
   if (!target) return showToast('PROVEEDOR NO ENCONTRADO','red');
   if (!Array.isArray(target.productos)) target.productos = [];
   const cur = window._findCatProducto(p, nombre);
@@ -20672,7 +20679,7 @@ function openCatalogoProveedores(){
 function renderCatProvList(){
   const p = activeProj();
   const cont = document.getElementById('catProvList');
-  const proveedores = p.materiales.proveedores || [];
+  const proveedores = _getProveedores();
   if (proveedores.length === 0) {
     cont.innerHTML = `<div style="padding:20px 14px;text-align:center;color:var(--mute);font-size:10px;letter-spacing:1px;text-transform:uppercase">Sin proveedores — Pulsar + arriba</div>`;
     return;
@@ -20691,7 +20698,7 @@ function selectCatProv(provId){
   currentCatProvId = provId;
   catProvSearchTerm = '';
   const p = activeProj();
-  const prv = (p.materiales.proveedores || []).find(x => x.id === provId);
+  const prv = _getProveedores().find(x => x.id === provId);
   if (!prv) return;
 
   document.getElementById('catProvEmpty').style.display = 'none';
@@ -20707,7 +20714,7 @@ function selectCatProv(provId){
 
 function renderCatProvProductos(){
   const p = activeProj();
-  const prv = (p.materiales.proveedores || []).find(x => x.id === currentCatProvId);
+  const prv = _getProveedores().find(x => x.id === currentCatProvId);
   if (!prv) return;
 
   const cont = document.getElementById('catProvProductos');
@@ -20746,7 +20753,7 @@ function filterCatProvProductos(term){
 function addProductoToProveedor(){
   if (!can('users.manage')) return;
   const p = activeProj();
-  const prv = (p.materiales.proveedores || []).find(x => x.id === currentCatProvId);
+  const prv = _getProveedores().find(x => x.id === currentCatProvId);
   if (!prv) return;
   if (!Array.isArray(prv.productos)) prv.productos = [];
   prv.productos.unshift({ nombre: '', unidad: '', precio: 0 });
@@ -20763,7 +20770,7 @@ function addProductoToProveedor(){
 function updateCatProvProducto(idx, field, value){
   if (!can('users.manage')) return;
   const p = activeProj();
-  const prv = (p.materiales.proveedores || []).find(x => x.id === currentCatProvId);
+  const prv = _getProveedores().find(x => x.id === currentCatProvId);
   if (!prv || !prv.productos[idx]) return;
   if (field === 'precio') {
     prv.productos[idx].precio = Number(value) || 0;
@@ -20779,7 +20786,7 @@ function updateCatProvProducto(idx, field, value){
 function deleteCatProvProducto(idx){
   if (!can('users.manage')) return;
   const p = activeProj();
-  const prv = (p.materiales.proveedores || []).find(x => x.id === currentCatProvId);
+  const prv = _getProveedores().find(x => x.id === currentCatProvId);
   if (!prv || !prv.productos[idx]) return;
   const name = prv.productos[idx].nombre || '(sin nombre)';
   return requestDeletion({
@@ -20793,7 +20800,7 @@ function deleteCatProvProducto(idx){
 function _doDeleteCatProvProducto(idx, provId){
   const p = activeProj();
   const targetId = provId || currentCatProvId;
-  const prv = (p.materiales.proveedores || []).find(x => x.id === targetId);
+  const prv = _getProveedores().find(x => x.id === targetId);
   if (!prv || !prv.productos[idx]) return;
   prv.productos.splice(idx, 1);
   saveState();
@@ -20824,7 +20831,7 @@ function openAddProveedorFromCatalog(){
 function editCurrentProveedor(){
   if (!can('users.manage')) return;
   const p = activeProj();
-  const prv = (p.materiales.proveedores || []).find(x => x.id === currentCatProvId);
+  const prv = _getProveedores().find(x => x.id === currentCatProvId);
   if (!prv) return;
   document.getElementById('newProvNombre').value = prv.nombre || '';
   document.getElementById('newProvContacto').value = prv.contacto || '';
@@ -20837,7 +20844,7 @@ function editCurrentProveedor(){
 function deleteCurrentProveedor(){
   if (!can('users.manage')) return;
   const p = activeProj();
-  const prv = (p.materiales.proveedores || []).find(x => x.id === currentCatProvId);
+  const prv = _getProveedores().find(x => x.id === currentCatProvId);
   if (!prv) return;
   return requestDeletion({
     type: 'proveedor',
@@ -20850,10 +20857,10 @@ function deleteCurrentProveedor(){
 function _doDeleteCurrentProveedor(provId){
   const p = activeProj();
   const targetId = provId || currentCatProvId;
-  const prv = (p.materiales.proveedores || []).find(x => x.id === targetId);
+  const prv = _getProveedores().find(x => x.id === targetId);
   if (!prv) return;
   const numProds = (prv.productos || []).length;
-  p.materiales.proveedores = p.materiales.proveedores.filter(x => x.id !== targetId);
+  state.proveedoresGlobales = _getProveedores().filter(x => x.id !== targetId);
   logActivity('delete', `Proveedor eliminado: ${prv.nombre}`, `${p.name} · ${numProds} productos`);
   saveState();
   currentCatProvId = null;
@@ -38145,6 +38152,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   function _activeProj(){ return (typeof activeProj === 'function') ? activeProj() : null; }
   // v352: storage GLOBAL (state.polizasGlobales) — el arg p se ignora.
   function _getPolizas(_p){ try { if (typeof state !== 'undefined' && state) { if (!Array.isArray(state.polizasGlobales)) state.polizasGlobales = []; return state.polizasGlobales; } } catch(e){} return []; }
+  // v524: storage GLOBAL (state.proveedoresGlobales) — el catálogo de proveedores es el mismo en todos los proyectos.
+  function _getProveedores(){ try { if (typeof state !== 'undefined' && state) { if (!Array.isArray(state.proveedoresGlobales)) state.proveedoresGlobales = []; return state.proveedoresGlobales; } } catch(e){} return []; }
   function _getConfig(_p){ try { if (typeof state !== 'undefined' && state) { if (!state.polizasConfig || typeof state.polizasConfig !== 'object') state.polizasConfig = { montoDefault: 44.95 }; if (typeof state.polizasConfig.montoDefault !== 'number') state.polizasConfig.montoDefault = 44.95; return state.polizasConfig; } } catch(e){} return { montoDefault: 44.95 }; }
   // v352: colaboradores GLOBALES (todos los proyectos, dedupe por nombre).
   function _allColabsGlobal(){ const seen = {}; const list = []; try { const projs = (typeof state !== 'undefined' && state && Array.isArray(state.projects)) ? state.projects : []; projs.forEach(pr => { const cs = (pr && pr.planilla && Array.isArray(pr.planilla.colaboradores)) ? pr.planilla.colaboradores : []; cs.forEach(c => { const k = String(c.nombre||'').trim().toUpperCase(); if (!k) return; if (k.replace(/[\s\-_]/g,'') === 'PREAPP') return; /* v400: ocultar PRE-APP */ if (!seen[k]) { seen[k] = { id: c.id, nombre: c.nombre, _projId: pr.id, _projName: pr.name }; list.push(seen[k]); } }); }); } catch(e){} return list.sort((a,b) => String(a.nombre||'').localeCompare(String(b.nombre||''))); }
