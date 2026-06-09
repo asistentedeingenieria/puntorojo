@@ -2435,6 +2435,7 @@ table{max-width:100%}
       <div class="card" id="cobro-estimaciones-card">
         <div class="card-hd">
           <h3>ESTIMACIONES</h3>
+          <button class="btn ghost sm" style="margin-right:8px" onclick="descargarEstimacionesPDF()" title="Descargar el resumen de cobro en PDF">DESCARGAR PDF</button>
           <button class="btn ghost sm" style="margin-right:8px" onclick="descargarEstimacionExcel()" title="Descargar el Excel de estimación (sin las pestañas RESUMEN PR / AVANCE PR)">DESCARGAR EXCEL</button>
           <label class="btn primary sm" style="cursor:pointer;margin:0" data-perm="cobro.subirExcel">
             SUBIR EXCEL DE ESTIMACIONES
@@ -2879,7 +2880,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v559</span>
+    <span style="opacity:.5;font-size:9px">v560</span>
   </footer>
 
 </div>
@@ -9734,6 +9735,52 @@ function rowValues(r, cfg){
 /* Sincronizar: si está PAGADO, la factura debe estar EMITIDA */
 function syncFact(r){ if (r.sc === 'PAGADO') r.sf = 'EMITIDA'; }
 
+function descargarEstimacionesPDF(){
+  const p = activeProj(); if(!p || !p.cobro) return;
+  const cfg = cobroConfig(p);
+  const rows = p.cobro.rows || [];
+  if(!rows.length){ showToast('SIN ESTIMACIONES','red'); return; }
+  if (typeof window.jspdf==='undefined' || !window.jspdf.jsPDF){ showToast('JSPDF NO CARGÓ — RECARGAR LA APP','red'); return; }
+  const money = n => 'Q ' + (Math.round((Number(n)||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  let tPag=0;
+  const body = rows.map(r => {
+    const v = rowValues(r, cfg);
+    const pagado = r.sc==='PAGADO' ? v.netCI : 0; tPag += pagado;
+    const pend = (r.sc!=='PAGADO') ? v.netCI : 0;
+    const row = [ r.f||'—', r.d||'', money(v.vpCI), (r.isAnticipo?'—':(r.noAmort?'SIN AMORT.':money(v.amCI))) ];
+    if (cfg.hasRet) row.push((r.isAnticipo||r.noAmort)?'—':money(v.retenido));
+    row.push(pagado>0?money(pagado):'', pend>0?money(pend):'', r.factura?('N° '+r.factura):(r.sf==='EMITIDA'?'EMITIDA':'—'), r.facturaFechaEmision||'—', r.fp||'—', r.sc||'PENDIENTE');
+    return row;
+  });
+  const totalRef = (typeof totalProyectoNeto==='function') ? totalProyectoNeto(p) : 0;
+  const saldo = Math.max(0, totalRef - tPag);
+  const head = ['F. PRESENT.','DESCRIPCIÓN','VALOR PRES.','AMORT.'];
+  if (cfg.hasRet) head.push('RETENIDO');
+  head.push('PAGADO','PENDIENTE','FACTURA','F. RECEP.','F. PAGO','STATUS');
+  const off = cfg.hasRet?1:0; const iPag=4+off, iPend=5+off, iStat=9+off;
+  const { jsPDF }=window.jspdf;
+  const doc=new jsPDF({ unit:'pt', format:'a4', orientation:'landscape' });
+  const W=doc.internal.pageSize.width;
+  doc.setFontSize(14); doc.setFont(undefined,'bold');
+  doc.text('COBRO Y ESTIMACIONES · '+String(p.name||'').toUpperCase(), W/2, 34, {align:'center'});
+  doc.setFontSize(8.5); doc.setFont(undefined,'normal');
+  doc.text('CONTRATADO: '+money(totalRef)+'        TOTAL COBRADO: '+money(tPag)+'        SALDO PENDIENTE: '+money(saldo), W/2, 50, {align:'center'});
+  doc.autoTable({
+    startY:62, head:[head], body:body, theme:'striped',
+    styles:{ fontSize:7, cellPadding:3, valign:'middle', overflow:'linebreak' },
+    headStyles:{ fillColor:[200,20,28], textColor:255, fontStyle:'bold', halign:'center', fontSize:7 },
+    columnStyles:{ 1:{halign:'left', cellWidth:130} },
+    didParseCell: function(d){
+      if (d.section!=='body') return;
+      const ci=d.column.index;
+      if (ci>=2 && ci<=(3+off)) d.cell.styles.halign='right';
+      if (ci===iPag){ d.cell.styles.halign='right'; if(String(d.cell.raw).trim()) d.cell.styles.textColor=[30,107,30]; }
+      if (ci===iPend){ d.cell.styles.halign='right'; if(String(d.cell.raw).trim()) d.cell.styles.textColor=[200,20,28]; }
+      if (ci===iStat){ d.cell.styles.halign='center'; const s=String(d.cell.raw).toUpperCase(); if(s.indexOf('PAGAD')!==-1){ d.cell.styles.textColor=[30,107,30]; d.cell.styles.fontStyle='bold'; } else if(s.indexOf('AUTORIZ')!==-1){ d.cell.styles.textColor=[180,120,0]; } else { d.cell.styles.textColor=[200,20,28]; } }
+    }
+  });
+  doc.save('COBRO '+String(p.name||'').replace(/[^\w\s-]/g,'').trim()+'.pdf');
+}
 function renderCobro(){
   const p = activeProj();
   const cfg = cobroConfig(p);
