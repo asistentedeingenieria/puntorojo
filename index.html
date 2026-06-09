@@ -19737,19 +19737,20 @@ function parseResumenPR(aoa){
   const rows = Array.isArray(aoa) ? aoa : [];
   const avisos = [];
   const nrm = s => String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
-  let hi = -1; const col = {};
+  let hi = -1; const col = {d:-1,m:-1,fpres:-1,ff:-1,fp:-1,fac:-1,est:-1,tipo:-1};
   for (let i=0;i<rows.length;i++){
     const cells = (rows[i]||[]).map(nrm);
     const di = cells.findIndex(c => c.indexOf('DESCRIPCION')!==-1);
     const mi = cells.findIndex(c => c.indexOf('MONTO')!==-1 && c.indexOf('IVA')!==-1);
     if (di!==-1 && mi!==-1){
       hi = i; col.d = di; col.m = mi;
-      col.ff  = cells.findIndex(c => c.indexOf('FECHA')!==-1 && c.indexOf('FACTURA')!==-1);
-      col.fp  = cells.findIndex(c => c.indexOf('FECHA')!==-1 && c.indexOf('PAGO')!==-1);
-      col.fac = cells.findIndex(c => c.indexOf('FACTURA')!==-1 && (c.indexOf('NO')!==-1 || c.indexOf('NUM')!==-1 || c.indexOf('#')!==-1));
-      col.est = cells.findIndex(c => c.indexOf('ESTADO')!==-1);
-      col.tipo= cells.findIndex(c => c.indexOf('TIPO')!==-1);
-      if (col.fac === -1) col.fac = cells.findIndex((c,idx) => idx!==col.ff && idx!==col.d && c.indexOf('FACTURA')!==-1);
+      col.fpres = cells.findIndex(c => c.indexOf('FECHA')!==-1 && (c.indexOf('PRESENT')!==-1 || c.indexOf('ESTIMACION')!==-1));
+      col.ff    = cells.findIndex(c => c.indexOf('FECHA')!==-1 && c.indexOf('FACTURA')!==-1);
+      col.fp    = cells.findIndex(c => c.indexOf('FECHA')!==-1 && c.indexOf('PAGO')!==-1);
+      col.fac   = cells.findIndex(c => c.indexOf('FACTURA')!==-1 && (c.indexOf('NO')!==-1 || c.indexOf('NUM')!==-1 || c.indexOf('#')!==-1));
+      if (col.fac===-1) col.fac = cells.findIndex((c,idx)=> idx!==col.ff && idx!==col.d && c.indexOf('FACTURA')!==-1);
+      col.est   = cells.findIndex(c => c.indexOf('ESTADO')!==-1);
+      col.tipo  = cells.findIndex(c => c.indexOf('TIPO')!==-1);
       break;
     }
   }
@@ -19760,26 +19761,19 @@ function parseResumenPR(aoa){
     const d = String(r[col.d]==null?'':r[col.d]).trim();
     if (!d) continue;
     if (/^(GRAN )?TOTAL(ES)?\b|^SUBTOTAL\b|^LIQUIDO\b|^ACUMULADO\b|^SALDO\b|^CHEQUEO\b|^MENOS\b/.test(nrm(d))) continue;
-    const vp = _resumenNum(col.m>=0 ? r[col.m] : '');
-    const estado = nrm(col.est>=0 ? r[col.est] : '');
-    const tipo = nrm(col.tipo>=0 ? r[col.tipo] : '');
-    const fac = col.fac>=0 ? String(r[col.fac]==null?'':r[col.fac]).trim() : '';
-    let sc = 'PENDIENTE';
-    if (estado.indexOf('PAGAD')!==-1) sc='PAGADO';
-    else if (estado.indexOf('AUTORIZ')!==-1) sc='EN AUTORIZACIÓN';
-    const o = {
-      id: 'rpr'+out.length,
-      f: col.ff>=0 ? _resumenFecha(r[col.ff]) : '',
-      d: d.toUpperCase(),
-      vp_ci: vp,
-      sf: (fac || sc==='PAGADO') ? 'EMITIDA' : 'PENDIENTE',
-      sc: sc,
-      fp: col.fp>=0 ? _resumenFecha(r[col.fp]) : '',
-      factura: fac
-    };
-    if (tipo.indexOf('ANTICIPO')!==-1) o.isAnticipo = true;
-    if (tipo.indexOf('SIN AMORT')!==-1 || tipo.indexOf('NO AMORT')!==-1) o.noAmort = true;
-    out.push(o);
+    const row = { d: d.toUpperCase() };
+    const mRaw = col.m>=0 ? r[col.m] : '';
+    if (mRaw!=='' && mRaw!=null) row.vp_ci = _resumenNum(mRaw);
+    const fpres = col.fpres>=0 ? _resumenFecha(r[col.fpres]) : (col.ff>=0 ? _resumenFecha(r[col.ff]) : '');
+    if (fpres) row.f = fpres;
+    if (col.ff>=0){ const v=_resumenFecha(r[col.ff]); if (v) row.facturaFechaEmision = v; }
+    if (col.fp>=0){ const v=_resumenFecha(r[col.fp]); if (v) row.fp = v; }
+    if (col.fac>=0){ const v=String(r[col.fac]==null?'':r[col.fac]).trim(); if (v) row.factura = v; }
+    if (col.est>=0){ const e=nrm(r[col.est]); if (e){ row.sc = e.indexOf('PAGAD')!==-1?'PAGADO':(e.indexOf('AUTORIZ')!==-1?'EN AUTORIZACIÓN':'PENDIENTE'); } }
+    const tipo = col.tipo>=0 ? nrm(r[col.tipo]) : '';
+    if (tipo.indexOf('ANTICIPO')!==-1 || nrm(d).indexOf('ANTICIPO')===0) row.isAnticipo = true;
+    if (col.tipo>=0) row.noAmort = (tipo.indexOf('SIN AMORT')!==-1 || tipo.indexOf('NO AMORT')!==-1);
+    out.push(row);
   }
   if (!out.length) avisos.push('La hoja RESUMEN PR no tenía filas con datos.');
   return { rows: out, avisos };
@@ -22682,14 +22676,25 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         const _okPR = await window.prConfirm({
           title:'CARGAR DESDE "RESUMEN PR"',
           bodyHTML:'<div style="font-size:11.5px;color:#666;margin-bottom:10px">'+String(_pP&&_pP.name||'').toUpperCase()+'</div>'
-            +'<div>Se leyó la hoja <strong>RESUMEN PR</strong>. Esto va a <strong>REEMPLAZAR</strong> el cobro con:</div>'
-            +'<div style="margin-top:10px;font-size:12.5px;color:#444"><strong>'+_resPR.rows.length+'</strong> filas · <strong>'+_pag+'</strong> pagadas · suma Q '+_suma.toLocaleString('es-GT',{minimumFractionDigits:2})+'</div>'
+            +'<div>Se leyó la hoja <strong>RESUMEN PR</strong>. Esto va a <strong>ACTUALIZAR</strong> el cobro (conserva la factura, fecha de pago y estado que tengas en la app):</div>'
+            +'<div style="margin-top:10px;font-size:12.5px;color:#444"><strong>'+_resPR.rows.length+'</strong> estimaciones · suma con IVA Q '+_suma.toLocaleString('es-GT',{minimumFractionDigits:2})+'</div>'
             +(_resPR.avisos.length?'<div style="margin-top:8px;color:#92400E;font-size:12px">'+_resPR.avisos.map(a=>'· '+String(a).replace(/[&<>]/g,'')).join('<br>')+'</div>':''),
-          okText:'REEMPLAZAR', cancelText:'CANCELAR'
+          okText:'ACTUALIZAR', cancelText:'CANCELAR'
         });
         if (!_okPR){ event.target.value=''; return; }
         if (!_pP.cobro) _pP.cobro = { rows: [] };
-        _pP.cobro.rows = _resPR.rows.map(r => { const x = Object.assign({}, r); x.id = uid(); return x; });
+        const _normD = s => String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+        const _byDesc = {};
+        (_pP.cobro.rows||[]).forEach(rr => { _byDesc[_normD(rr.d)] = rr; });
+        _pP.cobro.rows = _resPR.rows.map(er => {
+          const prev = _byDesc[_normD(er.d)];
+          const base = prev ? Object.assign({}, prev) : { id: uid(), d:'', vp_ci:0, f:'', fp:'', factura:'', sf:'PENDIENTE', sc:'PENDIENTE' };
+          const row = Object.assign(base, er);
+          if (!row.id) row.id = uid();
+          if (row.sc==='PAGADO' && (!row.sf || row.sf==='PENDIENTE')) row.sf='EMITIDA';
+          if (row.factura && (!row.sf || row.sf==='PENDIENTE')) row.sf='EMITIDA';
+          return row;
+        });
         try { if (typeof logActivity==='function') logActivity('update','Cobro actualizado (RESUMEN PR)', (_pP.name||'')+' · '+_resPR.rows.length+' filas'); } catch(e){}
         saveState();
         try { if (typeof CloudSync!=='undefined' && CloudSync.ref) await CloudSync.uploadCurrent(); } catch(e){}

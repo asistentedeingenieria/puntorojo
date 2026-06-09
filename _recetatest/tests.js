@@ -128,5 +128,15 @@ module.exports = function (t) {
     ['SUBTOTAL',777,''],
     ['ESTIMACIÓN #1',50,'PENDIENTE']
   ]);
+  const _prMin = t.api.parseResumenPR([
+    ['DESCRIPCIÓN','MONTO CON IVA','FECHA PRESENTACIÓN'],
+    ['ANTICIPO',1000,'01/06/2026'],
+    ['ESTIMACIÓN #1',500,'15/06/2026']
+  ]);
+  eq('pr.minCount', _prMin.rows.length, 2);
+  eq('pr.minF', _prMin.rows[1].f, '15/06/2026');
+  eq('pr.minAntic', _prMin.rows[0].isAnticipo, true);
+  eq('pr.minNoSc', _prMin.rows[1].sc, undefined);
+  eq('pr.minNoId', _prMin.rows[1].id, undefined);
   eq('pr.skipTotales', _prT.rows.length, 2);
 };
