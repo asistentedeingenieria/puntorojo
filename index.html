@@ -2741,26 +2741,35 @@ table{max-width:100%}
       <h1 class="view-title">Personal y <em>cuadrillas.</em></h1>
       <div class="mat-tabs" style="margin-bottom:18px">
         <button class="mat-tab active" data-perstab="lista" onclick="setPersonalSubTab('lista')">COLABORADORES</button>
+        <button class="mat-tab" data-perstab="asistencia" onclick="setPersonalSubTab('asistencia')">ASISTENCIA</button>
         <button class="mat-tab" data-perstab="dpi" onclick="setPersonalSubTab('dpi')">DPI Y EXPEDIENTE</button>
       </div>
       <div class="kpi-grid" id="persKpis" data-perm="kpis.personal"></div>
       <div id="personal-dpi-panel" style="display:none"></div>
 
-      <div class="card">
+      <div class="card" id="pers-lista-panel">
         <div class="card-hd"><h3>COLABORADORES</h3>
-          <button class="btn olive sm" onclick="openModal('newPersona')">+ AGREGAR COLABORADOR</button>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <select id="persEmpresaFilter" class="inline" onchange="setPersEmpresaFilter(this.value)" style="min-width:150px"></select>
+            <label class="btn ghost sm" style="cursor:pointer;margin:0" data-perm="personal.edit">SUBIR EXCEL DE PERSONAL<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importarPersonalExcel(event)"></label>
+            <button class="btn olive sm" data-perm="personal.edit" onclick="agregarPersonaGlobal()">+ AGREGAR</button>
+          </div>
         </div>
         <div class="tbl-wrap">
           <table class="tbl">
-            <thead><tr><th>NOMBRE</th><th>PUESTO</th><th>CUADRILLA</th><th></th></tr></thead>
+            <thead><tr><th>NOMBRE</th><th>CARGO</th><th>EMPRESA</th><th>DPI</th><th>TELÉFONO</th><th>FACTURADO POR</th><th></th></tr></thead>
             <tbody id="persBody"></tbody>
           </table>
         </div>
       </div>
 
-      <div class="card">
-        <div class="card-hd"><h3>ASISTENCIA · <span id="todayLabel" style="color:var(--cafe)"></span></h3>
-          <button class="btn ghost sm" onclick="markAllPresent()">TODOS PRESENTES</button>
+      <div class="card" id="pers-asist-panel" style="display:none">
+        <div class="card-hd"><h3>ASISTENCIA</h3>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="date" id="asistFecha" class="inline" onchange="setAsistFecha(this.value)">
+            <select id="asistEmpresaFilter" class="inline" onchange="setPersEmpresaFilter(this.value)" style="min-width:150px"></select>
+            <button class="btn ghost sm" data-perm="personal.asistencia" onclick="markAllPresentGlobal()">TODOS PRESENTES</button>
+          </div>
         </div>
         <div class="asist-grid" id="asistGrid"></div>
       </div>
@@ -16102,104 +16111,127 @@ function todayKey(){
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
 
+let _persEmpresaFilter = '';
+let _asistFecha = '';
+function _persEmpresas(){ return [...new Set(_getPersonal().map(p=>p.empresa).filter(Boolean))].sort(); }
+function _asistFechaActual(){ return _asistFecha || todayKey(); }
+function _persNorm(s){ return String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim(); }
+function _personaById(id){ return _getPersonal().find(p=>p.id===id); }
+function _persListaFiltrada(){ const all=_getPersonal(); const emps=_persEmpresas(); const f=_persEmpresaFilter&&emps.includes(_persEmpresaFilter)?_persEmpresaFilter:''; return f?all.filter(p=>p.empresa===f):all; }
+function setPersEmpresaFilter(v){ _persEmpresaFilter=v||''; renderPersonal(); }
+function setAsistFecha(v){ _asistFecha=v||''; renderPersonal(); }
+
 function renderPersonal(){
-  const p = activeProj();
-  const colabs = p.personal.colaboradores || [];
-  const asistencia = p.personal.asistencia || {};
-  const tk = todayKey();
-  const asistHoy = asistencia[tk] || {};
-  const presentes = Object.values(asistHoy).filter(v => v).length;
-
-  const cuadrillas = [...new Set(colabs.map(c => c.cuadrilla).filter(Boolean))].length;
-
-  document.getElementById('persKpis').innerHTML = `
-    <div class="kpi olive"><div class="lbl">Colaboradores</div><div class="val">${colabs.length}</div><div class="sub">En este proyecto</div></div>
-    <div class="kpi cafe"><div class="lbl">Cuadrillas</div><div class="val">${cuadrillas}</div><div class="sub">Configuradas</div></div>
-    <div class="kpi green"><div class="lbl">Presentes hoy</div><div class="val green">${presentes}</div><div class="sub">De ${colabs.length}</div></div>
-  `;
-
-  const tf = new Date();
-  document.getElementById('todayLabel').textContent = `${String(tf.getDate()).padStart(2,'0')}/${String(tf.getMonth()+1).padStart(2,'0')}/${tf.getFullYear()}`;
-
-  const body = document.getElementById('persBody');
-  if (colabs.length === 0) {
-    body.innerHTML = `<tr><td colspan="4" style="padding:40px;text-align:center;color:var(--mute)">SIN COLABORADORES — <a href="#" onclick="event.preventDefault();openModal('newPersona')" style="color:var(--red)">AGREGAR</a></td></tr>`;
-  } else {
-    body.innerHTML = colabs.map(c => `<tr>
-      <td><input class="inline wide" value="${c.nombre}" oninput="updatePers('${c.id}','nombre',this.value)"></td>
-      <td><input class="inline" value="${c.puesto||''}" oninput="updatePers('${c.id}','puesto',this.value)"></td>
-      <td><input class="inline" value="${c.cuadrilla||''}" oninput="updatePers('${c.id}','cuadrilla',this.value)"></td>
-      <td><button class="btn-icon danger" onclick="deletePers('${c.id}')" title="ELIMINAR">✕</button></td>
-    </tr>`).join('');
+  const personal=_getPersonal();
+  const empresas=_persEmpresas();
+  const lista=_persListaFiltrada();
+  const fecha=_asistFechaActual();
+  const A=_getAsistencia(); const dia=A[fecha]||{};
+  const presentes=Object.values(dia).filter(a=>a&&a.presente).length;
+  const canEd=(typeof can==='function')&&(can('personal.edit')||can('users.manage'));
+  const canAsist=(typeof can==='function')&&(can('personal.asistencia')||can('personal.edit')||can('users.manage'));
+  const kp=document.getElementById('persKpis');
+  if(kp) kp.innerHTML=`
+    <div class="kpi olive"><div class="lbl">Personal</div><div class="val">${personal.length}</div><div class="sub">${_persEmpresaFilter?('Mostrando '+lista.length):'Total global'}</div></div>
+    <div class="kpi cafe"><div class="lbl">Empresas</div><div class="val">${empresas.length}</div><div class="sub">${empresas.join(' · ')||'—'}</div></div>
+    <div class="kpi green"><div class="lbl">Presentes</div><div class="val green">${presentes}</div><div class="sub">${fecha}</div></div>`;
+  const empOpts=['<option value="">TODAS LAS EMPRESAS</option>'].concat(empresas.map(e=>`<option value="${e}"${e===_persEmpresaFilter?' selected':''}>${e}</option>`)).join('');
+  const fe1=document.getElementById('persEmpresaFilter'); if(fe1) fe1.innerHTML=empOpts;
+  const fe2=document.getElementById('asistEmpresaFilter'); if(fe2) fe2.innerHTML=empOpts;
+  const fi=document.getElementById('asistFecha'); if(fi&&!fi.value) fi.value=fecha;
+  const body=document.getElementById('persBody');
+  if(body){
+    if(!lista.length){ body.innerHTML=`<tr><td colspan="7" style="padding:40px;text-align:center;color:var(--mute)">SIN PERSONAL${canEd?' — SUBÍ TU EXCEL o <a href="#" onclick="event.preventDefault();agregarPersonaGlobal()" style="color:var(--red)">AGREGÁ</a>':''}</td></tr>`; }
+    else { body.innerHTML=lista.map(c=>{ const f=c.facturadoPor; const fact=f&&f.nombre?`${f.nombre}${f.dpi?'<br><span style="font-size:9px;color:var(--mute)">DPI '+f.dpi+'</span>':''}`:'<span style="color:var(--mute)">—</span>';
+      return `<tr>
+        <td style="font-weight:600">${c.nombre||''}</td>
+        <td>${c.cargo||'<span style="color:var(--mute)">—</span>'}</td>
+        <td>${c.empresa?('<span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 8px;border-radius:10px;background:#EEF2FF;color:#3730A3">'+c.empresa+'</span>'):'<span style="color:var(--mute)">—</span>'}</td>
+        <td style="font-size:11px">${c.dpi||'—'}</td>
+        <td style="font-size:11px">${c.telefono||'—'}</td>
+        <td style="font-size:11px">${fact}</td>
+        <td>${canEd?`<button class="btn-icon" title="EDITAR" style="margin-right:4px" onclick="editarPersonaGlobal('${c.id}')">✎</button><button class="btn-icon danger" title="ELIMINAR" onclick="eliminarPersonaGlobal('${c.id}')">✕</button>`:''}</td>
+      </tr>`; }).join(''); }
   }
-
-  const asist = document.getElementById('asistGrid');
-  if (colabs.length === 0) {
-    asist.innerHTML = `<div class="empty"><p>No hay colaboradores para registrar asistencia.</p></div>`;
-  } else {
-    asist.innerHTML = colabs.map(c => {
-      const on = asistHoy[c.id] === true;
-      return `<div class="asist-row">
-        <div>
-          <div style="font-weight:700;color:var(--ink);font-size:13px">${c.nombre}</div>
-          <div style="font-size:10px;color:var(--mute);letter-spacing:1px;text-transform:uppercase;margin-top:2px">${c.puesto||'—'}</div>
-        </div>
-        <div style="font-size:10px;color:var(--mute);letter-spacing:1px;text-transform:uppercase">${c.cuadrilla||'SIN CUADRILLA'}</div>
-        <div style="font-size:11px;color:${on?'var(--green-dark)':'var(--mute)'};font-weight:600">${on?'● PRESENTE':'○ AUSENTE'}</div>
-        <div class="asist-chk ${on?'on':''}" onclick="toggleAsistencia('${c.id}')"></div>
-      </div>`;
-    }).join('');
+  const grid=document.getElementById('asistGrid');
+  if(grid){
+    if(!lista.length){ grid.innerHTML=`<div class="empty"><p>No hay personal para registrar asistencia.</p></div>`; }
+    else { const projs=(typeof state!=='undefined'&&state&&Array.isArray(state.projects))?state.projects:[];
+      grid.innerHTML=lista.map(c=>{ const a=dia[c.id]||{}; const on=a.presente===true; const obraId=a.obraId||'';
+        const opt=['<option value="">— OBRA —</option>'].concat(projs.map(pr=>`<option value="${pr.id}"${pr.id===obraId?' selected':''}>${String(pr.name||'').toUpperCase()}</option>`)).concat([`<option value="OTRA"${obraId==='OTRA'?' selected':''}>OTRA…</option>`]).join('');
+        const otra=obraId==='OTRA'?`<input class="inline" style="margin-top:4px" placeholder="¿Dónde?" value="${String(a.obraDesc||'').replace(/"/g,'&quot;')}" ${canAsist?'':'disabled'} onchange="setAsistenciaObraDesc('${c.id}',this.value)">`:'';
+        return `<div class="asist-row" style="grid-template-columns:1.4fr 1.2fr auto auto;align-items:center">
+          <div><div style="font-weight:700;color:var(--ink);font-size:13px">${c.nombre}</div><div style="font-size:10px;color:var(--mute);text-transform:uppercase;margin-top:2px">${c.cargo||'—'}${c.empresa?(' · '+c.empresa):''}</div></div>
+          <div><select class="inline" ${canAsist&&on?'':'disabled'} onchange="setAsistenciaObra('${c.id}',this.value)">${opt}</select>${otra}</div>
+          <div style="font-size:11px;color:${on?'var(--green-dark)':'var(--mute)'};font-weight:600">${on?'● PRESENTE':'○ AUSENTE'}</div>
+          <div class="asist-chk ${on?'on':''}" ${canAsist?`onclick="toggleAsistenciaGlobal('${c.id}')"` :''}></div>
+        </div>`; }).join(''); }
   }
 }
 
-function updatePers(id, field, val){
-  const p = activeProj();
-  const c = p.personal.colaboradores.find(x => x.id === id);
-  if (!c) return;
-  c[field] = String(val).toUpperCase();
-  saveState();
+function _guardarPersonaGlobal(data,id){ const arr=_getPersonal(); if(id){ const c=arr.find(p=>p.id===id); if(c) Object.assign(c,data); } else { arr.push(Object.assign({id:'pg-'+uid(),activo:true,ts:Date.now()},data)); } saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
+function eliminarPersonaGlobal(id){ const c=_personaById(id); if(!c) return; prConfirm({title:'ELIMINAR',body:`¿Eliminar a ${c.nombre}?`,okText:'ELIMINAR',danger:true}).then(ok=>{ if(!ok) return; if(typeof state!=='undefined'&&state) state.personalGlobal=_getPersonal().filter(p=>p.id!==id); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); showToast('PERSONA ELIMINADA'); }); }
+function toggleAsistenciaGlobal(id){ const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; const cur=A[f][id]||{}; if(cur.presente===true){ delete A[f][id]; } else { A[f][id]={presente:true,obraId:cur.obraId||'',obraDesc:cur.obraDesc||''}; } saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
+function setAsistenciaObra(id,obraId){ const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; if(!A[f][id])A[f][id]={presente:true}; A[f][id].obraId=obraId; if(obraId!=='OTRA')A[f][id].obraDesc=''; saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
+function setAsistenciaObraDesc(id,desc){ const f=_asistFechaActual(); const A=_getAsistencia(); if(A[f]&&A[f][id]){ A[f][id].obraDesc=desc; saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} } }
+function markAllPresentGlobal(){ const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; _persListaFiltrada().forEach(c=>{ if(!A[f][c.id])A[f][c.id]={presente:true,obraId:'',obraDesc:''}; else A[f][c.id].presente=true; }); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
+
+function agregarPersonaGlobal(){ _personaModalGlobal(null); }
+function editarPersonaGlobal(id){ const c=_personaById(id); if(c) _personaModalGlobal(c); }
+function _personaModalGlobal(c){
+  const e=c||{}; const f=e.facturadoPor||{};
+  const esc=s=>String(s==null?'':s).replace(/"/g,'&quot;');
+  const html=`<div class="modal-bg show" id="_pgModal" style="z-index:100040" onclick="if(event.target===this)this.remove()">
+    <div class="modal" style="max-width:440px" onclick="event.stopPropagation()">
+      <div class="modal-hd"><h3>${c?'EDITAR':'NUEVO'} PERSONAL</h3><button class="x" onclick="document.getElementById('_pgModal').remove()">✕</button></div>
+      <div class="modal-bd" style="display:flex;flex-direction:column;gap:10px">
+        <label class="fld"><span>NOMBRE COMPLETO</span><input id="_pgNombre" value="${esc(e.nombre)}"></label>
+        <label class="fld"><span>CARGO</span><input id="_pgCargo" value="${esc(e.cargo)}"></label>
+        <label class="fld"><span>EMPRESA</span><input id="_pgEmpresa" value="${esc(e.empresa)}" placeholder="DRYMIX / PALADIUS / KANZERVERUS"></label>
+        <label class="fld"><span>DPI</span><input id="_pgDpi" value="${esc(e.dpi)}"></label>
+        <label class="fld"><span>TELÉFONO</span><input id="_pgTel" value="${esc(e.telefono)}"></label>
+        <div style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px;font-size:10px;color:var(--mute);letter-spacing:.5px">FACTURADO POR (opcional)</div>
+        <label class="fld"><span>NOMBRE</span><input id="_pgFNombre" value="${esc(f.nombre)}"></label>
+        <label class="fld"><span>DPI</span><input id="_pgFDpi" value="${esc(f.dpi)}"></label>
+        <label class="fld"><span>TELÉFONO</span><input id="_pgFTel" value="${esc(f.telefono)}"></label>
+      </div>
+      <div class="modal-ft"><button class="btn ghost" onclick="document.getElementById('_pgModal').remove()">CANCELAR</button><button class="btn primary" onclick="_savePersonaModal('${c?c.id:''}')">GUARDAR</button></div>
+    </div></div>`;
+  const w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);
+  if(typeof window._prLockScroll==='function') window._prLockScroll();
+}
+function _savePersonaModal(id){
+  const v=k=>{ const el=document.getElementById(k); return el?el.value.trim():''; };
+  const nombre=v('_pgNombre'); if(!nombre){ showToast('FALTA EL NOMBRE','red'); return; }
+  const data={ nombre:nombre.toUpperCase(), cargo:v('_pgCargo'), empresa:v('_pgEmpresa').toUpperCase(), dpi:v('_pgDpi'), telefono:v('_pgTel') };
+  const fn=v('_pgFNombre'); if(fn){ data.facturadoPor={nombre:fn.toUpperCase(),dpi:v('_pgFDpi'),telefono:v('_pgFTel')}; } else { data.facturadoPor=undefined; }
+  _guardarPersonaGlobal(data, id||null);
+  const m=document.getElementById('_pgModal'); if(m) m.remove();
+  if(typeof window._prUnlockScroll==='function') window._prUnlockScroll();
 }
 
-function deletePers(id){
-  const p = activeProj();
-  const pers = p && p.personal && (p.personal.colaboradores || []).find(c => c.id === id);
-  if (!pers) return;
-  return requestDeletion({
-    type: 'colaborador',
-    label: `Colaborador: ${pers.nombre || pers.id}`,
-    payload: { id },
-    onAdminConfirm: () => _doDeletePers(id)
-  });
-}
-
-function _doDeletePers(id){
-  const p = activeProj();
-  p.personal.colaboradores = p.personal.colaboradores.filter(c => c.id !== id);
-  saveState();
-  renderPersonal();
-  showToast('COLABORADOR ELIMINADO');
-}
-window.DELETION_EXECUTORS['colaborador'] = (payload) => _doDeletePers(payload.id);
-
-function toggleAsistencia(colabId){
-  const p = activeProj();
-  if (!p.personal.asistencia) p.personal.asistencia = {};
-  const tk = todayKey();
-  if (!p.personal.asistencia[tk]) p.personal.asistencia[tk] = {};
-  p.personal.asistencia[tk][colabId] = !p.personal.asistencia[tk][colabId];
-  saveState();
-  renderPersonal();
-}
-
-function markAllPresent(){
-  const p = activeProj();
-  if (!p.personal.asistencia) p.personal.asistencia = {};
-  const tk = todayKey();
-  p.personal.asistencia[tk] = {};
-  p.personal.colaboradores.forEach(c => { p.personal.asistencia[tk][c.id] = true; });
-  saveState();
-  renderPersonal();
-  showToast('TODOS MARCADOS PRESENTES', 'green');
+async function _parsePersonalFromFile(file){ if(typeof XLSX==='undefined'||!XLSX.read) return null; try{ const buf=await file.arrayBuffer(); const wb=XLSX.read(buf,{type:'array',cellDates:false,raw:true}); const sheets={}; (wb.SheetNames||[]).forEach(sn=>{ sheets[sn]=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,defval:'',raw:true,blankrows:true}); }); return parsePersonalExcel(sheets); }catch(e){ console.warn('[PERSONAL]',e); return null; } }
+async function importarPersonalExcel(event){
+  const file=event.target.files&&event.target.files[0]; if(!file) return;
+  try{
+    window._prUploadShow&&window._prUploadShow();
+    const res=await _parsePersonalFromFile(file);
+    window._prUploadHide&&window._prUploadHide();
+    if(!res||!res.personas||!res.personas.length){ showToast('NO SE ENCONTRÓ PERSONAL EN EL EXCEL','red'); event.target.value=''; return; }
+    const ok=await prConfirm({title:'IMPORTAR PERSONAL',body:`Se detectaron ${res.personas.length} personas. ¿Actualizar el listado? Se conserva lo existente y se agregan/actualizan.`,okText:'ACTUALIZAR'});
+    if(!ok){ event.target.value=''; return; }
+    window._prUploadShow&&window._prUploadShow();
+    const arr=_getPersonal(); const byDpi={},byName={};
+    arr.forEach(p=>{ if(p.dpi) byDpi[_persNorm(p.dpi)]=p; byName[_persNorm(p.nombre)]=p; });
+    let add=0,upd=0;
+    res.personas.forEach(per=>{ const k=per.dpi?_persNorm(per.dpi):null; let ex=(k&&byDpi[k])||byName[_persNorm(per.nombre)];
+      if(ex){ if(per.nombre)ex.nombre=per.nombre; if(per.cargo)ex.cargo=per.cargo; if(per.empresa)ex.empresa=per.empresa; if(per.dpi)ex.dpi=per.dpi; if(per.telefono)ex.telefono=per.telefono; if(per.facturadoPor)ex.facturadoPor=per.facturadoPor; upd++; }
+      else { const np=Object.assign({id:'pg-'+uid(),activo:true,ts:Date.now()},per); arr.push(np); if(np.dpi)byDpi[_persNorm(np.dpi)]=np; byName[_persNorm(np.nombre)]=np; add++; } });
+    saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) await CloudSync.uploadCurrent(); }catch(e){}
+    window._prUploadHide&&window._prUploadHide();
+    showToast(`PERSONAL ACTUALIZADO · ${add} nuevos · ${upd} actualizados`,'green'); renderPersonal();
+  }catch(e){ window._prUploadHide&&window._prUploadHide(); console.error('[importarPersonal]',e); showToast('ERROR AL IMPORTAR','red'); }
+  finally{ event.target.value=''; }
 }
 
 /* ─────────────── MODALS ─────────────── */
@@ -23539,12 +23571,16 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   window.setPersonalSubTab = function(tab, silent){
     window.currentPersonalSubTab = tab;
     document.querySelectorAll('[data-perstab]').forEach(b => b.classList.toggle('active', b.dataset.perstab === tab));
-    const panel = document.getElementById('personal-dpi-panel');
-    const cards = Array.from(document.querySelectorAll('#view-personal > .card'));
-    cards.forEach(c => c.style.display = tab === 'lista' ? '' : 'none');
-    const kpis = document.getElementById('persKpis'); if (kpis) kpis.style.display = tab === 'lista' ? '' : 'none';
-    if (panel) panel.style.display = tab === 'dpi' ? '' : 'none';
+    const dpiPanel = document.getElementById('personal-dpi-panel');
+    const listaPanel = document.getElementById('pers-lista-panel');
+    const asistPanel = document.getElementById('pers-asist-panel');
+    const kpis = document.getElementById('persKpis');
+    if (listaPanel) listaPanel.style.display = tab === 'lista' ? '' : 'none';
+    if (asistPanel) asistPanel.style.display = tab === 'asistencia' ? '' : 'none';
+    if (dpiPanel) dpiPanel.style.display = tab === 'dpi' ? '' : 'none';
+    if (kpis) kpis.style.display = (tab === 'lista' || tab === 'asistencia') ? '' : 'none';
     if (tab === 'dpi') renderDpiPanel();
+    if ((tab === 'lista' || tab === 'asistencia') && !silent) renderPersonal();
   };
 
   window.renderDpiPanel = function(){
