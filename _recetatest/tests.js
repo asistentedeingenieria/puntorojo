@@ -165,4 +165,16 @@ module.exports = function (t) {
   ]}, _avTw);
   eq('avpr.101', _avPR.avance['a101'], 100);
   eq('avpr.cine', _avPR.avance['aCine'], 50);
+  const _peSheets = { 'GENERAL': [
+    [],
+    ['No.','NOMBRE','CARGO','EMPRESA','DPI','TELÉFONO','','','FACTURADO X','NOMBRE','DPI','TELÉFONO'],
+    [1,'CARLOS DAVID','TEMPORAL','PALADIUS','3018 98197 0101','39531046'],
+    [10,'JOSE MIGUEL','INSTALADOR','DRYMIX','2699 49496 0107','43555755','','','','LINDA MARIBEL','2857 20171 0107','38455147']
+  ]};
+  const _pe = t.api.parsePersonalExcel(_peSheets);
+  eq('pe.count', _pe.personas.length, 2);
+  eq('pe.empresa', _pe.personas[0].empresa, 'PALADIUS');
+  eq('pe.cargo', _pe.personas[1].cargo, 'INSTALADOR');
+  eq('pe.fact', _pe.personas[1].facturadoPor.nombre, 'LINDA MARIBEL');
+  t.ok('pe.nofact', _pe.personas[0].facturadoPor===undefined);
 };

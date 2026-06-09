@@ -7385,6 +7385,24 @@ function ensureDataV9(data){
       (data.projects || []).forEach(pr => { if (pr && pr.materiales) pr.materiales.proveedores = []; });
     }
 
+    // vXXX: PERSONAL GLOBAL — listado maestro + asistencia por obra.
+    if (!Array.isArray(data.personalGlobal)) data.personalGlobal = [];
+    if (!data.asistenciaGlobal || typeof data.asistenciaGlobal !== 'object') data.asistenciaGlobal = {};
+    {
+      const _nrmN = s => String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+      const _seenP = new Set(data.personalGlobal.map(p => _nrmN(p && p.nombre)).filter(Boolean));
+      (data.projects || []).forEach(pr => {
+        const arr = pr && pr.personal && pr.personal.colaboradores;
+        if (Array.isArray(arr)) arr.forEach(c => {
+          const nm = _nrmN(c && c.nombre);
+          if (nm && !_seenP.has(nm)){
+            data.personalGlobal.push({ id:'pg-'+(c.id||Math.random().toString(36).slice(2)), nombre:String(c.nombre||'').toUpperCase(), cargo:String(c.puesto||c.cargo||''), empresa:'', dpi:String(c.dpi||''), telefono:String(c.telefono||''), activo:true });
+            _seenP.add(nm);
+          }
+        });
+      });
+    }
+
   // v355: Carga inicial de los 27 anticipos del PDF "ANTICIPOS". Idempotente.
   try {
     if (!data._anticiposPDFSeedLoadedV355 && Array.isArray(data.anticiposGlobales)) {
@@ -19856,9 +19874,53 @@ function parseAvanceExcel(sheets, towers){
   }
   return { avance, avisos };
 }
+function parsePersonalExcel(sheets){
+  const nrm = s => String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+  const names = Object.keys(sheets||{});
+  function headerInfo(aoa){
+    for (let r=0;r<Math.min((aoa||[]).length,15);r++){
+      const cells = (aoa[r]||[]).map(nrm);
+      if (cells.indexOf('NOMBRE')!==-1 && (cells.indexOf('CARGO')!==-1 || cells.indexOf('DPI')!==-1)) return { hr:r, cells };
+    }
+    return null;
+  }
+  let aoa=null, hi=null, chosen=names.find(n => nrm(n)==='GENERAL') || null;
+  if (chosen){ aoa = sheets[chosen]; hi = headerInfo(aoa); }
+  if (!hi){ for (const n of names){ const h=headerInfo(sheets[n]); if(h){ aoa=sheets[n]; hi=h; chosen=n; break; } } }
+  if (!hi) return { personas:[], avisos:['No se encontró el encabezado (NOMBRE / CARGO / DPI).'] };
+  const cells = hi.cells, hr = hi.hr;
+  const col = {
+    nombre: cells.indexOf('NOMBRE'),
+    cargo:  cells.indexOf('CARGO'),
+    empresa:cells.indexOf('EMPRESA'),
+    dpi:    cells.indexOf('DPI'),
+    tel:    cells.findIndex(c => c.indexOf('TELEFONO')!==-1)
+  };
+  const fi = cells.findIndex(c => c.indexOf('FACTURADO')!==-1);
+  const fcol = { nombre:-1, dpi:-1, tel:-1 };
+  if (fi!==-1){ for (let c=fi+1;c<cells.length;c++){
+    if (fcol.nombre===-1 && cells[c]==='NOMBRE') fcol.nombre=c;
+    else if (fcol.dpi===-1 && cells[c]==='DPI') fcol.dpi=c;
+    else if (fcol.tel===-1 && cells[c].indexOf('TELEFONO')!==-1) fcol.tel=c;
+  } }
+  const get=(row,i)=> i>=0 ? String(row[i]==null?'':row[i]).trim() : '';
+  const personas=[]; const avisos=[];
+  for (let r=hr+1;r<aoa.length;r++){
+    const row = aoa[r]||[];
+    const nombre = get(row,col.nombre);
+    if (!nombre) continue;
+    const p = { nombre:nombre.toUpperCase(), cargo:get(row,col.cargo), empresa:get(row,col.empresa).toUpperCase(), dpi:get(row,col.dpi), telefono:get(row,col.tel) };
+    if (fcol.nombre>=0){ const fn=get(row,fcol.nombre); if (fn) p.facturadoPor = { nombre:fn.toUpperCase(), dpi:get(row,fcol.dpi), telefono:get(row,fcol.tel) }; }
+    personas.push(p);
+  }
+  if (!personas.length) avisos.push('No se encontraron personas con nombre.');
+  return { personas, avisos };
+}
 // ===RECETA-PURE-END===
 // v524: accessor del catálogo GLOBAL de proveedores. Top-level (global) para que lo alcancen OCs, recetas y catálogo.
 function _getProveedores(){ try { if (typeof state !== 'undefined' && state) { if (!Array.isArray(state.proveedoresGlobales)) state.proveedoresGlobales = []; return state.proveedoresGlobales; } } catch(e){} return []; }
+function _getPersonal(){ try { if (typeof state !== 'undefined' && state) { if (!Array.isArray(state.personalGlobal)) state.personalGlobal = []; return state.personalGlobal; } } catch(e){} return []; }
+function _getAsistencia(){ try { if (typeof state !== 'undefined' && state) { if (!state.asistenciaGlobal || typeof state.asistenciaGlobal!=='object') state.asistenciaGlobal = {}; return state.asistenciaGlobal; } } catch(e){} return {}; }
 </script>
 <script>
 let recetaV2TorreSel = null, recetaV2NivelSel = null, recetaV2AptoSel = 'TOTAL';
