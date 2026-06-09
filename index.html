@@ -19754,42 +19754,40 @@ window.renderRecetaV2 = function(){
   cont.innerHTML = html;
   if (typeof applyPermissions==='function') applyPermissions();
 };
-window._recetaV2PedirDatos = async function(levelId, etapaIdx, tipo, material){
+window._recetaV2PedirDatos = async function(levelId, etapaIdx, tipo, material, aptoId){
   const p = activeProj();
   const lista = (p.materiales.recetaV2.niveles[levelId] || [[],[],[],[]])[etapaIdx] || [];
   if (tipo === 'cantidad'){
     const line = lista.find(l => l.m === material);
-    const actual = line ? line.c : 0;
-    const v = await window.prPrompt({ title:'CAMBIAR CANTIDAD', body:material+'\nCantidad actual: '+actual, placeholder:'nueva cantidad', defaultValue:String(actual), required:true });
+    const actual = line && line.aptos ? (Number(line.aptos[aptoId])||0) : 0;
+    const v = await window.prPrompt({ title:'CAMBIAR CANTIDAD (APTO)', body:material+'\nCantidad actual: '+actual, placeholder:'nueva cantidad', defaultValue:String(actual), required:true });
     if (v === null) return null;
     const c = Number(String(v).replace(/[^\d.]/g,''));
     if (!(c >= 0)) { showToast('CANTIDAD INVÁLIDA','red'); return null; }
-    return { material, unidad: line ? line.u : 'U', cantidadNueva: c, cantidadActual: actual };
+    return { material, unidad: line ? line.u : 'U', cantidadNueva: c, cantidadActual: actual, aptoId };
   }
   if (tipo === 'quitar'){
-    const okq = await window.prConfirm({ title:'QUITAR MATERIAL', bodyHTML:'<div style="font-size:12px">¿Quitar <strong>'+material.replace(/[&<>]/g,'')+'</strong> de esta etapa?</div>', okText:'QUITAR', cancelText:'CANCELAR', danger:true });
+    const okq = await window.prConfirm({ title:'QUITAR MATERIAL', bodyHTML:'<div style="font-size:12px">¿Quitar <strong>'+material.replace(/[&<>]/g,'')+'</strong> de esta etapa (todos los aptos)?</div>', okText:'QUITAR', cancelText:'CANCELAR', danger:true });
     if (!okq) return null;
-    return { material, unidad:'U', cantidadNueva:0, cantidadActual:0 };
+    return { material, unidad:'U', cantidadNueva:0, cantidadActual:0, aptoId:null };
   }
   if (tipo === 'agregar'){
-    const nombre = await window.prPrompt({ title:'AGREGAR MATERIAL', body:'Nombre del material', placeholder:'ej: Tornillo de 1" pf', required:true });
+    const nombre = await window.prPrompt({ title:'AGREGAR MATERIAL', body:'Nombre del material', placeholder:'ej: TORNILLO DE 1" PUNTA FINA', required:true });
     if (nombre === null || !String(nombre).trim()) return null;
     const unidad = await window.prPrompt({ title:'UNIDAD', body:'Unidad (U, LB, ...)', placeholder:'U', defaultValue:'U', required:true });
     if (unidad === null) return null;
-    const v = await window.prPrompt({ title:'CANTIDAD', body:'Cantidad total del nivel', placeholder:'0', required:true });
-    if (v === null) return null;
-    const c = Number(String(v).replace(/[^\d.]/g,''));
-    if (!(c >= 0)) { showToast('CANTIDAD INVÁLIDA','red'); return null; }
-    return { material:String(nombre).trim(), unidad:String(unidad).trim()||'U', cantidadNueva:c, cantidadActual:null };
+    const v = await window.prPrompt({ title:'CANTIDAD', body:(aptoId?'Cantidad para este apto':'Cantidad (la asignás luego por apto)'), placeholder:'0', defaultValue:'0', required:false });
+    const c = Number(String(v==null?'0':v).replace(/[^\d.]/g,''));
+    return { material:String(nombre).trim(), unidad:String(unidad).trim()||'U', cantidadNueva:(c>=0?c:0), cantidadActual:null, aptoId: aptoId||null };
   }
   return null;
 };
-window.recetaV2Op = async function(levelId, etapaIdx, tipo, material){
+window.recetaV2Op = async function(levelId, etapaIdx, tipo, material, aptoId){
   if (!(can('receta.edit') || can('users.manage'))) return showToast('SIN PERMISO','red');
   const p = activeProj();
-  const datos = await window._recetaV2PedirDatos(levelId, etapaIdx, tipo, material);
+  const datos = await window._recetaV2PedirDatos(levelId, etapaIdx, tipo, material, aptoId);
   if (!datos) return;
-  const res = aplicarOperacionReceta(p.materiales.recetaV2, p.materiales.precios, { tipo, levelId, etapaIdx, material:datos.material, unidad:datos.unidad, cantidadNueva:datos.cantidadNueva });
+  const res = aplicarOperacionReceta(p.materiales.recetaV2, p.materiales.precios, { tipo, levelId, etapaIdx, material:datos.material, unidad:datos.unidad, aptoId:datos.aptoId, cantidadNueva:datos.cantidadNueva });
   if (!res.ok) return showToast('NO SE PUDO: '+(res.error||''),'red');
   try { if (typeof logActivity==='function') logActivity('update','Receta editada', p.name+' · '+tipo+' · '+datos.material); } catch(e){}
   saveState();
@@ -19797,18 +19795,19 @@ window.recetaV2Op = async function(levelId, etapaIdx, tipo, material){
   showToast('RECETA ACTUALIZADA','green');
   renderRecetaV2();
 };
-window.recetaV2Solicitar = async function(levelId, etapaIdx, tipo, material){
+window.recetaV2Solicitar = async function(levelId, etapaIdx, tipo, material, aptoId){
   const p = activeProj();
-  const datos = await window._recetaV2PedirDatos(levelId, etapaIdx, tipo, material);
+  const datos = await window._recetaV2PedirDatos(levelId, etapaIdx, tipo, material, aptoId);
   if (!datos) return;
   if (!Array.isArray(p.solicitudesReceta)) p.solicitudesReceta = [];
   const torre = (p.towers||[]).find(t => (t.levels||[]).some(l => l.id===levelId));
   const lvl = torre && (torre.levels||[]).find(l => l.id===levelId);
+  const aptoNom = (() => { const a=lvl&&(lvl.aptos||[]).find(x=>x.id===datos.aptoId); return a?a.name:''; })();
   const etiqueta = (torre?torre.name:'')+' · '+(lvl?lvl.name:'')+' · '+(p.materiales.recetaV2.etapas[etapaIdx]||('ETAPA '+(etapaIdx+1)));
-  const verbo = tipo==='cantidad' ? (datos.cantidadActual+' → '+datos.cantidadNueva) : (tipo==='agregar' ? ('AGREGAR · '+datos.cantidadNueva+' '+datos.unidad) : 'QUITAR');
+  const verbo = tipo==='cantidad' ? ((aptoNom?aptoNom+' · ':'')+datos.cantidadActual+' → '+datos.cantidadNueva) : (tipo==='agregar' ? ('AGREGAR · '+(datos.cantidadNueva||0)+' '+datos.unidad) : 'QUITAR');
   p.solicitudesReceta.push({
     id:'rec_'+Date.now()+'_'+Math.floor(Math.random()*100000),
-    tipo, levelId, etapaIdx, material:datos.material, unidad:datos.unidad,
+    tipo, levelId, etapaIdx, material:datos.material, unidad:datos.unidad, aptoId:datos.aptoId||'',
     cantidadActual:datos.cantidadActual, cantidadNueva:datos.cantidadNueva,
     resumen: etiqueta+' · '+datos.material+' · '+verbo,
     by:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''),
@@ -19827,7 +19826,7 @@ window.autorizarReceta = async function(solId){
   if (!p || !Array.isArray(p.solicitudesReceta)) return;
   const sol = p.solicitudesReceta.find(s => s.id === solId);
   if (!sol || sol.estado !== 'PENDIENTE'){ showToast('SOLICITUD NO ENCONTRADA O YA PROCESADA','red'); return; }
-  const res = aplicarOperacionReceta(p.materiales.recetaV2, p.materiales.precios, { tipo:sol.tipo, levelId:sol.levelId, etapaIdx:sol.etapaIdx, material:sol.material, unidad:sol.unidad, cantidadNueva:sol.cantidadNueva });
+  const res = aplicarOperacionReceta(p.materiales.recetaV2, p.materiales.precios, { tipo:sol.tipo, levelId:sol.levelId, etapaIdx:sol.etapaIdx, material:sol.material, unidad:sol.unidad, aptoId:sol.aptoId, cantidadNueva:sol.cantidadNueva });
   if (!res.ok){ showToast('NO SE PUDO APLICAR: '+(res.error||''),'red'); return; }
   sol.estado = 'APROBADA';
   sol.procesadoPor = (typeof window._getUserEmail==='function' ? window._getUserEmail() : '') || '';
