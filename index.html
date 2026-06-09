@@ -2748,16 +2748,14 @@ table{max-width:100%}
       <div class="mat-tabs" style="margin-bottom:18px">
         <button class="mat-tab active" data-perstab="lista" onclick="setPersonalSubTab('lista')">COLABORADORES</button>
         <button class="mat-tab" data-perstab="asistencia" onclick="setPersonalSubTab('asistencia')">ASISTENCIA</button>
-        <button class="mat-tab" data-perstab="dpi" onclick="setPersonalSubTab('dpi')">DPI Y EXPEDIENTE</button>
       </div>
       <div class="kpi-grid" id="persKpis" data-perm="kpis.personal"></div>
-      <div id="personal-dpi-panel" style="display:none"></div>
 
       <div class="card" id="pers-lista-panel">
         <div class="card-hd"><h3>COLABORADORES</h3>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input id="persBuscar" class="inline" placeholder="Buscar nombre / empresa / cargo / DPI…" oninput="setPersBuscar(this.value)" style="min-width:220px">
             <select id="persEmpresaFilter" class="inline" onchange="setPersEmpresaFilter(this.value)" style="min-width:150px"></select>
-            <label class="btn ghost sm" style="cursor:pointer;margin:0" data-perm="personal.edit">SUBIR EXCEL DE PERSONAL<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importarPersonalExcel(event)"></label>
             <button class="btn olive sm" data-perm="personal.edit" onclick="agregarPersonaGlobal()">+ AGREGAR</button>
           </div>
         </div>
@@ -16117,13 +16115,23 @@ function todayKey(){
 }
 
 let _persEmpresaFilter = '';
+let _persBuscar = '';
 let _asistFecha = '';
 function _persEmpresas(){ return [...new Set(_getPersonal().map(p=>p.empresa).filter(Boolean))].sort(); }
 function _asistFechaActual(){ return _asistFecha || todayKey(); }
 function _persNorm(s){ return String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim(); }
 function _personaById(id){ return _getPersonal().find(p=>p.id===id); }
-function _persListaFiltrada(){ const all=_getPersonal(); const emps=_persEmpresas(); const f=_persEmpresaFilter&&emps.includes(_persEmpresaFilter)?_persEmpresaFilter:''; return f?all.filter(p=>p.empresa===f):all; }
+function _persListaFiltrada(){
+  const all=_getPersonal();
+  const emps=_persEmpresas();
+  const f=_persEmpresaFilter&&emps.includes(_persEmpresaFilter)?_persEmpresaFilter:'';
+  let res=f?all.filter(p=>p.empresa===f):all;
+  const q=_persNorm(_persBuscar);
+  if(q){ res=res.filter(p=>_persNorm(p.nombre).includes(q)||_persNorm(p.empresa).includes(q)||_persNorm(p.cargo).includes(q)||_persNorm(p.dpi).includes(q)); }
+  return res.slice().sort((a,b)=>_persNorm(a.nombre).localeCompare(_persNorm(b.nombre),'es',{sensitivity:'base'}));
+}
 function setPersEmpresaFilter(v){ _persEmpresaFilter=v||''; renderPersonal(); }
+function setPersBuscar(v){ _persBuscar=v||''; renderPersonal(); }
 function setAsistFecha(v){ _asistFecha=v||''; renderPersonal(); }
 
 function renderPersonal(){
@@ -16149,7 +16157,7 @@ function renderPersonal(){
     if(!lista.length){ body.innerHTML=`<tr><td colspan="7" style="padding:40px;text-align:center;color:var(--mute)">SIN PERSONAL${canEd?' — SUBÍ TU EXCEL o <a href="#" onclick="event.preventDefault();agregarPersonaGlobal()" style="color:var(--red)">AGREGÁ</a>':''}</td></tr>`; }
     else { body.innerHTML=lista.map(c=>{ const f=c.facturadoPor; const fact=f&&f.nombre?`${f.nombre}${f.dpi?'<br><span style="font-size:9px;color:var(--mute)">DPI '+f.dpi+'</span>':''}`:'<span style="color:var(--mute)">—</span>';
       return `<tr>
-        <td style="font-weight:600">${c.nombre||''}</td>
+        <td style="font-weight:600">${c.nombre||''}${(c.dpiFrenteURL||c.dpiReversoURL)?' <span title="DPI cargado" style="font-size:9px;color:var(--green-dark)">&#9679;DPI</span>':''}</td>
         <td>${c.cargo||'<span style="color:var(--mute)">—</span>'}</td>
         <td>${c.empresa?('<span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 8px;border-radius:10px;background:#EEF2FF;color:#3730A3">'+c.empresa+'</span>'):'<span style="color:var(--mute)">—</span>'}</td>
         <td style="font-size:11px">${c.dpi||'—'}</td>
@@ -16175,6 +16183,26 @@ function renderPersonal(){
 }
 
 function _guardarPersonaGlobal(data,id){ const arr=_getPersonal(); if(id){ const c=arr.find(p=>p.id===id); if(c) Object.assign(c,data); } else { arr.push(Object.assign({id:'pg-'+uid(),activo:true,ts:Date.now()},data)); } saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
+async function uploadPersonaDPI(event, personaId, lado){
+  if(!(can('personal.edit')||can('users.manage'))) return showToast('SIN PERMISO','red');
+  const file=event.target.files&&event.target.files[0]; if(!file){ return; }
+  const c=_personaById(personaId); if(!c){ event.target.value=''; return; }
+  try{
+    window._prUploadShow&&window._prUploadShow();
+    if(typeof firebase==='undefined'||!firebase.storage) throw new Error('Storage no disponible');
+    const ext=((file.name.split('.').pop())||'jpg').toLowerCase();
+    const ref=firebase.storage().ref(`dpi/${personaId}/${lado}.${ext}`);
+    await ref.put(file,{contentType:file.type||'image/jpeg'});
+    const url=await ref.getDownloadURL();
+    c[lado==='frente'?'dpiFrenteURL':'dpiReversoURL']=url;
+    saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) await CloudSync.uploadCurrent(); }catch(e){}
+    window._prUploadHide&&window._prUploadHide();
+    showToast('DPI '+(lado==='frente'?'FRENTE':'ATRÁS')+' GUARDADO','green');
+    const open=document.getElementById('_pgModal'); if(open){ _pgCloseModal(); _personaModalGlobal(c); }
+    renderPersonal();
+  }catch(e){ window._prUploadHide&&window._prUploadHide(); console.error('[DPI]',e); showToast('ERROR AL SUBIR DPI','red'); }
+  finally{ event.target.value=''; }
+}
 function eliminarPersonaGlobal(id){ const c=_personaById(id); if(!c) return; prConfirm({title:'ELIMINAR',body:`¿Eliminar a ${c.nombre}?`,okText:'ELIMINAR',danger:true}).then(ok=>{ if(!ok) return; if(typeof state!=='undefined'&&state) state.personalGlobal=_getPersonal().filter(p=>p.id!==id); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); showToast('PERSONA ELIMINADA'); }); }
 function toggleAsistenciaGlobal(id){ const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; const cur=A[f][id]||{}; if(cur.presente===true){ delete A[f][id]; } else { A[f][id]={presente:true,obraId:cur.obraId||'',obraDesc:cur.obraDesc||''}; } saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
 function setAsistenciaObra(id,obraId){ const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; if(!A[f][id])A[f][id]={presente:true}; A[f][id].obraId=obraId; if(obraId!=='OTRA')A[f][id].obraDesc=''; saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
@@ -16186,6 +16214,16 @@ function editarPersonaGlobal(id){ const c=_personaById(id); if(c) _personaModalG
 function _personaModalGlobal(c){
   const e=c||{}; const f=e.facturadoPor||{};
   const esc=s=>String(s==null?'':s).replace(/"/g,'&quot;');
+  const dpiSection = c ? (function(){
+    const fStyle='flex:1;cursor:pointer;border:1px dashed var(--line);border-radius:6px;padding:10px;text-align:center;font-size:10px;letter-spacing:.5px;color:var(--mute);background-size:cover;background-position:center;min-height:70px;display:flex;align-items:flex-end;justify-content:center';
+    const fBg=e.dpiFrenteURL?';background-image:url('+e.dpiFrenteURL+')':'';
+    const rBg=e.dpiReversoURL?';background-image:url('+e.dpiReversoURL+')':'';
+    return '<div style="border-top:1px solid var(--line);margin-top:6px;padding-top:8px;font-size:10px;color:var(--mute);letter-spacing:.5px">FOTO DEL DPI</div>'
+      +'<div style="display:flex;gap:10px">'
+      +'<label style="'+fStyle+fBg+'">'+(e.dpiFrenteURL?'FRENTE &#10003;':'SUBIR FRENTE')+'<input type="file" accept="image/*" style="display:none" onchange="uploadPersonaDPI(event,\''+c.id+'\',\'frente\')"></label>'
+      +'<label style="'+fStyle+rBg+'">'+(e.dpiReversoURL?'ATRÁS &#10003;':'SUBIR ATRÁS')+'<input type="file" accept="image/*" style="display:none" onchange="uploadPersonaDPI(event,\''+c.id+'\',\'reverso\')"></label>'
+      +'</div>';
+  })() : '<div style="font-size:10px;color:var(--mute);margin-top:6px">Guardá la persona y luego editála para subir la foto del DPI.</div>';
   const html=`<div class="modal-bg show" id="_pgModal" style="z-index:100040" onclick="if(event.target===this)_pgCloseModal()">
     <div class="modal" style="max-width:440px" onclick="event.stopPropagation()">
       <div class="modal-hd"><h3>${c?'EDITAR':'NUEVO'} PERSONAL</h3><button class="x" onclick="_pgCloseModal()">✕</button></div>
@@ -16199,6 +16237,7 @@ function _personaModalGlobal(c){
         <label class="fld"><span>NOMBRE</span><input id="_pgFNombre" value="${esc(f.nombre)}"></label>
         <label class="fld"><span>DPI</span><input id="_pgFDpi" value="${esc(f.dpi)}"></label>
         <label class="fld"><span>TELÉFONO</span><input id="_pgFTel" value="${esc(f.telefono)}"></label>
+        ${dpiSection}
       </div>
       <div class="modal-ft" style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px"><button class="btn ghost" onclick="_pgCloseModal()">CANCELAR</button><button class="btn primary" onclick="_savePersonaModal('${c?c.id:''}')">GUARDAR</button></div>
     </div></div>`;
@@ -23574,18 +23613,16 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   const _renderPersonal = renderPersonal;
   window.renderPersonal = renderPersonal = function(){ _renderPersonal(); setPersonalSubTab(window.currentPersonalSubTab || 'lista', true); };
   window.setPersonalSubTab = function(tab, silent){
+    if(tab==='dpi') tab='lista';
     window.currentPersonalSubTab = tab;
     document.querySelectorAll('[data-perstab]').forEach(b => b.classList.toggle('active', b.dataset.perstab === tab));
-    const dpiPanel = document.getElementById('personal-dpi-panel');
     const listaPanel = document.getElementById('pers-lista-panel');
     const asistPanel = document.getElementById('pers-asist-panel');
     const kpis = document.getElementById('persKpis');
     if (listaPanel) listaPanel.style.display = tab === 'lista' ? '' : 'none';
     if (asistPanel) asistPanel.style.display = tab === 'asistencia' ? '' : 'none';
-    if (dpiPanel) dpiPanel.style.display = tab === 'dpi' ? '' : 'none';
-    if (kpis) kpis.style.display = (tab === 'lista' || tab === 'asistencia') ? '' : 'none';
-    if (tab === 'dpi') renderDpiPanel();
-    if ((tab === 'lista' || tab === 'asistencia') && !silent) renderPersonal();
+    if (kpis) kpis.style.display = '';
+    if (!silent) renderPersonal();
   };
 
   window.renderDpiPanel = function(){
