@@ -19606,7 +19606,7 @@ function precioDeProductoReceta(p, materialNombre){
   for (const prv of provs){
     for (const prod of (prv.productos||[])){
       if (matchKeyProducto(prod.nombre) === key)
-        return { proveedorId: prv.id, proveedor: prv.nombre, precio: Number(prod.precio)||0, unidad: prod.unidad||'' };
+        return { proveedorId: prv.id, proveedor: prv.nombre, precio: Number(prod.precio)||0, unidad: prod.unidad||'', rendimiento: Number(prod.rendimiento)||1 };
     }
   }
   return null;
@@ -19730,8 +19730,10 @@ window.renderRecetaV2 = function(){
     lineas.forEach(l => {
       const qty = esTotal ? totalMaterialNivel(l) : (Number((l.aptos||{})[recetaV2AptoSel])||0);
       const info = precioDeProductoReceta(p, l.m);
-      const pu = info ? info.precio : 0;
-      const sub = pu * qty;
+      const rend = info && info.rendimiento ? info.rendimiento : 1;
+      const tienePrecio = info && info.precio>0;
+      const sub = tienePrecio ? (qty / rend) * info.precio : 0;
+      const puCell = tienePrecio ? (money(info.precio)+(rend>1?(' /'+rend):'')) : '—';
       totalEtapa += sub;
       const matArg = esc(l.m).replace(/'/g,"\\'");
       const accion = puedeEditar ? 'recetaV2Op' : 'recetaV2Solicitar';
@@ -19739,8 +19741,8 @@ window.renderRecetaV2 = function(){
         + '<td style="padding:6px 12px">'+esc(l.m)+'</td>'
         + '<td style="text-align:center;color:#6B7280">'+esc(l.u)+'</td>'
         + '<td style="text-align:right;font-variant-numeric:tabular-nums">'+qty.toLocaleString('es-GT')+'</td>'
-        + '<td style="text-align:right;color:'+(pu?'#374151':'#D1D5DB')+'">'+(pu?money(pu):'—')+'</td>'
-        + '<td style="text-align:right;font-variant-numeric:tabular-nums">'+(pu?money(sub):'—')+'</td>'
+        + '<td style="text-align:right;color:'+(tienePrecio?'#374151':'#D1D5DB')+'">'+puCell+'</td>'
+        + '<td style="text-align:right;font-variant-numeric:tabular-nums">'+(tienePrecio?money(sub):'—')+'</td>'
         + '<td style="text-align:right;white-space:nowrap;padding-right:8px">'
           + (esTotal ? '' : '<button class="btn-icon" title="Editar cantidad del apto" onclick="'+accion+'(\''+recetaV2NivelSel+'\','+ei+',\'cantidad\',\''+matArg+'\',\''+recetaV2AptoSel+'\')">✎</button>')
           + '<button class="btn-icon danger" title="Quitar material del nivel" onclick="'+accion+'(\''+recetaV2NivelSel+'\','+ei+',\'quitar\',\''+matArg+'\')">✕</button>'
@@ -19910,7 +19912,7 @@ window.verCatalogoPreciosReceta = async function(){
   const sinPrecio = prods.filter(x => !precioDeProductoReceta(p, x.nombre)).length;
   let body = '<div style="font-size:11.5px;color:#475569;margin-bottom:10px">Los precios salen del <strong>catálogo de proveedores</strong>. '+(sinPrecio?('<span style="color:#B45309">'+sinPrecio+' sin precio.</span>'):'Todos con precio.')+'</div>';
   if (esAdmin && !provs.length) body += '<div style="margin-bottom:10px;padding:10px;background:#FFFBEB;border:1px solid #FCD34D;border-radius:6px;color:#92400E;font-size:11px">No hay proveedores. Creá uno en el catálogo para poder asignar precios.</div>';
-  body += '<div style="max-height:55vh;overflow:auto;border:1px solid #E5E7EB;border-radius:8px"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="position:sticky;top:0;background:#374151;color:#fff;font-size:10px"><th style="text-align:left;padding:6px 8px">PRODUCTO</th><th style="padding:6px 4px">PROVEEDOR</th><th style="text-align:right;padding:6px 8px">PRECIO Q</th></tr></thead><tbody>';
+  body += '<div style="max-height:55vh;overflow:auto;border:1px solid #E5E7EB;border-radius:8px"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="position:sticky;top:0;background:#374151;color:#fff;font-size:10px"><th style="text-align:left;padding:6px 8px">PRODUCTO</th><th style="padding:6px 4px">PROVEEDOR</th><th style="text-align:right;padding:6px 8px">PRECIO Q</th><th style="padding:6px 4px">RINDE</th></tr></thead><tbody>';
   prods.forEach(x => {
     const info = precioDeProductoReceta(p, x.nombre);
     const pn = esc(x.nombre).replace(/'/g,"\\'");
@@ -19924,7 +19926,10 @@ window.verCatalogoPreciosReceta = async function(){
       provCell = '<span style="color:'+(info?'#374151':'#B45309')+'">'+(info?esc(info.proveedor):'SIN PRECIO')+'</span>';
       precioCell = info?money(info.precio):'—';
     }
-    body += '<tr style="border-top:1px solid #F1F5F9"><td style="padding:5px 8px">'+esc(x.nombre)+'</td><td style="padding:3px 4px;text-align:center">'+provCell+'</td><td style="padding:3px 8px;text-align:right">'+precioCell+'</td></tr>';
+    let rindeCell;
+    if (esAdmin){ rindeCell = '<input type="number" step="1" min="1" value="'+(info&&info.rendimiento?info.rendimiento:1)+'" oninput="setRindeRecetaProducto(\''+pn+'\',this.value)" style="width:60px;font-size:11px;padding:3px 6px;border:1px solid #D1D5DB;border-radius:5px;text-align:right">'; }
+    else { rindeCell = String(info&&info.rendimiento?info.rendimiento:1); }
+    body += '<tr style="border-top:1px solid #F1F5F9"><td style="padding:5px 8px">'+esc(x.nombre)+'</td><td style="padding:3px 4px;text-align:center">'+provCell+'</td><td style="padding:3px 8px;text-align:right">'+precioCell+'</td><td style="padding:3px 8px;text-align:right">'+rindeCell+'</td></tr>';
   });
   body += '</tbody></table></div>';
   if (esAdmin) body += '<div style="margin-top:10px;text-align:right"><button class="btn ghost sm" onclick="openCatalogoProveedores()">ABRIR CATÁLOGO DE PROVEEDORES</button></div>';
@@ -19953,11 +19958,19 @@ window.setProvRecetaProducto = function(nombre, unidad, proveedorId){
     const prod = cur.prv.productos.splice(cur.idx,1)[0];
     target.productos.push(prod);
   } else {
-    target.productos.push({ nombre: String(nombre), unidad: String(unidad||''), precio: 0 });
+    target.productos.push({ nombre: String(nombre), unidad: String(unidad||''), precio: 0, rendimiento: 1 });
   }
   saveState();
   try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
   showToast('PROVEEDOR ASIGNADO','green');
+};
+window.setRindeRecetaProducto = function(producto, valor){
+  if (!can('users.manage')) return;
+  const p = activeProj();
+  const cur = window._findCatProducto(p, producto);
+  if (!cur){ showToast('ELEGÍ PROVEEDOR PRIMERO','red'); return; }
+  cur.prv.productos[cur.idx].rendimiento = Math.max(1, Number(valor)||1);
+  saveState();
 };
 window.setPrecioRecetaProducto = function(nombre, valor){
   if (!can('users.manage')) return;
