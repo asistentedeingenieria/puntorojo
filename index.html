@@ -19605,6 +19605,57 @@ function precioDeProductoReceta(p, materialNombre){
   }
   return null;
 }
+function _aptoNorm(s){ return String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim(); }
+function resolveAptoId(level, label){
+  const lab = String(label==null?'':label).trim();
+  if (!level || !Array.isArray(level.aptos)) return null;
+  if (/^\d+$/.test(lab)){
+    const a = level.aptos.find(x => new RegExp('\\b'+lab+'\\b').test(String(x.name||'')));
+    return a ? a.id : null;
+  }
+  const key = _aptoNorm(lab);
+  if (!key) return null;
+  const a = level.aptos.find(x => _aptoNorm(x.name).indexOf(key) !== -1);
+  return a ? a.id : null;
+}
+function totalMaterialNivel(item){
+  if (!item || !item.aptos) return 0;
+  let s = 0; for (const k in item.aptos) s += Number(item.aptos[k])||0; return s;
+}
+function parseRecetaPorApto(sheets, towers){
+  const ETAPAS = ['1RA ETAPA','2DA ETAPA','3RA ETAPA','4TA ETAPA'];
+  const recetaV2 = { version:3, etapas:ETAPAS.slice(), niveles:{} };
+  const avisos = [];
+  const etapaIdxDe = txt => { const s=String(txt||'').toUpperCase().replace(/\s+/g,' ').trim();
+    if(/^1\s*RA/.test(s))return 0; if(/^2\s*(DA|NDA)/.test(s))return 1; if(/^3\s*(RA|ERA)/.test(s))return 2; if(/^4\s*TA/.test(s))return 3; return -1; };
+  Object.keys(sheets||{}).forEach(name => {
+    const mm = String(name).trim().match(/^T(\d+)-N(\d+)$/i);
+    if (!mm) return;
+    const aoa = sheets[name] || [];
+    const towerId = torreSheetToTowerId('T'+mm[1], towers);
+    const tower = (towers||[]).find(t => t.id===towerId);
+    if (!tower){ avisos.push('Hoja "'+name+'": torre no existe.'); return; }
+    const nivelNum = parseInt(mm[2],10);
+    const level = (tower.levels||[]).find(l => _aptoNorm(l.name)===('NIVEL '+nivelNum)) ||
+                  (tower.levels||[]).find(l => { const x=String(l.name||'').match(/(\d+)/); return x && parseInt(x[1],10)===nivelNum; });
+    if (!level){ avisos.push('Hoja "'+name+'": nivel '+nivelNum+' no existe.'); return; }
+    const lid = level.id;
+    const header = aoa[0] || [];
+    const aptoCols = [];
+    header.forEach((h,c) => { const hh=_aptoNorm(h); if(['ETAPA','MATERIAL','UNIDAD','TOTAL','TOTAL NIVEL'].indexOf(hh)!==-1) return;
+      const aid = resolveAptoId(level, h); if(aid) aptoCols.push({col:c, aptoId:aid}); else if(String(h||'').trim()) avisos.push(name+': apto "'+h+'" sin equivalente.'); });
+    if (!recetaV2.niveles[lid]) recetaV2.niveles[lid] = [[],[],[],[]];
+    for (let i=1;i<aoa.length;i++){
+      const row = aoa[i]||[];
+      const eIdx = etapaIdxDe(row[0]); const material=String(row[1]||'').trim(); const unidad=String(row[2]||'U').trim()||'U';
+      if (eIdx<0 || !material) continue;
+      const aptos = {};
+      aptoCols.forEach(ac => { const v=Number(row[ac.col]); if(v>0) aptos[ac.aptoId]=v; });
+      recetaV2.niveles[lid][eIdx].push({ m:material, u:unidad, aptos });
+    }
+  });
+  return { recetaV2, avisos };
+}
 // ===RECETA-PURE-END===
 </script>
 <script>
