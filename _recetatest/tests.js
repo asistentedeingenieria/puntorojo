@@ -214,4 +214,17 @@ module.exports = function (t) {
   eq('mig.keep.salida', nuevo.salida, '17:00');
   eq('mig.keep.via', nuevo.via, 'cara');
   eq('mig.null', t.api.migrateAsistenciaRegistro(null), null);
+  // --- haversineMeters / evalGeocerca ---
+  const d0 = t.api.haversineMeters(14.6349,-90.5069,14.6349,-90.5069);
+  eq('hav.zero', Math.round(d0), 0);
+  const d1 = t.api.haversineMeters(14.6349,-90.5069,14.6358,-90.5069);
+  eq('hav.~100', (d1 > 90 && d1 < 110), true);
+  const g1 = t.api.evalGeocerca({lat:14.6349,lng:-90.5069},{lat:14.6349,lng:-90.5069,radio:150});
+  eq('geo.dentro', g1.enObra, true);
+  eq('geo.dist0', Math.round(g1.distancia), 0);
+  const g2 = t.api.evalGeocerca({lat:14.6500,lng:-90.5069},{lat:14.6349,lng:-90.5069,radio:150});
+  eq('geo.fuera', g2.enObra, false);
+  eq('geo.fueraDist', g2.distancia > 150, true);
+  eq('geo.nullMark', t.api.evalGeocerca(null,{lat:1,lng:1,radio:150}), null);
+  eq('geo.nullObra', t.api.evalGeocerca({lat:1,lng:1},null), null);
 };
