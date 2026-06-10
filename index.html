@@ -15302,7 +15302,7 @@ function renderOcItems(){
 
   html += ocWorkingItems.map((it, idx) => `
     <div class="oc-item-row multi${!it.proveedorId ? ' oc-row-warn' : ''}">
-      <div class="oc-name">${it.name}${it.eventual ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#FEF3C7;color:#92400E;margin-left:6px">EVENTUAL</span>' : ''}${it.autoAssigned ? '<div style="font-size:8px;color:var(--red-dark);letter-spacing:1px;margin-top:2px">ASIGNADO POR CATÁLOGO</div>' : ''}</div>
+      <div class="oc-name">${it.name}${it.eventual ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#FEF3C7;color:#92400E;margin-left:6px">EVENTUAL</span><button type="button" onclick="_promoverEventual(' + idx + ')" style="background:none;border:none;color:var(--cafe);font-size:9px;font-weight:700;letter-spacing:.3px;cursor:pointer;text-decoration:underline;padding:0;margin-left:6px">PROMOVER AL CATÁLOGO</button>' : ''}${it.autoAssigned ? '<div style="font-size:8px;color:var(--red-dark);letter-spacing:1px;margin-top:2px">ASIGNADO POR CATÁLOGO</div>' : ''}</div>
       <div class="oc-qty">${it.qty}</div>
       <div><select class="oc-provider-select" onchange="updateOcItemProveedor(${idx}, this.value)">${buildOcProviderOptions(it.proveedorId)}</select></div>
       <div><input type="number" step="0.01" min="0" value="${it.precio || ''}" placeholder="0.00" oninput="updateOcPrecio(${idx}, this.value)"></div>
@@ -15345,6 +15345,18 @@ function updateOcPrecio(idx, val){
   const sub = document.getElementById('ocSubtotal-'+idx);
   if (sub) sub.textContent = 'Q ' + fmtQ(ocWorkingItems[idx].qty * ocWorkingItems[idx].precio);
   updateOcTotal();
+}
+
+async function _promoverEventual(idx){
+  const items = ocWorkingItems;
+  const it = items && items[idx]; if(!it){ return; }
+  const defProv = it.proveedorNombre || '';
+  const nom = await prPrompt({ title:'PROMOVER AL CATÁLOGO', body:'¿Bajo qué proveedor registrar "'+(it.name||'')+'" a Q'+(Number(it.precio)||0).toFixed(2)+'?', placeholder:'Nombre del proveedor', defaultValue:defProv, required:true });
+  if(nom===null) return;
+  const k=normOcName(nom);
+  const existing=_getProveedores().find(p=>normOcName(p.nombre)===k);
+  _crearSolicitudPrecio('ALTA', existing?existing.id:'', it.name, it.unidad||it.unit||'', null, Number(it.precio)||0, 'Promoción de compra eventual', String(nom).toUpperCase());
+  showToast('SOLICITUD DE ALTA ENVIADA','green');
 }
 
 function updateOcTotal(){
@@ -21958,12 +21970,12 @@ function _doDeleteCatProvProducto(idx, provId){
 window.DELETION_EXECUTORS['catProvProducto'] = (payload) => _doDeleteCatProvProducto(payload.idx, payload.provId);
 
 /* === Solicitudes de cambio/alta de precio del catálogo === */
-function _crearSolicitudPrecio(tipo, proveedorId, productoNombre, unidad, precioActual, precioNuevo, motivo){
+function _crearSolicitudPrecio(tipo, proveedorId, productoNombre, unidad, precioActual, precioNuevo, motivo, proveedorNombreFallback){
   const list=(state.solicitudesPrecios=state.solicitudesPrecios||[]);
   const prov=(_getProveedores().find(p=>p.id===proveedorId)||{});
   const _u = (typeof currentUser!=='undefined') ? currentUser : null;
   const _nombre = ((_u && (_u.displayName||_u.username||_u.email)) || '').toUpperCase();
-  const s={ id:'sp-'+uid(), tipo:tipo, proveedorId, proveedorNombre:prov.nombre||'', productoNombre:String(productoNombre||''), unidad:unidad||'', precioActual:(precioActual==null?null:Number(precioActual)), precioNuevo:Number(precioNuevo), motivo:motivo||'', solicitadoPor:((_u&&(_u.email||_u.username))||''), solicitadoNombre:_nombre, ts:Date.now(), estado:'PENDIENTE' };
+  const s={ id:'sp-'+uid(), tipo:tipo, proveedorId, proveedorNombre:(prov.nombre||proveedorNombreFallback||''), productoNombre:String(productoNombre||''), unidad:unidad||'', precioActual:(precioActual==null?null:Number(precioActual)), precioNuevo:Number(precioNuevo), motivo:motivo||'', solicitadoPor:((_u&&(_u.email||_u.username))||''), solicitadoNombre:_nombre, ts:Date.now(), estado:'PENDIENTE' };
   list.push(s); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
   try{ if(typeof _notifyByPerm==='function') _notifyByPerm('precios.autorizar', { type:'precio-solicitud', title:'SOLICITUD DE PRECIO', body:(tipo==='ALTA'?'Alta':'Cambio')+' de "'+s.productoNombre+'" a Q'+s.precioNuevo }).catch(()=>{}); }catch(e){}
   return s;
@@ -21971,7 +21983,13 @@ function _crearSolicitudPrecio(tipo, proveedorId, productoNombre, unidad, precio
 function autorizarSolicitudPrecio(id){
   if(!(can('precios.autorizar')||can('users.manage'))) return showToast('SIN PERMISO','red');
   const s=(state.solicitudesPrecios||[]).find(x=>x.id===id); if(!s||s.estado!=='PENDIENTE') return;
-  const prov=_getProveedores().find(p=>p.id===s.proveedorId); if(!prov){ s.estado='RECHAZADA'; saveState(); return; }
+  let prov=_getProveedores().find(p=>p.id===s.proveedorId);
+  if(!prov && s.proveedorNombre){
+    const kp=normOcName(s.proveedorNombre);
+    prov=_getProveedores().find(p=>normOcName(p.nombre)===kp);
+    if(!prov && s.tipo==='ALTA'){ prov={id:'prv-'+uid(),nombre:String(s.proveedorNombre).toUpperCase(),contacto:'',telefono:'',productos:[]}; _getProveedores().push(prov); }
+  }
+  if(!prov){ s.estado='RECHAZADA'; s.resueltoTs=Date.now(); saveState(); showToast('PROVEEDOR NO ENCONTRADO','red'); if(typeof _renderSolicitudesPrecio==='function')_renderSolicitudesPrecio(); return; }
   prov.productos=prov.productos||[];
   const k=matchKeyProducto(s.productoNombre);
   const ex=prov.productos.find(q=>matchKeyProducto(q.nombre)===k);
