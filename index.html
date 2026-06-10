@@ -2779,6 +2779,7 @@ table{max-width:100%}
             <input id="asistBuscar" class="inline" placeholder="Buscar persona…" oninput="setAsistBuscar(this.value)" style="min-width:200px">
             <select id="asistObraPdf" class="inline" data-perm="personal.asistenciaPdf" title="Obra para el PDF" style="min-width:160px"></select>
             <button class="btn olive sm" data-perm="personal.asistenciaPdf" onclick="descargarAsistenciaPDF()">DESCARGAR PDF</button>
+            <button class="btn primary sm" data-perm="personal.asistencia" onclick="_abrirKioskoCaras()">ESCANEAR CARAS</button>
           </div>
         </div>
         <div class="asist-grid" id="asistGrid"></div>
@@ -16421,6 +16422,87 @@ async function _detectOneDescriptor(input){
   const det = await faceapi.detectSingleFace(input, opt).withFaceLandmarks().withFaceDescriptor();
   return det || null;
 }
+
+// ── KIOSKO FACIAL ────────────────────────────────────────────────────────────
+let _kioskStream=null, _kioskLoop=null, _kioskMatcher=null, _kioskBusy=false;
+const _kioskLast = {}; // personaId -> timestamp ultima marca (debounce 5s)
+async function _abrirKioskoCaras(){
+  if (!(can('personal.asistencia')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
+  const enroladas = _facesEnroladas();
+  if (!enroladas.length){ showToast('NO HAY CARAS REGISTRADAS TODAVÍA','red'); return; }
+  try { showToast('CARGANDO RECONOCIMIENTO…',''); await loadFaceModels(); } catch(e){ showToast('NO SE PUDO CARGAR (revisá internet)','red'); return; }
+  _kioskMatcher = new faceapi.FaceMatcher(
+    enroladas.map(p => new faceapi.LabeledFaceDescriptors(p.id, p.descriptors)), 0.6);
+  const projs = (typeof state!=='undefined' && state && Array.isArray(state.projects)) ? state.projects : [];
+  const obras = projs.map(pr=>'<option value="'+pr.id+'">'+(pr.name||pr.id)+'</option>').join('');
+  const html = '<div id="_kioskScreen" style="position:fixed;inset:0;z-index:100070;background:#0B0B0C;display:flex;flex-direction:column">'
+    + '<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;color:#fff">'
+    +   '<span style="font-size:11px;letter-spacing:2px;font-weight:700">ESCANEAR CARAS</span>'
+    +   '<select id="_kioskObra" style="margin-left:auto;padding:6px;border-radius:6px">'+obras+'<option value="OTRA">OTRA…</option></select>'
+    +   '<button class="btn ghost sm" style="color:#fff;border-color:#555" onclick="_cerrarKiosko()">CERRAR</button>'
+    + '</div>'
+    + '<div style="position:relative;flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden">'
+    +   '<video id="_kioskVideo" autoplay playsinline muted style="max-width:100%;max-height:100%"></video>'
+    +   '<div id="_kioskBanner" style="position:absolute;bottom:0;left:0;right:0;padding:18px;text-align:center;color:#fff;font-size:20px;font-weight:800;background:linear-gradient(transparent,rgba(0,0,0,.7))"></div>'
+    + '</div>'
+    + '<div id="_kioskCandidates" style="display:none;padding:14px;background:#111;color:#fff"></div>'
+    + '</div>';
+  const w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);
+  if (window._prLockScroll) window._prLockScroll();
+  try {
+    _kioskStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user' }, audio:false });
+    document.getElementById('_kioskVideo').srcObject = _kioskStream;
+  } catch(e){ showToast('NO SE PUDO ABRIR LA CÁMARA','red'); _cerrarKiosko(); return; }
+  _kioskLoop = setInterval(_kioskTick, 600);
+}
+function _kioskObraActual(){ const s=document.getElementById('_kioskObra'); const v=s?s.value:''; return { obraId:v, obraDesc: v==='OTRA' ? 'OTRA' : '' }; }
+async function _kioskTick(){
+  if (_kioskBusy) return; const v=document.getElementById('_kioskVideo'); if(!v||!v.videoWidth) return;
+  _kioskBusy = true;
+  try {
+    const det = await _detectOneDescriptor(v);
+    if (det){
+      const all = _kioskMatcher.labeledDescriptors.map(ld => ({ id: ld.label,
+        distance: Math.min.apply(null, ld.descriptors.map(d => faceapi.euclideanDistance(d, det.descriptor))) }));
+      const pick = pickFaceCandidates(all, 0.48, 0.58);
+      if (pick.status==='auto') _kioskMarcar(pick.matchId);
+      else if (pick.status==='confirm') _kioskMostrarCandidatos(pick.candidates);
+    }
+  } catch(e){} finally { _kioskBusy=false; }
+}
+function _kioskMarcar(personaId){
+  const now = Date.now();
+  if (_kioskLast[personaId] && (now - _kioskLast[personaId] < 5000)) return;
+  _kioskLast[personaId] = now;
+  const { obraId, obraDesc } = _kioskObraActual();
+  const r = _marcarAsistenciaFacial(personaId, obraId, obraDesc);
+  if (!r) return;
+  const p = (_getPersonal()||[]).find(x=>x.id===personaId);
+  const banner = document.getElementById('_kioskBanner');
+  if (!banner) return;
+  banner.style.color = r.accion==='entrada' ? '#34D399' : '#FBBF24';
+  banner.textContent = (r.accion==='entrada' ? 'ENTRADA · ' : 'SALIDA · ') + ((p&&p.nombre)||'') + ' · ' + r.hora;
+  setTimeout(function(){ if(document.getElementById('_kioskBanner')) banner.textContent=''; }, 2500);
+}
+function _kioskMostrarCandidatos(ids){
+  const cont = document.getElementById('_kioskCandidates'); if(!cont) return;
+  const personas = (_getPersonal()||[]);
+  cont.style.display='block';
+  cont.innerHTML = '<div style="font-size:11px;letter-spacing:1px;margin-bottom:8px">¿QUIÉN ES?</div>'
+    + ids.map(function(id){ const p=personas.find(function(x){ return x.id===id; })||{};
+        return '<button class="btn ghost sm" style="color:#fff;border-color:#555;margin:0 6px 6px 0" onclick="_kioskConfirmar(\''+id+'\')">'+((p.nombre||id))+'</button>'; }).join('')
+    + '<button class="btn ghost sm" style="color:#888;border-color:#333" onclick="document.getElementById(\'_kioskCandidates\').style.display=\'none\'">DESCARTAR</button>';
+  setTimeout(function(){ var c=document.getElementById('_kioskCandidates'); if(c) c.style.display='none'; }, 6000);
+}
+function _kioskConfirmar(id){ var c=document.getElementById('_kioskCandidates'); if(c) c.style.display='none'; _kioskMarcar(id); }
+function _cerrarKiosko(){
+  try { if(_kioskLoop){ clearInterval(_kioskLoop); _kioskLoop=null; } } catch(e){}
+  try { if(_kioskStream){ _kioskStream.getTracks().forEach(function(t){ t.stop(); }); _kioskStream=null; } } catch(e){}
+  var s=document.getElementById('_kioskScreen'); if(s) s.remove();
+  if (window._prUnlockScroll) window._prUnlockScroll();
+  if (typeof renderPersonal==='function') renderPersonal();
+}
+// ── FIN KIOSKO ───────────────────────────────────────────────────────────────
 
 function agregarPersonaGlobal(){ _personaModalGlobal(null); }
 function editarPersonaGlobal(id){ const c=_personaById(id); if(c) _personaModalGlobal(c); }
