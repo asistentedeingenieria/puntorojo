@@ -16426,7 +16426,7 @@ async function _detectOneDescriptor(input){
 }
 
 // ── KIOSKO FACIAL ────────────────────────────────────────────────────────────
-let _kioskMatcher=null;
+let _kioskMatcher=null, _kioskStream=null, _kioskLoop=null, _kioskBusy=false;
 const _kioskLast = {}; // personaId -> timestamp ultima marca (debounce 5s)
 async function _abrirKioskoCaras(){
   if (document.getElementById('_kioskScreen')) return;
@@ -16441,21 +16441,47 @@ async function _abrirKioskoCaras(){
     +   '<select id="_kioskObra" style="margin-left:auto;padding:6px;border-radius:6px">'+obras+'<option value="OTRA">OTRA…</option></select>'
     +   '<button class="btn ghost sm" style="color:#fff;border-color:#555" onclick="_cerrarKiosko()">CERRAR</button>'
     + '</div>'
-    + '<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;padding:24px;text-align:center">'
-    +   '<div id="_kioskResult" style="color:#fff;font-size:18px;font-weight:800;min-height:52px;display:flex;align-items:center;justify-content:center"></div>'
-    +   '<button type="button" class="btn primary" style="font-size:16px;padding:18px 30px" onclick="_tomarFotoMarcar()">TOMAR FOTO Y MARCAR</button>'
-    +   '<div id="_kioskCandidates" style="display:none;width:100%;max-width:420px"></div>'
+    + '<div style="position:relative;flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#000">'
+    +   '<video id="_kioskVideo" autoplay playsinline muted style="max-width:100%;max-height:100%"></video>'
+    +   '<div id="_kioskResult" style="position:absolute;bottom:0;left:0;right:0;padding:16px;text-align:center;color:#fff;font-size:18px;font-weight:800;background:linear-gradient(transparent,rgba(0,0,0,.75))"></div>'
     + '</div>'
+    + '<div id="_kioskCandidates" style="display:none;padding:12px;background:#111;color:#fff"></div>'
+    + '<div style="padding:10px 14px;text-align:center;background:#0B0B0C"><button type="button" class="btn ghost sm" style="color:#bbb;border-color:#444" onclick="_tomarFotoMarcar()">¿NO ABRE LA CÁMARA? TOMÁ UNA FOTO</button></div>'
     + '</div>';
   const w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);
   if (window._prLockScroll) window._prLockScroll();
-  const r=document.getElementById('_kioskResult'); if(r) r.textContent='Preparando reconocimiento…';
+  // 1) Cámara en vivo PRIMERO (dentro del gesto, antes de cargar modelos)
+  try {
+    _kioskStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:'environment' } }, audio:false });
+    const v=document.getElementById('_kioskVideo'); if(v) v.srcObject=_kioskStream;
+  } catch(e){ _kioskSetResult('Cámara en vivo no disponible · usá el botón de abajo','#FBBF24'); }
+  // 2) Modelos en 2do plano → matcher → loop continuo (solo si hay cámara en vivo)
+  if(!_kioskStream){ /* keep the camera-error message */ } else { _kioskSetResult('Preparando reconocimiento…','#fff'); }
   loadFaceModels().then(()=>{
     _kioskMatcher = new faceapi.FaceMatcher(enroladas.map(pp => new faceapi.LabeledFaceDescriptors(pp.id, pp.descriptors)), 0.6);
-    const rr=document.getElementById('_kioskResult'); if(rr) rr.textContent='Tomá la foto de la persona';
-  }).catch(()=>{ const rr=document.getElementById('_kioskResult'); if(rr) rr.textContent='No se pudo cargar el reconocimiento'; });
+    if (_kioskStream && document.getElementById('_kioskScreen') && !_kioskLoop){
+      _kioskLoop = setInterval(_kioskTick, 700);
+      _kioskSetResult('Escaneando…','#fff');
+    } else if (!_kioskStream){
+      _kioskSetResult('Tomá la foto con el botón de abajo','#fff');
+    }
+  }).catch(()=>{ _kioskSetResult('No se pudo cargar el reconocimiento','#FBBF24'); });
 }
 function _kioskSetResult(txt,color){ const r=document.getElementById('_kioskResult'); if(r){ r.textContent=txt; r.style.color=color||'#fff'; } }
+async function _kioskTick(){
+  if (_kioskBusy || !_kioskMatcher) return;
+  const v=document.getElementById('_kioskVideo'); if(!v||!v.videoWidth) return;
+  _kioskBusy=true;
+  try{
+    const det=await _detectOneDescriptor(v);
+    if(det){
+      const all=_kioskMatcher.labeledDescriptors.map(ld=>({id:ld.label, distance:Math.min.apply(null, ld.descriptors.map(d=>faceapi.euclideanDistance(d, det.descriptor)))}));
+      const pick=pickFaceCandidates(all,0.48,0.58);
+      if(pick.status==='auto') _kioskMarcar(pick.matchId);
+      else if(pick.status==='confirm') _kioskMostrarCandidatos(pick.candidates);
+    }
+  }catch(e){} finally{ _kioskBusy=false; }
+}
 function _tomarFotoMarcar(){
   if(!_kioskMatcher){ showToast('PREPARANDO RECONOCIMIENTO, ESPERÁ…',''); return; }
   let input=document.getElementById('_prNativeCamKiosk'); if(input) input.remove();
@@ -16492,6 +16518,7 @@ function _kioskMarcar(personaId){
   const p=(_getPersonal()||[]).find(x=>x.id===personaId);
   _kioskSetResult((r.accion==='entrada'?'✓ ENTRADA · ':'✓ SALIDA · ')+((p&&p.nombre)||'')+' · '+r.hora, r.accion==='entrada'?'#34D399':'#FBBF24');
   const cc=document.getElementById('_kioskCandidates'); if(cc) cc.style.display='none';
+  if (_kioskLoop){ setTimeout(function(){ if(_kioskLoop && document.getElementById('_kioskScreen')) _kioskSetResult('Escaneando…','#fff'); }, 2600); }
 }
 function _kioskMostrarCandidatos(ids){
   const cont=document.getElementById('_kioskCandidates'); if(!cont) return;
@@ -16503,6 +16530,8 @@ function _kioskMostrarCandidatos(ids){
 }
 function _kioskConfirmar(id){ const cc=document.getElementById('_kioskCandidates'); if(cc) cc.style.display='none'; _kioskMarcar(id); }
 function _cerrarKiosko(){
+  try{ if(_kioskLoop){ clearInterval(_kioskLoop); _kioskLoop=null; } }catch(e){}
+  try{ if(_kioskStream){ _kioskStream.getTracks().forEach(t=>t.stop()); _kioskStream=null; } }catch(e){}
   const s=document.getElementById('_kioskScreen'); if(s) s.remove();
   _kioskMatcher=null;
   if (window._prUnlockScroll) window._prUnlockScroll();
