@@ -16301,7 +16301,7 @@ function renderPersonal(){
     if(!lista.length){ body.innerHTML=`<tr><td colspan="7" style="padding:40px;text-align:center;color:var(--mute)">SIN PERSONAL${canEd?' — <a href="#" onclick="event.preventDefault();agregarPersonaGlobal()" style="color:var(--red)">AGREGÁ una persona</a>':''}</td></tr>`; }
     else { body.innerHTML=lista.map(c=>{ const f=c.facturadoPor; const fact=f&&f.nombre?`${f.nombre}${f.dpi?'<br><span style="font-size:9px;color:var(--mute)">DPI '+f.dpi+'</span>':''}`:'<span style="color:var(--mute)">—</span>';
       return `<tr>
-        <td style="font-weight:600">${c.nombre||''}${(c.dpiFrenteURL||c.dpiReversoURL)?' <span title="DPI cargado" style="font-size:9px;color:var(--green-dark)">&#9679;DPI</span>':''}</td>
+        <td style="font-weight:600">${c.nombre||''}${(c.dpiFrenteURL||c.dpiReversoURL)?' <span onclick="event.stopPropagation();_verDPIPersona(\''+c.id+'\')" title="Ver DPI" style="cursor:pointer;font-size:9px;color:var(--green-dark);text-decoration:underline">&#9679;VER DPI</span>':''}</td>
         <td>${c.cargo||'<span style="color:var(--mute)">—</span>'}</td>
         <td>${c.empresa?('<span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 8px;border-radius:10px;background:#EEF2FF;color:#3730A3">'+c.empresa+'</span>'):'<span style="color:var(--mute)">—</span>'}${c.tipo==='OFICINA'?' <span style="display:inline-block;font-size:8px;font-weight:700;padding:2px 7px;border-radius:10px;background:#FEF3C7;color:#92400E">OFICINA</span>':' <span style="display:inline-block;font-size:8px;font-weight:700;padding:2px 7px;border-radius:10px;background:var(--green-soft);color:var(--green-dark)">OBRA</span>'}</td>
         <td style="font-size:11px">${c.dpi||'—'}</td>
@@ -16427,6 +16427,7 @@ async function _detectOneDescriptor(input){
 
 // ── KIOSKO FACIAL ────────────────────────────────────────────────────────────
 let _kioskStream=null, _kioskLoop=null, _kioskMatcher=null, _kioskBusy=false;
+let _kioskFacing='environment';
 const _kioskLast = {}; // personaId -> timestamp ultima marca (debounce 5s)
 async function _abrirKioskoCaras(){
   if (_kioskLoop || document.getElementById('_kioskScreen')) return;
@@ -16439,6 +16440,7 @@ async function _abrirKioskoCaras(){
     + '<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;color:#fff">'
     +   '<span style="font-size:11px;letter-spacing:2px;font-weight:700">ESCANEAR CARAS</span>'
     +   '<select id="_kioskObra" style="margin-left:auto;padding:6px;border-radius:6px">'+obras+'<option value="OTRA">OTRA…</option></select>'
+    +   '<button class="btn ghost sm" style="color:#fff;border-color:#555" onclick="_kioskFlipCamera()">VOLTEAR CÁMARA</button>'
     +   '<button class="btn ghost sm" style="color:#fff;border-color:#555" onclick="_cerrarKiosko()">CERRAR</button>'
     + '</div>'
     + '<div style="position:relative;flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden">'
@@ -16450,7 +16452,7 @@ async function _abrirKioskoCaras(){
   const w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);
   if (window._prLockScroll) window._prLockScroll();
   try {
-    _kioskStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:'environment' } }, audio:false });
+    _kioskStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:_kioskFacing } }, audio:false });
     const _v=document.getElementById('_kioskVideo'); if(_v) _v.srcObject = _kioskStream;
   } catch(e){ showToast('NO SE PUDO ABRIR LA CÁMARA','red'); _cerrarKiosko(); return; }
   const _bn=document.getElementById('_kioskBanner'); if(_bn) _bn.textContent='PREPARANDO RECONOCIMIENTO…';
@@ -16507,6 +16509,14 @@ function _cerrarKiosko(){
   if (window._prUnlockScroll) window._prUnlockScroll();
   if (typeof renderPersonal==='function') renderPersonal();
 }
+async function _kioskFlipCamera(){
+  _kioskFacing = (_kioskFacing==='environment') ? 'user' : 'environment';
+  try{ if(_kioskStream){ _kioskStream.getTracks().forEach(t=>t.stop()); } }catch(e){}
+  try{
+    _kioskStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:_kioskFacing } }, audio:false });
+    const v=document.getElementById('_kioskVideo'); if(v) v.srcObject=_kioskStream;
+  }catch(e){ showToast('NO SE PUDO CAMBIAR DE CÁMARA','red'); }
+}
 // ── FIN KIOSKO ───────────────────────────────────────────────────────────────
 
 function agregarPersonaGlobal(){ _personaModalGlobal(null); }
@@ -16552,6 +16562,27 @@ function _personaModalGlobal(c){
   if(typeof window._prLockScroll==='function') window._prLockScroll();
   if(c){ const fs=document.getElementById('_faceStatus'); if(fs){ if(e.face&&e.face.descriptors&&e.face.descriptors.length){ fs.textContent='Cara registrada ✓ ('+e.face.descriptors.length+' tomas)'; } else { fs.textContent='Sin cara registrada'; } } }
 }
+function _verDPIPersona(personaId){
+  const p=(_getPersonal()||[]).find(x=>x.id===personaId); if(!p) return;
+  if(!p.dpiFrenteURL && !p.dpiReversoURL){ showToast('SIN DPI CARGADO',''); return; }
+  const id='_dpiVerOverlay'; const old=document.getElementById(id); if(old) old.remove();
+  const esc=s=>String(s==null?'':s).replace(/"/g,'&quot;');
+  const card=(url,lbl)=> url ? ('<div style="display:flex;flex-direction:column;align-items:center;gap:8px">'
+      +'<div style="color:#fff;font-size:10px;letter-spacing:2px;font-weight:700">'+lbl+'</div>'
+      +'<img src="'+esc(url)+'" style="max-width:88vw;max-height:58vh;object-fit:contain;border-radius:6px">'
+      +'<a href="'+esc(url)+'" download target="_blank" rel="noopener" class="btn sm" style="background:var(--red);color:#fff;border:none;text-decoration:none">DESCARGAR</a>'
+      +'</div>') : '';
+  const ov=document.createElement('div'); ov.id=id;
+  ov.style.cssText='position:fixed;inset:0;z-index:100060;background:rgba(0,0,0,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:24px 16px;overflow:auto';
+  ov.innerHTML='<button type="button" id="_dpiVerClose" style="position:fixed;top:14px;right:16px;background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.3);padding:8px 16px;border-radius:3px;font-size:10px;letter-spacing:2px;font-weight:700;cursor:pointer">CERRAR</button>'
+    +'<div style="color:#fff;font-size:12px;letter-spacing:1px;font-weight:700;text-transform:uppercase">DPI · '+esc(p.nombre||'')+'</div>'
+    + card(p.dpiFrenteURL,'FRENTE') + card(p.dpiReversoURL,'REVERSO');
+  const close=()=>{ try{ ov.remove(); }catch(e){} if(window._prUnlockScroll) window._prUnlockScroll(); };
+  ov.addEventListener('click',e=>{ if(e.target===ov) close(); });
+  document.body.appendChild(ov);
+  const cb=document.getElementById('_dpiVerClose'); if(cb) cb.addEventListener('click', close);
+  if(window._prLockScroll) window._prLockScroll();
+}
 function _dpiLightbox(url, titulo){
   if(!url) return;
   const id='_dpiLbOverlay';
@@ -16592,6 +16623,7 @@ async function _subirAStorage(blob, path){
   return await snap.ref.getDownloadURL();
 }
 let _enrolStream=null, _enrolDesc=[], _enrolThumb=null;
+let _enrolFacing='environment';
 async function _abrirEnrolarCara(personaId){
   if (!(can('personal.edit') || can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
   const p=(_getPersonal()||[]).find(x=>x.id===personaId); if(!p) return;
@@ -16603,6 +16635,7 @@ async function _abrirEnrolarCara(personaId){
     +'<video id="_enrolVideo" autoplay playsinline muted style="width:100%;border-radius:8px;background:#000;aspect-ratio:3/4;object-fit:cover"></video>'
     +'<canvas id="_enrolCanvas" style="display:none"></canvas>'
     +'<div id="_enrolCount" style="text-align:center;font-size:12px;color:var(--mute);margin-top:8px">0 / 3 tomas</div>'
+    +'<div style="text-align:center;margin-top:6px"><button type="button" class="btn ghost sm" onclick="_enrolFlipCamera()">VOLTEAR CÁMARA</button></div>'
     +'<label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-size:11px;color:var(--text)"><input type="checkbox" id="_enrolConsent" style="margin-top:2px"><span>La persona da su consentimiento para guardar su rostro (dato biométrico) con fines de control de asistencia.</span></label>'
     +'<div style="display:flex;gap:8px;margin-top:12px">'
     +'<button type="button" class="btn" style="flex:1" onclick="_capturarTomaCara()">CAPTURAR TOMA</button>'
@@ -16611,7 +16644,7 @@ async function _abrirEnrolarCara(personaId){
   const w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);
   if(window._prLockScroll) window._prLockScroll();
   try{
-    _enrolStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+    _enrolStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:_enrolFacing}},audio:false});
     const _v=document.getElementById('_enrolVideo'); if(_v) _v.srcObject=_enrolStream;
   }catch(e){ showToast('NO SE PUDO ABRIR LA CÁMARA','red'); _cerrarEnrolar(); return; }
   if(!_faceModelsReady){
@@ -16640,6 +16673,14 @@ function _cerrarEnrolar(){
   try{ if(_enrolStream){ _enrolStream.getTracks().forEach(t=>t.stop()); _enrolStream=null; } }catch(e){}
   const m=document.getElementById('_enrolModal'); if(m) m.remove();
   if(window._prUnlockScroll) window._prUnlockScroll();
+}
+async function _enrolFlipCamera(){
+  _enrolFacing = (_enrolFacing==='environment') ? 'user' : 'environment';
+  try{ if(_enrolStream){ _enrolStream.getTracks().forEach(t=>t.stop()); } }catch(e){}
+  try{
+    _enrolStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:_enrolFacing } }, audio:false });
+    const v=document.getElementById('_enrolVideo'); if(v) v.srcObject=_enrolStream;
+  }catch(e){ showToast('NO SE PUDO CAMBIAR DE CÁMARA','red'); }
 }
 async function _guardarCara(personaId){
   if (!(can('personal.edit') || can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
