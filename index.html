@@ -16378,7 +16378,7 @@ function _facesEnroladas(){
       descriptors: p.face.descriptors.map(d => new Float32Array(d)) }));
 }
 // Marca entrada/salida facial para una persona en la obra elegida. Devuelve {accion, hora} o null.
-function _marcarAsistenciaFacial(personaId, obraId, obraDesc){
+function _marcarAsistenciaFacial(personaId, obraId, obraDesc, geo){
   if (!(can('personal.asistencia') || can('users.manage'))){ showToast('SIN PERMISO','red'); return null; }
   const fecha = todayKey(), hhmm = _asisHoraHHMM();
   const asis = _getAsistencia();
@@ -16387,6 +16387,7 @@ function _marcarAsistenciaFacial(personaId, obraId, obraDesc){
   const out = computeAsistenciaMark(prev || {}, hhmm);
   const reg = out.reg;
   reg.obraId = obraId; reg.obraDesc = obraDesc || ''; reg.via = 'cara';
+  if (out.accion === 'entrada') reg.geoEntrada = geo || null; else reg.geoSalida = geo || null;
   asis[fecha][personaId] = reg;
   saveState();
   try { if (typeof CloudSync!=='undefined' && CloudSync.uploadCurrent) CloudSync.uploadCurrent(); } catch(e){}
@@ -16439,7 +16440,7 @@ async function _detectOneDescriptor(input){
 }
 
 // ── KIOSKO FACIAL ────────────────────────────────────────────────────────────
-let _kioskMatcher=null, _kioskStream=null, _kioskLoop=null, _kioskBusy=false;
+let _kioskMatcher=null, _kioskStream=null, _kioskLoop=null, _kioskBusy=false, _kioskGeo=null, _kioskGeoWatch=null;
 const _kioskLast = {}; // personaId -> timestamp ultima marca (debounce 5s)
 async function _abrirKioskoCaras(){
   if (document.getElementById('_kioskScreen')) return;
@@ -16463,6 +16464,14 @@ async function _abrirKioskoCaras(){
     + '</div>';
   const w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);
   if (window._prLockScroll) window._prLockScroll();
+  if (navigator.geolocation){
+    _kioskGeo=null;
+    try{ if(_kioskGeoWatch!=null) navigator.geolocation.clearWatch(_kioskGeoWatch); }catch(e){}
+    _kioskGeoWatch = navigator.geolocation.watchPosition(
+      function(pos){ _kioskGeo={ lat:pos.coords.latitude, lng:pos.coords.longitude, acc:pos.coords.accuracy, ts:Date.now() }; },
+      function(err){ _kioskGeo=null; _kioskSetResult('⚠ ACTIVÁ LA UBICACIÓN PARA MARCAR','#FBBF24'); },
+      { enableHighAccuracy:true, maximumAge:15000, timeout:20000 });
+  } else { _kioskSetResult('ESTE DISPOSITIVO NO TIENE GPS','#FBBF24'); }
   // 1) Cámara en vivo PRIMERO (dentro del gesto, antes de cargar modelos)
   try {
     _kioskStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:'environment' } }, audio:false });
@@ -16522,11 +16531,12 @@ function _tomarFotoMarcar(){
 }
 function _kioskObraActual(){ const s=document.getElementById('_kioskObra'); const v=s?s.value:''; return { obraId:v, obraDesc:'' }; }
 function _kioskMarcar(personaId){
+  if (!_kioskGeo){ _kioskSetResult('⚠ SIN UBICACIÓN · ACTIVÁ EL GPS PARA MARCAR','#FBBF24'); return; }
   const now=Date.now();
   if (_kioskLast[personaId] && (now-_kioskLast[personaId]<5000)){ return; }
   _kioskLast[personaId]=now;
   const { obraId, obraDesc } = _kioskObraActual();
-  const r=_marcarAsistenciaFacial(personaId, obraId, obraDesc);
+  const r=_marcarAsistenciaFacial(personaId, obraId, obraDesc, _kioskGeo);
   if(!r) return;
   const p=(_getPersonal()||[]).find(x=>x.id===personaId);
   _kioskSetResult((r.accion==='entrada'?'✓ ENTRADA · ':'✓ SALIDA · ')+((p&&p.nombre)||'')+' · '+r.hora, r.accion==='entrada'?'#34D399':'#FBBF24');
@@ -16545,6 +16555,8 @@ function _kioskConfirmar(id){ const cc=document.getElementById('_kioskCandidates
 function _cerrarKiosko(){
   try{ if(_kioskLoop){ clearInterval(_kioskLoop); _kioskLoop=null; } }catch(e){}
   try{ if(_kioskStream){ _kioskStream.getTracks().forEach(t=>t.stop()); _kioskStream=null; } }catch(e){}
+  try{ if(_kioskGeoWatch!=null && navigator.geolocation){ navigator.geolocation.clearWatch(_kioskGeoWatch); _kioskGeoWatch=null; } }catch(e){}
+  _kioskGeo=null;
   const s=document.getElementById('_kioskScreen'); if(s) s.remove();
   _kioskMatcher=null;
   if (window._prUnlockScroll) window._prUnlockScroll();
