@@ -4319,6 +4319,7 @@ const PERMS_DISPONIBLES = [
   { key: 'pedidos.receive',  label: 'Confirmar recibido (supervisor)',    group: 'EDICIÓN MATERIALES' },
   { key: 'receta.edit',      label: 'Editar receta de materiales por etapa',  group: 'EDICIÓN MATERIALES' },
   { key: 'compras.autorizar',label: 'Autorizar Órdenes de Compra (Finanzas)',  group: 'EDICIÓN MATERIALES' },
+  { key: 'precios.autorizar', label: 'Autorizar cambios de precio del catálogo', group: 'EDICIÓN MATERIALES' },
   { key: 'personal.add',     label: 'Agregar nuevos colaboradores', group: 'EDICIÓN PERSONAL' },
   { key: 'personal.edit',    label: 'Editar o eliminar colaboradores',    group: 'EDICIÓN PERSONAL' },
   { key: 'personal.asistencia', label: 'Marcar asistencia',    group: 'EDICIÓN PERSONAL' },
@@ -7404,6 +7405,8 @@ function ensureDataV9(data){
     if (!Array.isArray(data.solicitudesPolizas)) data.solicitudesPolizas = [];
     // v390: solicitudes para eliminar colaboradores
     if (!Array.isArray(data.solicitudesColaboradores)) data.solicitudesColaboradores = [];
+    // solicitudes de cambio/alta de precio del catálogo
+    if (!Array.isArray(data.solicitudesPrecios)) data.solicitudesPrecios = [];
   } catch(e) { console.warn('[v352] migración pólizas globales:', e && e.message); }
 
   // v355: ANTICIPOS GLOBALES — migrar de p.planilla.anticipos a data.anticiposGlobales.
@@ -21877,6 +21880,36 @@ function _doDeleteCatProvProducto(idx, provId){
   renderCatProvList();
 }
 window.DELETION_EXECUTORS['catProvProducto'] = (payload) => _doDeleteCatProvProducto(payload.idx, payload.provId);
+
+/* === Solicitudes de cambio/alta de precio del catálogo === */
+function _crearSolicitudPrecio(tipo, proveedorId, productoNombre, unidad, precioActual, precioNuevo, motivo){
+  const list=(state.solicitudesPrecios=state.solicitudesPrecios||[]);
+  const prov=(_getProveedores().find(p=>p.id===proveedorId)||{});
+  const _u = (typeof currentUser!=='undefined') ? currentUser : null;
+  const _nombre = ((_u && (_u.displayName||_u.username||_u.email)) || '').toUpperCase();
+  const s={ id:'sp-'+uid(), tipo:tipo, proveedorId, proveedorNombre:prov.nombre||'', productoNombre:String(productoNombre||''), unidad:unidad||'', precioActual:(precioActual==null?null:Number(precioActual)), precioNuevo:Number(precioNuevo), motivo:motivo||'', solicitadoPor:((_u&&(_u.email||_u.username))||''), solicitadoNombre:_nombre, ts:Date.now(), estado:'PENDIENTE' };
+  list.push(s); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  try{ if(typeof _notifyByPerm==='function') _notifyByPerm('precios.autorizar', { type:'precio-solicitud', title:'SOLICITUD DE PRECIO', body:(tipo==='ALTA'?'Alta':'Cambio')+' de "'+s.productoNombre+'" a Q'+s.precioNuevo }).catch(()=>{}); }catch(e){}
+  return s;
+}
+function autorizarSolicitudPrecio(id){
+  if(!(can('precios.autorizar')||can('users.manage'))) return showToast('SIN PERMISO','red');
+  const s=(state.solicitudesPrecios||[]).find(x=>x.id===id); if(!s||s.estado!=='PENDIENTE') return;
+  const prov=_getProveedores().find(p=>p.id===s.proveedorId); if(!prov){ s.estado='RECHAZADA'; saveState(); return; }
+  prov.productos=prov.productos||[];
+  const k=matchKeyProducto(s.productoNombre);
+  const ex=prov.productos.find(q=>matchKeyProducto(q.nombre)===k);
+  if(ex){ ex.precio=Number(s.precioNuevo); } else { prov.productos.push({nombre:String(s.productoNombre).toUpperCase(),unidad:s.unidad||'',precio:Number(s.precioNuevo),rendimiento:1}); }
+  s.estado='AUTORIZADA'; s.resueltoTs=Date.now();
+  saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  showToast('PRECIO AUTORIZADO','green'); if(typeof renderCatProvList==='function') renderCatProvList(); if(typeof _renderSolicitudesPrecio==='function') _renderSolicitudesPrecio();
+}
+function rechazarSolicitudPrecio(id){
+  if(!(can('precios.autorizar')||can('users.manage'))) return showToast('SIN PERMISO','red');
+  const s=(state.solicitudesPrecios||[]).find(x=>x.id===id); if(!s||s.estado!=='PENDIENTE') return;
+  s.estado='RECHAZADA'; s.resueltoTs=Date.now(); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  showToast('SOLICITUD RECHAZADA',''); if(typeof _renderSolicitudesPrecio==='function') _renderSolicitudesPrecio();
+}
 
 function _bringModalFront(el){
   if(!el) return;
