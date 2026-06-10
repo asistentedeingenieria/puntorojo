@@ -16329,13 +16329,15 @@ function renderPersonal(){
       grid.innerHTML=asistLista.map(c=>{ const a=dia[c.id]||{}; const on=a.presente===true; const obraId=a.obraId||'';
         const rg=on?(migrateAsistenciaRegistro(a)||a):null;
         const horasTxt=rg?('ENT '+(rg.entrada||'—')+(rg.salida?(' · SAL '+rg.salida):'')):'';
+        const _ge = on ? _geoTxtMarca(rg,'geoEntrada') : null;
+        const _geoLine = _ge ? ('<div style="font-size:9px;margin-top:3px"><a href="'+_ge.maps+'" target="_blank" rel="noopener" style="text-decoration:underline;color:'+(_ge.enObra===true?'var(--green-dark)':(_ge.enObra===false?'var(--red)':'var(--mute)'))+'">'+_ge.txt+'</a></div>') : '';
         const opt=['<option value="">— OBRA —</option>'].concat(projs.map(pr=>`<option value="${pr.id}"${pr.id===obraId?' selected':''}>${String(pr.name||'').toUpperCase()}</option>`)).concat([`<option value="OTRA"${obraId==='OTRA'?' selected':''}>OTRA…</option>`]).join('');
         const otra=obraId==='OTRA'?`<input class="inline" style="margin-top:4px" placeholder="¿Dónde?" value="${String(a.obraDesc||'').replace(/"/g,'&quot;')}" ${canAsist?'':'disabled'} onchange="setAsistenciaObraDesc('${c.id}',this.value)">`:'';
         return `<div class="asist-row" style="display:flex;flex-wrap:wrap;align-items:center;gap:10px">
           <div style="flex:1 1 160px;min-width:140px"><div style="font-weight:700;color:var(--ink);font-size:13px">${c.nombre}</div><div style="font-size:10px;color:var(--mute);text-transform:uppercase;margin-top:2px">${c.cargo||'—'}</div></div>
           <div style="flex:1 1 150px;min-width:130px"><select class="inline" style="width:100%" ${canAsist&&on?'':'disabled'} onchange="setAsistenciaObra('${c.id}',this.value)">${opt}</select>${otra}</div>
           <div style="flex:0 0 auto;display:flex;align-items:center;gap:10px;margin-left:auto">
-            <div style="text-align:center;font-size:11px;font-weight:600;line-height:1.25;color:${on?'var(--green-dark)':'var(--mute)'}">${on?('● PRESENTE'+(horasTxt?('<br><span style="font-size:10px">'+horasTxt+'</span>'):'')):'○ AUSENTE'}</div>
+            <div style="text-align:center;font-size:11px;font-weight:600;line-height:1.25;color:${on?'var(--green-dark)':'var(--mute)'}">${on?('● PRESENTE'+(horasTxt?('<br><span style="font-size:10px">'+horasTxt+'</span>'):'')):('○ AUSENTE')}${_geoLine}</div>
             <div class="asist-chk ${on?'on':''}" ${canAsist?`onclick="toggleAsistenciaGlobal('${c.id}')"` :''}></div>
           </div>
         </div>`; }).join(''); }
@@ -16394,6 +16396,16 @@ function _marcarAsistenciaFacial(personaId, obraId, obraDesc, geo){
   return { accion: out.accion, hora: hhmm };
 }
 
+function _geoTxtMarca(reg, geoKey){
+  const g = reg && reg[geoKey];
+  if (!g || g.lat==null) return null;
+  let obra=null; try{ obra=(typeof state!=='undefined'&&state.projects)?state.projects.find(x=>x.id===reg.obraId):null; }catch(e){}
+  const ev = (typeof evalGeocerca==='function') ? evalGeocerca(g, obra&&obra.geo) : null;
+  const maps='https://maps.google.com/?q='+g.lat+','+g.lng;
+  if (!ev) return { txt:'SIN GEOCERCA', enObra:null, maps:maps };
+  return { txt: ev.enObra?'EN OBRA':('FUERA · '+Math.round(ev.distancia)+'m'), enObra: ev.enObra, maps:maps };
+}
+
 function descargarAsistenciaPDF(){
   if(typeof can==='function' && !(can('personal.asistenciaPdf')||can('users.manage'))) return showToast('SIN PERMISO','red');
   const fecha=_asistFechaActual();
@@ -16408,12 +16420,12 @@ function descargarAsistenciaPDF(){
   if(!presentes.length){ showToast(obraSel?('NADIE PRESENTE EN '+obraLabel+' ESE DÍA'):'NADIE MARCADO PRESENTE ESE DÍA','red'); return; }
   if(typeof window.jspdf==='undefined'||!window.jspdf.jsPDF){ showToast('JSPDF NO CARGÓ — RECARGAR LA APP','red'); return; }
   const { jsPDF }=window.jspdf;
-  const doc=new jsPDF({ unit:'pt', format:'a4', orientation:'portrait' });
+  const doc=new jsPDF({ unit:'pt', format:'a4', orientation:'landscape' });
   const pageW=doc.internal.pageSize.width;
   doc.setFontSize(14); doc.setFont(undefined,'bold');
   doc.text('ASISTENCIA · '+fecha+(obraLabel?(' · '+obraLabel):''), pageW/2, 50, {align:'center'});
-  const rows=presentes.map((pn,i)=>{ const rg=migrateAsistenciaRegistro(dia[pn.id])||dia[pn.id]||{}; return [String(i+1), pn.nombre, pn.cargo||'', rg.entrada||'—', rg.salida||'—', nombreObra(dia[pn.id])]; });
-  doc.autoTable({ startY:70, head:[['#','NOMBRE','CARGO','ENTRADA','SALIDA','OBRA']], body:rows, theme:'striped', styles:{fontSize:9,halign:'center',valign:'middle'}, headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',halign:'center'} });
+  const rows=presentes.map((pn,i)=>{ const rg=migrateAsistenciaRegistro(dia[pn.id])||dia[pn.id]||{}; return [String(i+1), pn.nombre, pn.cargo||'', rg.entrada||'—', rg.salida||'—', nombreObra(dia[pn.id]), ((_geoTxtMarca(rg,'geoEntrada')||{txt:'—'}).txt)]; });
+  doc.autoTable({ startY:70, head:[['#','NOMBRE','CARGO','ENTRADA','SALIDA','OBRA','UBICACIÓN']], body:rows, theme:'striped', styles:{fontSize:9,halign:'center',valign:'middle'}, headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',halign:'center'} });
   doc.save('ASISTENCIA '+fecha+(obraLabel?(' - '+obraLabel):'')+'.pdf');
 }
 
