@@ -3283,6 +3283,10 @@ table{max-width:100%}
     <h3>CATÁLOGO MAESTRO DE PRODUCTOS POR PROVEEDOR</h3>
     <p class="desc">GESTIONAR LOS PRECIOS FIJOS DE CADA PROVEEDOR. ESTOS PRECIOS SE AUTO-LLENAN AL GENERAR UNA ORDEN DE COMPRA. <strong style="color:var(--red)">SOLO EL ADMINISTRADOR PUEDE EDITAR ESTE CATÁLOGO.</strong></p>
 
+    <div style="display:flex;justify-content:flex-end;margin:0 0 12px">
+      <label class="btn primary sm" style="cursor:pointer;margin:0" data-perm="users.manage">SUBIR EXCEL DE PRECIOS<input type="file" accept=".xlsx,.xls" style="display:none" onchange="_importarPreciosExcel(event)"></label>
+    </div>
+
     <div class="cat-prov-layout">
       <div class="cat-prov-sidebar">
         <div class="cat-prov-sidebar-head">
@@ -15459,6 +15463,40 @@ function saveNewProveedor(){
     renderCatProvList();
     selectCatProv(provId);
   }
+}
+
+// v525: Importador de Excel de precios (estilo DATOS_COMPRAS) -> merge en proveedores globales + datos de pago.
+async function _importarPreciosExcel(event){
+  if(!(can('users.manage')||can('precios.autorizar'))){ showToast('SOLO ADMIN / AUTORIZADOR','red'); event.target.value=''; return; }
+  const file=event.target.files&&event.target.files[0]; if(!file){ return; }
+  try{
+    window._prUploadShow&&window._prUploadShow('PROCESANDO EXCEL…');
+    const data=await file.arrayBuffer();
+    const wb=XLSX.read(data,{type:'array'});
+    const shPre=wb.Sheets['PRECIOS_MATERIALES']||wb.Sheets[wb.SheetNames.find(n=>/PRECIO/i.test(n))||wb.SheetNames[0]];
+    const aoaPre=shPre?XLSX.utils.sheet_to_json(shPre,{header:1,defval:''}):[];
+    const parsed=parsePreciosExcel(aoaPre);
+    const shPrv=wb.Sheets['PROVEEDOR']||wb.Sheets[wb.SheetNames.find(n=>/PROVEEDOR/i.test(n))];
+    const pagos=shPrv?parseProveedoresPago(XLSX.utils.sheet_to_json(shPrv,{header:1,defval:''})):[];
+    const provs=_getProveedores();
+    const findProv=nom=>{ const k=normOcName(nom); return provs.find(p=>normOcName(p.nombre)===k); };
+    let creados=0, prodNuevos=0, prodUpd=0;
+    const ensureProv=nom=>{ let pr=findProv(nom); if(!pr){ pr={id:'prv-'+uid(),nombre:String(nom).toUpperCase(),contacto:'',telefono:'',productos:[]}; provs.push(pr); creados++; } if(!pr.productos)pr.productos=[]; return pr; };
+    const REF='SIN PROVEEDOR FIJO / REFERENCIA';
+    parsed.items.forEach(it=>{
+      const pr=ensureProv(it.proveedor? it.proveedor : REF);
+      const k=matchKeyProducto(it.material);
+      const ex=pr.productos.find(q=>matchKeyProducto(q.nombre)===k);
+      if(ex){ ex.precio=it.precio; prodUpd++; } else { pr.productos.push({nombre:it.material.toUpperCase(),unidad:'',precio:it.precio,rendimiento:1}); prodNuevos++; }
+    });
+    let pagoSet=0;
+    pagos.forEach(pg=>{ const pr=findProv(pg.nombre); if(pr){ pr.pago=Object.assign({},pr.pago,{numeroCuenta:pg.numeroCuenta,tipoCuenta:pg.tipoCuenta,banco:pg.banco}); pagoSet++; } });
+    saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) await CloudSync.uploadCurrent(); }catch(e){}
+    window._prUploadHide&&window._prUploadHide();
+    if(typeof renderCatProvList==='function') renderCatProvList();
+    await prAlert({ title:'IMPORTACIÓN COMPLETA', bodyHTML:'<div>Proveedores nuevos: <b>'+creados+'</b><br>Productos nuevos: <b>'+prodNuevos+'</b><br>Precios actualizados: <b>'+prodUpd+'</b><br>Datos de pago asignados: <b>'+pagoSet+'</b>'+(parsed.avisos.length?'<br><span style="color:#92400E;font-size:12px">Avisos: '+parsed.avisos.length+'</span>':'')+'</div>' });
+  }catch(e){ window._prUploadHide&&window._prUploadHide(); console.error('[importPrecios]',e); showToast('ERROR AL IMPORTAR','red'); }
+  finally{ event.target.value=''; }
 }
 
 function openAddDireccion(){
