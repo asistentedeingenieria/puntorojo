@@ -2881,7 +2881,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v592</span>
+    <span style="opacity:.5;font-size:9px">v593</span>
   </footer>
 
 </div>
@@ -7460,6 +7460,9 @@ function ensureDataV9(data){
 
     // vXXX: PERSONAL GLOBAL — listado maestro + asistencia por obra.
     if (!Array.isArray(data.personalGlobal)) data.personalGlobal = [];
+    // empresas: registro maestro + seed desde las que ya usan los colaboradores
+    if (!Array.isArray(data.empresasGlobales)) data.empresasGlobales = [];
+    try { const _emp=new Set((data.empresasGlobales||[]).map(e=>String(e==null?'':e).trim().toUpperCase()).filter(Boolean)); (data.personalGlobal||[]).forEach(pr=>{ const e=String(pr&&pr.empresa||'').trim().toUpperCase(); if(e)_emp.add(e); }); data.empresasGlobales=[..._emp].sort(); } catch(e){}
     // caras: descriptors number[][] es array anidado (prohibido en Firestore) -> [{d:[...]}] para que sincronice
     try { (data.personalGlobal||[]).forEach(pr => { if (pr && pr.face && Array.isArray(pr.face.descriptors)) { pr.face.descriptors = pr.face.descriptors.map(d => Array.isArray(d) ? { d: d } : d).filter(x => x && Array.isArray(x.d)); } }); } catch(e){}
     if (!data.asistenciaGlobal || typeof data.asistenciaGlobal !== 'object') data.asistenciaGlobal = {};
@@ -16451,7 +16454,45 @@ function todayKey(){
 let _persEmpresaFilter = '';
 let _persBuscar = '';
 let _asistFecha = '';
-function _persEmpresas(){ return [...new Set(_getPersonal().map(p=>p.empresa).filter(Boolean))].sort(); }
+function _persEmpresas(){
+  const reg=(typeof state!=='undefined'&&state&&Array.isArray(state.empresasGlobales))?state.empresasGlobales:[];
+  const set=new Set();
+  reg.forEach(e=>{ const v=String(e==null?'':e).trim().toUpperCase(); if(v)set.add(v); });
+  _getPersonal().forEach(p=>{ const v=String(p&&p.empresa||'').trim().toUpperCase(); if(v)set.add(v); });
+  return [...set].sort();
+}
+function _agregarEmpresa(nombre){
+  const n=String(nombre==null?'':nombre).trim().toUpperCase(); if(!n) return false;
+  if(typeof state==='undefined'||!state) return false;
+  if(!Array.isArray(state.empresasGlobales)) state.empresasGlobales=[];
+  if(state.empresasGlobales.some(e=>String(e==null?'':e).trim().toUpperCase()===n)) return false;
+  state.empresasGlobales.push(n);
+  try{ saveState(); }catch(e){}
+  try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  return true;
+}
+function _kpiAgregarEmpresa(){
+  if(!(can('personal.add')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
+  const inp=document.getElementById('_kpiEmpInput'); if(!inp) return;
+  const n=String(inp.value||'').trim().toUpperCase();
+  if(!n){ showToast('ESCRIBÍ EL NOMBRE DE LA EMPRESA','red'); return; }
+  if(_agregarEmpresa(n)){ showToast('EMPRESA AGREGADA · '+n,'green'); } else { showToast('YA EXISTÍA O INVÁLIDA',''); }
+  inp.value='';
+  if(typeof renderPersonal==='function') renderPersonal();
+}
+async function _pgEmpresaChange(){
+  const sel=document.getElementById('_pgEmpresa'); if(!sel||sel.value!=='__NUEVA__') return;
+  sel.value='';
+  let n=null; try{ n=await prPrompt({title:'NUEVA EMPRESA',body:'Nombre de la empresa',placeholder:'EJ: DRYMIX',required:true}); }catch(e){ n=null; }
+  if(n===null) return;
+  const nU=String(n).trim().toUpperCase(); if(!nU) return;
+  _agregarEmpresa(nU);
+  const ops=_persEmpresas();
+  const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  sel.innerHTML='<option value="">— Empresa —</option>'+ops.map(em=>'<option value="'+esc(em)+'"'+(em===nU?' selected':'')+'>'+esc(em)+'</option>').join('')+'<option value="__NUEVA__">+ Nueva empresa…</option>';
+  sel.value=nU;
+  if(typeof renderPersonal==='function') renderPersonal();
+}
 function _asistFechaActual(){ return _asistFecha || todayKey(); }
 function _persNorm(s){ return String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim(); }
 function _personaById(id){ return _getPersonal().find(p=>p.id===id); }
@@ -16490,7 +16531,7 @@ function renderPersonal(){
   if(kp){
     const _sub = (typeof window!=='undefined' && window.currentPersonalSubTab) || 'lista';
     const _kPersonal = `<div class="kpi olive"><div class="lbl">Personal</div><div class="val">${personal.length}</div><div class="sub">${_persEmpresaFilter?('Mostrando '+lista.length):'Total global'}</div></div>`;
-    const _kEmpresas = `<div class="kpi cafe"><div class="lbl">Empresas</div><div class="val">${empresas.length}</div><div class="sub">${empresas.join(' · ')||'—'}</div></div>`;
+    const _kEmpresas = `<div class="kpi cafe"><div class="lbl">Empresas</div><div class="val">${empresas.length}</div><div class="sub">${empresas.join(' · ')||'—'}</div>${canAdd?`<div style="display:flex;gap:5px;margin-top:8px"><input id="_kpiEmpInput" placeholder="NUEVA EMPRESA" style="flex:1;min-width:0;padding:5px 8px;border:1px solid var(--line);border-radius:5px;font-size:11px;text-transform:uppercase" onkeydown="if(event.key==='Enter'){event.preventDefault();_kpiAgregarEmpresa();}"><button type="button" class="btn primary" style="padding:5px 11px;font-size:13px;line-height:1" onclick="_kpiAgregarEmpresa()">+</button></div>`:''}</div>`;
     const _regsDia = Object.values(dia).filter(a=>a&&a.presente).map(a=>(typeof migrateAsistenciaRegistro==='function'?(migrateAsistenciaRegistro(a)||a):a));
     const _avgEnt = (typeof promedioHoraHHMM==='function') ? promedioHoraHHMM(_regsDia.map(r=>r.entrada)) : '—';
     const _avgSal = (typeof promedioHoraHHMM==='function') ? promedioHoraHHMM(_regsDia.map(r=>r.salida)) : '—';
@@ -16847,7 +16888,7 @@ function _personaModalGlobal(c){
         <label class="fld"><span>NOMBRE COMPLETO</span><input id="_pgNombre" value="${esc(e.nombre)}"></label>
         <label class="fld"><span>CARGO</span><input id="_pgCargo" value="${esc(e.cargo)}"></label>
         <label class="fld"><span>TIPO</span><select id="_pgTipo" style="padding:8px 10px;border:1px solid var(--line);border-radius:4px;font:inherit;font-size:13px"><option value="OBRA"${(e.tipo||'OBRA')==='OBRA'?' selected':''}>OBRA (va a asistencia)</option><option value="OFICINA"${e.tipo==='OFICINA'?' selected':''}>OFICINA (no va a asistencia)</option></select></label>
-        <label class="fld"><span>EMPRESA</span><input id="_pgEmpresa" value="${esc(e.empresa)}" placeholder="DRYMIX / PALADIUS / KANZERVERUS"></label>
+        <label class="fld"><span>EMPRESA</span><select id="_pgEmpresa" onchange="_pgEmpresaChange()" style="padding:8px 10px;border:1px solid var(--line);border-radius:4px;font:inherit;font-size:13px">${(function(){ const cur=String(e.empresa||'').trim().toUpperCase(); const ops=_persEmpresas(); let html='<option value="">— Empresa —</option>'; let has=false; ops.forEach(em=>{ const s=(em===cur); if(s)has=true; html+='<option value="'+esc(em)+'"'+(s?' selected':'')+'>'+esc(em)+'</option>'; }); if(cur&&!has) html+='<option value="'+esc(cur)+'" selected>'+esc(cur)+'</option>'; html+='<option value="__NUEVA__">+ Nueva empresa…</option>'; return html; })()}</select></label>
         <label class="fld"><span>DPI</span><input id="_pgDpi" value="${esc(e.dpi)}"></label>
         <label class="fld"><span>TELÉFONO</span><input id="_pgTel" value="${esc(e.telefono)}"></label>
         <div style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px;font-size:10px;color:var(--mute);letter-spacing:.5px">FACTURADO POR (opcional)</div>
@@ -17009,7 +17050,7 @@ function _pgCloseModal(){ const m=document.getElementById('_pgModal'); if(m) m.r
 async function _savePersonaModal(id){
   const v=k=>{ const el=document.getElementById(k); return el?el.value.trim():''; };
   const nombre=v('_pgNombre'); if(!nombre){ showToast('FALTA EL NOMBRE','red'); return; }
-  const data={ nombre:nombre.toUpperCase(), cargo:v('_pgCargo'), empresa:v('_pgEmpresa').toUpperCase(), dpi:v('_pgDpi'), telefono:v('_pgTel'), tipo:((document.getElementById('_pgTipo')||{}).value||'OBRA') };
+  const data={ nombre:nombre.toUpperCase(), cargo:v('_pgCargo'), empresa:(v('_pgEmpresa').toUpperCase()==='__NUEVA__'?'':v('_pgEmpresa').toUpperCase()), dpi:v('_pgDpi'), telefono:v('_pgTel'), tipo:((document.getElementById('_pgTipo')||{}).value||'OBRA') };
   const fn=v('_pgFNombre'); if(fn){ data.facturadoPor={nombre:fn.toUpperCase(),dpi:v('_pgFDpi'),telefono:v('_pgFTel')}; } else { data.facturadoPor=undefined; }
   if(id){
     if(!(can('personal.edit')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
