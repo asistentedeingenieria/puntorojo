@@ -232,4 +232,23 @@ module.exports = function (t) {
   eq('hora.avg3', t.api.promedioHoraHHMM(['06:00','08:00','10:00']), '08:00');
   eq('hora.empty', t.api.promedioHoraHHMM([]), '—');
   eq('hora.skipBad', t.api.promedioHoraHHMM(['xx',null,'12:00']), '12:00');
+  // --- parsePreciosExcel / parseProveedoresPago ---
+  const _aoa = [
+    ['', '', ''],
+    ['MATERIALES','PRECIOS','PROVEEDOR'],
+    ['ACABADO FINO', 54.5, 'SISTEGUA, S.A.'],
+    ['TORNILLO 1"', 8.5, 'SISTEGUA, S.A.'],
+    ['ARENA DE RIO', 12.999, ''],
+    ['', 10, 'X'],
+    ['SIN PRECIO', 0, 'Y']
+  ];
+  const _pp = t.api.parsePreciosExcel(_aoa);
+  eq('pp.count', _pp.items.length, 3);
+  eq('pp.round', _pp.items[2].precio, 13);
+  eq('pp.sinProv', _pp.items[2].proveedor, '');
+  eq('pp.mat', _pp.items[0].material, 'ACABADO FINO');
+  const _paoa = [['PROVEEDOR','N° CUENTA','TIPO CUENTA','BANCO'],['SISTEGUA, S.A.','123','MONETARIA','INDUSTRIAL'],['',' ',' ',' ']];
+  const _pg = t.api.parseProveedoresPago(_paoa);
+  eq('pg.count', _pg.length, 1);
+  eq('pg.banco', _pg[0].banco, 'INDUSTRIAL');
 };
