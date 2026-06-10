@@ -2583,13 +2583,10 @@ table{max-width:100%}
       <div id="mat-inventario" style="display:none">
         <div class="card">
           <div class="card-hd"><h3>INVENTARIO DE MATERIALES</h3>
-            <button class="btn primary sm" onclick="openModal('newMaterial')">+ AGREGAR MATERIAL</button>
+            <button class="btn primary sm" onclick="openNewMaterial()">+ AGREGAR MATERIAL</button>
           </div>
           <div class="tbl-wrap">
-            <table class="tbl">
-              <thead><tr><th>MATERIAL</th><th>UNIDAD</th><th>STOCK</th><th></th></tr></thead>
-              <tbody id="matBody"></tbody>
-            </table>
+            <div id="matBody"></div>
           </div>
         </div>
       </div>
@@ -3075,6 +3072,14 @@ table{max-width:100%}
     </div>
     <div class="field"><label>UNIDAD</label><input id="nmUnit" placeholder="EJ: LÁMINA, UNIDAD, SACO"></div>
     <div class="field"><label>STOCK ACTUAL</label><input id="nmStock" type="number" value="0"><div class="hint">Cantidad registrada en este momento. Captura manual — sin alertas automáticas.</div></div>
+    <div class="field"><label>UBICACIÓN</label>
+      <label style="font-weight:400;font-size:12px;display:flex;align-items:center;gap:6px;margin-bottom:6px"><input type="checkbox" id="nmGeneral" onchange="_nmToggleGeneral()"> General (sin apto)</label>
+      <div id="nmUbicWrap" style="display:flex;gap:8px;flex-wrap:wrap">
+        <select id="nmTorre" onchange="_nmFillNiveles()" style="flex:1 1 30%;min-width:90px;padding:8px;border:1px solid var(--line);border-radius:4px;font:inherit"></select>
+        <select id="nmNivel" onchange="_nmFillAptos()" style="flex:1 1 30%;min-width:90px;padding:8px;border:1px solid var(--line);border-radius:4px;font:inherit"></select>
+        <select id="nmApto" style="flex:1 1 30%;min-width:90px;padding:8px;border:1px solid var(--line);border-radius:4px;font:inherit"></select>
+      </div>
+    </div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="closeModal('newMaterial')">CANCELAR</button>
       <button class="btn primary" onclick="createMaterial()">AGREGAR</button>
@@ -13969,16 +13974,78 @@ function renderMateriales(){
 
   const body = document.getElementById('matBody');
   if (items.length === 0) {
-    body.innerHTML = `<tr><td colspan="4" style="padding:40px;text-align:center;color:var(--mute)">NO HAY MATERIALES REGISTRADOS</td></tr>`;
+    body.innerHTML = `<div style="padding:40px;text-align:center;color:var(--mute)">NO HAY MATERIALES REGISTRADOS</div>`;
   } else {
-    body.innerHTML = items.map(m => {
-      return `<tr>
-        <td><input class="inline wide" value="${m.nombre}" oninput="updateMat('${m.id}','nombre',this.value)"></td>
-        <td><input class="inline" value="${m.unidad||''}" style="width:80px" oninput="updateMat('${m.id}','unidad',this.value)"></td>
+    // Render agrupado y colapsable por TORRE → NIVEL → APTO, más un grupo GENERAL.
+    // Items sin ubic (o cuya ubicación ya no existe en la estructura) caen en GENERAL.
+    const matRow = (m) => `<tr>
+        <td><input class="inline wide" value="${escapeAttr(m.nombre||'')}" oninput="updateMat('${m.id}','nombre',this.value)"></td>
+        <td><input class="inline" value="${escapeAttr(m.unidad||'')}" style="width:80px" oninput="updateMat('${m.id}','unidad',this.value)"></td>
         <td class="num"><input class="inline num" value="${m.stock||0}" type="number" oninput="updateMat('${m.id}','stock',this.value)"></td>
         <td><button class="btn-icon danger" onclick="deleteMat('${m.id}')" title="ELIMINAR">✕</button></td>
       </tr>`;
-    }).join('');
+    const matTable = (arr) => `<table class="tbl" style="margin:0">
+        <thead><tr><th>MATERIAL</th><th>UNIDAD</th><th>STOCK</th><th></th></tr></thead>
+        <tbody>${arr.map(matRow).join('')}</tbody>
+      </table>`;
+    const esc = (s) => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const sumStyle = 'cursor:pointer;font-weight:700;padding:8px 10px;list-style:none;user-select:none';
+    const badge = (n) => `<span style="display:inline-block;min-width:20px;text-align:center;background:var(--mute-light);color:var(--mute);border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700;margin-left:8px">${n}</span>`;
+
+    // Indexar items por torre/nivel/apto válidos
+    const towers = (p.towers || []);
+    const towerById = {}; const levelById = {}; const aptoById = {};
+    towers.forEach(t => { towerById[t.id] = t; (t.levels||[]).forEach(l => { levelById[l.id] = l; (l.aptos||[]).forEach(a => { aptoById[a.id] = a; }); }); });
+    // bucket[torreId][nivelId][aptoId] = [items]
+    const bucket = {}; const general = [];
+    items.forEach(m => {
+      const u = m.ubic;
+      if (u && u.torreId && towerById[u.torreId] && u.nivelId && levelById[u.nivelId] && u.aptoId && aptoById[u.aptoId]) {
+        (bucket[u.torreId] = bucket[u.torreId] || {});
+        (bucket[u.torreId][u.nivelId] = bucket[u.torreId][u.nivelId] || {});
+        (bucket[u.torreId][u.nivelId][u.aptoId] = bucket[u.torreId][u.nivelId][u.aptoId] || []).push(m);
+      } else {
+        general.push(m);
+      }
+    });
+
+    let html = '';
+    // Recorrer en orden estructural
+    towers.forEach(t => {
+      const tb = bucket[t.id]; if (!tb) return;
+      let tCount = 0; let tInner = '';
+      (t.levels || []).forEach(l => {
+        const lb = tb[l.id]; if (!lb) return;
+        let lCount = 0; let lInner = '';
+        (l.aptos || []).forEach(a => {
+          const arr = lb[a.id]; if (!arr || !arr.length) return;
+          lCount += arr.length;
+          lInner += `<details style="margin:4px 0 4px 14px;border-left:2px solid var(--line);padding-left:6px">
+            <summary style="${sumStyle}">${esc(a.name||a.id)}${badge(arr.length)}</summary>
+            <div style="padding:4px 0 8px 0">${matTable(arr)}</div>
+          </details>`;
+        });
+        if (!lCount) return;
+        tCount += lCount;
+        tInner += `<details style="margin:4px 0 4px 10px;border-left:2px solid var(--line);padding-left:6px">
+          <summary style="${sumStyle}">${esc(l.name||l.id)}${badge(lCount)}</summary>
+          <div>${lInner}</div>
+        </details>`;
+      });
+      if (!tCount) return;
+      html += `<details open style="margin:6px 0;border:1px solid var(--line);border-radius:6px">
+        <summary style="${sumStyle};background:var(--cream);border-radius:6px">${esc(t.name||t.id)}${badge(tCount)}</summary>
+        <div style="padding:4px 8px 8px 8px">${tInner}</div>
+      </details>`;
+    });
+    // Grupo GENERAL (sin apto) al final
+    if (general.length) {
+      html += `<details open style="margin:6px 0;border:1px solid var(--line);border-radius:6px">
+        <summary style="${sumStyle};background:var(--cream);border-radius:6px">GENERAL (SIN APTO)${badge(general.length)}</summary>
+        <div style="padding:4px 8px 8px 8px">${matTable(general)}</div>
+      </details>`;
+    }
+    body.innerHTML = html;
   }
 
   // Pedidos — renderizado nuevo
@@ -17456,19 +17523,54 @@ function createLevel(){
   showToast(`NIVEL CREADO CON ${numAptos} APTO${numAptos!==1?'S':''}`, 'green');
 }
 
+function openNewMaterial(){ _nmInitUbic(); openModal('newMaterial'); }
+function _nmInitUbic(){
+  const p=activeProj(); const ts=(p&&p.towers)||[];
+  const tSel=document.getElementById('nmTorre'); if(!tSel) return;
+  tSel.innerHTML = '<option value="">— Torre —</option>' + ts.map(t=>`<option value="${t.id}">${(t.name||t.id)}</option>`).join('');
+  const nSel=document.getElementById('nmNivel'); if(nSel) nSel.innerHTML='<option value="">— Nivel —</option>';
+  const aSel=document.getElementById('nmApto'); if(aSel) aSel.innerHTML='<option value="">— Apto —</option>';
+  const g=document.getElementById('nmGeneral'); if(g) g.checked=false;
+  const w=document.getElementById('nmUbicWrap'); if(w) w.style.display='';
+}
+function _nmFillNiveles(){
+  const p=activeProj(); const t=((p&&p.towers)||[]).find(x=>x.id===document.getElementById('nmTorre').value);
+  const nSel=document.getElementById('nmNivel'); const aSel=document.getElementById('nmApto');
+  nSel.innerHTML='<option value="">— Nivel —</option>'+((t&&t.levels)||[]).map(l=>`<option value="${l.id}">${(l.name||l.id)}</option>`).join('');
+  aSel.innerHTML='<option value="">— Apto —</option>';
+}
+function _nmFillAptos(){
+  const p=activeProj(); const t=((p&&p.towers)||[]).find(x=>x.id===document.getElementById('nmTorre').value);
+  const l=((t&&t.levels)||[]).find(x=>x.id===document.getElementById('nmNivel').value);
+  const aSel=document.getElementById('nmApto');
+  aSel.innerHTML='<option value="">— Apto —</option>'+((l&&l.aptos)||[]).map(a=>`<option value="${a.id}">${(a.name||a.numero||a.id)}</option>`).join('');
+}
+function _nmToggleGeneral(){ const w=document.getElementById('nmUbicWrap'); const g=document.getElementById('nmGeneral'); if(w) w.style.display=g.checked?'none':''; }
+
 function createMaterial(){
   const nombre = document.getElementById('nmName').value.trim().toUpperCase();
   if (!nombre) return showToast('NOMBRE REQUERIDO', 'red');
   const p = activeProj();
+  let ubic=null;
+  const _gen=document.getElementById('nmGeneral');
+  if(!(_gen&&_gen.checked)){
+    const tId=document.getElementById('nmTorre').value, nId=document.getElementById('nmNivel').value, aId=document.getElementById('nmApto').value;
+    if(tId){
+      const t=(p.towers||[]).find(x=>x.id===tId); const l=t&&(t.levels||[]).find(x=>x.id===nId); const a=l&&(l.aptos||[]).find(x=>x.id===aId);
+      ubic={ torreId:tId, torreName:(t&&(t.name||t.id))||'', nivelId:nId||'', nivelName:(l&&(l.name||l.id))||'', aptoId:aId||'', aptoName:(a&&(a.name||a.numero||a.id))||'' };
+    }
+  }
   p.materiales.items.push({
     id: 'm-'+uid(), nombre,
     unidad: document.getElementById('nmUnit').value.trim().toUpperCase() || 'UNIDAD',
-    stock: Number(document.getElementById('nmStock').value) || 0
+    stock: Number(document.getElementById('nmStock').value) || 0,
+    ubic
     // v452: min eliminado — inventario sin control de mínimo
   });
   ['nmName','nmUnit'].forEach(id => document.getElementById(id).value = '');
   const nmStockEl = document.getElementById('nmStock');
   if (nmStockEl) nmStockEl.value = 0;
+  _nmInitUbic();
   // Cerrar también el dropdown del picker
   const dd = document.getElementById('nmMaterialDropdown');
   if (dd) dd.style.display = 'none';
