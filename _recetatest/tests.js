@@ -227,4 +227,9 @@ module.exports = function (t) {
   eq('geo.fueraDist', g2.distancia > 150, true);
   eq('geo.nullMark', t.api.evalGeocerca(null,{lat:1,lng:1,radio:150}), null);
   eq('geo.nullObra', t.api.evalGeocerca({lat:1,lng:1},null), null);
+  // --- promedioHoraHHMM ---
+  eq('hora.avg2', t.api.promedioHoraHHMM(['07:00','07:30']), '07:15');
+  eq('hora.avg3', t.api.promedioHoraHHMM(['06:00','08:00','10:00']), '08:00');
+  eq('hora.empty', t.api.promedioHoraHHMM([]), '—');
+  eq('hora.skipBad', t.api.promedioHoraHHMM(['xx',null,'12:00']), '12:00');
 };
