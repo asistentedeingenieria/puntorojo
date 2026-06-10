@@ -177,4 +177,17 @@ module.exports = function (t) {
   eq('pe.cargo', _pe.personas[1].cargo, 'INSTALADOR');
   eq('pe.fact', _pe.personas[1].facturadoPor.nombre, 'LINDA MARIBEL');
   t.ok('pe.nofact', _pe.personas[0].facturadoPor===undefined);
+  // --- computeAsistenciaMark ---
+  const m1 = t.api.computeAsistenciaMark(null, '07:02');
+  eq('asis.entrada.accion', m1.accion, 'entrada');
+  eq('asis.entrada.val', m1.reg.entrada, '07:02');
+  eq('asis.entrada.salidaNull', m1.reg.salida, null);
+  eq('asis.entrada.presente', m1.reg.presente, true);
+  const m2 = t.api.computeAsistenciaMark({ presente:true, entrada:'07:02', salida:null, obraId:'p1' }, '17:30');
+  eq('asis.salida.accion', m2.accion, 'salida');
+  eq('asis.salida.val', m2.reg.salida, '17:30');
+  eq('asis.salida.entradaKeep', m2.reg.entrada, '07:02');
+  eq('asis.salida.obraKeep', m2.reg.obraId, 'p1');
+  const m3 = t.api.computeAsistenciaMark({ presente:true, entrada:'07:02', salida:'12:00' }, '17:45');
+  eq('asis.salida.update', m3.reg.salida, '17:45');
 };
