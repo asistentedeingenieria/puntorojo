@@ -21063,13 +21063,39 @@ window.setRindeRecetaProducto = function(producto, valor){
   saveState();
 };
 window.setPrecioRecetaProducto = function(nombre, valor){
-  if (!can('users.manage')) return;
+  const _puedeAutorizar = can('precios.autorizar') || can('users.manage');
   const p = activeProj();
   const cur = window._findCatProducto(p, nombre);
   if (!cur){ showToast('ELEGÍ PROVEEDOR PRIMERO','red'); return; }
+  // No-autorizador → genera SOLICITUD (no aplica directo)
+  if (!_puedeAutorizar) { _solicitarCambioPrecioReceta(cur, valor); return; }
+  if (!can('users.manage')) return;
   cur.prv.productos[cur.idx].precio = Number(valor)||0;
   saveState();
 };
+let _solicitandoPrecioReceta = false;
+async function _solicitarCambioPrecioReceta(cur, valor){
+  if (_solicitandoPrecioReceta) return;
+  const producto = cur.prv.productos[cur.idx];
+  if (!producto) return;
+  const precioNuevo = Number(valor) || 0;
+  const precioActual = Number(producto.precio) || 0;
+  _solicitandoPrecioReceta = true;
+  try {
+    const motivo = await window.prPrompt({
+      title: 'SOLICITAR CAMBIO DE PRECIO',
+      body: (producto.nombre||'') + '\nPrecio actual: Q' + precioActual + '\nPrecio solicitado: Q' + precioNuevo,
+      placeholder: 'ej: subió el costo con el proveedor',
+      required: true
+    });
+    if (motivo === null) return;
+    _crearSolicitudPrecio('CAMBIO', cur.prv.id, producto.nombre, producto.unidad||'', precioActual, precioNuevo, motivo);
+    showToast('SOLICITUD DE PRECIO ENVIADA','');
+  } finally {
+    _solicitandoPrecioReceta = false;
+    if (typeof verCatalogoPreciosReceta==='function') verCatalogoPreciosReceta(); // revierte (re-render)
+  }
+}
 window.importarRecetaExcel = async function(ev){
   const file = ev && ev.target && ev.target.files && ev.target.files[0];
   if (ev && ev.target) ev.target.value = '';
@@ -21840,6 +21866,12 @@ function addProductoToProveedor(){
 }
 
 function updateCatProvProducto(idx, field, value){
+  const _puedeAutorizar = can('precios.autorizar') || can('users.manage');
+  // Cambio de precio por quien NO puede autorizar → genera SOLICITUD (no aplica directo)
+  if (field === 'precio' && !_puedeAutorizar) {
+    _solicitarCambioPrecioCat(idx, value);
+    return;
+  }
   if (!can('users.manage')) return;
   const p = activeProj();
   const prv = _getProveedores().find(x => x.id === currentCatProvId);
@@ -21853,6 +21885,31 @@ function updateCatProvProducto(idx, field, value){
   // No re-render completo — sería distractivo mientras escribe
   // Solo actualizo el sidebar con el count
   renderCatProvList();
+}
+// Solicitud de cambio de precio del catálogo (no-autorizador) — pide motivo y crea PENDIENTE
+let _solicitandoPrecioCat = false;
+async function _solicitarCambioPrecioCat(idx, value){
+  if (_solicitandoPrecioCat) return;            // evita doble modal por oninput
+  const prv = _getProveedores().find(x => x.id === currentCatProvId);
+  if (!prv || !prv.productos[idx]) return;
+  const producto = prv.productos[idx];
+  const precioNuevo = Number(value) || 0;
+  const precioActual = Number(producto.precio) || 0;
+  _solicitandoPrecioCat = true;
+  try {
+    const motivo = await window.prPrompt({
+      title: 'SOLICITAR CAMBIO DE PRECIO',
+      body: (producto.nombre||'') + '\nPrecio actual: Q' + precioActual + '\nPrecio solicitado: Q' + precioNuevo,
+      placeholder: 'ej: subió el costo con el proveedor',
+      required: true
+    });
+    if (motivo === null) { renderCatProvProductos(); return; } // canceló → revierte input
+    _crearSolicitudPrecio('CAMBIO', currentCatProvId, producto.nombre, producto.unidad||'', precioActual, precioNuevo, motivo);
+    showToast('SOLICITUD DE PRECIO ENVIADA','');
+  } finally {
+    _solicitandoPrecioCat = false;
+    renderCatProvProductos();                   // revierte el input al precio viejo
+  }
 }
 
 function deleteCatProvProducto(idx){
