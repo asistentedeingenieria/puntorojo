@@ -16297,6 +16297,7 @@ function renderPersonal(){
   const A=_getAsistencia(); const dia=A[fecha]||{};
   const presentes=Object.values(dia).filter(a=>a&&a.presente).length;
   const canEd=(typeof can==='function')&&(can('personal.edit')||can('users.manage'));
+  const canAdd=(typeof can==='function')&&(can('personal.add')||can('users.manage'));
   const canAsist=(typeof can==='function')&&(can('personal.asistencia')||can('users.manage'));
   const kp=document.getElementById('persKpis');
   if(kp){
@@ -16313,7 +16314,7 @@ function renderPersonal(){
   const _obraSel=document.getElementById('asistObraPdf'); if(_obraSel){ const _projs=(typeof state!=='undefined'&&state&&Array.isArray(state.projects))?state.projects:[]; const _cur=_obraSel.value; _obraSel.innerHTML=['<option value="">TODAS LAS OBRAS</option>'].concat(_projs.map(pr=>`<option value="${pr.id}">${String(pr.name||'').toUpperCase()}</option>`)).concat(['<option value="OTRA">OTRA</option>']).join(''); _obraSel.value=_cur; }
   const body=document.getElementById('persBody');
   if(body){
-    if(!lista.length){ body.innerHTML=`<tr><td colspan="7" style="padding:40px;text-align:center;color:var(--mute)">SIN PERSONAL${canEd?' — <a href="#" onclick="event.preventDefault();agregarPersonaGlobal()" style="color:var(--red)">AGREGÁ una persona</a>':''}</td></tr>`; }
+    if(!lista.length){ body.innerHTML=`<tr><td colspan="7" style="padding:40px;text-align:center;color:var(--mute)">SIN PERSONAL${canAdd?' — <a href="#" onclick="event.preventDefault();agregarPersonaGlobal()" style="color:var(--red)">AGREGÁ una persona</a>':''}</td></tr>`; }
     else { body.innerHTML=lista.map(c=>{ const f=c.facturadoPor; const fact=f&&f.nombre?`${f.nombre}${f.dpi?'<br><span style="font-size:9px;color:var(--mute)">DPI '+f.dpi+'</span>':''}`:'<span style="color:var(--mute)">—</span>';
       return `<tr>
         <td style="font-weight:600">${c.nombre||''}${(c.dpiFrenteURL||c.dpiReversoURL)?' <span onclick="event.stopPropagation();_verDPIPersona(\''+c.id+'\')" title="Ver DPI" style="cursor:pointer;font-size:9px;color:var(--green-dark);text-decoration:underline">&#9679;VER DPI</span>':''}</td>
@@ -16349,7 +16350,7 @@ function renderPersonal(){
 }
 
 function _notifyPersonalChange(accion, persona){ try { if (typeof _notifyByPerm !== 'function') return; const u=(typeof currentUser!=='undefined')?currentUser:null; const actorName=((u&&(u.displayName||u.username||u.email))||'USUARIO').toUpperCase(); const nm=(persona&&persona.nombre)?persona.nombre:'—'; _notifyByPerm('users.manage', { type:'personal-'+String(accion).toLowerCase(), title:actorName+' · PERSONAL '+accion, body:(nm+(persona&&persona.empresa?(' · '+persona.empresa):'')+(persona&&persona.cargo?(' · '+persona.cargo):'')).slice(0,300), projectId:(typeof state!=='undefined'&&state)?(state.activeProjectId||null):null }).catch(()=>{}); } catch(e){ console.warn('[notif personal]',e); } }
-function _guardarPersonaGlobal(data,id){ const arr=_getPersonal(); let _pers; if(id){ const c=arr.find(p=>p.id===id); if(c){ Object.assign(c,data); _pers=c; } } else { _pers=Object.assign({id:'pg-'+uid(),activo:true,ts:Date.now()},data); arr.push(_pers); } saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} try{ _notifyPersonalChange(id?'EDITADO':'NUEVO', _pers||{nombre:data.nombre}); }catch(e){} renderPersonal(); }
+function _guardarPersonaGlobal(data,id){ const arr=_getPersonal(); let _pers; if(id){ const c=arr.find(p=>p.id===id); if(c){ Object.assign(c,data); _pers=c; } } else { _pers=Object.assign({id:'pg-'+uid(),activo:true,ts:Date.now()},data); arr.push(_pers); } saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} try{ _notifyPersonalChange(id?'EDITADO':'NUEVO', _pers||{nombre:data.nombre}); }catch(e){} renderPersonal(); return _pers; }
 async function uploadPersonaDPI(event, personaId, lado){
   if(!(can('personal.edit')||can('users.manage'))) return showToast('SIN PERMISO','red');
   const file=event.target.files&&event.target.files[0]; if(!file){ return; }
@@ -16580,9 +16581,35 @@ function _cerrarKiosko(){
 }
 // ── FIN KIOSKO ───────────────────────────────────────────────────────────────
 
+function _tomarDpiAlta(lado){
+  let input=document.getElementById('_pgDpiInput'); if(input) input.remove();
+  input=document.createElement('input'); input.type='file'; input.accept='image/*'; input.setAttribute('capture','environment'); input.id='_pgDpiInput'; input.style.display='none';
+  document.body.appendChild(input);
+  input.onchange=function(ev){
+    const file=ev.target.files&&ev.target.files[0];
+    try{
+      if(!file) return;
+      if(!file.type||!file.type.startsWith('image/')){ showToast('NO ES IMAGEN','red'); return; }
+      _pgDpiBlobs[lado]=file;
+      const prev=document.getElementById('_pgDpiPrev_'+lado);
+      if(prev){ try{ prev.style.backgroundImage='url('+URL.createObjectURL(file)+')'; }catch(e){} prev.textContent=(lado==='frente'?'FRENTE ✓':'ATRÁS ✓'); }
+      showToast('DPI '+(lado==='frente'?'FRENTE':'ATRÁS')+' LISTO','green');
+    } finally { try{ input.remove(); }catch(e){} }
+  };
+  input.click();
+}
+async function _subirDpiBlob(person, lado, file){
+  if(typeof firebase==='undefined' || !firebase.storage) throw new Error('Storage no disponible');
+  const ext=((file.name&&file.name.split('.').pop())||'jpg').toLowerCase();
+  const ref=firebase.storage().ref('dpi/'+person.id+'/'+lado+'.'+ext);
+  await ref.put(file,{contentType:file.type||'image/jpeg'});
+  const url=await ref.getDownloadURL();
+  person[lado==='frente'?'dpiFrenteURL':'dpiReversoURL']=url;
+}
 function agregarPersonaGlobal(){ if(!(can('personal.add')||can('users.manage'))){ showToast('SIN PERMISO PARA AGREGAR','red'); return; } _personaModalGlobal(null); }
 function editarPersonaGlobal(id){ if(!(can('personal.edit')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; } const c=_personaById(id); if(c) _personaModalGlobal(c); }
 function _personaModalGlobal(c){
+  if(!c){ _pgDpiBlobs={frente:null,reverso:null}; }
   const e=c||{}; const f=e.facturadoPor||{};
   const esc=s=>String(s==null?'':s).replace(/"/g,'&quot;');
   const dpiSection = c ? (function(){
@@ -16594,7 +16621,11 @@ function _personaModalGlobal(c){
       +'<label style="'+fStyle+fBg+'">'+(e.dpiFrenteURL?'FRENTE &#10003;':'SUBIR FRENTE')+(e.dpiFrenteURL?'<button type="button" onclick="event.preventDefault();event.stopPropagation();_dpiLightbox(this.getAttribute(\'data-url\'),\'DPI - FRENTE\')" data-url="'+esc(e.dpiFrenteURL)+'" style="position:absolute;top:5px;right:5px;background:rgba(28,25,23,.85);color:#fff;border:none;padding:4px 8px;border-radius:3px;font-size:9px;letter-spacing:1px;font-weight:700;cursor:pointer">VER</button>':'')+'<input type="file" accept="image/*" style="display:none" onchange="uploadPersonaDPI(event,\''+c.id+'\',\'frente\')"></label>'
       +'<label style="'+fStyle+rBg+'">'+(e.dpiReversoURL?'ATRÁS &#10003;':'SUBIR ATRÁS')+(e.dpiReversoURL?'<button type="button" onclick="event.preventDefault();event.stopPropagation();_dpiLightbox(this.getAttribute(\'data-url\'),\'DPI - REVERSO\')" data-url="'+esc(e.dpiReversoURL)+'" style="position:absolute;top:5px;right:5px;background:rgba(28,25,23,.85);color:#fff;border:none;padding:4px 8px;border-radius:3px;font-size:9px;letter-spacing:1px;font-weight:700;cursor:pointer">VER</button>':'')+'<input type="file" accept="image/*" style="display:none" onchange="uploadPersonaDPI(event,\''+c.id+'\',\'reverso\')"></label>'
       +'</div>';
-  })() : '<div style="font-size:10px;color:var(--mute);margin-top:6px">Guardá la persona y luego editála para subir la foto del DPI.</div>';
+  })() : ('<div style="border-top:1px solid var(--line);margin-top:6px;padding-top:8px;font-size:10px;color:var(--mute);letter-spacing:.5px">FOTO DEL DPI (OBLIGATORIO · FRENTE Y REVERSO)</div>'
+  +'<div style="display:flex;gap:10px;margin-top:6px">'
+  +'<div id="_pgDpiPrev_frente" onclick="_tomarDpiAlta(\'frente\')" style="flex:1;cursor:pointer;border:1px dashed var(--line);border-radius:6px;padding:10px;text-align:center;font-size:10px;letter-spacing:.5px;color:var(--mute);background-size:cover;background-position:center;min-height:70px;display:flex;align-items:flex-end;justify-content:center">TOMAR FRENTE</div>'
+  +'<div id="_pgDpiPrev_reverso" onclick="_tomarDpiAlta(\'reverso\')" style="flex:1;cursor:pointer;border:1px dashed var(--line);border-radius:6px;padding:10px;text-align:center;font-size:10px;letter-spacing:.5px;color:var(--mute);background-size:cover;background-position:center;min-height:70px;display:flex;align-items:flex-end;justify-content:center">TOMAR ATRÁS</div>'
+  +'</div>');
   const faceSection = c ? ('<div style="border-top:1px solid var(--line);margin-top:8px;padding-top:8px;font-size:10px;color:var(--mute);letter-spacing:.5px">RECONOCIMIENTO FACIAL</div>'
     +'<div style="display:flex;align-items:center;gap:10px;margin-top:6px">'
     +'<div id="_faceStatus" style="font-size:11px;color:var(--mute)"></div>'
@@ -16764,14 +16795,35 @@ async function _guardarCara(personaId){
   if(typeof renderPersonal==='function') renderPersonal();
 }
 // === fin enrolamiento ===
+let _pgDpiBlobs = { frente:null, reverso:null };
 function _pgCloseModal(){ const m=document.getElementById('_pgModal'); if(m) m.remove(); if(typeof window._prUnlockScroll==='function') window._prUnlockScroll(); }
-function _savePersonaModal(id){
+async function _savePersonaModal(id){
   const v=k=>{ const el=document.getElementById(k); return el?el.value.trim():''; };
   const nombre=v('_pgNombre'); if(!nombre){ showToast('FALTA EL NOMBRE','red'); return; }
   const data={ nombre:nombre.toUpperCase(), cargo:v('_pgCargo'), empresa:v('_pgEmpresa').toUpperCase(), dpi:v('_pgDpi'), telefono:v('_pgTel'), tipo:((document.getElementById('_pgTipo')||{}).value||'OBRA') };
   const fn=v('_pgFNombre'); if(fn){ data.facturadoPor={nombre:fn.toUpperCase(),dpi:v('_pgFDpi'),telefono:v('_pgFTel')}; } else { data.facturadoPor=undefined; }
-  _guardarPersonaGlobal(data, id||null);
+  if(id){
+    if(!(can('personal.edit')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
+    _guardarPersonaGlobal(data, id);
+    _pgCloseModal();
+    return;
+  }
+  // ADD: requiere permiso + DPI frente y reverso
+  if(!(can('personal.add')||can('users.manage'))){ showToast('SIN PERMISO PARA AGREGAR','red'); return; }
+  if(!_pgDpiBlobs.frente || !_pgDpiBlobs.reverso){ showToast('FALTA LA FOTO DEL DPI (FRENTE Y REVERSO)','red'); return; }
+  const _pers = _guardarPersonaGlobal(data, null);
+  if(!_pers){ _pgCloseModal(); return; }
+  try{
+    window._prUploadShow && window._prUploadShow();
+    await _subirDpiBlob(_pers,'frente',_pgDpiBlobs.frente);
+    await _subirDpiBlob(_pers,'reverso',_pgDpiBlobs.reverso);
+    saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) await CloudSync.uploadCurrent(); }catch(e){}
+    window._prUploadHide && window._prUploadHide();
+    showToast('PERSONA Y DPI GUARDADOS','green');
+  }catch(e){ window._prUploadHide && window._prUploadHide(); showToast('PERSONA GUARDADA · FALLÓ EL DPI, SUBILO EDITANDO','red'); }
+  _pgDpiBlobs={frente:null,reverso:null};
   _pgCloseModal();
+  renderPersonal();
 }
 
 async function _parsePersonalFromFile(file){ if(typeof XLSX==='undefined'||!XLSX.read) return null; try{ const buf=await file.arrayBuffer(); const wb=XLSX.read(buf,{type:'array',cellDates:false,raw:true}); const sheets={}; (wb.SheetNames||[]).forEach(sn=>{ sheets[sn]=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,defval:'',raw:true,blankrows:true}); }); return parsePersonalExcel(sheets); }catch(e){ console.warn('[PERSONAL]',e); return null; } }
