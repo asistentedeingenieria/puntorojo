@@ -204,4 +204,14 @@ module.exports = function (t) {
   const none = t.api.pickFaceCandidates([{id:'a',distance:0.70}], S, L);
   eq('face.none.status', none.status, 'none');
   eq('face.empty.status', t.api.pickFaceCandidates([], S, L).status, 'none');
+  // --- migrateAsistenciaRegistro ---
+  const leg = t.api.migrateAsistenciaRegistro({ presente:true, hora:'07:00', obraId:'p1' });
+  eq('mig.entrada', leg.entrada, '07:00');
+  eq('mig.salidaNull', leg.salida, null);
+  eq('mig.via', leg.via, 'manual');
+  eq('mig.obra', leg.obraId, 'p1');
+  const nuevo = t.api.migrateAsistenciaRegistro({ presente:true, entrada:'07:00', salida:'17:00', via:'cara' });
+  eq('mig.keep.salida', nuevo.salida, '17:00');
+  eq('mig.keep.via', nuevo.via, 'cara');
+  eq('mig.null', t.api.migrateAsistenciaRegistro(null), null);
 };
