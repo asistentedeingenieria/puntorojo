@@ -2779,6 +2779,7 @@ table{max-width:100%}
             <select id="asistObraPdf" class="inline" data-perm="personal.asistenciaPdf" title="Obra para el PDF" style="flex:1 1 150px;min-width:130px"></select>
             <button class="btn olive sm" data-perm="personal.asistenciaPdf" onclick="descargarAsistenciaPDF()" style="flex:0 0 auto">DESCARGAR PDF</button>
             <button class="btn primary sm" data-perm="personal.asistencia" onclick="_abrirKioskoCaras()" style="flex:0 0 auto">ESCANEAR CARAS</button>
+            <button class="btn ghost sm" data-perm="obra.ubicacion" onclick="_abrirUbicacionObra()" style="flex:0 0 auto" title="Fijar el punto de la geocerca de esta obra">UBICACIÓN DE OBRA</button>
           </div>
         </div>
         <div class="asist-grid" id="asistGrid"></div>
@@ -2881,7 +2882,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v595</span>
+    <span style="opacity:.5;font-size:9px">v596</span>
   </footer>
 
 </div>
@@ -2909,6 +2910,21 @@ table{max-width:100%}
   </div>
 </div>
 
+<div class="modal-bg" id="modalUbicacionObra" onclick="closeModalBg(event,'UbicacionObra')">
+  <div class="modal" style="max-width:460px" onclick="event.stopPropagation()">
+    <div class="modal-hd"><h3>UBICACIÓN DE LA OBRA</h3><button class="modal-x" onclick="closeModal('UbicacionObra')">&times;</button></div>
+    <div class="modal-bd">
+      <p style="font-size:12px;color:var(--mute);margin-bottom:10px;line-height:1.5">Parado <strong>en la obra</strong>, tocá "USAR MI UBICACIÓN ACTUAL" para fijar el punto. El <strong>radio</strong> define hasta dónde cuenta como EN OBRA al marcar asistencia.</p>
+      <div id="uoStatus" style="font-size:12px;color:var(--mute);margin-bottom:10px">Sin configurar</div>
+      <input type="hidden" id="uoLat"><input type="hidden" id="uoLng">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button type="button" class="btn primary sm" onclick="_uoUsarUbicacion()">USAR MI UBICACIÓN ACTUAL</button>
+        <label style="font-size:11px;color:var(--mute)">Radio (m): <input id="uoRadio" type="number" class="inline" style="width:90px" value="150" min="10"></label>
+      </div>
+    </div>
+    <div class="modal-ft" style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px"><button class="btn ghost" onclick="closeModal('UbicacionObra')">CANCELAR</button><button class="btn primary" onclick="_guardarUbicacionObra()">GUARDAR</button></div>
+  </div>
+</div>
 <div class="modal-bg" id="modalEditProject" onclick="closeModalBg(event,'editProject')">
   <div class="modal">
     <h3>EDITAR PROYECTO ACTIVO</h3>
@@ -4337,6 +4353,7 @@ const PERMS_DISPONIBLES = [
   { key: 'personal.add',     label: 'Agregar nuevos colaboradores', group: 'EDICIÓN PERSONAL' },
   { key: 'personal.edit',    label: 'Editar o eliminar colaboradores',    group: 'EDICIÓN PERSONAL' },
   { key: 'personal.asistencia', label: 'Marcar asistencia',    group: 'EDICIÓN PERSONAL' },
+  { key: 'obra.ubicacion',     label: 'Configurar la ubicación (geocerca) de la obra', group: 'EDICIÓN PERSONAL' },
   { key: 'personal.asistenciaPdf', label: 'Descargar PDF de asistencia', group: 'EDICIÓN PERSONAL' },
   { key: 'polizas.edit',     label: 'Ver y editar pólizas (con solicitud)', group: 'EDICIÓN PERSONAL' },
   { key: 'projects.create',  label: 'Crear proyectos nuevos',  group: 'ADMINISTRACIÓN' },
@@ -17452,6 +17469,37 @@ function _epUsarMiUbicacion(){
   }, function(err){ showToast('NO SE PUDO OBTENER LA UBICACIÓN (activá el permiso)','red'); }, { enableHighAccuracy:true, timeout:10000, maximumAge:0 });
 }
 
+function _abrirUbicacionObra(){
+  if(!(can('obra.ubicacion')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
+  const p=activeProj(); if(!p){ showToast('SIN PROYECTO ACTIVO','red'); return; }
+  const g=p.geo||{};
+  var a=document.getElementById('uoLat'); if(a) a.value=(g.lat!=null?g.lat:'');
+  var b=document.getElementById('uoLng'); if(b) b.value=(g.lng!=null?g.lng:'');
+  var r=document.getElementById('uoRadio'); if(r) r.value=(g.radio!=null?g.radio:150);
+  var s=document.getElementById('uoStatus'); if(s) s.textContent=(g.lat!=null)?('✓ '+Number(g.lat).toFixed(6)+', '+Number(g.lng).toFixed(6)+' · '+(p.name||'')):('Sin configurar · '+(p.name||''));
+  document.getElementById('modalUbicacionObra').classList.add('show');
+}
+function _uoUsarUbicacion(){
+  if(!navigator.geolocation){ showToast('ESTE DISPOSITIVO NO TIENE GPS','red'); return; }
+  showToast('OBTENIENDO UBICACIÓN…','');
+  navigator.geolocation.getCurrentPosition(function(pos){
+    const la=pos.coords.latitude, ln=pos.coords.longitude;
+    document.getElementById('uoLat').value=la; document.getElementById('uoLng').value=ln;
+    var s=document.getElementById('uoStatus'); if(s) s.textContent='✓ '+la.toFixed(6)+', '+ln.toFixed(6)+' (±'+Math.round(pos.coords.accuracy)+'m)';
+    showToast('UBICACIÓN TOMADA','green');
+  }, function(err){ showToast('NO SE PUDO OBTENER LA UBICACIÓN (activá el permiso)','red'); }, { enableHighAccuracy:true, timeout:10000, maximumAge:0 });
+}
+function _guardarUbicacionObra(){
+  if(!(can('obra.ubicacion')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
+  const p=activeProj(); if(!p) return;
+  const gl=parseFloat(document.getElementById('uoLat').value), gn=parseFloat(document.getElementById('uoLng').value), gr=parseInt(document.getElementById('uoRadio').value,10);
+  if(isNaN(gl)||isNaN(gn)){ showToast('PRIMERO TOMÁ LA UBICACIÓN','red'); return; }
+  p.geo={ lat:gl, lng:gn, radio:(!isNaN(gr)&&gr>0?gr:150) };
+  try{ saveState(); }catch(e){}
+  try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  closeModal('UbicacionObra');
+  showToast('UBICACIÓN DE LA OBRA GUARDADA','green');
+}
 function saveProjectSpecs(){
   if (!can('users.manage')) return showToast('SOLO ADMINISTRADOR', 'red');
   const p = activeProj();
