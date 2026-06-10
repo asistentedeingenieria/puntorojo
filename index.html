@@ -2711,7 +2711,7 @@ table{max-width:100%}
         <div class="card">
           <div class="card-hd"><h3>ÓRDENES DE COMPRA GENERADAS</h3>
             <span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600" id="ocCountLabel">— 0 ÓRDENES</span>
-            <button class="btn ghost sm" onclick="openCatalogoProveedores()" data-perm="users.manage" title="Gestionar catálogo maestro de precios por proveedor (solo admin)">CATÁLOGO DE PRECIOS</button>
+            <button class="btn ghost sm" onclick="openCatalogoProveedores()" title="Ver el catálogo maestro de precios por proveedor">CATÁLOGO DE PRECIOS</button>
           </div>
           <div id="ordenesListContainer"></div>
         </div>
@@ -3298,7 +3298,7 @@ table{max-width:100%}
       <div class="cat-prov-sidebar">
         <div class="cat-prov-sidebar-head">
           <span>PROVEEDORES</span>
-          <button class="btn-icon" onclick="openAddProveedorFromCatalog()" title="Agregar proveedor">+</button>
+          <button class="btn-icon" onclick="openAddProveedorFromCatalog()" data-perm="users.manage" title="Agregar proveedor">+</button>
         </div>
         <div id="catProvList"></div>
       </div>
@@ -3313,13 +3313,13 @@ table{max-width:100%}
               <div style="font-size:10px;color:var(--mute);letter-spacing:1.5px;text-transform:uppercase;font-weight:600;margin-top:4px" id="catProvInfo">—</div>
             </div>
             <div style="display:flex;gap:6px">
-              <button class="btn ghost sm" onclick="editCurrentProveedor()" title="Editar datos del proveedor">EDITAR DATOS</button>
-              <button class="btn ghost sm" onclick="deleteCurrentProveedor()" style="color:var(--red);border-color:var(--red)" title="Eliminar proveedor">✕</button>
+              <button class="btn ghost sm" onclick="editCurrentProveedor()" data-perm="users.manage" title="Editar datos del proveedor">EDITAR DATOS</button>
+              <button class="btn ghost sm" onclick="deleteCurrentProveedor()" data-perm="users.manage" style="color:var(--red);border-color:var(--red)" title="Eliminar proveedor">✕</button>
             </div>
           </div>
           <div class="cat-prov-search-row">
             <input id="catProvSearch" type="search" placeholder="Buscar producto en el catálogo..." oninput="filterCatProvProductos(this.value)">
-            <button class="btn cafe sm" onclick="addProductoToProveedor()">+ AGREGAR PRODUCTO</button>
+            <button class="btn cafe sm" onclick="addProductoToProveedor()" data-perm="users.manage">+ AGREGAR PRODUCTO</button>
           </div>
           <div class="cat-prov-productos-head">
             <div>PRODUCTO / DESCRIPCIÓN</div>
@@ -4328,6 +4328,7 @@ const PERMS_DISPONIBLES = [
   { key: 'receta.edit',      label: 'Editar receta de materiales por etapa',  group: 'EDICIÓN MATERIALES' },
   { key: 'compras.autorizar',label: 'Autorizar Órdenes de Compra (Finanzas)',  group: 'EDICIÓN MATERIALES' },
   { key: 'precios.autorizar', label: 'Autorizar cambios de precio del catálogo', group: 'EDICIÓN MATERIALES' },
+  { key: 'precios.proponer', label: 'Ver catálogo de precios y proponer cambios', group: 'EDICIÓN MATERIALES' },
   { key: 'personal.add',     label: 'Agregar nuevos colaboradores', group: 'EDICIÓN PERSONAL' },
   { key: 'personal.edit',    label: 'Editar o eliminar colaboradores',    group: 'EDICIÓN PERSONAL' },
   { key: 'personal.asistencia', label: 'Marcar asistencia',    group: 'EDICIÓN PERSONAL' },
@@ -21773,13 +21774,14 @@ let currentCatProvId = null;
 let catProvSearchTerm = '';
 
 function openCatalogoProveedores(){
-  if (!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE GESTIONAR EL CATÁLOGO', 'red');
+  if (!(can('users.manage')||can('precios.autorizar')||can('precios.proponer'))) return showToast('SIN ACCESO AL CATÁLOGO DE PRECIOS', 'red');
   currentCatProvId = null;
   catProvSearchTerm = '';
   renderCatProvList();
   document.getElementById('catProvEmpty').style.display = 'block';
   document.getElementById('catProvEditor').style.display = 'none';
   document.getElementById('modalCatalogoProveedores').classList.add('show');
+  if (typeof applyPermissions === 'function') applyPermissions();
 }
 
 function renderCatProvList(){
@@ -21817,6 +21819,7 @@ function selectCatProv(provId){
 
   renderCatProvList();
   renderCatProvProductos();
+  if (typeof applyPermissions === 'function') applyPermissions();
 }
 
 function renderCatProvProductos(){
@@ -21824,6 +21827,7 @@ function renderCatProvProductos(){
   const prv = _getProveedores().find(x => x.id === currentCatProvId);
   if (!prv) return;
 
+  const _esAdminCat = can('users.manage');
   const cont = document.getElementById('catProvProductos');
   if (!Array.isArray(prv.productos)) prv.productos = [];
 
@@ -21833,7 +21837,7 @@ function renderCatProvProductos(){
     .filter(({prod}) => !term || (prod.nombre || '').toUpperCase().includes(term) || (prod.unidad || '').toUpperCase().includes(term));
 
   if (prv.productos.length === 0) {
-    cont.innerHTML = `<div class="cat-prov-empty-productos">SIN PRODUCTOS EN EL CATÁLOGO · PULSAR "+ AGREGAR PRODUCTO" PARA EMPEZAR</div>`;
+    cont.innerHTML = `<div class="cat-prov-empty-productos">SIN PRODUCTOS EN EL CATÁLOGO${_esAdminCat ? ' · PULSAR "+ AGREGAR PRODUCTO" PARA EMPEZAR' : ''}</div>`;
     return;
   }
 
@@ -21842,12 +21846,14 @@ function renderCatProvProductos(){
     return;
   }
 
-  cont.innerHTML = filtered.map(({prod, origIdx}) => `
+  const _hint = _esAdminCat ? '' : `<div style="font-size:10px;color:var(--cafe);letter-spacing:.5px;text-transform:uppercase;font-weight:600;margin:0 0 8px">Editar un precio envía una SOLICITUD al autorizador.</div>`;
+
+  cont.innerHTML = _hint + filtered.map(({prod, origIdx}) => `
     <div class="cat-prov-producto-row">
-      <input type="text" value="${(prod.nombre || '').replace(/"/g,'&quot;')}" placeholder="NOMBRE DEL PRODUCTO" oninput="updateCatProvProducto(${origIdx}, 'nombre', this.value)">
-      <input type="text" value="${(prod.unidad || '').replace(/"/g,'&quot;')}" placeholder="UNIDAD" oninput="updateCatProvProducto(${origIdx}, 'unidad', this.value)">
+      <input type="text" value="${(prod.nombre || '').replace(/"/g,'&quot;')}" placeholder="NOMBRE DEL PRODUCTO" oninput="updateCatProvProducto(${origIdx}, 'nombre', this.value)"${_esAdminCat ? '' : ' disabled'}>
+      <input type="text" value="${(prod.unidad || '').replace(/"/g,'&quot;')}" placeholder="UNIDAD" oninput="updateCatProvProducto(${origIdx}, 'unidad', this.value)"${_esAdminCat ? '' : ' disabled'}>
       <input type="number" step="0.01" min="0" class="precio" value="${prod.precio || ''}" placeholder="0.00" oninput="updateCatProvProducto(${origIdx}, 'precio', this.value)">
-      <button class="btn-icon" onclick="deleteCatProvProducto(${origIdx})" title="Eliminar">✕</button>
+      ${_esAdminCat ? `<button class="btn-icon" onclick="deleteCatProvProducto(${origIdx})" title="Eliminar">✕</button>` : '<span></span>'}
     </div>
   `).join('');
 }
