@@ -2435,6 +2435,7 @@ table{max-width:100%}
       <div class="card" id="cobro-estimaciones-card">
         <div class="card-hd">
           <h3>ESTIMACIONES</h3>
+          <button id="btnSolAmort" class="btn ghost sm" style="margin-right:8px;display:none;border-color:var(--cafe);color:var(--cafe)" onclick="verSolicitudesAmort()">SOLICITUDES</button>
           <button class="btn ghost sm" style="margin-right:8px" onclick="descargarEstimacionExcel()" title="Descargar el Excel de estimación (sin las pestañas RESUMEN PR / AVANCE PR)">DESCARGAR EXCEL</button>
           <label class="btn primary sm" style="cursor:pointer;margin:0" data-perm="cobro.subirExcel">
             SUBIR EXCEL DE ESTIMACIONES
@@ -9838,6 +9839,14 @@ function renderCobro(){
   }
 
   document.getElementById('badgeCobro').textContent = p.cobro.rows.length;
+  try {
+    const _bSol = document.getElementById('btnSolAmort');
+    if (_bSol){
+      const _nPend = ((p.cobro && p.cobro.solicitudesAmort)||[]).filter(s=>s.estado==='PENDIENTE').length;
+      _bSol.style.display = _nPend>0 ? '' : 'none';
+      _bSol.textContent = 'SOLICITUDES ('+_nPend+')';
+    }
+  } catch(e){}
   applyPermissions();
 }
 
@@ -9891,9 +9900,11 @@ function renderCobroRow(r, cfg, canEdit, p){
   }
 
   // AMORTIZACIÓN — read-only + toggle "sin amortización" (admin/cobro)
+  const _isAdminCobro = (typeof can==='function') && can('users.manage');
   let amCell;
   if (!r.isAnticipo && canEdit) {
-    const _amTog = `<div onclick="toggleEstNoAmort('${r.id}')" title="Marcar/quitar SIN AMORTIZACIÓN (se paga el 100%)" style="font-size:8px;letter-spacing:.5px;margin-top:2px;cursor:pointer;color:var(--mute);text-decoration:underline">${r.noAmort ? 'AMORTIZAR' : 'SIN AMORT.'}</div>`;
+    const _amLabel = _isAdminCobro ? (r.noAmort ? 'AMORTIZAR' : 'SIN AMORT.') : (r.noAmort ? 'SOLICITAR AMORTIZAR' : 'SOLICITAR SIN AMORT.');
+    const _amTog = `<div onclick="toggleEstNoAmort('${r.id}')" title="${_isAdminCobro?'Marcar/quitar SIN AMORTIZACIÓN (paga 100%)':'Enviar solicitud al admin'}" style="font-size:8px;letter-spacing:.5px;margin-top:2px;cursor:pointer;color:var(--mute);text-decoration:underline">${_amLabel}</div>`;
     amCell = r.noAmort
       ? `<td class="num" style="color:var(--mute);font-size:10px">SIN AMORT.${_amTog}</td>`
       : `<td class="num">${fQcell(v.amCI)}${_amTog}</td>`;
@@ -10275,16 +10286,69 @@ function addEstimacion(){
   showToast('ESTIMACIÓN AGREGADA', 'green');
 }
 window.toggleEstNoAmort = function(id){
-  if (!can('cobro.edit') && !can('users.manage')) return showToast('SIN PERMISO', 'red');
   const p = activeProj();
   const r = p && p.cobro && (p.cobro.rows||[]).find(x => x.id === id);
   if (!r || r.isAnticipo) return;
-  r.noAmort = !r.noAmort;
-  try { if (typeof logActivity==='function') logActivity('update', (r.noAmort?'Sin amortización: ':'Amortización normal: ')+(r.d||''), p.name); } catch(e){}
+  if (can('users.manage')){
+    r.noAmort = !r.noAmort;
+    try { if (typeof logActivity==='function') logActivity('update', (r.noAmort?'Sin amortización: ':'Amortización normal: ')+(r.d||''), p.name); } catch(e){}
+    saveState();
+    try { if (typeof CloudSync!=='undefined' && CloudSync.ref) CloudSync.uploadCurrent(); } catch(e){}
+    renderCobro();
+    showToast(r.noAmort ? 'ESTIMACIÓN SIN AMORTIZACIÓN (PAGA 100%)' : 'AMORTIZACIÓN NORMAL', 'green');
+    return;
+  }
+  if (!can('cobro.edit')) return showToast('SIN PERMISO', 'red');
+  if (!p.cobro.solicitudesAmort) p.cobro.solicitudesAmort = [];
+  if (p.cobro.solicitudesAmort.some(s => s.estado==='PENDIENTE' && s.rowId===id)) return showToast('YA HAY UNA SOLICITUD PENDIENTE PARA ESTA ESTIMACIÓN','red');
+  const u = (typeof currentUser!=='undefined') ? currentUser : null;
+  const actorName = ((u && (u.displayName||u.username||u.email)) || 'USUARIO').toUpperCase();
+  const sol = { id:'solam-'+Date.now()+'-'+Math.random().toString(36).slice(2,7), rowId:id, descripcion:(r.d||''), valorDeseado: !r.noAmort, accion: (r.noAmort?'QUITAR SIN AMORT.':'PONER SIN AMORT.'), solicitadoPor:((u&&(u.email||u.username))||''), solicitadoNombre:actorName, ts:Date.now(), estado:'PENDIENTE' };
+  p.cobro.solicitudesAmort.push(sol);
   saveState();
-  try { if (typeof CloudSync!=='undefined' && CloudSync.ref) CloudSync.uploadCurrent(); } catch(e){}
+  try { if (typeof CloudSync!=='undefined' && CloudSync.uploadCurrent) CloudSync.uploadCurrent(); } catch(e){}
+  try { if (typeof _notifyByPerm==='function') _notifyByPerm('users.manage', { type:'amort-solicitud', title: actorName+' · SOLICITUD SIN AMORTIZACIÓN', body: (r.d||'ESTIMACIÓN')+' · '+sol.accion, projectId: p.id }).catch(()=>{}); } catch(e){}
   renderCobro();
-  showToast(r.noAmort ? 'ESTIMACIÓN SIN AMORTIZACIÓN (PAGA 100%)' : 'AMORTIZACIÓN NORMAL', 'green');
+  showToast('SOLICITUD ENVIADA · ESPERANDO AUTORIZACIÓN DEL ADMIN','green');
+};
+window.autorizarSolicitudAmort = function(solId){
+  if (!can('users.manage')) return showToast('SOLO EL ADMIN AUTORIZA','red');
+  const p = activeProj(); const sol = (p.cobro.solicitudesAmort||[]).find(s=>s.id===solId);
+  if (!sol || sol.estado!=='PENDIENTE') return;
+  const r = (p.cobro.rows||[]).find(x=>x.id===sol.rowId);
+  if (r) r.noAmort = !!sol.valorDeseado;
+  sol.estado='AUTORIZADA'; sol.fechaProceso=Date.now();
+  saveState(); try { if (typeof CloudSync!=='undefined' && CloudSync.uploadCurrent) CloudSync.uploadCurrent(); } catch(e){}
+  const m=document.getElementById('_amSolModal'); if(m){ m.remove(); if(window._prUnlockScroll) window._prUnlockScroll(); }
+  renderCobro();
+  showToast('SOLICITUD AUTORIZADA · CAMBIO APLICADO','green');
+};
+window.rechazarSolicitudAmort = function(solId){
+  if (!can('users.manage')) return showToast('SOLO EL ADMIN PUEDE RECHAZAR','red');
+  const p = activeProj(); const sol = (p.cobro.solicitudesAmort||[]).find(s=>s.id===solId);
+  if (!sol || sol.estado!=='PENDIENTE') return;
+  sol.estado='RECHAZADA'; sol.fechaProceso=Date.now();
+  saveState(); try { if (typeof CloudSync!=='undefined' && CloudSync.uploadCurrent) CloudSync.uploadCurrent(); } catch(e){}
+  const m=document.getElementById('_amSolModal'); if(m){ m.remove(); if(window._prUnlockScroll) window._prUnlockScroll(); }
+  renderCobro();
+  showToast('SOLICITUD RECHAZADA','');
+};
+window.verSolicitudesAmort = function(){
+  const p = activeProj(); if(!p||!p.cobro) return;
+  const sols = (p.cobro.solicitudesAmort||[]).filter(s=>s.estado==='PENDIENTE');
+  const isAdmin = can('users.manage');
+  const esc = s => String(s==null?'':s).replace(/</g,'&lt;');
+  let body;
+  if (!sols.length) body = '<div style="padding:24px;text-align:center;color:var(--mute);font-size:12px">No hay solicitudes pendientes.</div>';
+  else body = sols.map(s => '<div style="border:1px solid var(--line);border-radius:6px;padding:12px;margin-bottom:8px">'
+    + '<div style="font-weight:700;color:var(--ink)">'+esc(s.descripcion||'ESTIMACIÓN')+'</div>'
+    + '<div style="font-size:11px;color:var(--mute);margin-top:3px">'+esc(s.accion)+' · solicitado por '+esc(s.solicitadoNombre||s.solicitadoPor||'—')+'</div>'
+    + (isAdmin
+        ? '<div style="display:flex;gap:8px;margin-top:10px"><button class="btn primary sm" onclick="autorizarSolicitudAmort(\''+s.id+'\')">AUTORIZAR</button><button class="btn ghost sm" style="border-color:var(--red);color:var(--red)" onclick="rechazarSolicitudAmort(\''+s.id+'\')">RECHAZAR</button></div>'
+        : '<div style="font-size:10px;color:var(--mute);margin-top:6px">Esperando autorización del administrador.</div>')
+    + '</div>').join('');
+  const html = '<div class="modal-bg show" id="_amSolModal" style="z-index:100045" onclick="if(event.target===this){this.remove(); if(window._prUnlockScroll)window._prUnlockScroll();}"><div class="modal" style="max-width:480px" onclick="event.stopPropagation()"><div class="modal-hd"><h3>SOLICITUDES · SIN AMORTIZACIÓN</h3><button class="x" onclick="document.getElementById(\'_amSolModal\').remove(); if(window._prUnlockScroll)window._prUnlockScroll();">✕</button></div><div class="modal-bd">'+body+'</div></div></div>';
+  const w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild); if(window._prLockScroll) window._prLockScroll();
 };
 
 async function delLastEstimacion(){
