@@ -190,4 +190,18 @@ module.exports = function (t) {
   eq('asis.salida.obraKeep', m2.reg.obraId, 'p1');
   const m3 = t.api.computeAsistenciaMark({ presente:true, entrada:'07:02', salida:'12:00' }, '17:45');
   eq('asis.salida.update', m3.reg.salida, '17:45');
+  // --- pickFaceCandidates (strict=0.48, loose=0.58) ---
+  const S=0.48, L=0.58;
+  const auto = t.api.pickFaceCandidates([{id:'a',distance:0.30},{id:'b',distance:0.70}], S, L);
+  eq('face.auto.status', auto.status, 'auto');
+  eq('face.auto.match', auto.matchId, 'a');
+  const amb = t.api.pickFaceCandidates([{id:'a',distance:0.30},{id:'b',distance:0.34}], S, L);
+  eq('face.amb.status', amb.status, 'confirm');
+  eq('face.amb.cands', amb.candidates.length >= 2, true);
+  const mid = t.api.pickFaceCandidates([{id:'a',distance:0.52},{id:'b',distance:0.80}], S, L);
+  eq('face.mid.status', mid.status, 'confirm');
+  eq('face.mid.cand0', mid.candidates[0], 'a');
+  const none = t.api.pickFaceCandidates([{id:'a',distance:0.70}], S, L);
+  eq('face.none.status', none.status, 'none');
+  eq('face.empty.status', t.api.pickFaceCandidates([], S, L).status, 'none');
 };
