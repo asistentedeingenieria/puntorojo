@@ -2887,7 +2887,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v605</span>
+    <span style="opacity:.5;font-size:9px">v606</span>
   </footer>
 
 </div>
@@ -16840,15 +16840,36 @@ function descargarAsistenciaPDF(){
   let presentes=_getPersonal().filter(pn=>dia[pn.id]&&dia[pn.id].presente);
   if(obraSel) presentes=presentes.filter(pn=>String(dia[pn.id].obraId||'')===obraSel);
   presentes=presentes.sort((x,y)=>_persNorm(x.nombre).localeCompare(_persNorm(y.nombre),'es',{sensitivity:'base'}));
-  if(!presentes.length){ showToast(obraSel?('NADIE PRESENTE EN '+obraLabel+' ESE DÍA'):'NADIE MARCADO PRESENTE ESE DÍA','red'); return; }
+  // AUSENTES (solo sin filtro de obra): ausencia manual con su motivo, o "NO REGISTRADO" si el día ya cerró (después de 19:00 o día pasado).
+  let ausentes=[];
+  if(!obraSel){
+    const _cerrado=(typeof _asistDiaCerrado==='function')?_asistDiaCerrado(fecha):true;
+    ausentes=_getPersonal().filter(pn=>{ const r=dia[pn.id]; if(r&&r.presente) return false; if(r&&r.presente===false&&r.motivo) return true; return _cerrado; })
+      .map(pn=>{ const r=dia[pn.id]; return {pn, motivo:(r&&r.motivo)?r.motivo:'NO REGISTRADO'}; })
+      .sort((x,y)=>_persNorm(x.pn.nombre).localeCompare(_persNorm(y.pn.nombre),'es',{sensitivity:'base'}));
+  }
+  if(!presentes.length && !ausentes.length){ showToast(obraSel?('NADIE PRESENTE EN '+obraLabel+' ESE DÍA'):'SIN DATOS DE ASISTENCIA ESE DÍA','red'); return; }
   if(typeof window.jspdf==='undefined'||!window.jspdf.jsPDF){ showToast('JSPDF NO CARGÓ — RECARGAR LA APP','red'); return; }
   const { jsPDF }=window.jspdf;
   const doc=new jsPDF({ unit:'pt', format:'a4', orientation:'landscape' });
-  const pageW=doc.internal.pageSize.width;
+  const pageW=doc.internal.pageSize.width, pageH=doc.internal.pageSize.height;
   doc.setFontSize(14); doc.setFont(undefined,'bold');
   doc.text('ASISTENCIA · '+fecha+(obraLabel?(' · '+obraLabel):''), pageW/2, 50, {align:'center'});
-  const rows=presentes.map((pn,i)=>{ const rg=migrateAsistenciaRegistro(dia[pn.id])||dia[pn.id]||{}; return [String(i+1), pn.nombre, pn.cargo||'', rg.entrada||'—', rg.salida||'—', nombreObra(dia[pn.id]), ((_geoTxtMarca(rg,'geoEntrada')||{txt:'—'}).txt)]; });
-  doc.autoTable({ startY:70, head:[['#','NOMBRE','CARGO','ENTRADA','SALIDA','OBRA','UBICACIÓN']], body:rows, theme:'striped', styles:{fontSize:9,halign:'center',valign:'middle'}, headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',halign:'center'} });
+  doc.setFontSize(9); doc.setFont(undefined,'normal');
+  doc.text('PRESENTES: '+presentes.length+(obraSel?'':('   ·   AUSENTES: '+ausentes.length)), pageW/2, 66, {align:'center'});
+  let _y=88;
+  if(presentes.length){
+    const rows=presentes.map((pn,i)=>{ const rg=migrateAsistenciaRegistro(dia[pn.id])||dia[pn.id]||{}; return [String(i+1), pn.nombre, pn.cargo||'', rg.entrada||'—', rg.salida||'—', nombreObra(dia[pn.id]), ((_geoTxtMarca(rg,'geoEntrada')||{txt:'—'}).txt)]; });
+    doc.setFontSize(11); doc.setFont(undefined,'bold'); doc.text('PRESENTES ('+presentes.length+')', 40, _y);
+    doc.autoTable({ startY:_y+6, head:[['#','NOMBRE','CARGO','ENTRADA','SALIDA','OBRA','UBICACIÓN']], body:rows, theme:'striped', styles:{fontSize:9,halign:'center',valign:'middle'}, headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',halign:'center'} });
+    _y=doc.lastAutoTable.finalY+24;
+  }
+  if(ausentes.length){
+    if(_y>pageH-90){ doc.addPage(); _y=50; }
+    const arows=ausentes.map((o,i)=>[String(i+1), o.pn.nombre, o.pn.cargo||'', o.motivo]);
+    doc.setFontSize(11); doc.setFont(undefined,'bold'); doc.text('AUSENTES ('+ausentes.length+')', 40, _y);
+    doc.autoTable({ startY:_y+6, head:[['#','NOMBRE','CARGO','MOTIVO']], body:arows, theme:'striped', styles:{fontSize:9,halign:'left',valign:'middle'}, columnStyles:{0:{halign:'center',cellWidth:28}}, headStyles:{fillColor:[110,110,110],textColor:255,fontStyle:'bold',halign:'center'} });
+  }
   doc.save('ASISTENCIA '+fecha+(obraLabel?(' - '+obraLabel):'')+'.pdf');
 }
 
