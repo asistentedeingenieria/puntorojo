@@ -596,6 +596,9 @@ h3{font-weight:700;font-size:11px;color:var(--ink);letter-spacing:1.2px;text-tra
 .btn-icon{background:transparent;border:1px solid transparent;color:var(--mute);cursor:pointer;padding:4px 8px;font-size:12px;border-radius:6px;transition:all .15s;font-family:inherit}
 .btn-icon:hover{background:var(--cream);color:var(--ink);border-color:var(--line)}
 .btn-icon.danger:hover{background:var(--red);color:#fff;border-color:var(--red)}
+.am-chip{background:transparent;border:1px solid var(--line);color:var(--mute);cursor:pointer;padding:6px 11px;font-size:10.5px;font-weight:700;letter-spacing:.4px;border-radius:14px;transition:all .15s;font-family:inherit;text-transform:uppercase}
+.am-chip:hover{border-color:var(--red);color:var(--ink)}
+.am-chip.sel{background:var(--red);border-color:var(--red);color:#fff}
 
 /* ═════════════════════════ TABLES ═════════════════════════ */
 /* v504: filtros de polizas — cada label SOBRE su select; en celular se apilan en fila hacia abajo */
@@ -3161,6 +3164,42 @@ table{max-width:100%}
     <div class="modal-actions">
       <button class="btn ghost" onclick="closeModal('RequestDeletion')">CANCELAR</button>
       <button class="btn primary" onclick="submitDeletionRequest()">ENVIAR SOLICITUD</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════ MODAL: MARCAR AUSENCIA CON MOTIVO ════════ -->
+<div class="modal-bg" id="modalAusenciaMotivo" onclick="closeModalBg(event,'AusenciaMotivo')">
+  <div class="modal" style="max-width:460px">
+    <h3>MARCAR AUSENCIA</h3>
+
+    <div style="background:var(--cream);border-left:3px solid var(--red);padding:10px 14px;border-radius:4px;margin-bottom:14px">
+      <div style="font-size:9px;letter-spacing:1.4px;text-transform:uppercase;font-weight:700;color:var(--mute);margin-bottom:4px">PERSONA</div>
+      <div id="amNombre" style="font-size:14px;font-weight:700;color:var(--ink);letter-spacing:.2px;line-height:1.3">—</div>
+    </div>
+
+    <div class="field">
+      <label>MOTIVO *</label>
+      <div id="amChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+        <button type="button" class="am-chip" data-tipo="ENFERMEDAD" onclick="_amSelTipo('ENFERMEDAD')">ENFERMEDAD</button>
+        <button type="button" class="am-chip" data-tipo="PERMISO" onclick="_amSelTipo('PERMISO')">PERMISO</button>
+        <button type="button" class="am-chip" data-tipo="SUSPENSIÓN" onclick="_amSelTipo('SUSPENSIÓN')">SUSPENSIÓN</button>
+        <button type="button" class="am-chip" data-tipo="FALTA INJUSTIFICADA" onclick="_amSelTipo('FALTA INJUSTIFICADA')">FALTA INJUSTIFICADA</button>
+        <button type="button" class="am-chip" data-tipo="OTRO" onclick="_amSelTipo('OTRO')">OTRO</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>DETALLE (OPCIONAL)</label>
+      <textarea id="amDetalle" rows="3" maxlength="300" placeholder="Detalle (opcional)"></textarea>
+    </div>
+
+    <div id="amError" style="color:var(--red);font-size:11px;margin-bottom:8px;display:none;letter-spacing:.3px"></div>
+
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeModal('AusenciaMotivo')">CANCELAR</button>
+      <button id="amBtnQuitar" class="btn" style="display:none;color:var(--red)" onclick="_quitarAusencia()">QUITAR AUSENCIA</button>
+      <button class="btn primary" onclick="_guardarAusenciaMotivo()">GUARDAR AUSENCIA</button>
     </div>
   </div>
 </div>
@@ -16577,6 +16616,13 @@ async function _pgEmpresaChange(){
   if(typeof renderPersonal==='function') renderPersonal();
 }
 function _asistFechaActual(){ return _asistFecha || todayKey(); }
+// El día de asistencia queda CERRADO (ausencias definitivas) a partir de las 19:00, o si es un día pasado.
+function _asistDiaCerrado(fecha){
+  const hoy = (typeof todayKey==='function') ? todayKey() : '';
+  if(fecha < hoy) return true;
+  if(fecha > hoy) return false;
+  return new Date().getHours() >= 19;
+}
 function _persNorm(s){ return String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim(); }
 function _personaById(id){ return _getPersonal().find(p=>p.id===id); }
 function _persListaFiltrada(){
@@ -16658,13 +16704,22 @@ function renderPersonal(){
         const horasTxt=rg?('ENT '+(rg.entrada||'—')+(rg.salida?(' · SAL '+rg.salida):'')):'';
         const _ge = on ? _geoTxtMarca(rg,'geoEntrada') : null;
         const _geoLine = _ge ? ('<div style="font-size:9px;margin-top:3px"><a href="'+_ge.maps+'" target="_blank" rel="noopener" style="text-decoration:underline;color:'+(_ge.enObra===true?'var(--green-dark)':(_ge.enObra===false?'var(--red)':'var(--mute)'))+'">'+_ge.txt+'</a></div>') : '';
+        const _esManualAus = (a && a.presente===false && a.motivo);
+        const _cerrado = _asistDiaCerrado(fecha);
+        let _statusColor, _statusHtml;
+        if(on){ _statusColor='var(--green-dark)'; _statusHtml='● PRESENTE'+(horasTxt?('<br><span style="font-size:10px">'+horasTxt+'</span>'):''); }
+        else if(_esManualAus){ _statusColor='var(--red)'; _statusHtml='<b>✕ AUSENTE</b><br><span style="font-size:10px">'+String(a.motivo).replace(/[&<>]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]))+'</span>'; }
+        else if(_cerrado){ _statusColor='var(--red)'; _statusHtml='<b>✕ AUSENTE</b><br><span style="font-size:9px;color:var(--mute)">AUTO 19:00</span>'; }
+        else { _statusColor='var(--mute)'; _statusHtml='○ AUSENTE'; }
+        const _btnMotivo = canAsist?('<button type="button" class="btn-icon" title="Marcar ausencia con motivo" style="font-size:9px;font-weight:700;width:auto;padding:0 7px" onclick="_abrirAusenciaMotivo(\''+c.id+'\')">MOTIVO</button>'):'';
         const opt=['<option value="">— OBRA —</option>'].concat(projs.map(pr=>`<option value="${pr.id}"${pr.id===obraId?' selected':''}>${String(pr.name||'').toUpperCase()}</option>`)).concat([`<option value="OTRA"${obraId==='OTRA'?' selected':''}>OTRA…</option>`]).join('');
         const otra=obraId==='OTRA'?`<input class="inline" style="margin-top:4px" placeholder="¿Dónde?" value="${String(a.obraDesc||'').replace(/"/g,'&quot;')}" ${canAsist?'':'disabled'} onchange="setAsistenciaObraDesc('${c.id}',this.value)">`:'';
         return `<div class="asist-row" style="display:flex;flex-wrap:wrap;align-items:center;gap:10px">
           <div style="flex:1 1 160px;min-width:140px"><div style="font-weight:700;color:var(--ink);font-size:13px">${c.nombre}</div><div style="font-size:10px;color:var(--mute);text-transform:uppercase;margin-top:2px">${c.cargo||'—'}</div></div>
           <div style="flex:1 1 150px;min-width:130px"><select class="inline" style="width:100%" ${canAsist&&on?'':'disabled'} onchange="setAsistenciaObra('${c.id}',this.value)">${opt}</select>${otra}</div>
           <div style="flex:0 0 auto;display:flex;align-items:center;gap:10px;margin-left:auto">
-            <div style="text-align:center;font-size:11px;font-weight:600;line-height:1.25;color:${on?'var(--green-dark)':'var(--mute)'}">${on?('● PRESENTE'+(horasTxt?('<br><span style="font-size:10px">'+horasTxt+'</span>'):'')):('○ AUSENTE')}${_geoLine}</div>
+            <div style="text-align:center;font-size:11px;font-weight:600;line-height:1.25;color:${_statusColor}">${_statusHtml}${_geoLine}</div>
+            ${_btnMotivo}
             <div class="asist-chk ${on?'on':''}" ${can('users.manage')?`onclick="toggleAsistenciaGlobal('${c.id}')" title="Corrección manual (solo admin)"`:`style="cursor:default;opacity:.7" title="La asistencia se marca con Face ID — ESCANEAR CARAS"`}></div>
           </div>
         </div>`; }).join(''); }
@@ -16698,6 +16753,47 @@ function toggleAsistenciaGlobal(id){ if(typeof can==='function' && !(can('person
 function setAsistenciaObra(id,obraId){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; if(!A[f][id])A[f][id]={presente:true}; A[f][id].obraId=obraId; if(obraId!=='OTRA')A[f][id].obraDesc=''; saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
 function setAsistenciaObraDesc(id,desc){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return; const f=_asistFechaActual(); const A=_getAsistencia(); if(A[f]&&A[f][id]){ A[f][id].obraDesc=desc; saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} } }
 function markAllPresentGlobal(){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; _asistListaFiltrada().forEach(c=>{ if(!A[f][c.id])A[f][c.id]={presente:true,obraId:'',obraDesc:''}; else A[f][c.id].presente=true; }); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
+
+// ── Ausencia manual con motivo ─────────────────────────────────────────────
+let _amPersonaId='', _amTipo='';
+function _amCanAsist(){ return (typeof can!=='function') || can('personal.asistencia') || can('users.manage'); }
+function _abrirAusenciaMotivo(personaId){
+  if(!_amCanAsist()) return showToast('SIN PERMISO','red');
+  _amPersonaId=personaId; _amTipo='';
+  const c=_personaById(personaId);
+  const nom=document.getElementById('amNombre'); if(nom) nom.textContent=(c&&c.nombre)||'—';
+  const A=_getAsistencia(); const f=_asistFechaActual(); const cur=(A[f]&&A[f][personaId])||{};
+  const esManual = cur && cur.presente===false && cur.motivo;
+  // preseleccionar motivo y detalle existentes si ya es ausencia manual
+  _amTipo = esManual ? (cur.motivoTipo||'') : '';
+  document.querySelectorAll('#amChips .am-chip').forEach(ch=>ch.classList.toggle('sel', !!_amTipo && ch.getAttribute('data-tipo')===_amTipo));
+  const det=document.getElementById('amDetalle'); if(det) det.value=esManual ? (cur.motivoDetalle||'') : '';
+  const btnQ=document.getElementById('amBtnQuitar'); if(btnQ) btnQ.style.display=esManual ? '' : 'none';
+  const err=document.getElementById('amError'); if(err){ err.style.display='none'; err.textContent=''; }
+  openModal('AusenciaMotivo');
+}
+function _amSelTipo(tipo){
+  _amTipo=tipo;
+  document.querySelectorAll('#amChips .am-chip').forEach(ch=>ch.classList.toggle('sel', ch.getAttribute('data-tipo')===tipo));
+  const err=document.getElementById('amError'); if(err){ err.style.display='none'; err.textContent=''; }
+}
+function _guardarAusenciaMotivo(){
+  if(!_amCanAsist()) return showToast('SIN PERMISO','red');
+  if(!_amTipo){ const err=document.getElementById('amError'); if(err){ err.textContent='SELECCIONA UN MOTIVO'; err.style.display='block'; } return; }
+  const detalle=((document.getElementById('amDetalle')||{}).value||'').trim();
+  const motivo=_amTipo + (detalle ? (' — ' + detalle) : '');
+  const A=_getAsistencia(); const f=_asistFechaActual(); if(!A[f])A[f]={};
+  const cur=A[f][_amPersonaId]||{};
+  A[f][_amPersonaId]={presente:false, motivo, motivoTipo:_amTipo, motivoDetalle:detalle, via:'manual', ausenteTs:Date.now(), obraId:cur.obraId||'', obraDesc:cur.obraDesc||''};
+  saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  closeModal('AusenciaMotivo'); renderPersonal(); showToast('AUSENCIA REGISTRADA','green');
+}
+function _quitarAusencia(){
+  if(!_amCanAsist()) return showToast('SIN PERMISO','red');
+  const A=_getAsistencia(); const f=_asistFechaActual(); if(A[f]) delete A[f][_amPersonaId];
+  saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  closeModal('AusenciaMotivo'); renderPersonal(); showToast('AUSENCIA QUITADA');
+}
 
 function _asisHoraHHMM(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return p(d.getHours())+':'+p(d.getMinutes()); }
 // Descriptores etiquetados para FaceMatcher, desde personalGlobal.
