@@ -5181,7 +5181,13 @@ function applyPermissions(){
   // Ocultar/mostrar tabs principales según permisos de view.X
   document.querySelectorAll('.tab[data-view]').forEach(el => {
     const view = el.dataset.view;
-    el.style.display = can('view.' + view) ? '' : 'none';
+    // PERSONAL: visible también para usuarios "solo-asistencia"
+    // (personal.asistencia) aunque no tengan view.personal.
+    if (view === 'personal' && typeof window._puedeVerPersonalSeccion === 'function') {
+      el.style.display = window._puedeVerPersonalSeccion() ? '' : 'none';
+    } else {
+      el.style.display = can('view.' + view) ? '' : 'none';
+    }
   });
   // Procesar elementos con data-perm. Para elementos tipo "pestaña/menú"
   // (tabs, sub-tabs, items del kebab, opciones de menú) se OCULTAN
@@ -9560,10 +9566,16 @@ function _resetAllCollapsibles(){
 }
 
 function setView(v){
+  // ¿Puede ver esta top-view? PERSONAL admite el modo solo-asistencia
+  // (personal.asistencia) aunque no tenga view.personal.
+  const _puedeVerView = (x) => {
+    if (x === 'personal' && typeof window._puedeVerPersonalSeccion === 'function') return window._puedeVerPersonalSeccion();
+    return can('view.' + x);
+  };
   // Bloquear si no tiene permiso; redirigir a la primera vista permitida
-  if (!can('view.' + v)) {
+  if (!_puedeVerView(v)) {
     const allViews = ['dashboard','cobro','avance','materiales','personal','actividad'];
-    const fallback = allViews.find(x => can('view.' + x));
+    const fallback = allViews.find(x => _puedeVerView(x));
     if (!fallback) {
       showToast('SIN PERMISO PARA NINGUNA VISTA', 'red');
       return;
@@ -25004,18 +25016,79 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   // (descargarTemplateEstimacion eliminado — ya no se usa el sistema de plantilla.
   //  El parser ahora detecta automáticamente el formato oficial del Excel.)
 
+  // ── Modo solo-asistencia ──────────────────────────────────────────────
+  // Un usuario cuyo único permiso "personal" es `personal.asistencia` puede
+  // entrar a PERSONAL y ver ÚNICAMENTE la sub-pestaña ASISTENCIA.
+  // _puedeVerColaboradores(): puede ver COLABORADORES (lista) + acciones.
+  // _puedeVerAsistencia(): puede ver la sub-pestaña ASISTENCIA.
+  // _puedeVerPersonalSeccion(): puede ver la sección PERSONAL del todo.
+  //
+  // OJO: can('view.personal') NO sirve aquí para distinguir COLABORADORES,
+  // porque can() tiene la regla implícita "si tiene cualquier personal.*,
+  // view.personal es true" — eso haría que un usuario solo-asistencia
+  // (personal.asistencia) pareciera tener view.personal y se le mostrara
+  // COLABORADORES. Por eso para COLABORADORES exigimos el permiso EXPLÍCITO
+  // view.personal (o admin '*'), evitando la inferencia implícita.
+  function _tienePermPersonalExplicito(p){
+    const u = (typeof getCurrentUser==='function') ? getCurrentUser() : null;
+    if (!u || !u.perms) return false;
+    return u.perms.includes('*') || u.perms.includes(p);
+  }
+  function _puedeVerColaboradores(){ return (typeof can==='function') && (_tienePermPersonalExplicito('view.personal')||can('users.manage')||can('personal.add')||can('personal.edit')); }
+  // ASISTENCIA antes no tenía data-perm: era visible para cualquiera que
+  // entrara a PERSONAL. Para NO cambiar el comportamiento de usuarios
+  // existentes, quien pueda ver COLABORADORES sigue viendo también ASISTENCIA.
+  function _puedeVerAsistencia(){ return (typeof can==='function') && (can('personal.asistencia')||_tienePermPersonalExplicito('view.personal')||can('users.manage')||_puedeVerColaboradores()); }
+  function _puedeVerPersonalSeccion(){ return _puedeVerColaboradores() || _puedeVerAsistencia(); }
+  window._puedeVerColaboradores = _puedeVerColaboradores;
+  window._puedeVerAsistencia = _puedeVerAsistencia;
+  window._puedeVerPersonalSeccion = _puedeVerPersonalSeccion;
+
+  // Aplica visibilidad de los botones de sub-pestaña según permisos.
+  function _aplicarVisibilidadSubPestPersonal(){
+    const bLista = document.querySelector('[data-perstab="lista"]');
+    const bAsist = document.querySelector('[data-perstab="asistencia"]');
+    if (bLista) bLista.style.display = _puedeVerColaboradores() ? '' : 'none';
+    if (bAsist) bAsist.style.display = _puedeVerAsistencia() ? '' : 'none';
+    // PÓLIZAS conserva su gating por data-perm="polizas.edit" (applyPermissions).
+  }
+  window._aplicarVisibilidadSubPestPersonal = _aplicarVisibilidadSubPestPersonal;
+
+  // Devuelve la primera sub-pestaña VISIBLE como default al entrar a PERSONAL.
+  function _defaultSubPestPersonal(){
+    if (_puedeVerColaboradores()) return 'lista';
+    if (_puedeVerAsistencia()) return 'asistencia';
+    return 'lista';
+  }
+
   window.currentPersonalSubTab = 'lista';
   const _renderPersonal = renderPersonal;
-  window.renderPersonal = renderPersonal = function(){ _renderPersonal(); setPersonalSubTab(window.currentPersonalSubTab || 'lista', true); };
+  window.renderPersonal = renderPersonal = function(){
+    _aplicarVisibilidadSubPestPersonal();
+    let _sub = window.currentPersonalSubTab || 'lista';
+    // Si la sub-pestaña actual no es visible para este usuario, caer al default.
+    if (_sub === 'lista' && !_puedeVerColaboradores()) _sub = _defaultSubPestPersonal();
+    else if (_sub === 'asistencia' && !_puedeVerAsistencia()) _sub = _defaultSubPestPersonal();
+    window.currentPersonalSubTab = _sub;
+    _renderPersonal();
+    setPersonalSubTab(_sub, true);
+  };
   window.setPersonalSubTab = function(tab, silent){
     if(tab==='dpi') tab='lista';
+    // Solo-asistencia: si piden COLABORADORES pero no puede verlos, ir a ASISTENCIA.
+    if(tab==='lista' && typeof _puedeVerColaboradores==='function' && !_puedeVerColaboradores()){
+      tab = _puedeVerAsistencia() ? 'asistencia' : 'lista';
+    }
     window.currentPersonalSubTab = tab;
+    _aplicarVisibilidadSubPestPersonal();
     document.querySelectorAll('[data-perstab]').forEach(b => b.classList.toggle('active', b.dataset.perstab === tab));
     const listaPanel = document.getElementById('pers-lista-panel');
     const asistPanel = document.getElementById('pers-asist-panel');
     const polizasPanel = document.getElementById('planilla-polizas');
     const kpis = document.getElementById('persKpis');
-    if (listaPanel) listaPanel.style.display = tab === 'lista' ? '' : 'none';
+    // #pers-lista-panel nunca se muestra a quien no puede ver COLABORADORES.
+    const _verLista = (typeof _puedeVerColaboradores!=='function') || _puedeVerColaboradores();
+    if (listaPanel) listaPanel.style.display = (tab === 'lista' && _verLista) ? '' : 'none';
     if (asistPanel) asistPanel.style.display = tab === 'asistencia' ? '' : 'none';
     if (polizasPanel) polizasPanel.style.display = tab === 'polizas' ? '' : 'none';
     if (kpis) kpis.style.display = tab === 'polizas' ? 'none' : '';
