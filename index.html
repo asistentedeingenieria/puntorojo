@@ -2887,7 +2887,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v609</span>
+    <span style="opacity:.5;font-size:9px">v610</span>
   </footer>
 
 </div>
@@ -19742,6 +19742,25 @@ function _formatRelativeTime(ts){
   return new Date(ts).toLocaleDateString('es-ES');
 }
 
+// ── PRESENCIA (EN LÍNEA) ──────────────────────────────────────────────
+// Latido: escribe lastSeen en el doc del usuario cada 60s mientras la app está
+// abierta. La columna ESTADO del reporte usa lastSeen para mostrar EN LÍNEA.
+let _presenceTimer=null;
+function _writePresence(){
+  try{
+    const fu=(typeof firebase!=='undefined'&&firebase.auth)?firebase.auth().currentUser:null;
+    if(fu&&fu.uid&&typeof saveUserDoc==='function'){ saveUserDoc(fu.uid,{lastSeen:Date.now()}).catch(()=>{}); }
+  }catch(e){}
+}
+function _onVisPresence(){ try{ if(document.visibilityState==='visible') _writePresence(); }catch(e){} }
+function _startPresence(){
+  _stopPresence();
+  _writePresence();
+  _presenceTimer=setInterval(_writePresence, 60000);
+  try{ document.removeEventListener('visibilitychange', _onVisPresence); document.addEventListener('visibilitychange', _onVisPresence); }catch(e){}
+}
+function _stopPresence(){ if(_presenceTimer){ clearInterval(_presenceTimer); _presenceTimer=null; } }
+
 async function openReporteUsoModal(){
   if (!can('users.manage')) return showToast('SOLO ADMINISTRADOR', 'red');
 
@@ -19756,6 +19775,15 @@ async function openReporteUsoModal(){
     console.error('Error cargando reporte:', e);
     body.innerHTML = `<div style="padding:40px;text-align:center;color:var(--rojo)">ERROR: ${e.message || e}</div>`;
   }
+  // Auto-refrescar EN LÍNEA mientras el modal siga abierto (se autolimpia al cerrar).
+  try{
+    if(window._reporteUsoTimer) clearInterval(window._reporteUsoTimer);
+    window._reporteUsoTimer=setInterval(async()=>{
+      var m=document.getElementById('modalReporteUso');
+      if(m && m.classList.contains('show')){ try{ await refreshUsersCache(); renderReporteUso(); }catch(e){} }
+      else { clearInterval(window._reporteUsoTimer); window._reporteUsoTimer=null; }
+    }, 45000);
+  }catch(e){}
 }
 
 function renderReporteUso(){
@@ -19814,13 +19842,11 @@ function renderReporteUso(){
           ${usersOrdenados.map(u => {
             const e7 = events_7d.filter(e => e.role === u.username).length;
             const e30 = events_30d.filter(e => e.role === u.username).length;
-            const isActive = active7.has(u.username);
-            const isInactive30 = !active30.has(u.username);
-            const status = isActive
-              ? '<span style="color:#4d8c2c;font-weight:700">● Activo</span>'
-              : isInactive30
-                ? '<span style="color:#c8141c;font-weight:700">○ Inactivo</span>'
-                : '<span style="color:#a98142;font-weight:700">◐ Bajo uso</span>';
+            // EN LÍNEA: el usuario tiene un latido (lastSeen) reciente → está dentro de la app ahora.
+            const _online = u.lastSeen && (now - u.lastSeen) < 150000; // 2.5 min
+            const status = _online
+              ? '<span style="color:#4d8c2c;font-weight:700">● EN LÍNEA</span>'
+              : '<span style="color:var(--mute);font-weight:700">○ Desconectado</span>';
             const founderTag = u.isFounder ? '<span style="background:var(--rojo);color:#fff;padding:1px 5px;border-radius:3px;font-size:8px;letter-spacing:.5px;margin-left:6px">★</span>' : '';
             return `<tr style="border-top:1px solid var(--line)">
               <td style="padding:10px;font-weight:600">${u.displayName || u.username}${founderTag}<div style="font-size:9px;color:var(--mute);font-weight:400;margin-top:2px">${u.email || u.username}</div></td>
@@ -31422,6 +31448,7 @@ function initAuthListener(){
   function _showLoginScreenNow(){
     currentUser = null;
     cachedUsers = [];
+    try { _stopPresence(); } catch(e){}
     try { unsubscribeFromMyNotifications(); } catch(e){}
     try { saveNotifications([]); } catch(e){}
     hideSplash('');           // sin texto extra — se va el logo limpio
@@ -31568,6 +31595,7 @@ function applyAuthSession(fbUser, profileData){
     }
   } catch(e){}
   refreshUsersCache().catch(()=>{});
+  try{ _startPresence(); }catch(e){} // latido EN LÍNEA
   // Sincronizar registros del portal cliente (background, no bloquea login)
   setTimeout(() => { try { syncClientRegistrations().catch(()=>{}); } catch(e){} }, 2000);
   renderAll();
