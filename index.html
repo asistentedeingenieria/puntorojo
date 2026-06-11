@@ -2887,7 +2887,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v608</span>
+    <span style="opacity:.5;font-size:9px">v609</span>
   </footer>
 
 </div>
@@ -17639,6 +17639,8 @@ function _epUsarMiUbicacion(){
   }, function(err){ showToast('NO SE PUDO OBTENER LA UBICACIÓN (activá el permiso)','red'); }, { enableHighAccuracy:true, timeout:10000, maximumAge:0 });
 }
 
+// Obras cuya ubicación SOLO el administrador puede configurar/reconfigurar (no delegados).
+function _obraSoloAdminUbicacion(p){ return !!p && (typeof _persNorm==='function') && _persNorm(p.name)==='TORELO'; }
 function _abrirUbicacionObra(){
   if(!(can('obra.ubicacion')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
   const p=activeProj(); if(!p){ showToast('SIN PROYECTO ACTIVO','red'); return; }
@@ -17647,24 +17649,33 @@ function _abrirUbicacionObra(){
   var b=document.getElementById('uoLng'); if(b) b.value=(g.lng!=null?g.lng:'');
   var r=document.getElementById('uoRadio'); if(r) r.value=(g.radio!=null?g.radio:150);
   var s=document.getElementById('uoStatus'); if(s) s.textContent=(g.lat!=null)?('✓ '+Number(g.lat).toFixed(6)+', '+Number(g.lng).toFixed(6)+' · '+(p.name||'')):('Sin configurar · '+(p.name||''));
-  var _locked=(g.lat!=null);
-  var _er=document.getElementById('uoEditRow'); if(_er) _er.style.display=_locked?'none':'';
-  var _gb=document.getElementById('uoGuardarBtn'); if(_gb) _gb.style.display=_locked?'none':'';
-  var _ln=document.getElementById('uoLockNote'); if(_ln) _ln.style.display=_locked?'block':'none';
-  var _canCfg=(typeof can==='function')&&(can('obra.ubicacion')||can('users.manage'));
-  var _rb=document.getElementById('uoReconfigBtn'); if(_rb) _rb.style.display=(_locked&&_canCfg)?'inline-flex':'none';
   var _admin=(typeof can==='function')&&can('users.manage');
+  var _soloAdmin=_obraSoloAdminUbicacion(p);
+  var _locked=(g.lat!=null);
+  // Primera configuración (sin ubicación): admin siempre; delegado solo si la obra NO es "solo admin" (TORELO).
+  var _puedeConfigPrimera=_admin || ((typeof can==='function')&&can('obra.ubicacion') && !_soloAdmin);
+  var _mostrarEdit=(!_locked && _puedeConfigPrimera);
+  var _er=document.getElementById('uoEditRow'); if(_er) _er.style.display=_mostrarEdit?'':'none';
+  var _gb=document.getElementById('uoGuardarBtn'); if(_gb) _gb.style.display=_mostrarEdit?'':'none';
+  var _ln=document.getElementById('uoLockNote');
+  if(_ln){
+    if(_locked){ _ln.style.display='block'; _ln.textContent = _admin ? '🔒 Ubicación configurada. Tocá RECONFIGURAR para cambiar la ubicación o el radio.' : '🔒 La ubicación de esta obra ya quedó configurada y solo el administrador puede cambiarla.'; }
+    else if(!_puedeConfigPrimera){ _ln.style.display='block'; _ln.textContent='🔒 Solo el administrador puede configurar la ubicación de esta obra.'; }
+    else { _ln.style.display='none'; }
+  }
+  // RECONFIGURAR: solo admin, solo si ya está configurada.
+  var _rb=document.getElementById('uoReconfigBtn'); if(_rb) _rb.style.display=(_locked&&_admin)?'inline-flex':'none';
   var _at=document.getElementById('uoAdminTools'); if(_at) _at.style.display=_admin?'block':'none';
   var _bb=document.getElementById('uoBorrarBtn'); if(_bb) _bb.style.display=(_admin&&_locked)?'inline-flex':'none';
   document.getElementById('modalUbicacionObra').classList.add('show');
 }
 function _uoReconfigurar(){
-  if(!(can('obra.ubicacion')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
+  if(!can('users.manage')){ showToast('SOLO EL ADMINISTRADOR PUEDE RECONFIGURAR','red'); return; }
   var _er=document.getElementById('uoEditRow'); if(_er) _er.style.display='';
   var _gb=document.getElementById('uoGuardarBtn'); if(_gb) _gb.style.display='';
   var _ln=document.getElementById('uoLockNote'); if(_ln) _ln.style.display='none';
   var _rb=document.getElementById('uoReconfigBtn'); if(_rb) _rb.style.display='none';
-  var s=document.getElementById('uoStatus'); if(s) s.textContent='Reconfigurando — tomá la nueva ubicación y GUARDAR para reemplazar.';
+  var s=document.getElementById('uoStatus'); if(s) s.textContent='Reconfigurando — ajustá el radio y/o tomá una nueva ubicación, luego GUARDAR.';
 }
 function _uoUsarUbicacion(){
   if(!navigator.geolocation){ showToast('ESTE DISPOSITIVO NO TIENE GPS','red'); return; }
@@ -17679,17 +17690,23 @@ function _uoUsarUbicacion(){
 function _guardarUbicacionObra(){
   if(!(can('obra.ubicacion')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
   const p=activeProj(); if(!p) return;
-  // Sobreescribir una ubicación ya configurada solo se permite en modo edición (tras RECONFIGURAR);
-  // si sigue bloqueada (formulario oculto), no se cambia.
-  var _erEl=document.getElementById('uoEditRow'); var _editVisible=_erEl && _erEl.style.display!=='none';
-  if(p.geo && p.geo.lat!=null && !_editVisible){ showToast('LA UBICACIÓN YA ESTÁ CONFIGURADA · USÁ RECONFIGURAR PARA CAMBIARLA','red'); closeModal('UbicacionObra'); return; }
+  var _admin=(typeof can==='function')&&can('users.manage');
+  var _soloAdmin=_obraSoloAdminUbicacion(p);
+  var _yaConfig=(p.geo && p.geo.lat!=null);
+  // Reconfigurar una ubicación ya existente → solo el administrador.
+  if(_yaConfig && !_admin){ showToast('LA UBICACIÓN YA ESTÁ CONFIGURADA · SOLO EL ADMINISTRADOR PUEDE CAMBIARLA','red'); closeModal('UbicacionObra'); return; }
+  // Primera configuración de una obra "solo admin" (TORELO) → solo el administrador.
+  if(!_yaConfig && _soloAdmin && !_admin){ showToast('SOLO EL ADMINISTRADOR PUEDE CONFIGURAR ESTA OBRA','red'); closeModal('UbicacionObra'); return; }
   const gl=parseFloat(document.getElementById('uoLat').value), gn=parseFloat(document.getElementById('uoLng').value), gr=parseInt(document.getElementById('uoRadio').value,10);
   if(isNaN(gl)||isNaN(gn)){ showToast('PRIMERO TOMÁ LA UBICACIÓN','red'); return; }
+  var _eraNueva=!_yaConfig;
   p.geo={ lat:gl, lng:gn, radio:(!isNaN(gr)&&gr>0?gr:150) };
   try{ saveState(); }catch(e){}
   try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  // Avisar a los administradores cuando un delegado (no admin) configura por primera vez.
+  try{ if(_eraNueva && !_admin && typeof _notifyByPerm==='function'){ _notifyByPerm('users.manage', { type:'ubicacion', title:'UBICACIÓN DE OBRA CONFIGURADA', body:((currentUser&&currentUser.displayName)?String(currentUser.displayName).toUpperCase():'UN USUARIO')+' configuró la ubicación de '+(p.name||'una obra')+'.', projectId:p.id }); } }catch(e){}
   closeModal('UbicacionObra');
-  showToast('UBICACIÓN DE LA OBRA GUARDADA','green');
+  showToast(_yaConfig?'UBICACIÓN ACTUALIZADA':'UBICACIÓN DE LA OBRA GUARDADA','green');
 }
 function _uoBorrarUbicacion(){
   if(!can('users.manage')){ showToast('SOLO ADMINISTRADOR','red'); return; }
