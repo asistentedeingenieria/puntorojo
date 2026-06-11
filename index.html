@@ -2887,7 +2887,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v610</span>
+    <span style="opacity:.5;font-size:9px">v611</span>
   </footer>
 
 </div>
@@ -8259,6 +8259,22 @@ const CloudSync = {
         console.warn(`CloudSync: limpieza removió ${beforeRowCount - afterRowCount} filas vacías. Se re-subirá.`);
       }
     } catch(e) { console.warn('ensureDataV9 falló en applyRemote:', e); }
+
+    // v611 BLINDAJE DE CARAS: un estado remoto NUNCA debe BORRAR una cara que ya
+    // existe localmente. Si el remoto no trae la cara de una persona (o viene vacía)
+    // pero el equipo SÍ la tiene, la conservamos (solo agrega, nunca quita).
+    try {
+      const _hasFace = f => f && Array.isArray(f.descriptors) && f.descriptors.length;
+      const _locPG = (state && Array.isArray(state.personalGlobal)) ? state.personalGlobal : [];
+      if (Array.isArray(merged.personalGlobal) && _locPG.length){
+        const _locById = {}; _locPG.forEach(lp => { if (lp && lp.id) _locById[lp.id] = lp; });
+        merged.personalGlobal.forEach(rp => {
+          if (!rp || !rp.id) return;
+          const lp = _locById[rp.id];
+          if (lp && _hasFace(lp.face) && !_hasFace(rp.face)) { rp.face = lp.face; }
+        });
+      }
+    } catch(e){ console.warn('blindaje de caras en applyRemote:', e); }
 
     state = merged;
     // v495: recalcular _projHashes desde el remoteData REALMENTE aplicado en esta llamada.
@@ -17241,13 +17257,65 @@ async function _guardarCara(personaId){
     enrolledAt:Date.now()
   };
   saveState();
-  try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  // v611: subir + VERIFICAR que la cara llegó a la nube + respaldo aparte (faceBackups).
+  let _okNube=false;
+  const _doSync=(async()=>{
+    if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent){ await CloudSync.uploadCurrent(); }
+    try{ await _respaldarCara(personaId, p); }catch(e){}
+    _okNube = await _verificarCaraEnNube(personaId);
+  })();
+  try{ await (typeof _withTimeout==='function' ? _withTimeout(_doSync, 15000) : _doSync); }catch(e){ _okNube=false; }
   _cerrarEnrolar();
   const _fs = document.getElementById('_faceStatus');
   if (_fs){ const _n = (p && p.face && p.face.descriptors ? p.face.descriptors.length : 0); _fs.textContent = 'Cara registrada ✓ ('+_n+' tomas)'; }
-  showToast('CARA REGISTRADA ✓','green');
+  if(_okNube){ showToast('CARA REGISTRADA Y RESPALDADA EN LA NUBE ✓','green'); }
+  else { showToast('⚠ CARA GUARDADA EN ESTE EQUIPO PERO NO SUBIÓ A LA NUBE · REVISÁ INTERNET Y VOLVÉ A GUARDAR','red'); }
   if(typeof renderPersonal==='function') renderPersonal();
 }
+// v611: VERIFICAR que la cara llegó a la nube (lee appState/core).
+async function _verificarCaraEnNube(personaId){
+  try{
+    const doc = await firebase.firestore().collection('appState').doc('core').get();
+    const d = (doc && doc.data && doc.data()) || {};
+    const per = (d.personalGlobal||[]).find(x=>x && x.id===personaId);
+    return !!(per && per.face && Array.isArray(per.face.descriptors) && per.face.descriptors.length);
+  }catch(e){ return false; }
+}
+// v611: respaldo append-only de la cara en una colección aparte que la sync NO toca.
+async function _respaldarCara(personaId, p){
+  if(!personaId || !p || !p.face || !(p.face.descriptors && p.face.descriptors.length)) return;
+  await firebase.firestore().collection('faceBackups').doc(personaId).set({
+    personaId: personaId,
+    nombre: p.nombre||'',
+    descriptors: p.face.descriptors||[],
+    thumbURL: p.face.thumbURL||'',
+    enrolledAt: p.face.enrolledAt||Date.now(),
+    by: (typeof currentUser!=='undefined'&&currentUser&&(currentUser.email||currentUser.uid))||'',
+    ts: Date.now()
+  }, { merge:true });
+}
+// v611: restaurar caras desde el respaldo aparte (no pisa las que ya estén). Admin.
+async function _restaurarCarasDesdeBackup(){
+  if(!can('users.manage')){ showToast('SOLO ADMINISTRADOR','red'); return 0; }
+  try{
+    const snap = await firebase.firestore().collection('faceBackups').get();
+    const pg = (state && Array.isArray(state.personalGlobal)) ? state.personalGlobal : [];
+    let restauradas=0, yaTenian=0, sinPersona=0;
+    snap.forEach(doc=>{
+      const b = doc.data()||{};
+      if(!b.descriptors || !b.descriptors.length) return;
+      const per = pg.find(x=>x && x.id===b.personaId);
+      if(!per){ sinPersona++; return; }
+      if(per.face && Array.isArray(per.face.descriptors) && per.face.descriptors.length){ yaTenian++; return; }
+      per.face = { descriptors:b.descriptors, thumbURL:b.thumbURL||'', enrolledAt:b.enrolledAt||Date.now(), consent:{at:Date.now(),by:'restaurado-backup'} };
+      restauradas++;
+    });
+    if(restauradas){ saveState(); try{ await CloudSync.uploadCurrent(); }catch(e){} if(typeof renderPersonal==='function') renderPersonal(); }
+    showToast('CARAS RESTAURADAS: '+restauradas+' · ya tenían: '+yaTenian+(sinPersona?(' · sin persona: '+sinPersona):''), restauradas?'green':'');
+    return restauradas;
+  }catch(e){ showToast('ERROR AL RESTAURAR: '+(e.message||e),'red'); return 0; }
+}
+window._restaurarCarasDesdeBackup = _restaurarCarasDesdeBackup;
 // === fin enrolamiento ===
 let _pgDpiBlobs = { frente:null, reverso:null };
 function _pgCloseModal(){ const m=document.getElementById('_pgModal'); if(m) m.remove(); if(typeof window._prUnlockScroll==='function') window._prUnlockScroll(); }
