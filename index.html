@@ -2887,7 +2887,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v612</span>
+    <span style="opacity:.5;font-size:9px">v613</span>
   </footer>
 
 </div>
@@ -6393,9 +6393,9 @@ function logActivity(type, title, desc){
   if (state.activity.length > 60) state.activity = state.activity.slice(0, 60); // v472: bajado de 200 a 60 para no inflar appState/main (limite 1MB Firestore)
   saveState();
   updateActivityBadge();
-  // ⚠️ AUTO-NOTIFICACIÓN A ADMINS DESACTIVADA — los admins ya no reciben notif
-  // por cada acción de cada usuario. La actividad sigue registrada en el log
-  // (visible en la pestaña ACTIVIDAD) pero NO genera push ni notif por usuario.
+  // v613: notificar (campanita + push) a TODOS los que VEN el módulo de esta acción,
+  // menos a quien la hizo. Fire-and-forget para no bloquear logActivity.
+  try{ _notifyOnActivity(ev); }catch(e){}
 }
 
 /* Manda push notification a todos los administradores cuando un usuario NO-admin
@@ -6460,6 +6460,69 @@ async function _notifyByPerm(perm, payload){
       await addNotification({ forUser: usr.email, ...payload });
     } catch(e){}
   }
+}
+
+/* ═══════════ v613 — NOTIFICACIÓN POR MOVIMIENTO ═══════════
+   Cada acción registrada en logActivity avisa (campanita + push) a TODOS los
+   usuarios que pueden VER ese módulo, menos a quien la hizo. */
+// view.X + permisos del módulo = "todos los que ven ese módulo".
+const _NOTIF_MODULO_PERMS = {
+  cobro:      ['view.cobro','cobro.edit','cobro.subirExcel'],
+  avance:     ['view.avance','avance.edit'],
+  materiales: ['view.materiales','materiales.edit','pedidos.create','pedidos.advance','pedidos.receive','receta.edit','compras.autorizar','precios.autorizar','precios.proponen','oficina.firmar'],
+  personal:   ['view.personal','personal.add','personal.edit','personal.asistencia','obra.ubicacion','personal.asistenciaPdf'],
+  planilla:   ['planilla.edit','planilla.authorize'],
+  polizas:    ['polizas.edit','planilla.edit'],
+  anticipos:  ['polizas.edit','planilla.edit','planilla.authorize'],
+  acuses:     ['receptores.manage','cobro.edit','avance.edit'],
+  proyectos:  ['projects.create']
+};
+function _moduloDeActividad(title){
+  const t = String(title||'').toLowerCase();
+  if(/factura|cobro|estimaci|amortiz|excepci/.test(t)) return 'cobro';
+  if(/p[óo]liza/.test(t)) return 'polizas';
+  if(/anticipo/.test(t)) return 'anticipos';
+  if(/planilla|retenci|descuento|\bpago\b/.test(t)) return 'planilla';
+  if(/pedido|orden de compra|\boc\b|receta|material|inventario|precio|proveedor|compra/.test(t)) return 'materiales';
+  if(/colaborador|personal|asistencia|biometr|\bcara\b|\bdpi\b|ubicaci|geocerca/.test(t)) return 'personal';
+  if(/etapa|avance|nivel|licencia|\bfoto/.test(t)) return 'avance';
+  if(/acuse|firma|portal|receptor|cliente|\bqr\b/.test(t)) return 'acuses';
+  if(/proyecto|backup|reporte/.test(t)) return 'proyectos';
+  return null;
+}
+// Notifica a la UNIÓN de titulares de cualquiera de los permisos (dedup por email, excluye al actor).
+async function _notifyByPerms(perms, payload){
+  if(!perms || !perms.length || !payload) return;
+  let list=[]; try{ list = await _getAllUsersList(); }catch(e){ return; }
+  const myEmail = currentUser && currentUser.email;
+  const permSet = new Set(perms);
+  const seen = new Set();
+  for(const usr of list){
+    if(!usr || !usr.email || !Array.isArray(usr.perms)) continue;
+    if(!(usr.perms.includes('*') || usr.perms.some(p=>permSet.has(p)))) continue;
+    if(myEmail && usr.email===myEmail) continue;
+    if(seen.has(usr.email)) continue; seen.add(usr.email);
+    try{ await addNotification({ forUser: usr.email, ...payload }); }catch(e){}
+  }
+}
+// Hook central de logActivity. Anti-ráfaga: no repite el mismo movimiento (título+actor+proyecto) en 15s.
+const _movNotifLast = {};
+function _notifyOnActivity(ev){
+  if(!ev || !ev.title) return;
+  const key = (ev.title||'')+'|'+(ev.role||'')+'|'+(ev.projectId||'');
+  const now = Date.now();
+  if(_movNotifLast[key] && (now - _movNotifLast[key]) < 15000) return;
+  _movNotifLast[key] = now;
+  const modulo = _moduloDeActividad(ev.title);
+  const perms = (modulo ? (_NOTIF_MODULO_PERMS[modulo]||[]).slice() : []);
+  if(perms.indexOf('users.manage')<0) perms.push('users.manage');
+  const actor = String(ev.role||'usuario').toUpperCase();
+  _notifyByPerms(perms, {
+    type: 'mov-'+(modulo||'gral'),
+    title: actor + ' · ' + ev.title,
+    body: ev.desc || '',
+    projectId: ev.projectId || null
+  });
 }
 
 /* Notifica a un usuario específico por su username (lowercase). Si no hay match,
