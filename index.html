@@ -2888,7 +2888,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v615</span>
+    <span style="opacity:.5;font-size:9px">v616</span>
   </footer>
 
 </div>
@@ -16970,14 +16970,14 @@ async function loadFaceModels(){
   return _faceModelsLoading;
 }
 // Detecta UNA cara en un <video>/<canvas>/<img> y devuelve la detección con descriptor (Float32Array) o null.
-async function _detectOneDescriptor(input){
-  const opt = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 });
+async function _detectOneDescriptor(input, inputSize){
+  const opt = new faceapi.TinyFaceDetectorOptions({ inputSize: (inputSize||416), scoreThreshold: 0.5 });
   const det = await faceapi.detectSingleFace(input, opt).withFaceLandmarks().withFaceDescriptor();
   return det || null;
 }
 
 // ── KIOSKO FACIAL ────────────────────────────────────────────────────────────
-let _kioskMatcher=null, _kioskStream=null, _kioskLoop=null, _kioskBusy=false, _kioskGeo=null, _kioskGeoWatch=null;
+let _kioskMatcher=null, _kioskStream=null, _kioskLoop=null, _kioskBusy=false, _kioskGeo=null, _kioskGeoWatch=null, _kioskStreak={id:null,n:0}, _kioskSkipUntil=0;
 const _kioskLast = {}; // personaId -> timestamp ultima marca (debounce 5s)
 async function _abrirKioskoCaras(){
   if (document.getElementById('_kioskScreen')) return;
@@ -17023,7 +17023,7 @@ async function _abrirKioskoCaras(){
   loadFaceModels().then(()=>{
     _kioskMatcher = new faceapi.FaceMatcher(enroladas.map(pp => new faceapi.LabeledFaceDescriptors(pp.id, pp.descriptors)), 0.6);
     if (_kioskStream && document.getElementById('_kioskScreen') && !_kioskLoop){
-      _kioskLoop = setInterval(_kioskTick, 700);
+      _kioskLoop = setInterval(_kioskTick, 500);
       _kioskSetResult('Escaneando…','#fff');
     } else if (!_kioskStream){
       _kioskSetResult('ACTIVÁ EL PERMISO DE CÁMARA Y VOLVÉ A ABRIR','#FBBF24');
@@ -17043,16 +17043,21 @@ function _kioskPedirUbicacion(){
 }
 async function _kioskTick(){
   if (_kioskBusy || !_kioskMatcher) return;
+  if (Date.now() < _kioskSkipUntil) return; // enfriamiento tras marcar
   const v=document.getElementById('_kioskVideo'); if(!v||!v.videoWidth) return;
   _kioskBusy=true;
   try{
-    const det=await _detectOneDescriptor(v);
+    const det=await _detectOneDescriptor(v, 320); // 320: más rápido (la cara está cerca)
     if(det){
       const all=_kioskMatcher.labeledDescriptors.map(ld=>({id:ld.label, distance:Math.min.apply(null, ld.descriptors.map(d=>faceapi.euclideanDistance(d, det.descriptor)))}));
-      const pick=pickFaceCandidates(all,0.48,0.58);
-      if(pick.status==='auto') _kioskMarcar(pick.matchId);
-      else if(pick.status==='confirm') _kioskMostrarCandidatos(pick.candidates);
-    }
+      const pick=pickFaceCandidates(all,0.44,0.54,0.10); // umbrales estrictos + margen 0.10
+      if(pick.status==='auto'){
+        // Anti falso positivo: exigir 2 lecturas SEGUIDAS de la misma persona antes de marcar.
+        if(_kioskStreak.id===pick.matchId) _kioskStreak.n++; else { _kioskStreak.id=pick.matchId; _kioskStreak.n=1; }
+        if(_kioskStreak.n>=2){ _kioskStreak={id:null,n:0}; _kioskMarcar(pick.matchId); }
+      } else if(pick.status==='confirm'){ _kioskStreak={id:null,n:0}; _kioskMostrarCandidatos(pick.candidates); }
+      else { _kioskStreak={id:null,n:0}; }
+    } else { _kioskStreak={id:null,n:0}; }
   }catch(e){} finally{ _kioskBusy=false; }
 }
 function _tomarFotoMarcar(){
@@ -17071,7 +17076,7 @@ function _tomarFotoMarcar(){
       const det=await _detectOneDescriptor(img);
       if(!det){ _kioskSetResult('NO SE DETECTÓ UNA CARA','#FBBF24'); return; }
       const all = _kioskMatcher.labeledDescriptors.map(ld=>({id:ld.label, distance:Math.min.apply(null, ld.descriptors.map(d=>faceapi.euclideanDistance(d, det.descriptor)))}));
-      const pick = pickFaceCandidates(all,0.48,0.58);
+      const pick = pickFaceCandidates(all,0.44,0.54,0.10);
       if(pick.status==='auto') _kioskMarcar(pick.matchId);
       else if(pick.status==='confirm') _kioskMostrarCandidatos(pick.candidates);
       else _kioskSetResult('NO RECONOCIDA · PROBÁ DE NUEVO','#FBBF24');
@@ -17092,6 +17097,7 @@ function _kioskMarcar(personaId){
   const p=(_getPersonal()||[]).find(x=>x.id===personaId);
   _kioskSetResult((r.accion==='entrada'?'✓ ENTRADA · ':'✓ SALIDA · ')+((p&&p.nombre)||'')+' · '+r.hora, r.accion==='entrada'?'#34D399':'#FBBF24');
   const cc=document.getElementById('_kioskCandidates'); if(cc) cc.style.display='none';
+  _kioskSkipUntil = Date.now()+2500; _kioskStreak={id:null,n:0}; // enfriamiento: no re-escanear mientras se muestra el resultado
   if (_kioskLoop){ setTimeout(function(){ if(_kioskLoop && document.getElementById('_kioskScreen')) _kioskSetResult('Escaneando…','#fff'); }, 2600); }
 }
 function _kioskMostrarCandidatos(ids){
@@ -21337,11 +21343,12 @@ function computeAsistenciaMark(reg, hhmm){
 }
 // Decide auto / confirmar / nada según distancias de match. Puro.
 // matches: [{id, distance}]. strict (auto si <=), loose (candidato si <=). margen de ambigüedad 0.06.
-function pickFaceCandidates(matches, strict, loose){
+function pickFaceCandidates(matches, strict, loose, margin){
+  const _m = (typeof margin==='number') ? margin : 0.06;
   const arr = (matches||[]).filter(m => m && typeof m.distance === 'number').slice().sort((a,b)=>a.distance-b.distance);
   if (!arr.length || arr[0].distance > loose) return { status:'none', matchId:null, candidates:[] };
   const best = arr[0], second = arr[1];
-  const ambiguo = second && (second.distance - best.distance) < 0.06;
+  const ambiguo = second && (second.distance - best.distance) < _m;
   if (best.distance <= strict && !ambiguo) return { status:'auto', matchId:best.id, candidates:[best.id] };
   const candidates = arr.filter(m => m.distance <= loose).slice(0,3).map(m => m.id);
   return { status:'confirm', matchId:null, candidates };
