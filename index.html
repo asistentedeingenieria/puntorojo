@@ -2903,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v639</span>
+    <span style="opacity:.5;font-size:9px">v640</span>
   </footer>
 
 </div>
@@ -17171,17 +17171,20 @@ function descargarAsistenciaPDF(){
   const nombreObra=(a)=>{ if(!a) return '—'; if(a.obraId==='OTRA') return 'OTRA: '+(a.obraDesc||''); const pr=projs.find(x=>x.id===a.obraId); return pr?String(pr.name||'').toUpperCase():'—'; };
   const obraSel=(document.getElementById('asistObraPdf')||{}).value||'';
   const obraLabel = obraSel ? (obraSel==='OTRA'?'OTRA':(String((projs.find(x=>x.id===obraSel)||{}).name||'').toUpperCase()||obraSel)) : '';
-  let presentes=_getPersonal().filter(pn=>dia[pn.id]&&dia[pn.id].presente&&_personaEnObraUsuario(pn));
-  if(obraSel) presentes=presentes.filter(pn=>String(dia[pn.id].obraId||'')===obraSel);
-  presentes=presentes.sort((x,y)=>_persNorm(x.nombre).localeCompare(_persNorm(y.nombre),'es',{sensitivity:'base'}));
-  // AUSENTES (solo sin filtro de obra): ausencia manual con su motivo, o "NO REGISTRADO" si el día ya cerró (después de 19:00 o día pasado).
-  let ausentes=[];
-  if(!obraSel){
-    const _cerrado=(typeof _asistDiaCerrado==='function')?_asistDiaCerrado(fecha):true;
-    ausentes=_getPersonal().filter(pn=>{ if(!_personaEnObraUsuario(pn)) return false; const r=dia[pn.id]; if(r&&r.presente) return false; if(r&&r.presente===false&&r.motivo) return true; return _cerrado; })
-      .map(pn=>{ const r=dia[pn.id]; return {pn, motivo:(r&&r.motivo)?r.motivo:'NO REGISTRADO'}; })
-      .sort((x,y)=>_persNorm(x.pn.nombre).localeCompare(_persNorm(y.pn.nombre),'es',{sensitivity:'base'}));
+  // v640: TODO el personal de la obra (presentes + ausentes). Roster = asignados fijos a la
+  // obra + multi-obra marcados ahí ese día; sin obra (admin "todas") = todo el personal visible.
+  const _obraCtx = obraSel || ((typeof _getUserObraAsignada==='function')?_getUserObraAsignada():'');
+  let roster;
+  if(_obraCtx){
+    roster=_getPersonal().filter(pn=> pn.tipo!=='OFICINA' && (pn.obraAsignada===_obraCtx || (dia[pn.id] && String(dia[pn.id].obraId||'')===_obraCtx)));
+  } else {
+    roster=_getPersonal().filter(pn=> pn.tipo!=='OFICINA' && _personaEnObraUsuario(pn));
   }
+  let presentes=roster.filter(pn=> dia[pn.id] && dia[pn.id].presente)
+    .sort((x,y)=>_persNorm(x.nombre).localeCompare(_persNorm(y.nombre),'es',{sensitivity:'base'}));
+  let ausentes=roster.filter(pn=> !(dia[pn.id] && dia[pn.id].presente))
+    .map(pn=>{ const r=dia[pn.id]; return {pn, motivo:(r&&r.motivo)?r.motivo:'AUSENTE'}; })
+    .sort((x,y)=>_persNorm(x.pn.nombre).localeCompare(_persNorm(y.pn.nombre),'es',{sensitivity:'base'}));
   if(!presentes.length && !ausentes.length){ showToast(obraSel?('NADIE PRESENTE EN '+obraLabel+' ESE DÍA'):'SIN DATOS DE ASISTENCIA ESE DÍA','red'); return; }
   if(typeof window.jspdf==='undefined'||!window.jspdf.jsPDF){ showToast('JSPDF NO CARGÓ — RECARGAR LA APP','red'); return; }
   const { jsPDF }=window.jspdf;
@@ -17191,7 +17194,7 @@ function descargarAsistenciaPDF(){
   doc.setFontSize(14); doc.setFont(undefined,'bold');
   doc.text('ASISTENCIA · '+_fmtDMY(fecha)+(obraLabel?(' · '+obraLabel):''), pageW/2, 50, {align:'center'});
   doc.setFontSize(9); doc.setFont(undefined,'normal');
-  doc.text('PRESENTES: '+presentes.length+(obraSel?'':('   ·   AUSENTES: '+ausentes.length)), pageW/2, 66, {align:'center'});
+  doc.text('PRESENTES: '+presentes.length+'   ·   AUSENTES: '+ausentes.length, pageW/2, 66, {align:'center'});
   let _y=88;
   if(presentes.length){
     const rows=presentes.map((pn,i)=>{ const rg=migrateAsistenciaRegistro(dia[pn.id])||dia[pn.id]||{}; return [String(i+1), pn.nombre, pn.cargo||'', rg.entrada||'—', rg.salida||'—', nombreObra(dia[pn.id]), ((_geoTxtMarca(rg,'geoEntrada')||{txt:'—'}).txt)]; });
@@ -17241,14 +17244,18 @@ function descargarAsistenciaSemanalPDF(todas){
   else { const sel=(document.getElementById('asistObraPdf')||{}).value||''; obras = sel ? projs.filter(pr=>pr.id===sel) : projs.slice(); }
   if(!obras.length){ showToast('NO HAY OBRAS','red'); return; }
   const p2=n=>String(n).padStart(2,'0');
-  const diaCol=f=>{ const d=new Date(f+'T12:00:00'); return ['DO','LU','MA','MI','JU','VI','SA'][d.getDay()]+' '+p2(d.getDate())+'/'+p2(d.getMonth()+1); };
+  const diaCol=f=>{ const d=new Date(f+'T12:00:00'); return ['DOMINGO','LUNES','MARTES','MIÉRCOLES','JUEVES','VIERNES','SÁBADO'][d.getDay()]+'\n'+p2(d.getDate())+'/'+p2(d.getMonth()+1); };
   const { jsPDF }=window.jspdf;
   const doc=new jsPDF({ unit:'pt', format:'a4', orientation:'landscape' });
   const pageW=doc.internal.pageSize.width;
   let first=true, algo=false;
   obras.forEach(obra=>{
-    const personas=_getPersonal().filter(pn=> pn.tipo!=='OFICINA' && (pn.multiObra || pn.obraAsignada===obra.id))
-      .filter(pn=> dias.some(f=>{ const r=A[f]&&A[f][pn.id]; return r && (r.presente || (r.presente===false&&r.motivo)); }));
+    // v640: TODO el personal de la obra = asignados fijos a esta obra (aunque no tengan marcas)
+    // + multi-obra que SÍ fueron marcados en esta obra esa semana.
+    const personas=_getPersonal().filter(pn=> pn.tipo!=='OFICINA' && (
+      pn.obraAsignada===obra.id ||
+      (pn.multiObra && dias.some(f=>{ const r=A[f]&&A[f][pn.id]; return r && String(r.obraId||'')===obra.id && (r.presente || (r.presente===false&&r.motivo)); }))
+    ));
     if(!personas.length) return;
     personas.sort((x,y)=>_persNorm(x.nombre).localeCompare(_persNorm(y.nombre),'es',{sensitivity:'base'}));
     if(!first) doc.addPage(); first=false; algo=true;
@@ -17260,10 +17267,10 @@ function descargarAsistenciaSemanalPDF(todas){
     const head=[['NOMBRE'].concat(dias.map(diaCol)).concat(['DÍAS'])];
     const body=personas.map(pn=>{
       let cnt=0;
-      const cells=dias.map(f=>{ const r0=A[f]&&A[f][pn.id]; const r=(r0&&typeof migrateAsistenciaRegistro==='function')?(migrateAsistenciaRegistro(r0)||r0):r0; if(r&&r.presente){ cnt++; return (r.entrada||r.hora||'P'); } if(r&&r.presente===false&&r.motivo) return 'A'; return '-'; });
+      const cells=dias.map(f=>{ const r0=A[f]&&A[f][pn.id]; const r=(r0&&typeof migrateAsistenciaRegistro==='function')?(migrateAsistenciaRegistro(r0)||r0):r0; if(r&&r.presente){ cnt++; return (r.entrada||r.hora||'P'); } if(r&&r.presente===false&&r.motivo) return 'AUSENTE'; return '-'; });
       return [pn.nombre].concat(cells).concat([String(cnt)]);
     });
-    doc.autoTable({ startY:72, head:head, body:body, theme:'striped', styles:{fontSize:8,halign:'center',valign:'middle'}, columnStyles:{0:{halign:'left',cellWidth:120}}, headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',halign:'center',fontSize:7} });
+    doc.autoTable({ startY:72, head:head, body:body, theme:'striped', styles:{fontSize:8,halign:'center',valign:'middle'}, columnStyles:{0:{halign:'left',cellWidth:120},8:{fontStyle:'bold',halign:'center'}}, headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',halign:'center',fontSize:7} });
   });
   if(!algo){ showToast('SIN DATOS DE ASISTENCIA ESA SEMANA','red'); return; }
   doc.save('ASISTENCIA SEMANAL '+_fmtDMY(dias[0]).replace(/\//g,'-')+(todas?' - TODAS LAS OBRAS':(obras.length===1?(' - '+String(obras[0].name||'').toUpperCase()):''))+'.pdf');
