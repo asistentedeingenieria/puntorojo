@@ -2901,7 +2901,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v627</span>
+    <span style="opacity:.5;font-size:9px">v628</span>
   </footer>
 
 </div>
@@ -17064,12 +17064,12 @@ async function _detectOneDescriptor(input, inputSize){
 }
 // Detecta TODAS las caras del cuadro (multi-persona). Usa SSD MobileNet (preciso, de lejos);
 // cae a TinyFaceDetector si SSD no está cargado.
-async function _detectAllDescriptors(input){
+async function _detectAllDescriptors(input, lowLight){
   let opt;
   if (faceapi.nets.ssdMobilenetv1 && faceapi.nets.ssdMobilenetv1.params){
-    opt = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5, maxResults: 10 });
+    opt = new faceapi.SsdMobilenetv1Options({ minConfidence: lowLight?0.3:0.45, maxResults: 10 });
   } else {
-    opt = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 });
+    opt = new faceapi.TinyFaceDetectorOptions({ inputSize: lowLight?640:512, scoreThreshold: lowLight?0.35:0.5 });
   }
   const dets = await faceapi.detectAllFaces(input, opt).withFaceLandmarks().withFaceDescriptors();
   return dets || [];
@@ -17077,7 +17077,69 @@ async function _detectAllDescriptors(input){
 
 // ── KIOSKO FACIAL ────────────────────────────────────────────────────────────
 let _kioskMatcher=null, _kioskStream=null, _kioskLoop=null, _kioskBusy=false, _kioskGeo=null, _kioskGeoWatch=null, _kioskStreaks={}, _kioskFacing='environment';
+let _kioskTorchTrack=null, _kioskTorchOn=false, _kioskLuzManual=false, _kioskLowLight=false, _kioskLumaCanvas=null, _kioskFrameCanvas=null;
 const _kioskLast = {}; // personaId -> timestamp ultima marca (debounce 5s)
+// ── Linterna (torch) + poca luz ───────────────────────────────────────────────
+function _kioskInitTorch(stream){
+  _kioskTorchTrack=null;
+  try{
+    var tr = stream && stream.getVideoTracks && stream.getVideoTracks()[0];
+    if(tr && tr.getCapabilities){ var caps=tr.getCapabilities(); if(caps && caps.torch){ _kioskTorchTrack=tr; } }
+  }catch(e){}
+  if(!_kioskTorchTrack){ _kioskTorchOn=false; }
+  _kioskUpdateLuzBtn();
+}
+async function _kioskSetTorch(on){
+  if(!_kioskTorchTrack) return false;
+  try{ await _kioskTorchTrack.applyConstraints({ advanced:[{ torch: !!on }] }); _kioskTorchOn=!!on; _kioskUpdateLuzBtn(); return true; }
+  catch(e){ return false; }
+}
+function _kioskToggleLuz(){
+  if(!_kioskTorchTrack){ showToast('ESTE TELÉFONO NO PERMITE LINTERNA DESDE LA WEB',''); return; }
+  _kioskLuzManual=true; _kioskSetTorch(!_kioskTorchOn);
+}
+function _kioskUpdateLuzBtn(){
+  var b=document.getElementById('_kioskLuzBtn'); if(!b) return;
+  b.style.opacity=_kioskTorchTrack?'1':'.4';
+  b.style.background=_kioskTorchOn?'rgba(251,191,36,.34)':'rgba(255,255,255,.16)';
+  b.textContent=_kioskTorchOn?'LUZ ✓':'LUZ';
+}
+// Brillo promedio del cuadro (0..255) en baja resolución (barato).
+function _kioskBrillo(v){
+  try{
+    var w=v.videoWidth||0, h=v.videoHeight||0; if(!w||!h) return 255;
+    if(!_kioskLumaCanvas){ _kioskLumaCanvas=document.createElement('canvas'); }
+    var cw=48, ch=Math.max(1, Math.round(48*(h/w)));
+    _kioskLumaCanvas.width=cw; _kioskLumaCanvas.height=ch;
+    var ctx=_kioskLumaCanvas.getContext('2d',{willReadFrequently:true});
+    ctx.drawImage(v,0,0,cw,ch);
+    var d=ctx.getImageData(0,0,cw,ch).data, s=0, n=d.length/4;
+    for(var i=0;i<d.length;i+=4){ s+=(d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114); }
+    return s/n;
+  }catch(e){ return 255; }
+}
+// En poca luz devuelve un canvas aclarado (brillo+contraste) para detectar mejor; con buena luz, el video tal cual.
+function _kioskFrameInput(v){
+  if(!_kioskLowLight) return v;
+  try{
+    var w=v.videoWidth||0, h=v.videoHeight||0; if(!w||!h) return v;
+    if(!_kioskFrameCanvas){ _kioskFrameCanvas=document.createElement('canvas'); }
+    _kioskFrameCanvas.width=w; _kioskFrameCanvas.height=h;
+    var ctx=_kioskFrameCanvas.getContext('2d');
+    ctx.filter='brightness(1.5) contrast(1.18)';
+    ctx.drawImage(v,0,0,w,h);
+    ctx.filter='none';
+    return _kioskFrameCanvas;
+  }catch(e){ return v; }
+}
+// Loop de escaneo auto-pausado: corre el siguiente tick apenas termina el anterior (mucho más rápido que cada 500ms fijos).
+function _kioskAgendarTick(){
+  if(!_kioskStream || !document.getElementById('_kioskScreen')){ _kioskLoop=null; return; }
+  Promise.resolve(_kioskTick()).catch(function(){}).then(function(){
+    if(_kioskStream && document.getElementById('_kioskScreen')){ _kioskLoop=setTimeout(_kioskAgendarTick, 60); }
+    else { _kioskLoop=null; }
+  });
+}
 async function _abrirKioskoCaras(){
   if (document.getElementById('_kioskScreen')) return;
   if (!(can('personal.asistencia')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
@@ -17088,7 +17150,8 @@ async function _abrirKioskoCaras(){
   const html = '<div id="_kioskScreen" style="position:fixed;inset:0;z-index:100070;background:#0B0B0C;display:flex;flex-direction:column">'
     + '<div style="display:flex;align-items:center;gap:8px;padding:calc(env(safe-area-inset-top, 22px) + 14px) 14px 12px;color:#fff">'
     +   '<span style="font-size:12px;letter-spacing:2px;font-weight:800">MARCAR ASISTENCIA</span>'
-    +   '<button id="_kioskSelfieBtn" style="margin-left:auto;background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:8px;padding:9px 15px;font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer;font-family:inherit" onclick="_kioskCambiarCamara()">SELFIE</button>'
+    +   '<button id="_kioskLuzBtn" style="margin-left:auto;background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:8px;padding:9px 15px;font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer;font-family:inherit" onclick="_kioskToggleLuz()">LUZ</button>'
+    +   '<button id="_kioskSelfieBtn" style="background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:8px;padding:9px 15px;font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer;font-family:inherit" onclick="_kioskCambiarCamara()">SELFIE</button>'
     +   '<button style="background:rgba(220,38,38,.28);color:#fff;border:1px solid rgba(248,113,113,.7);border-radius:8px;padding:9px 15px;font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer;font-family:inherit" onclick="_cerrarKiosko()">CERRAR</button>'
     + '</div>'
     + '<div style="position:relative;flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#000">'
@@ -17115,15 +17178,16 @@ async function _abrirKioskoCaras(){
   // 1) Cámara en vivo PRIMERO (dentro del gesto, antes de cargar modelos)
   _kioskFacing='environment'; // cada apertura arranca con cámara trasera
   try {
-    _kioskStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:_kioskFacing } }, audio:false });
+    _kioskStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:_kioskFacing }, width:{ ideal:1280 }, height:{ ideal:720 } }, audio:false });
     const v=document.getElementById('_kioskVideo'); if(v){ v.srcObject=_kioskStream; v.style.transform=(_kioskFacing==='user')?'scaleX(-1)':'none'; }
+    _kioskLuzManual=false; _kioskTorchOn=false; _kioskInitTorch(_kioskStream);
   } catch(e){ _kioskSetResult('NO SE PUDO ABRIR LA CÁMARA · ACTIVÁ EL PERMISO Y VOLVÉ A ABRIR','#FBBF24'); }
   // 2) Modelos en 2do plano → matcher → loop continuo (solo si hay cámara en vivo)
   if(!_kioskStream){ /* keep the camera-error message */ } else { _kioskSetResult('Preparando reconocimiento…','#fff'); }
   loadFaceModels().then(()=>{
     _kioskMatcher = new faceapi.FaceMatcher(enroladas.map(pp => new faceapi.LabeledFaceDescriptors(pp.id, pp.descriptors)), 0.6);
     if (_kioskStream && document.getElementById('_kioskScreen') && !_kioskLoop){
-      _kioskLoop = setInterval(_kioskTick, 500);
+      _kioskLoop = 1; _kioskAgendarTick();
       _kioskSetResult('Escaneando…','#fff');
     } else if (!_kioskStream){
       _kioskSetResult('ACTIVÁ EL PERMISO DE CÁMARA Y VOLVÉ A ABRIR','#FBBF24');
@@ -17146,7 +17210,13 @@ async function _kioskTick(){
   const v=document.getElementById('_kioskVideo'); if(!v||!v.videoWidth) return;
   _kioskBusy=true;
   try{
-    const dets=await _detectAllDescriptors(v); // TODAS las caras del cuadro (multi-persona)
+    const _brillo=_kioskBrillo(v);
+    _kioskLowLight = _brillo < 75;
+    if(_kioskTorchTrack && !_kioskLuzManual){
+      if(_kioskLowLight && !_kioskTorchOn) _kioskSetTorch(true);
+      else if(!_kioskLowLight && _brillo>115 && _kioskTorchOn) _kioskSetTorch(false);
+    }
+    const dets=await _detectAllDescriptors(_kioskFrameInput(v), _kioskLowLight); // TODAS las caras del cuadro (multi-persona)
     const vistos=new Set();   // personas auto-detectadas en este frame
     for(const det of dets){
       const all=_kioskMatcher.labeledDescriptors.map(ld=>({id:ld.label, distance:Math.min.apply(null, ld.descriptors.map(d=>faceapi.euclideanDistance(d, det.descriptor)))}));
@@ -17205,8 +17275,9 @@ async function _kioskCambiarCamara(){
   try{ if(_kioskStream){ _kioskStream.getTracks().forEach(t=>{ try{t.stop();}catch(_){} }); } }catch(e){}
   const v=document.getElementById('_kioskVideo');
   try{
-    _kioskStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:_kioskFacing } }, audio:false });
+    _kioskStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:_kioskFacing }, width:{ ideal:1280 }, height:{ ideal:720 } }, audio:false });
     if(v){ v.srcObject=_kioskStream; v.style.transform=(_kioskFacing==='user')?'scaleX(-1)':'none'; }
+    _kioskLuzManual=false; _kioskTorchOn=false; _kioskInitTorch(_kioskStream);
   }catch(e){ _kioskSetResult('NO SE PUDO CAMBIAR DE CÁMARA','#FBBF24'); }
   const b=document.getElementById('_kioskSelfieBtn'); if(b) b.textContent=(_kioskFacing==='user')?'CÁMARA TRASERA':'SELFIE';
 }
@@ -17276,7 +17347,9 @@ function _kioskMostrarCandidatos(ids){
 }
 function _kioskConfirmar(id){ const cc=document.getElementById('_kioskCandidates'); if(cc) cc.style.display='none'; _kioskMarcar(id); }
 function _cerrarKiosko(){
-  try{ if(_kioskLoop){ clearInterval(_kioskLoop); _kioskLoop=null; } }catch(e){}
+  try{ if(_kioskLoop){ clearTimeout(_kioskLoop); } }catch(e){} _kioskLoop=null;
+  try{ if(_kioskTorchTrack && _kioskTorchOn){ _kioskTorchTrack.applyConstraints({advanced:[{torch:false}]}); } }catch(e){}
+  _kioskTorchTrack=null; _kioskTorchOn=false; _kioskLuzManual=false; _kioskLowLight=false;
   try{ if(_kioskStream){ _kioskStream.getTracks().forEach(t=>t.stop()); _kioskStream=null; } }catch(e){}
   try{ if(_kioskGeoWatch!=null && navigator.geolocation){ navigator.geolocation.clearWatch(_kioskGeoWatch); _kioskGeoWatch=null; } }catch(e){}
   _kioskGeo=null;
