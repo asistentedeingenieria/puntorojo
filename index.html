@@ -2901,7 +2901,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v629</span>
+    <span style="opacity:.5;font-size:9px">v630</span>
   </footer>
 
 </div>
@@ -28429,6 +28429,7 @@ function hasBiometricEnabled(){
 async function handleNotifEnableClick(){
   await requestNotificationPermission();
   refreshNotifPermBox();
+  try{ _refreshNotifActivarBanner(); }catch(e){}
 }
 
 function refreshNotifPermBox(){
@@ -28452,6 +28453,39 @@ function refreshNotifPermBox(){
     box.innerHTML = '<strong style="color:var(--mute)">DESACTIVADAS</strong> · Solo aparecerá un punto rojo en la app, sin alertas en la barra del celular.';
     if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.display = ''; btn.textContent = 'ACTIVAR'; }
   }
+}
+
+/* ═════════ BANNER VISIBLE "ACTIVAR NOTIFICACIONES" (v630) ═════════
+   Empuja a la gente a otorgar el permiso y registrar su token FCM (sin token NO
+   llega el push). Reusa requestNotificationPermission(). Aparece tras el login si
+   aún no están activadas; en iPhone sin instalar muestra el "Agregar a inicio". */
+function _removeNotifBanner(){ const b=document.getElementById('_notifActivarBar'); if(b) b.remove(); }
+window._dismissNotifBanner = function(){ try{ sessionStorage.setItem('pr_notif_banner_dismiss','1'); }catch(e){} _removeNotifBanner(); };
+window._activarNotifDesdeBanner = async function(){ try{ await requestNotificationPermission(); }catch(e){} _refreshNotifActivarBanner(); };
+function _refreshNotifActivarBanner(){
+  try{
+    if (typeof currentUser==='undefined' || !currentUser){ _removeNotifBanner(); return; }
+    try{ if (sessionStorage.getItem('pr_notif_banner_dismiss')==='1'){ _removeNotifBanner(); return; } }catch(e){}
+    const sup = (typeof notificationsSupported==='function') && notificationsSupported();
+    const perm = sup ? Notification.permission : 'unsupported';
+    const ua = navigator.userAgent || '';
+    const isiOS = /iPhone|iPad|iPod/i.test(ua);
+    const standalone = (navigator.standalone===true) || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+    let msg='', btnHtml='';
+    if (perm==='granted'){ _removeNotifBanner(); return; }
+    else if (isiOS && !standalone){ msg='Para recibir avisos en el iPhone: tocá <b>Compartir</b> y <b>"Agregar a inicio"</b>, y abrí la app desde ahí.'; }
+    else if (perm==='denied'){ msg='Notificaciones <b>bloqueadas</b>. Activalas desde el candado de la barra de direcciones y recargá.'; }
+    else if (!sup){ _removeNotifBanner(); return; }
+    else { msg='Activá las notificaciones para recibir avisos en el celular.'; btnHtml='<button onclick="_activarNotifDesdeBanner()" style="flex:0 0 auto;background:var(--red);color:#fff;border:none;border-radius:8px;padding:9px 16px;font-size:12px;font-weight:800;letter-spacing:.5px;cursor:pointer;font-family:inherit">ACTIVAR</button>'; }
+    let bar = document.getElementById('_notifActivarBar');
+    if (!bar){
+      bar = document.createElement('div');
+      bar.id = '_notifActivarBar';
+      bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9000;background:#1A1206;border-top:1px solid #92400E;color:#fff;padding:12px 14px calc(env(safe-area-inset-bottom,8px) + 12px);display:flex;align-items:center;gap:10px;font-size:12.5px;box-shadow:0 -4px 16px rgba(0,0,0,.35)';
+      document.body.appendChild(bar);
+    }
+    bar.innerHTML = '<span style="flex:1 1 auto;line-height:1.4;min-width:0">🔔 '+msg+'</span>'+btnHtml+'<button onclick="_dismissNotifBanner()" aria-label="Cerrar" style="flex:0 0 auto;background:transparent;color:#bbb;border:none;font-size:18px;line-height:1;cursor:pointer;padding:4px 6px">✕</button>';
+  }catch(e){ console.warn('notif banner:', e); }
 }
 
 /* ═════════ HANDLERS DEL TOGGLE EN AJUSTES ═════════ */
@@ -32018,6 +32052,9 @@ function applyAuthSession(fbUser, profileData){
   // forzamos el cambio de clave ANTES de que pueda usar la app.
   if (profileData.mustChangePassword === true) {
     setTimeout(() => showForcedPasswordChange(), 100);
+  } else {
+    // v630: empujar a activar notificaciones (push) si aún no están.
+    setTimeout(() => { try{ _refreshNotifActivarBanner(); }catch(e){} }, 1500);
   }
 
   // Registrar último login (solo si pasó al menos 1 minuto desde el último, para no escribir en cada hot-reload)
