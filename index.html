@@ -2903,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v635</span>
+    <span style="opacity:.5;font-size:9px">v636</span>
   </footer>
 
 </div>
@@ -4957,11 +4957,23 @@ function _getUserObraAsignada(){
   if (u.perms && (u.perms.includes('*') || u.perms.includes('users.manage'))) return ''; // admin: ve todo
   return u.obraAsignada || '';
 }
-/* ¿la persona pertenece a la obra del encargado? multiObra siempre se incluye (rota). */
+/* ¿la persona se puede ESCANEAR en la obra del encargado? multiObra SÍ se incluye
+   (rota entre obras, así el encargado puede marcarla en la suya). Para el KIOSKO. */
 function _personaEnObraUsuario(p){
   const o = _getUserObraAsignada();
   if (!o) return true; // sin restricción
   return !!(p && (p.multiObra || p.obraAsignada === o));
+}
+/* v636: ¿la persona aparece en el LISTADO de la obra del encargado? A diferencia del
+   kiosko, la gente "VARIAS OBRAS" NO sale por defecto en cada obra: solo si ese día
+   tiene una MARCA en esta obra. Los asignados fijos a la obra sí salen siempre. */
+function _personaEnListaObra(p){
+  const o = _getUserObraAsignada();
+  if (!o) return true; // sin restricción (admin / sin obra)
+  if (!p) return false;
+  if (p.obraAsignada === o && !p.multiObra) return true; // asignado fijo a esta obra
+  try { const r=(_getAsistencia()[_asistFechaActual()]||{})[p.id]; if (r && String(r.obraId||'')===o) return true; } catch(e){} // marcado en esta obra ese día
+  return false;
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -16905,7 +16917,7 @@ function _persListaFiltrada(){
   const emps=_persEmpresas();
   const f=_persEmpresaFilter&&emps.includes(_persEmpresaFilter)?_persEmpresaFilter:'';
   let res=f?all.filter(p=>p.empresa===f):all;
-  res=res.filter(p=>_personaEnObraUsuario(p)); // v631: encargado solo ve su obra
+  res=res.filter(p=>_personaEnListaObra(p)); // v636: multi-obra solo si marcó en esta obra
   const q=_persNorm(_persBuscar);
   if(q){ res=res.filter(p=>_persNorm(p.nombre).includes(q)||_persNorm(p.empresa).includes(q)||_persNorm(p.cargo).includes(q)||_persNorm(p.dpi).includes(q)); }
   return res.slice().sort((a,b)=>_persNorm(a.nombre).localeCompare(_persNorm(b.nombre),'es',{sensitivity:'base'}));
@@ -16916,7 +16928,7 @@ function setAsistFecha(v){ _asistFecha=v||''; renderPersonal(); }
 let _asistBuscar='';
 function setAsistBuscar(v){ _asistBuscar=v||''; renderPersonal(); }
 function _asistListaFiltrada(){
-  const all=_getPersonal().filter(p=>p.tipo!=='OFICINA' && _personaEnObraUsuario(p));
+  const all=_getPersonal().filter(p=>p.tipo!=='OFICINA' && _personaEnListaObra(p));
   const q=_persNorm(_asistBuscar);
   const res=q?all.filter(p=>_persNorm(p.nombre).includes(q)||_persNorm(p.cargo).includes(q)):all;
   return res.slice().sort((a,b)=>_persNorm(a.nombre).localeCompare(_persNorm(b.nombre),'es',{sensitivity:'base'}));
@@ -17501,8 +17513,11 @@ function _kioskMarcar(personaId){
   if (!_kioskGeo){ _kioskSetResult('⚠ SIN UBICACIÓN · ACTIVÁ EL GPS PARA MARCAR','#FBBF24'); return; }
   if (_kioskLast[personaId] && (Date.now()-_kioskLast[personaId]<900000)){ return; } // 15 min: tras marcar no detecta de nuevo (evita salida accidental al cruzarse)
   const _pAsig=(_getPersonal()||[]).find(x=>x.id===personaId);
-  // Obra fija → marca directo. Varias obras / sin obra fija → pregunta en qué obra está.
+  const _encObra=(typeof _getUserObraAsignada==='function')?_getUserObraAsignada():''; // v636: obra del ENCARGADO que escanea (si lo es)
+  // Obra fija → marca directo. Si la escanea un ENCARGADO → su obra (no pregunta).
+  // Auto-escaneo / admin (sin obra asignada) → pregunta en qué obra está.
   if(_pAsig && !_pAsig.multiObra && _pAsig.obraAsignada){ _kioskMarcarConObra(personaId, _pAsig.obraAsignada); }
+  else if(_encObra){ _kioskMarcarConObra(personaId, _encObra); }
   else { _kioskPedirObra(personaId); }
 }
 // Pregunta "¿EN QUÉ OBRA ESTÁS?" para los de varias obras / sin obra fija (no marca hasta que elijan).
