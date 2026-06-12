@@ -2796,7 +2796,9 @@ table{max-width:100%}
             <input type="date" id="asistFecha" class="inline" onchange="setAsistFecha(this.value)" style="flex:0 0 auto">
             <input id="asistBuscar" class="inline" placeholder="Buscar persona…" oninput="setAsistBuscar(this.value)" style="flex:1 1 160px;min-width:140px">
             <select id="asistObraPdf" class="inline" data-perm="personal.asistenciaPdf" title="Obra para el PDF" style="flex:1 1 150px;min-width:130px"></select>
-            <button class="btn olive sm" data-perm="personal.asistenciaPdf" onclick="descargarAsistenciaPDF()" style="flex:0 0 auto">DESCARGAR PDF</button>
+            <button class="btn olive sm" data-perm="personal.asistenciaPdf" onclick="descargarAsistenciaPDF()" style="flex:0 0 auto">PDF DÍA</button>
+            <button class="btn olive sm" data-perm="personal.asistenciaPdf" onclick="descargarAsistenciaSemanalPDF(false)" style="flex:0 0 auto">PDF SEMANA</button>
+            <button class="btn cafe sm" data-perm="personal.asistenciaPdfTodas" onclick="descargarAsistenciaSemanalPDF(true)" style="flex:0 0 auto">PDF TODAS LAS OBRAS</button>
             <button class="btn primary sm" data-perm="personal.asistencia" onclick="_abrirKioskoCaras()" style="flex:0 0 auto">ESCANEAR CARAS</button>
             <button class="btn ghost sm" data-perm="obra.ubicacion" onclick="_abrirUbicacionObra()" style="flex:0 0 auto" title="Fijar el punto de ubicación de esta obra">UBICACIÓN DE OBRA</button>
           </div>
@@ -2901,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v631</span>
+    <span style="opacity:.5;font-size:9px">v632</span>
   </footer>
 
 </div>
@@ -4433,6 +4435,7 @@ const PERMS_DISPONIBLES = [
   { key: 'obra.ubicacion',     label: 'Configurar la ubicación de la obra', group: 'EDICIÓN PERSONAL' },
   { key: 'personal.asignarObra', label: 'Asignar/cambiar obra de colaboradores', group: 'EDICIÓN PERSONAL' },
   { key: 'personal.asistenciaPdf', label: 'Descargar PDF de asistencia', group: 'EDICIÓN PERSONAL' },
+  { key: 'personal.asistenciaPdfTodas', label: 'Descargar PDF de TODAS las obras', group: 'EDICIÓN PERSONAL' },
   { key: 'polizas.edit',     label: 'Ver y editar pólizas (con solicitud)', group: 'EDICIÓN PERSONAL' },
   { key: 'projects.create',  label: 'Crear proyectos nuevos',  group: 'ADMINISTRACIÓN' },
   { key: 'data.import',      label: 'Importar/resetear datos', group: 'ADMINISTRACIÓN' },
@@ -17113,14 +17116,14 @@ function descargarAsistenciaPDF(){
   const nombreObra=(a)=>{ if(!a) return '—'; if(a.obraId==='OTRA') return 'OTRA: '+(a.obraDesc||''); const pr=projs.find(x=>x.id===a.obraId); return pr?String(pr.name||'').toUpperCase():'—'; };
   const obraSel=(document.getElementById('asistObraPdf')||{}).value||'';
   const obraLabel = obraSel ? (obraSel==='OTRA'?'OTRA':(String((projs.find(x=>x.id===obraSel)||{}).name||'').toUpperCase()||obraSel)) : '';
-  let presentes=_getPersonal().filter(pn=>dia[pn.id]&&dia[pn.id].presente);
+  let presentes=_getPersonal().filter(pn=>dia[pn.id]&&dia[pn.id].presente&&_personaEnObraUsuario(pn));
   if(obraSel) presentes=presentes.filter(pn=>String(dia[pn.id].obraId||'')===obraSel);
   presentes=presentes.sort((x,y)=>_persNorm(x.nombre).localeCompare(_persNorm(y.nombre),'es',{sensitivity:'base'}));
   // AUSENTES (solo sin filtro de obra): ausencia manual con su motivo, o "NO REGISTRADO" si el día ya cerró (después de 19:00 o día pasado).
   let ausentes=[];
   if(!obraSel){
     const _cerrado=(typeof _asistDiaCerrado==='function')?_asistDiaCerrado(fecha):true;
-    ausentes=_getPersonal().filter(pn=>{ const r=dia[pn.id]; if(r&&r.presente) return false; if(r&&r.presente===false&&r.motivo) return true; return _cerrado; })
+    ausentes=_getPersonal().filter(pn=>{ if(!_personaEnObraUsuario(pn)) return false; const r=dia[pn.id]; if(r&&r.presente) return false; if(r&&r.presente===false&&r.motivo) return true; return _cerrado; })
       .map(pn=>{ const r=dia[pn.id]; return {pn, motivo:(r&&r.motivo)?r.motivo:'NO REGISTRADO'}; })
       .sort((x,y)=>_persNorm(x.pn.nombre).localeCompare(_persNorm(y.pn.nombre),'es',{sensitivity:'base'}));
   }
@@ -17129,6 +17132,7 @@ function descargarAsistenciaPDF(){
   const { jsPDF }=window.jspdf;
   const doc=new jsPDF({ unit:'pt', format:'a4', orientation:'landscape' });
   const pageW=doc.internal.pageSize.width, pageH=doc.internal.pageSize.height;
+  _pdfLogo(doc); // v632: logo arriba a la izquierda
   doc.setFontSize(14); doc.setFont(undefined,'bold');
   doc.text('ASISTENCIA · '+fecha+(obraLabel?(' · '+obraLabel):''), pageW/2, 50, {align:'center'});
   doc.setFontSize(9); doc.setFont(undefined,'normal');
@@ -17147,6 +17151,65 @@ function descargarAsistenciaPDF(){
     doc.autoTable({ startY:_y+6, head:[['#','NOMBRE','CARGO','MOTIVO']], body:arows, theme:'striped', styles:{fontSize:9,halign:'left',valign:'middle'}, columnStyles:{0:{halign:'center',cellWidth:28}}, headStyles:{fillColor:[110,110,110],textColor:255,fontStyle:'bold',halign:'center'} });
   }
   doc.save('ASISTENCIA '+fecha+(obraLabel?(' - '+obraLabel):'')+'.pdf');
+}
+
+/* v632: logo arriba a la izquierda en los PDF de asistencia. */
+function _pdfLogo(doc){ try{ if(typeof LOGO_DATA_URI==='string' && LOGO_DATA_URI) doc.addImage(LOGO_DATA_URI,'PNG',40,22,42,42); }catch(e){} }
+/* Lunes..domingo de la semana que contiene fechaStr (YYYY-MM-DD). */
+function _semanaRango(fechaStr){
+  const p=n=>String(n).padStart(2,'0');
+  const d=new Date((fechaStr||todayKey())+'T12:00:00');
+  const dow=(d.getDay()+6)%7; // 0 = lunes
+  const mon=new Date(d); mon.setDate(d.getDate()-dow);
+  const dias=[];
+  for(let i=0;i<7;i++){ const x=new Date(mon); x.setDate(mon.getDate()+i); dias.push(x.getFullYear()+'-'+p(x.getMonth()+1)+'-'+p(x.getDate())); }
+  return dias;
+}
+/* Reporte SEMANAL de asistencia (matriz persona × día), una sección por obra.
+   todas=false → solo la obra del encargado (o la del dropdown si admin no eligió, todas).
+   todas=true  → TODAS las obras (requiere permiso personal.asistenciaPdfTodas). */
+function descargarAsistenciaSemanalPDF(todas){
+  if(typeof can==='function'){
+    if(todas){ if(!(can('personal.asistenciaPdfTodas')||can('users.manage'))) return showToast('SIN PERMISO','red'); }
+    else if(!(can('personal.asistenciaPdf')||can('users.manage'))) return showToast('SIN PERMISO','red');
+  }
+  if(typeof window.jspdf==='undefined'||!window.jspdf.jsPDF){ showToast('JSPDF NO CARGÓ — RECARGAR LA APP','red'); return; }
+  const A=_getAsistencia();
+  const dias=_semanaRango(_asistFechaActual());
+  const projs=(typeof state!=='undefined'&&state&&Array.isArray(state.projects))?state.projects:[];
+  const _uObra=(typeof _getUserObraAsignada==='function')?_getUserObraAsignada():'';
+  let obras;
+  if(todas){ obras=projs.slice(); }
+  else if(_uObra){ obras=projs.filter(pr=>pr.id===_uObra); }
+  else { const sel=(document.getElementById('asistObraPdf')||{}).value||''; obras = sel ? projs.filter(pr=>pr.id===sel) : projs.slice(); }
+  if(!obras.length){ showToast('NO HAY OBRAS','red'); return; }
+  const p2=n=>String(n).padStart(2,'0');
+  const diaCol=f=>{ const d=new Date(f+'T12:00:00'); return ['DO','LU','MA','MI','JU','VI','SA'][d.getDay()]+' '+p2(d.getDate()); };
+  const { jsPDF }=window.jspdf;
+  const doc=new jsPDF({ unit:'pt', format:'a4', orientation:'landscape' });
+  const pageW=doc.internal.pageSize.width;
+  let first=true, algo=false;
+  obras.forEach(obra=>{
+    const personas=_getPersonal().filter(pn=> pn.tipo!=='OFICINA' && (pn.multiObra || pn.obraAsignada===obra.id))
+      .filter(pn=> dias.some(f=>{ const r=A[f]&&A[f][pn.id]; return r && (r.presente || (r.presente===false&&r.motivo)); }));
+    if(!personas.length) return;
+    personas.sort((x,y)=>_persNorm(x.nombre).localeCompare(_persNorm(y.nombre),'es',{sensitivity:'base'}));
+    if(!first) doc.addPage(); first=false; algo=true;
+    _pdfLogo(doc);
+    doc.setFontSize(14); doc.setFont(undefined,'bold');
+    doc.text('ASISTENCIA SEMANAL · '+String(obra.name||'').toUpperCase(), pageW/2, 40, {align:'center'});
+    doc.setFontSize(9); doc.setFont(undefined,'normal');
+    doc.text(dias[0]+'  a  '+dias[6], pageW/2, 56, {align:'center'});
+    const head=[['NOMBRE'].concat(dias.map(diaCol)).concat(['DÍAS'])];
+    const body=personas.map(pn=>{
+      let cnt=0;
+      const cells=dias.map(f=>{ const r=A[f]&&A[f][pn.id]; if(r&&r.presente){ cnt++; return (r.entrada||'✓'); } if(r&&r.presente===false&&r.motivo) return 'A'; return '—'; });
+      return [pn.nombre].concat(cells).concat([String(cnt)]);
+    });
+    doc.autoTable({ startY:72, head:head, body:body, theme:'striped', styles:{fontSize:8,halign:'center',valign:'middle'}, columnStyles:{0:{halign:'left',cellWidth:120}}, headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',halign:'center'} });
+  });
+  if(!algo){ showToast('SIN DATOS DE ASISTENCIA ESA SEMANA','red'); return; }
+  doc.save('ASISTENCIA SEMANAL '+dias[0]+(todas?' - TODAS LAS OBRAS':(obras.length===1?(' - '+String(obras[0].name||'').toUpperCase()):''))+'.pdf');
 }
 
 let _faceModelsReady = false, _faceModelsLoading = null;
