@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v628-camara-luz-rapida';
+const CACHE_VERSION = 'v629-asistencia-offline';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
@@ -28,7 +28,10 @@ const CORE_ASSETS = [
   './assets/bg-5.jpg',
   './assets/bg-6.jpg',
   './assets/bg-7.jpg',
-  './assets/bg-8.jpg'
+  './assets/bg-8.jpg',
+  // v629: precachear la librería de reconocimiento facial para que el kiosko
+  // funcione sin internet (los pesos del modelo se cachean al enrolar/abrir online).
+  'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js'
 ];
 
 // ── INSTALL: pre-cachear los archivos básicos ──

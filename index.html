@@ -2901,7 +2901,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v628</span>
+    <span style="opacity:.5;font-size:9px">v629</span>
   </footer>
 
 </div>
@@ -8093,6 +8093,17 @@ function saveState(){
    - Si el usuario está editando (modal abierto / input enfocado), se pospone
      el re-render para no perder lo que escribió.
    ═══════════════════════════════════════════════════════════════ */
+// v629: registro de marcas de asistencia hechas localmente que aún NO se confirmó que
+// llegaron a la nube (p.ej. escaneadas sin internet). Vive en localStorage (sobrevive
+// recargas y NO es pisado por el estado remoto). Lo usa el blindaje en applyRemote para
+// conservar SOLO esas marcas; uploadCurrent lo limpia al subir con éxito.
+const _ASIST_PENDING_KEY = 'pr_asist_pending_v1';
+function _asistPendingGet(){ try{ return JSON.parse(localStorage.getItem(_ASIST_PENDING_KEY)||'{}')||{}; }catch(e){ return {}; } }
+function _asistPendingSet(o){ try{ localStorage.setItem(_ASIST_PENDING_KEY, JSON.stringify(o||{})); }catch(e){} }
+function _asistPendingAdd(fecha, pid){ if(!fecha||!pid) return; try{ const o=_asistPendingGet(); o[fecha+'|'+pid]=Date.now(); _asistPendingSet(o); }catch(e){} }
+function _asistPendingKeys(){ try{ return Object.keys(_asistPendingGet()); }catch(e){ return []; } }
+function _asistPendingClear(keys){ if(!keys||!keys.length) return; try{ const o=_asistPendingGet(); keys.forEach(k=>{ delete o[k]; }); _asistPendingSet(o); }catch(e){} }
+
 const CloudSync = {
   enabled: false,
   ref: null,                 // Doc reference: /appState/main (legacy / respaldo, ya no se reescribe)
@@ -8223,6 +8234,7 @@ const CloudSync = {
     if (!this.coreRef) return;
     const db = firebase.firestore();
     const data = this.stripLocal(state);              // clon sin base64 ni activeProjectId
+    const _pendUp = (typeof _asistPendingKeys==='function') ? _asistPendingKeys() : []; // v629: marcas que esta subida confirmará
     const projects = Array.isArray(data.projects) ? data.projects : [];
     delete data.projects;
     const stamp = { ts: Date.now(), by: (currentUser && (currentUser.email || currentUser.username)) || 'sistema' };
@@ -8273,6 +8285,7 @@ const CloudSync = {
       });
     }
     this.lastUploadAt = Date.now();
+    if (_pendUp.length && typeof _asistPendingClear==='function') _asistPendingClear(_pendUp); // v629: confirmadas en la nube
   },
 
   /* v491: reensambla el state (forma del doc unico viejo) desde core + proj_*. */
@@ -8386,6 +8399,29 @@ const CloudSync = {
         });
       }
     } catch(e){ console.warn('blindaje de caras en applyRemote:', e); }
+
+    // v629 BLINDAJE DE ASISTENCIA: conservar SOLO las marcas hechas localmente que aún
+    // no se confirmó que llegaron a la nube (registro _asistPending — p.ej. escaneadas
+    // SIN internet en un sótano). Así no se pierden las marcas offline, pero el admin SÍ
+    // puede borrar/corregir las YA sincronizadas (esas no están pendientes → se respeta
+    // el remoto, no se reviven). Solo agrega/mejora la marca pendiente, nunca otra.
+    try {
+      const _pend = (typeof _asistPendingKeys==='function') ? _asistPendingKeys() : [];
+      if (_pend.length) {
+        const _locAsis = (state && state.asistenciaGlobal && typeof state.asistenciaGlobal==='object') ? state.asistenciaGlobal : {};
+        if (!merged.asistenciaGlobal || typeof merged.asistenciaGlobal!=='object') merged.asistenciaGlobal = {};
+        const _asScore = r => r ? ((r.presente?1:0)+(r.entrada?1:0)+(r.salida?1:0)+(r.motivo?1:0)) : -1;
+        _pend.forEach(k => {
+          const _i = k.indexOf('|'); if (_i < 0) return;
+          const _f = k.slice(0,_i), _pid = k.slice(_i+1);
+          const _lr = _locAsis[_f] && _locAsis[_f][_pid];
+          if (!_lr) return; // ya no existe local (p.ej. se quitó) → no resucitar
+          if (!merged.asistenciaGlobal[_f] || typeof merged.asistenciaGlobal[_f]!=='object') merged.asistenciaGlobal[_f] = {};
+          const _rr = merged.asistenciaGlobal[_f][_pid];
+          if (!_rr || _asScore(_lr) > _asScore(_rr)) { merged.asistenciaGlobal[_f][_pid] = _lr; needsResync = true; }
+        });
+      }
+    } catch(e){ console.warn('blindaje de asistencia en applyRemote:', e); }
 
     state = merged;
     // v495: recalcular _projHashes desde el remoteData REALMENTE aplicado en esta llamada.
@@ -9556,6 +9592,12 @@ function setupNetworkListener(){
   }
   window.addEventListener('online', update);
   window.addEventListener('offline', update);
+  // v629: al volver a primer plano con internet, empujar marcas pendientes (sótano → señal).
+  document.addEventListener('visibilitychange', function(){
+    if (document.visibilityState==='visible' && navigator.onLine){
+      try { if (typeof CloudSync !== 'undefined' && CloudSync.enabled) CloudSync.scheduleSave(); } catch(e){}
+    }
+  });
   update();
 }
 
@@ -16895,9 +16937,9 @@ async function uploadPersonaDPI(event, personaId, lado){
   finally{ event.target.value=''; }
 }
 function eliminarPersonaGlobal(id){ if(!(can('personal.edit')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; } const c=_personaById(id); if(!c) return; prConfirm({title:'ELIMINAR',body:`¿Eliminar a ${c.nombre}?`,okText:'ELIMINAR',danger:true}).then(ok=>{ if(!ok) return; if(typeof state!=='undefined'&&state) state.personalGlobal=_getPersonal().filter(p=>p.id!==id); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} try{ _notifyPersonalChange('ELIMINADO', c); }catch(e){} renderPersonal(); showToast('PERSONA ELIMINADA'); }); }
-function toggleAsistenciaGlobal(id){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; const cur=A[f][id]||{}; if(cur.presente===true){ delete A[f][id]; } else { const _d=new Date(); const _h=String(_d.getHours()).padStart(2,'0')+':'+String(_d.getMinutes()).padStart(2,'0'); A[f][id]={presente:true,obraId:cur.obraId||'',obraDesc:cur.obraDesc||'',hora:_h}; } saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
-function setAsistenciaObra(id,obraId){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; if(!A[f][id])A[f][id]={presente:true}; A[f][id].obraId=obraId; if(obraId!=='OTRA')A[f][id].obraDesc=''; saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
-function setAsistenciaObraDesc(id,desc){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return; const f=_asistFechaActual(); const A=_getAsistencia(); if(A[f]&&A[f][id]){ A[f][id].obraDesc=desc; saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} } }
+function toggleAsistenciaGlobal(id){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; const cur=A[f][id]||{}; if(cur.presente===true){ delete A[f][id]; } else { const _d=new Date(); const _h=String(_d.getHours()).padStart(2,'0')+':'+String(_d.getMinutes()).padStart(2,'0'); A[f][id]={presente:true,obraId:cur.obraId||'',obraDesc:cur.obraDesc||'',hora:_h}; } try{ _asistPendingAdd(f, id); }catch(e){} saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
+function setAsistenciaObra(id,obraId){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; if(!A[f][id])A[f][id]={presente:true}; A[f][id].obraId=obraId; if(obraId!=='OTRA')A[f][id].obraDesc=''; try{ _asistPendingAdd(f, id); }catch(e){} saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
+function setAsistenciaObraDesc(id,desc){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return; const f=_asistFechaActual(); const A=_getAsistencia(); if(A[f]&&A[f][id]){ A[f][id].obraDesc=desc; try{ _asistPendingAdd(f, id); }catch(e){} saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} } }
 let _colabAbiertos = new Set(); // ids de colaboradores con su ficha desplegada (se preserva entre renders)
 function _toggleColab(id){
   const d=document.getElementById('colabDet-'+id); const h=document.getElementById('colabHead-'+id);
@@ -16918,7 +16960,7 @@ function _asignarObraColaborador(personaId, obraId){
   showToast('OBRA ASIGNADA: '+(_nom?_nom.toUpperCase():'(SIN OBRA)'),'green');
   if(typeof renderPersonal==='function') renderPersonal();
 }
-function markAllPresentGlobal(){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; _asistListaFiltrada().forEach(c=>{ if(!A[f][c.id])A[f][c.id]={presente:true,obraId:'',obraDesc:''}; else A[f][c.id].presente=true; }); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
+function markAllPresentGlobal(){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; _asistListaFiltrada().forEach(c=>{ if(!A[f][c.id])A[f][c.id]={presente:true,obraId:'',obraDesc:''}; else A[f][c.id].presente=true; try{ _asistPendingAdd(f, c.id); }catch(e){} }); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
 
 // ── Ausencia manual con motivo ─────────────────────────────────────────────
 let _amPersonaId='', _amTipo='';
@@ -16951,6 +16993,7 @@ function _guardarAusenciaMotivo(){
   const A=_getAsistencia(); const f=_asistFechaActual(); if(!A[f])A[f]={};
   const cur=A[f][_amPersonaId]||{};
   A[f][_amPersonaId]={presente:false, motivo, motivoTipo:_amTipo, motivoDetalle:detalle, via:'manual', ausenteTs:Date.now(), obraId:cur.obraId||'', obraDesc:cur.obraDesc||''};
+  try{ _asistPendingAdd(f, _amPersonaId); }catch(e){}
   saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
   closeModal('AusenciaMotivo'); renderPersonal(); showToast('AUSENCIA REGISTRADA','green');
 }
@@ -16980,6 +17023,7 @@ function _marcarAsistenciaFacial(personaId, obraId, obraDesc, geo){
   reg.obraId = obraId; reg.obraDesc = obraDesc || ''; reg.via = 'cara';
   if (out.accion === 'entrada') reg.geoEntrada = geo || null; else reg.geoSalida = geo || null;
   asis[fecha][personaId] = reg;
+  try{ _asistPendingAdd(fecha, personaId); }catch(e){}
   saveState();
   try { if (typeof CloudSync!=='undefined' && CloudSync.uploadCurrent) CloudSync.uploadCurrent(); } catch(e){}
   return { accion: out.accion, hora: hhmm };
@@ -17334,7 +17378,8 @@ function _kioskMarcarConObra(personaId, obraId, obraDesc){
   const p=(_getPersonal()||[]).find(x=>x.id===personaId);
   let _matchTxt='';
   try{ const _ge=_geoTxtMarca({geoEntrada:_kioskGeo, obraId:obraId}, 'geoEntrada'); if(_ge&&_ge.txt) _matchTxt=' · '+_ge.txt; }catch(e){}
-  _kioskSetResult((r.accion==='entrada'?'✓ ENTRADA · ':'✓ SALIDA · ')+((p&&p.nombre)||'')+' · '+r.hora+_matchTxt, r.accion==='entrada'?'#34D399':'#FBBF24');
+  const _offTxt = (!navigator.onLine) ? ' · SIN INTERNET (SE SUBE SOLO AL VOLVER)' : '';
+  _kioskSetResult((r.accion==='entrada'?'✓ ENTRADA · ':'✓ SALIDA · ')+((p&&p.nombre)||'')+' · '+r.hora+_matchTxt+_offTxt, r.accion==='entrada'?'#34D399':'#FBBF24');
   if (_kioskLoop){ setTimeout(function(){ if(_kioskLoop && document.getElementById('_kioskScreen')) _kioskSetResult('Escaneando…','#fff'); }, 2600); }
 }
 function _kioskMostrarCandidatos(ids){
