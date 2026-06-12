@@ -2901,7 +2901,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v625</span>
+    <span style="opacity:.5;font-size:9px">v626</span>
   </footer>
 
 </div>
@@ -3635,7 +3635,7 @@ table{max-width:100%}
       </div>
       <h3 style="color:var(--amber);margin:0">CAMBIO DE CLAVE OBLIGATORIO</h3>
     </div>
-    <p class="desc" style="text-align:center;line-height:1.6">
+    <p class="desc" id="fpDesc" style="text-align:center;line-height:1.6">
       <strong>¡Bienvenido!</strong> Por seguridad, antes de usar la app es necesario
       reemplazar la clave temporal entregada por el administrador por una clave
       personal y fuerte que solo el usuario conozca.
@@ -3646,7 +3646,7 @@ table{max-width:100%}
       <input id="fpCurrent" type="password" autocomplete="current-password">
     </div>
     <div class="field">
-      <label>NUEVA CLAVE FUERTE</label>
+      <label id="fpNewLabel">NUEVA CLAVE FUERTE</label>
       <input id="fpNew" type="password" autocomplete="new-password">
     </div>
     <div class="field">
@@ -5435,6 +5435,16 @@ function toggleAuthMode(mode){
    ═══════════════════════════════════════════════════════════════ */
 function validatePasswordStrength(password, email){
   const pwd = String(password || '');
+  // Usuarios de USUARIO+CLAVE (email sintético): la clave es SOLO numérica.
+  if (_isUserAccountEmail(email)) {
+    const nchecks = [
+      { key: 'numonly', label: 'Solo números (0–9)',            ok: pwd.length > 0 && /^[0-9]+$/.test(pwd) },
+      { key: 'numlen',  label: 'Mínimo 6 dígitos',              ok: pwd.length >= 6 },
+      { key: 'notrep',  label: 'No repetir el mismo dígito',    ok: pwd.length >= 6 && !/^([0-9])\1+$/.test(pwd) }
+    ];
+    const nscore = nchecks.filter(c => c.ok).length;
+    return { ok: nscore === nchecks.length, score: nscore, checks: nchecks, emailIssue: false, numeric: true };
+  }
   const checks = [
     { key: 'length',  label: 'Mínimo 8 caracteres',                ok: pwd.length >= 8 },
     { key: 'upper',   label: 'Al menos 1 letra mayúscula (A–Z)',   ok: /[A-Z]/.test(pwd) },
@@ -5502,18 +5512,20 @@ function attachPasswordStrength(inputId, getEmailFn){
     const fill = wrap.querySelector('.pwd-bar-fill');
     const label = wrap.querySelector('.pwd-label');
     const labels = ['Muy débil','Débil','Regular','Buena','Fuerte','Muy fuerte'];
-    const cls = 's' + Math.min(result.score, 5);
+    const total = result.checks.length || 1;
+    const lvl = Math.min(Math.round((result.score / total) * 5), 5);
+    const cls = 's' + lvl;
     fill.className = 'pwd-bar-fill ' + cls;
     label.className = 'pwd-label ' + cls;
-    label.textContent = labels[Math.min(result.score, 5)];
-    result.checks.forEach(c => {
-      const el = wrap.querySelector('.pwd-check[data-k="' + c.key + '"]');
-      if (el) el.classList.toggle('ok', !!c.ok);
-    });
-    const emailEl = wrap.querySelector('.pwd-check[data-k="email"]');
-    if (emailEl) {
-      emailEl.style.display = result.emailIssue ? '' : 'none';
-      emailEl.classList.toggle('ok', !result.emailIssue);
+    label.textContent = labels[lvl];
+    // Lista de requisitos generada dinámicamente (sirve para clave fuerte y para clave numérica).
+    const checksWrap = wrap.querySelector('.pwd-checks');
+    if (checksWrap) {
+      let h = result.checks.map(c =>
+        '<div class="pwd-check' + (c.ok ? ' ok' : '') + '">' + c.label + '</div>'
+      ).join('');
+      if (result.emailIssue) h += '<div class="pwd-check">No debe contener el email</div>';
+      checksWrap.innerHTML = h;
     }
   }
   input.addEventListener('input', _update);
@@ -5560,6 +5572,21 @@ function showForcedPasswordChange(){
   document.getElementById('fpNew').value = '';
   document.getElementById('fpNew2').value = '';
   document.getElementById('fpError').textContent = '';
+  // Adaptar el modal según el tipo de cuenta: usuario+clave => clave SOLO numérica.
+  const _fpEmail = firebase.auth().currentUser?.email || '';
+  const _fpNum = _isUserAccountEmail(_fpEmail);
+  ['fpCurrent','fpNew','fpNew2'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (_fpNum) { el.setAttribute('inputmode','numeric'); el.setAttribute('pattern','[0-9]*'); }
+    else { el.removeAttribute('inputmode'); el.removeAttribute('pattern'); }
+  });
+  const _fpDesc = document.getElementById('fpDesc');
+  if (_fpDesc) _fpDesc.innerHTML = _fpNum
+    ? '<strong>¡Bienvenido!</strong> Por seguridad, antes de usar la app reemplaza la clave temporal que te dio el administrador por una clave personal <strong>de solo números (mínimo 6 dígitos)</strong> que solo tú conozcas.'
+    : '<strong>¡Bienvenido!</strong> Por seguridad, antes de usar la app es necesario reemplazar la clave temporal entregada por el administrador por una clave personal y fuerte que solo el usuario conozca.';
+  const _fpNewLabel = document.getElementById('fpNewLabel');
+  if (_fpNewLabel) _fpNewLabel.textContent = _fpNum ? 'NUEVA CLAVE (SOLO NÚMEROS)' : 'NUEVA CLAVE FUERTE';
   document.getElementById('modalForcePassword').classList.add('show');
   setTimeout(() => attachPasswordStrength('fpNew', () => (firebase.auth().currentUser?.email || '')), 50);
   // Bloquear el resto de la UI
@@ -5749,6 +5776,11 @@ function _userToEmail(input){
   var u = s.toLowerCase().replace(/[^a-z0-9]/g,'');   // solo alfanumérico (quita +, espacios, etc.)
   if(!u) return '';
   return u + '@' + PR_USER_DOMAIN;
+}
+// true si el email es de una cuenta de USUARIO+CLAVE (email sintético interno),
+// que usa clave SOLO numérica (no correo real de admin).
+function _isUserAccountEmail(email){
+  return new RegExp('@'+PR_USER_DOMAIN.replace(/\./g,'\\.')+'$','i').test(String(email||''));
 }
 
 async function doLogin(){
@@ -6241,8 +6273,8 @@ async function saveUser(){
         if (!pass || pass.length < 8) { err.textContent = 'CLAVE MUY CORTA · MÍNIMO 8 CARACTERES'; return; }
       }
     } else {
-      // Usuario (PIN numérico): mínimo 6 dígitos (mínimo de Firebase).
-      if (!pass || pass.length < 6) { err.textContent = 'LA CLAVE DEBE TENER AL MENOS 6 DÍGITOS'; return; }
+      // Usuario (PIN numérico): SOLO números, mínimo 6 dígitos (mínimo de Firebase).
+      if (!pass || !/^[0-9]{6,}$/.test(pass)) { err.textContent = 'LA CLAVE DEBE SER SOLO NÚMEROS · MÍNIMO 6 DÍGITOS'; return; }
     }
     if (pass !== pass2) { err.textContent = 'LAS CLAVES NO COINCIDEN'; return; }
   }
@@ -6303,14 +6335,15 @@ async function saveUser(){
           isFounder: false,
           createdAt: Date.now(),
           createdBy: currentUser ? (currentUser.email || currentUser.phoneNumber || currentUser.uid) : null,
-          // Forzar cambio de clave en el primer login solo para admins con email real.
-          mustChangePassword: _isEmailInput ? true : false
+          // Forzar cambio de clave en el primer login para TODOS (admins con email
+          // real y usuarios de usuario+clave; estos últimos eligen una clave numérica).
+          mustChangePassword: true
         };
         await saveUserDoc(uid, profile);
         await secondaryApp.auth().signOut();
         showToast(_isEmailInput
           ? 'USUARIO CREADO · CAMBIARÁ SU CLAVE EN EL PRIMER LOGIN'
-          : 'USUARIO CREADO · ENTRA CON SU USUARIO + CLAVE', 'green');
+          : 'USUARIO CREADO · ENTRA CON USUARIO + CLAVE TEMPORAL Y LA CAMBIARÁ AL ENTRAR', 'green');
         // Notif de bienvenida (best effort, no bloquea)
         try {
           if (typeof _notifyByEmail === 'function') {
@@ -16821,7 +16854,7 @@ function renderPersonal(){
         else if(_esManualAus){ _statusColor='var(--red)'; _statusHtml='<b>✕ AUSENTE</b><br><span style="font-size:10px">'+String(a.motivo).replace(/[&<>]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]))+'</span>'; }
         else if(_cerrado){ _statusColor='var(--red)'; _statusHtml='<b>✕ AUSENTE</b><br><span style="font-size:9px;color:var(--mute)">AUTO 19:00</span>'; }
         else { _statusColor='var(--mute)'; _statusHtml='PENDIENTE'; } // ya no dice AUSENTE durante el día; solo cerrado (19:00) o manual marcan AUSENTE
-        const _btnMotivo = canAsist?('<button type="button" class="btn-icon" title="Marcar ausencia con motivo" style="font-size:9px;font-weight:700;width:auto;padding:0 7px" onclick="_abrirAusenciaMotivo(\''+c.id+'\')">AUSENTE ▾</button>'):'';
+        const _btnMotivo = (canAsist && !on)?('<button type="button" class="btn-icon" title="Marcar ausencia con motivo" style="font-size:9px;font-weight:700;width:auto;padding:0 7px" onclick="_abrirAusenciaMotivo(\''+c.id+'\')">AUSENTE ▾</button>'):'';
         const _obraNom = obraId ? (obraId==='OTRA' ? ('OTRA'+(a.obraDesc?(': '+String(a.obraDesc).toUpperCase()):'')) : (String((projs.find(x=>x.id===obraId)||{}).name||'').toUpperCase()||'—')) : '';
         const obraNombre = _obraNom ? ('<span style="font-weight:600;color:var(--ink)">'+_obraNom+'</span>') : '<span style="color:var(--mute)">— OBRA —</span>';
         return `<div class="asist-row" style="display:flex;flex-wrap:wrap;align-items:center;gap:10px">
@@ -17050,10 +17083,10 @@ async function _abrirKioskoCaras(){
   const projs = (typeof state!=='undefined' && state && Array.isArray(state.projects)) ? state.projects : [];
   const _actId=(typeof activeProj==='function'&&activeProj())?activeProj().id:''; const obras = projs.map(pr=>'<option value="'+pr.id+'"'+(pr.id===_actId?' selected':'')+'>'+(pr.name||pr.id)+'</option>').join('');
   const html = '<div id="_kioskScreen" style="position:fixed;inset:0;z-index:100070;background:#0B0B0C;display:flex;flex-direction:column">'
-    + '<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;color:#fff">'
-    +   '<span style="font-size:11px;letter-spacing:2px;font-weight:700">MARCAR ASISTENCIA</span>'
-    +   '<button id="_kioskSelfieBtn" class="btn ghost sm" style="margin-left:auto;color:#fff;border-color:#555" onclick="_kioskCambiarCamara()">SELFIE</button>'
-    +   '<button class="btn ghost sm" style="color:#fff;border-color:#555" onclick="_cerrarKiosko()">CERRAR</button>'
+    + '<div style="display:flex;align-items:center;gap:8px;padding:calc(env(safe-area-inset-top, 22px) + 14px) 14px 12px;color:#fff">'
+    +   '<span style="font-size:12px;letter-spacing:2px;font-weight:800">MARCAR ASISTENCIA</span>'
+    +   '<button id="_kioskSelfieBtn" style="margin-left:auto;background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:8px;padding:9px 15px;font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer;font-family:inherit" onclick="_kioskCambiarCamara()">SELFIE</button>'
+    +   '<button style="background:rgba(220,38,38,.28);color:#fff;border:1px solid rgba(248,113,113,.7);border-radius:8px;padding:9px 15px;font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer;font-family:inherit" onclick="_cerrarKiosko()">CERRAR</button>'
     + '</div>'
     + '<div style="position:relative;flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#000">'
     +   '<video id="_kioskVideo" autoplay playsinline muted style="max-width:100%;max-height:100%"></video>'
@@ -17287,8 +17320,8 @@ function _personaModalGlobal(c){
       <div class="modal-bd" style="display:flex;flex-direction:column;gap:10px">
         <label class="fld"><span>NOMBRE COMPLETO</span><input id="_pgNombre" value="${esc(e.nombre)}"></label>
         <label class="fld"><span>CARGO</span><input id="_pgCargo" value="${esc(e.cargo)}"></label>
-        <label class="fld"><span>TIPO</span><select id="_pgTipo" style="padding:8px 10px;border:1px solid var(--line);border-radius:4px;font:inherit;font-size:13px"><option value="OBRA"${(e.tipo||'OBRA')==='OBRA'?' selected':''}>OBRA (va a asistencia)</option><option value="OFICINA"${e.tipo==='OFICINA'?' selected':''}>OFICINA (no va a asistencia)</option></select></label>
-        <label class="fld"><span>EMPRESA</span><select id="_pgEmpresa" onchange="_pgEmpresaChange()" style="padding:8px 10px;border:1px solid var(--line);border-radius:4px;font:inherit;font-size:13px">${(function(){ const cur=String(e.empresa||'').trim().toUpperCase(); const ops=_persEmpresas(); let html='<option value="">— Empresa —</option>'; let has=false; ops.forEach(em=>{ const s=(em===cur); if(s)has=true; html+='<option value="'+esc(em)+'"'+(s?' selected':'')+'>'+esc(em)+'</option>'; }); if(cur&&!has) html+='<option value="'+esc(cur)+'" selected>'+esc(cur)+'</option>'; html+='<option value="__NUEVA__">+ Nueva empresa…</option>'; return html; })()}</select></label>
+        <label class="fld"><span>TIPO</span><select id="_pgTipo" style="padding:8px 10px;border:1px solid var(--line);border-radius:4px;font:inherit;font-size:13px"><option value="OBRA"${(e.tipo||'OBRA')==='OBRA'?' selected':''}>OBRA</option><option value="OFICINA"${e.tipo==='OFICINA'?' selected':''}>OFICINA</option></select></label>
+        <label class="fld"><span>EMPRESA</span><select id="_pgEmpresa" onchange="_pgEmpresaChange()" style="padding:8px 10px;border:1px solid var(--line);border-radius:4px;font:inherit;font-size:13px">${(function(){ const cur=String(e.empresa||'').trim().toUpperCase(); const ops=_persEmpresas(); let html='<option value="">— Empresa —</option>'; let has=false; ops.forEach(em=>{ const s=(em===cur); if(s)has=true; html+='<option value="'+esc(em)+'"'+(s?' selected':'')+'>'+esc(em)+'</option>'; }); if(cur&&!has) html+='<option value="'+esc(cur)+'" selected>'+esc(cur)+'</option>'; return html; })()}</select></label>
         <label class="fld"><span>DPI</span><input id="_pgDpi" value="${esc(e.dpi)}"></label>
         <label class="fld"><span>TELÉFONO</span><input id="_pgTel" value="${esc(e.telefono)}"></label>
         <div style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px;font-size:10px;color:var(--mute);letter-spacing:.5px">FACTURADO POR (opcional)</div>
