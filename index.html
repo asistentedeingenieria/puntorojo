@@ -2897,7 +2897,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v621</span>
+    <span style="opacity:.5;font-size:9px">v622</span>
   </footer>
 
 </div>
@@ -17474,39 +17474,45 @@ window._restaurarCarasDesdeBackup = _restaurarCarasDesdeBackup;
 // === fin enrolamiento ===
 let _pgDpiBlobs = { frente:null, reverso:null };
 function _pgCloseModal(){ const m=document.getElementById('_pgModal'); if(m) m.remove(); if(typeof window._prUnlockScroll==='function') window._prUnlockScroll(); }
+let _pgSaving=false;
 async function _savePersonaModal(id){
+  if(_pgSaving) return; // evita DUPLICADO por doble-click / doble-disparo del botón GUARDAR
   const v=k=>{ const el=document.getElementById(k); return el?el.value.trim():''; };
   const nombre=v('_pgNombre'); if(!nombre){ showToast('FALTA EL NOMBRE','red'); return; }
   const data={ nombre:nombre.toUpperCase(), cargo:v('_pgCargo'), empresa:(v('_pgEmpresa').toUpperCase()==='__NUEVA__'?'':v('_pgEmpresa').toUpperCase()), dpi:v('_pgDpi'), telefono:v('_pgTel'), tipo:((document.getElementById('_pgTipo')||{}).value||'OBRA') };
   const fn=v('_pgFNombre'); if(fn){ data.facturadoPor={nombre:fn.toUpperCase(),dpi:v('_pgFDpi'),telefono:v('_pgFTel')}; } else { data.facturadoPor=undefined; }
   if(id){
     if(!(can('personal.edit')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
-    _guardarPersonaGlobal(data, id);
-    _pgCloseModal();
+    _pgSaving=true;
+    try{ _guardarPersonaGlobal(data, id); _pgCloseModal(); } finally { _pgSaving=false; }
     return;
   }
   // ADD: requiere permiso + DPI frente y reverso
   if(!(can('personal.add')||can('users.manage'))){ showToast('SIN PERMISO PARA AGREGAR','red'); return; }
   if(!_pgDpiBlobs.frente || !_pgDpiBlobs.reverso){ showToast('FALTA LA FOTO DEL DPI (FRENTE Y REVERSO)','red'); return; }
-  const _pers = _guardarPersonaGlobal(data, null);
-  if(!_pers){ _pgCloseModal(); return; }
-  const _withTimeout=(pr,ms)=>Promise.race([pr, new Promise((_,rej)=>setTimeout(()=>rej(new Error('TIMEOUT')),ms))]);
-  window._prUploadShow && window._prUploadShow();
-  let _dpiOk=true;
+  _pgSaving=true;
+  const _gbtn=document.querySelector('#_pgModal .btn.primary'); if(_gbtn){ _gbtn.disabled=true; _gbtn.textContent='GUARDANDO…'; }
   try{
-    await _withTimeout(Promise.all([
-      _subirDpiBlob(_pers,'frente',_pgDpiBlobs.frente),
-      _subirDpiBlob(_pers,'reverso',_pgDpiBlobs.reverso)
-    ]), 30000);
-  }catch(e){ _dpiOk=false; console.warn('[DPI alta]', e); }
-  try{ window._prUploadHide && window._prUploadHide(); }catch(e){}
-  saveState();
-  // sync en segundo plano — NO esperar (puede colgar el modal si Firestore tarda)
-  try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
-  _pgDpiBlobs={frente:null,reverso:null};
-  _pgCloseModal();
-  renderPersonal();
-  showToast(_dpiOk ? 'PERSONA Y DPI GUARDADOS' : 'PERSONA GUARDADA · EL DPI NO SUBIÓ, SUBILO EDITANDO', _dpiOk?'green':'red');
+    const _pers = _guardarPersonaGlobal(data, null);
+    if(!_pers){ _pgCloseModal(); return; }
+    const _withTimeout=(pr,ms)=>Promise.race([pr, new Promise((_,rej)=>setTimeout(()=>rej(new Error('TIMEOUT')),ms))]);
+    window._prUploadShow && window._prUploadShow();
+    let _dpiOk=true;
+    try{
+      await _withTimeout(Promise.all([
+        _subirDpiBlob(_pers,'frente',_pgDpiBlobs.frente),
+        _subirDpiBlob(_pers,'reverso',_pgDpiBlobs.reverso)
+      ]), 30000);
+    }catch(e){ _dpiOk=false; console.warn('[DPI alta]', e); }
+    try{ window._prUploadHide && window._prUploadHide(); }catch(e){}
+    saveState();
+    // sync en segundo plano — NO esperar (puede colgar el modal si Firestore tarda)
+    try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+    _pgDpiBlobs={frente:null,reverso:null};
+    _pgCloseModal();
+    renderPersonal();
+    showToast(_dpiOk ? 'PERSONA Y DPI GUARDADOS' : 'PERSONA GUARDADA · EL DPI NO SUBIÓ, SUBILO EDITANDO', _dpiOk?'green':'red');
+  } finally { _pgSaving=false; }
 }
 
 async function _parsePersonalFromFile(file){ if(typeof XLSX==='undefined'||!XLSX.read) return null; try{ const buf=await file.arrayBuffer(); const wb=XLSX.read(buf,{type:'array',cellDates:false,raw:true}); const sheets={}; (wb.SheetNames||[]).forEach(sn=>{ sheets[sn]=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,defval:'',raw:true,blankrows:true}); }); return parsePersonalExcel(sheets); }catch(e){ console.warn('[PERSONAL]',e); return null; } }
