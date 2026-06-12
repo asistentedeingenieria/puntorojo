@@ -2888,7 +2888,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v616</span>
+    <span style="opacity:.5;font-size:9px">v617</span>
   </footer>
 
 </div>
@@ -16964,6 +16964,8 @@ async function loadFaceModels(){
     await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
     await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
     await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+    // SSD MobileNet: detector preciso (mejor de lejos y rechaza caras mal capturadas). Fallback a Tiny si no carga.
+    try { await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL); } catch(e){ console.warn('SSD no cargó, se usa TinyFaceDetector:', e&&e.message); }
     _faceModelsReady = true;
     return true;
   })();
@@ -16975,9 +16977,21 @@ async function _detectOneDescriptor(input, inputSize){
   const det = await faceapi.detectSingleFace(input, opt).withFaceLandmarks().withFaceDescriptor();
   return det || null;
 }
+// Detecta TODAS las caras del cuadro (multi-persona). Usa SSD MobileNet (preciso, de lejos);
+// cae a TinyFaceDetector si SSD no está cargado.
+async function _detectAllDescriptors(input){
+  let opt;
+  if (faceapi.nets.ssdMobilenetv1 && faceapi.nets.ssdMobilenetv1.params){
+    opt = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5, maxResults: 10 });
+  } else {
+    opt = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 });
+  }
+  const dets = await faceapi.detectAllFaces(input, opt).withFaceLandmarks().withFaceDescriptors();
+  return dets || [];
+}
 
 // ── KIOSKO FACIAL ────────────────────────────────────────────────────────────
-let _kioskMatcher=null, _kioskStream=null, _kioskLoop=null, _kioskBusy=false, _kioskGeo=null, _kioskGeoWatch=null, _kioskStreak={id:null,n:0}, _kioskSkipUntil=0;
+let _kioskMatcher=null, _kioskStream=null, _kioskLoop=null, _kioskBusy=false, _kioskGeo=null, _kioskGeoWatch=null, _kioskStreaks={};
 const _kioskLast = {}; // personaId -> timestamp ultima marca (debounce 5s)
 async function _abrirKioskoCaras(){
   if (document.getElementById('_kioskScreen')) return;
@@ -17043,21 +17057,27 @@ function _kioskPedirUbicacion(){
 }
 async function _kioskTick(){
   if (_kioskBusy || !_kioskMatcher) return;
-  if (Date.now() < _kioskSkipUntil) return; // enfriamiento tras marcar
   const v=document.getElementById('_kioskVideo'); if(!v||!v.videoWidth) return;
   _kioskBusy=true;
   try{
-    const det=await _detectOneDescriptor(v, 320); // 320: más rápido (la cara está cerca)
-    if(det){
+    const dets=await _detectAllDescriptors(v); // TODAS las caras del cuadro (multi-persona)
+    const vistos=new Set();   // personas auto-detectadas en este frame
+    let confirmCands=null;
+    for(const det of dets){
       const all=_kioskMatcher.labeledDescriptors.map(ld=>({id:ld.label, distance:Math.min.apply(null, ld.descriptors.map(d=>faceapi.euclideanDistance(d, det.descriptor)))}));
       const pick=pickFaceCandidates(all,0.44,0.54,0.10); // umbrales estrictos + margen 0.10
       if(pick.status==='auto'){
-        // Anti falso positivo: exigir 2 lecturas SEGUIDAS de la misma persona antes de marcar.
-        if(_kioskStreak.id===pick.matchId) _kioskStreak.n++; else { _kioskStreak.id=pick.matchId; _kioskStreak.n=1; }
-        if(_kioskStreak.n>=2){ _kioskStreak={id:null,n:0}; _kioskMarcar(pick.matchId); }
-      } else if(pick.status==='confirm'){ _kioskStreak={id:null,n:0}; _kioskMostrarCandidatos(pick.candidates); }
-      else { _kioskStreak={id:null,n:0}; }
-    } else { _kioskStreak={id:null,n:0}; }
+        vistos.add(pick.matchId);
+        // Anti falso positivo: exigir 2 lecturas SEGUIDAS de la MISMA persona (cada una con su racha).
+        _kioskStreaks[pick.matchId]=(_kioskStreaks[pick.matchId]||0)+1;
+        if(_kioskStreaks[pick.matchId]>=2){ _kioskStreaks[pick.matchId]=0; _kioskMarcar(pick.matchId); }
+      } else if(pick.status==='confirm' && dets.length===1 && !confirmCands){
+        confirmCands=pick.candidates; // confirmar sólo si hay UNA sola cara ambigua
+      }
+    }
+    // Resetear la racha de quien NO apareció (deben ser cuadros SEGUIDOS).
+    for(const id in _kioskStreaks){ if(!vistos.has(id)) _kioskStreaks[id]=0; }
+    if(confirmCands && vistos.size===0) _kioskMostrarCandidatos(confirmCands);
   }catch(e){} finally{ _kioskBusy=false; }
 }
 function _tomarFotoMarcar(){
@@ -17097,7 +17117,7 @@ function _kioskMarcar(personaId){
   const p=(_getPersonal()||[]).find(x=>x.id===personaId);
   _kioskSetResult((r.accion==='entrada'?'✓ ENTRADA · ':'✓ SALIDA · ')+((p&&p.nombre)||'')+' · '+r.hora, r.accion==='entrada'?'#34D399':'#FBBF24');
   const cc=document.getElementById('_kioskCandidates'); if(cc) cc.style.display='none';
-  _kioskSkipUntil = Date.now()+2500; _kioskStreak={id:null,n:0}; // enfriamiento: no re-escanear mientras se muestra el resultado
+  if(_kioskStreaks) _kioskStreaks[personaId]=0; // ya marcada: reiniciar su racha (el debounce de 5s evita re-marcar)
   if (_kioskLoop){ setTimeout(function(){ if(_kioskLoop && document.getElementById('_kioskScreen')) _kioskSetResult('Escaneando…','#fff'); }, 2600); }
 }
 function _kioskMostrarCandidatos(ids){
