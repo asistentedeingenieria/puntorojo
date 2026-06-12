@@ -2903,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v632</span>
+    <span style="opacity:.5;font-size:9px">v633</span>
   </footer>
 
 </div>
@@ -8172,6 +8172,11 @@ function _asistPendingAdd(fecha, pid){ if(!fecha||!pid) return; try{ const o=_as
 function _asistPendingKeys(){ try{ return Object.keys(_asistPendingGet()); }catch(e){ return []; } }
 function _asistPendingClear(keys){ if(!keys||!keys.length) return; try{ const o=_asistPendingGet(); keys.forEach(k=>{ delete o[k]; }); _asistPendingSet(o); }catch(e){} }
 
+// v633: las caras (descriptores) pesan ~445KB y NO deben ir en el doc 'core' (que se
+// re-sube en CADA guardado). Van en su propio doc appState/faces, que solo se reescribe
+// cuando cambian. Este helper arma {personaId: face} desde personalGlobal.
+function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=>{ if(p&&p.id&&p.face&&p.face.descriptors&&p.face.descriptors.length) o[p.id]=p.face; }); return o; }
+
 const CloudSync = {
   enabled: false,
   ref: null,                 // Doc reference: /appState/main (legacy / respaldo, ya no se reescribe)
@@ -8303,6 +8308,10 @@ const CloudSync = {
     const db = firebase.firestore();
     const data = this.stripLocal(state);              // clon sin base64 ni activeProjectId
     const _pendUp = (typeof _asistPendingKeys==='function') ? _asistPendingKeys() : []; // v629: marcas que esta subida confirmará
+    // v633: extraer las caras del core (van a su propio doc appState/faces). El payload se
+    // arma desde el state VIVO (solo lectura) y se quitan del CLON, sin tocar lo local.
+    const _facesPayload = _facesPayloadFrom(state.personalGlobal);
+    if (Array.isArray(data.personalGlobal)) data.personalGlobal = data.personalGlobal.map(p => { if (p && p.face) { const c = Object.assign({}, p); delete c.face; return c; } return p; });
     const projects = Array.isArray(data.projects) ? data.projects : [];
     delete data.projects;
     const stamp = { ts: Date.now(), by: (currentUser && (currentUser.email || currentUser.username)) || 'sistema' };
@@ -8330,6 +8339,10 @@ const CloudSync = {
     // "ya subido" para un proyecto que en realidad no se subio). El core va siempre primero.
     const ops = [];
     ops.push({ kind: 'set', ref: this.coreRef, data: data });   // core siempre (es chico)
+    // v633: el hash de caras se calcula acá; el doc appState/faces se sube APARTE (su propio
+    // commit, más abajo) para que un fallo de caras NUNCA rompa el guardado del core.
+    if (!this._facesHash) this._facesHash = '';
+    const _facesJson = JSON.stringify(_facesPayload);
     const seen = {};
     projects.forEach(p => {
       if (!p || !p.id) return;
@@ -8354,14 +8367,21 @@ const CloudSync = {
     }
     this.lastUploadAt = Date.now();
     if (_pendUp.length && typeof _asistPendingClear==='function') _asistPendingClear(_pendUp); // v629: confirmadas en la nube
+    // v633: el doc de caras se sube APARTE (su propio commit). Si falla (reglas/red) NO rompe
+    // el guardado del core; las caras quedan locales + el blindaje las conserva y se reintenta.
+    if (this._facesHash !== _facesJson) {
+      try { await db.collection('appState').doc('faces').set({ faces: _facesPayload, _lastUpdate: stamp }); this._facesHash = _facesJson; }
+      catch(e){ console.warn('Doc de caras no se subió (se conservan locales):', e && e.message); }
+    }
   },
 
   /* v491: reensambla el state (forma del doc unico viejo) desde core + proj_*. */
   _assembleFromSnap(snap){
     if (!snap) return null;
-    let core = null; const projById = {};
+    let core = null, facesData = null; const projById = {};
     snap.forEach(doc => {
       if (doc.id === 'core') core = doc.data();
+      else if (doc.id === 'faces') { const d = doc.data(); facesData = (d && d.faces && typeof d.faces==='object') ? d.faces : null; }
       else if (doc.id.indexOf('proj_') === 0) { const d = doc.data(); if (d && d.p) projById[doc.id.slice(5)] = d.p; }
     });
     if (!core) return null;
@@ -8377,6 +8397,10 @@ const CloudSync = {
     const data = Object.assign({}, core);
     delete data._projectIds; delete data._lastUpdate; delete data._migratedFrom;
     data.projects = projects;
+    // v633: re-adjuntar las caras desde el doc appState/faces a cada persona (el core ya no las trae).
+    if (facesData && Array.isArray(data.personalGlobal)) {
+      data.personalGlobal = data.personalGlobal.map(p => (p && p.id && facesData[p.id]) ? Object.assign({}, p, { face: facesData[p.id] }) : p);
+    }
     return data;
   },
 
@@ -8452,6 +8476,11 @@ const CloudSync = {
       }
     } catch(e) { console.warn('ensureDataV9 falló en applyRemote:', e); }
 
+    // v633: fijar el hash de caras al de la nube (lo que trajo el remoto, ya re-adjuntado
+    // desde el doc appState/faces). Así no se re-suben las caras recién bajadas; pero las
+    // que el blindaje de abajo conserve (locales que el remoto NO tiene) quedan FUERA de
+    // este hash → la próxima subida SÍ las manda al doc de caras.
+    try { this._facesHash = JSON.stringify(_facesPayloadFrom(merged.personalGlobal)); } catch(e){ this._facesHash = ''; }
     // v611 BLINDAJE DE CARAS: un estado remoto NUNCA debe BORRAR una cara que ya
     // existe localmente. Si el remoto no trae la cara de una persona (o viene vacía)
     // pero el equipo SÍ la tiene, la conservamos (solo agrega, nunca quita).
