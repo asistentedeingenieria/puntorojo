@@ -2903,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v641</span>
+    <span style="opacity:.5;font-size:9px">v642</span>
   </footer>
 
 </div>
@@ -17225,9 +17225,37 @@ function _semanaRango(fechaStr){
   for(let i=0;i<7;i++){ const x=new Date(mon); x.setDate(mon.getDate()+i); dias.push(x.getFullYear()+'-'+p(x.getMonth()+1)+'-'+p(x.getDate())); }
   return dias;
 }
-/* Reporte SEMANAL de asistencia (matriz persona × día), una sección por obra.
-   todas=false → solo la obra del encargado (o la del dropdown si admin no eligió, todas).
-   todas=true  → TODAS las obras (requiere permiso personal.asistenciaPdfTodas). */
+/* v642: arma la matriz semanal de UNA obra dentro de un doc dado (sin addPage ni save).
+   Devuelve true si la obra tenía gente. */
+function _obraSemanalEnDoc(doc, obra, dias, A){
+  const _getP=(typeof _getPersonal==='function')?(_getPersonal()||[]):[];
+  const personas=_getP.filter(pn=> pn.tipo!=='OFICINA' && (
+    pn.obraAsignada===obra.id ||
+    (pn.multiObra && dias.some(f=>{ const r=A[f]&&A[f][pn.id]; return r && String(r.obraId||'')===obra.id && (r.presente || (r.presente===false&&r.motivo)); }))
+  ));
+  if(!personas.length) return false;
+  personas.sort((x,y)=>_persNorm(x.nombre).localeCompare(_persNorm(y.nombre),'es',{sensitivity:'base'}));
+  const p2=n=>String(n).padStart(2,'0');
+  const diaCol=f=>{ const d=new Date(f+'T12:00:00'); return ['DOMINGO','LUNES','MARTES','MIÉRCOLES','JUEVES','VIERNES','SÁBADO'][d.getDay()]+'\n'+p2(d.getDate())+'/'+p2(d.getMonth()+1); };
+  const pageW=doc.internal.pageSize.width;
+  _pdfLogo(doc);
+  doc.setFontSize(14); doc.setFont(undefined,'bold');
+  doc.text('ASISTENCIA SEMANAL · '+String(obra.name||'').toUpperCase(), pageW/2, 40, {align:'center'});
+  doc.setFontSize(9); doc.setFont(undefined,'normal');
+  doc.text(_fmtDMY(dias[0])+'  a  '+_fmtDMY(dias[6]), pageW/2, 56, {align:'center'});
+  const head=[['NOMBRE'].concat(dias.map(diaCol)).concat(['DÍAS'])];
+  const body=personas.map(pn=>{
+    let cnt=0;
+    const cells=dias.map(f=>{ const r0=A[f]&&A[f][pn.id]; const r=(r0&&typeof migrateAsistenciaRegistro==='function')?(migrateAsistenciaRegistro(r0)||r0):r0; if(r&&r.presente){ cnt++; return 'V'; } return 'R'; });
+    return [pn.nombre].concat(cells).concat([String(cnt)]);
+  });
+  doc.autoTable({ startY:72, head:head, body:body, theme:'striped', styles:{fontSize:8,halign:'center',valign:'middle'}, columnStyles:{0:{halign:'left',cellWidth:120},8:{fontStyle:'bold',halign:'center'}}, headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',halign:'center',fontSize:7},
+    didParseCell:function(d){ if(d.section==='body'&&d.column.index>=1&&d.column.index<=7){ d.cell.text=['']; } },
+    didDrawCell:function(d){ if(d.section==='body'&&d.column.index>=1&&d.column.index<=7){ const v=d.cell.raw; const cx=d.cell.x+d.cell.width/2, cy=d.cell.y+d.cell.height/2; if(v==='V'){ doc.setDrawColor(0,150,0); doc.setLineWidth(1.5); doc.line(cx-3,cy+0.5,cx-0.8,cy+3); doc.line(cx-0.8,cy+3,cx+3.8,cy-3); } else { doc.setDrawColor(200,20,28); doc.setLineWidth(1.5); doc.line(cx-3,cy-3,cx+3,cy+3); doc.line(cx-3,cy+3,cx+3,cy-3); } } } });
+  return true;
+}
+/* Reporte SEMANAL. todas=false → 1 PDF (obra del encargado/seleccionada, o todas en secciones).
+   todas=true → UN PDF POR CADA OBRA (descargas separadas). Requiere personal.asistenciaPdfTodas. */
 function descargarAsistenciaSemanalPDF(todas){
   if(typeof can==='function'){
     if(todas){ if(!(can('personal.asistenciaPdfTodas')||can('users.manage'))) return showToast('SIN PERMISO','red'); }
@@ -17243,39 +17271,29 @@ function descargarAsistenciaSemanalPDF(todas){
   else if(_uObra){ obras=projs.filter(pr=>pr.id===_uObra); }
   else { const sel=(document.getElementById('asistObraPdf')||{}).value||''; obras = sel ? projs.filter(pr=>pr.id===sel) : projs.slice(); }
   if(!obras.length){ showToast('NO HAY OBRAS','red'); return; }
-  const p2=n=>String(n).padStart(2,'0');
-  const diaCol=f=>{ const d=new Date(f+'T12:00:00'); return ['DOMINGO','LUNES','MARTES','MIÉRCOLES','JUEVES','VIERNES','SÁBADO'][d.getDay()]+'\n'+p2(d.getDate())+'/'+p2(d.getMonth()+1); };
   const { jsPDF }=window.jspdf;
-  const doc=new jsPDF({ unit:'pt', format:'a4', orientation:'landscape' });
-  const pageW=doc.internal.pageSize.width;
-  let first=true, algo=false;
-  obras.forEach(obra=>{
-    // v640: TODO el personal de la obra = asignados fijos a esta obra (aunque no tengan marcas)
-    // + multi-obra que SÍ fueron marcados en esta obra esa semana.
-    const personas=_getPersonal().filter(pn=> pn.tipo!=='OFICINA' && (
-      pn.obraAsignada===obra.id ||
-      (pn.multiObra && dias.some(f=>{ const r=A[f]&&A[f][pn.id]; return r && String(r.obraId||'')===obra.id && (r.presente || (r.presente===false&&r.motivo)); }))
-    ));
-    if(!personas.length) return;
-    personas.sort((x,y)=>_persNorm(x.nombre).localeCompare(_persNorm(y.nombre),'es',{sensitivity:'base'}));
-    if(!first) doc.addPage(); first=false; algo=true;
-    _pdfLogo(doc);
-    doc.setFontSize(14); doc.setFont(undefined,'bold');
-    doc.text('ASISTENCIA SEMANAL · '+String(obra.name||'').toUpperCase(), pageW/2, 40, {align:'center'});
-    doc.setFontSize(9); doc.setFont(undefined,'normal');
-    doc.text(_fmtDMY(dias[0])+'  a  '+_fmtDMY(dias[6]), pageW/2, 56, {align:'center'});
-    const head=[['NOMBRE'].concat(dias.map(diaCol)).concat(['DÍAS'])];
-    const body=personas.map(pn=>{
-      let cnt=0;
-      const cells=dias.map(f=>{ const r0=A[f]&&A[f][pn.id]; const r=(r0&&typeof migrateAsistenciaRegistro==='function')?(migrateAsistenciaRegistro(r0)||r0):r0; if(r&&r.presente){ cnt++; return 'V'; } return 'R'; });
-      return [pn.nombre].concat(cells).concat([String(cnt)]);
+  const _stamp=_fmtDMY(dias[0]).replace(/\//g,'-');
+  if(todas){
+    // v642: un PDF SEPARADO por cada obra (descargas individuales).
+    let count=0;
+    obras.forEach(obra=>{
+      const doc=new jsPDF({ unit:'pt', format:'a4', orientation:'landscape' });
+      if(_obraSemanalEnDoc(doc, obra, dias, A)){ count++; doc.save('ASISTENCIA SEMANAL '+_stamp+' - '+String(obra.name||'').toUpperCase()+'.pdf'); }
     });
-    doc.autoTable({ startY:72, head:head, body:body, theme:'striped', styles:{fontSize:8,halign:'center',valign:'middle'}, columnStyles:{0:{halign:'left',cellWidth:120},8:{fontStyle:'bold',halign:'center'}}, headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',halign:'center',fontSize:7},
-      didParseCell:function(d){ if(d.section==='body'&&d.column.index>=1&&d.column.index<=7){ d.cell.text=['']; } },
-      didDrawCell:function(d){ if(d.section==='body'&&d.column.index>=1&&d.column.index<=7){ const v=d.cell.raw; const cx=d.cell.x+d.cell.width/2, cy=d.cell.y+d.cell.height/2; if(v==='V'){ doc.setDrawColor(0,150,0); doc.setLineWidth(1.5); doc.line(cx-3,cy+0.5,cx-0.8,cy+3); doc.line(cx-0.8,cy+3,cx+3.8,cy-3); } else { doc.setDrawColor(200,20,28); doc.setLineWidth(1.5); doc.line(cx-3,cy-3,cx+3,cy+3); doc.line(cx-3,cy+3,cx+3,cy-3); } } } });
+    if(!count){ showToast('SIN DATOS DE ASISTENCIA ESA SEMANA','red'); return; }
+    showToast(count+' PDF DESCARGADO'+(count!==1?'S':'')+' (UNO POR OBRA)','green');
+    return;
+  }
+  // todas=false: un solo PDF (la obra del encargado/seleccionada, o todas en secciones si admin no eligió).
+  const doc=new jsPDF({ unit:'pt', format:'a4', orientation:'landscape' });
+  let algo=false;
+  obras.forEach(obra=>{
+    if(algo) doc.addPage();
+    const ok=_obraSemanalEnDoc(doc, obra, dias, A);
+    if(ok){ algo=true; } else if(algo){ try{ doc.deletePage(doc.internal.getNumberOfPages()); }catch(e){} }
   });
   if(!algo){ showToast('SIN DATOS DE ASISTENCIA ESA SEMANA','red'); return; }
-  doc.save('ASISTENCIA SEMANAL '+_fmtDMY(dias[0]).replace(/\//g,'-')+(todas?' - TODAS LAS OBRAS':(obras.length===1?(' - '+String(obras[0].name||'').toUpperCase()):''))+'.pdf');
+  doc.save('ASISTENCIA SEMANAL '+_stamp+(obras.length===1?(' - '+String(obras[0].name||'').toUpperCase()):'')+'.pdf');
 }
 
 let _faceModelsReady = false, _faceModelsLoading = null;
