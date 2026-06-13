@@ -2903,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v644</span>
+    <span style="opacity:.5;font-size:9px">v645</span>
   </footer>
 
 </div>
@@ -16941,6 +16941,46 @@ function _asistListaFiltrada(){
   return res.slice().sort((a,b)=>_persNorm(a.nombre).localeCompare(_persNorm(b.nombre),'es',{sensitivity:'base'}));
 }
 
+// v644: modal con el desglose de presentes por cada obra (se abre al tocar el KPI
+// "Presentes por obra (prom.)"). Respeta el mismo alcance que el KPI: el ENCARGADO
+// ve solo su obra; el admin respeta el filtro del dropdown (_obraFiltroAsist()).
+window._v644ResumenPresentesPorObra = function(){
+  try{
+    const fecha = (typeof _asistFechaActual==='function')?_asistFechaActual():'';
+    const A = (typeof _getAsistencia==='function')?_getAsistencia():{};
+    const dia = A[fecha]||{};
+    const filtro = (typeof _obraFiltroAsist==='function')?(_obraFiltroAsist()||''):'';
+    const projs = (typeof state!=='undefined'&&state&&Array.isArray(state.projects))?state.projects:[];
+    const projName = id => { if(!id) return 'SIN OBRA'; if(id==='OTRA') return 'OTRA'; const pr=projs.find(x=>x.id===id); return pr?String(pr.name||id).toUpperCase():String(id).toUpperCase(); };
+    const escH = s => String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const porObra = {};
+    Object.values(dia).forEach(r=>{ if(!r||!r.presente) return; const oid=String(r.obraId||''); if(filtro && oid!==filtro) return; const k=projName(oid); porObra[k]=(porObra[k]||0)+1; });
+    const arr = Object.keys(porObra).map(k=>({obra:k,n:porObra[k]})).sort((a,b)=>b.n-a.n||a.obra.localeCompare(b.obra,'es',{sensitivity:'base'}));
+    const total = arr.reduce((s,o)=>s+o.n,0);
+    const nObras = arr.length;
+    const prom = nObras ? Math.round(total/nObras) : 0;
+    let body='';
+    body += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">';
+    body += '<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#64748B;font-weight:700">PRESENTES</div><div style="font-size:18px;font-weight:800;color:#0F172A;margin-top:2px">'+total+'</div></div>';
+    body += '<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#64748B;font-weight:700">OBRAS</div><div style="font-size:18px;font-weight:800;color:#1565C0;margin-top:2px">'+nObras+'</div></div>';
+    body += '<div style="background:#ECFDF5;border:1px solid #6EE7B7;border-radius:8px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#065F46;font-weight:700">PROMEDIO/OBRA</div><div style="font-size:18px;font-weight:800;color:#047857;margin-top:2px">'+prom+'</div></div>';
+    body += '</div>';
+    body += '<div style="font-size:11px;color:#64748B;font-weight:700;margin-bottom:8px;letter-spacing:.5px">'+escH(fecha)+'</div>';
+    if(!arr.length){ body += '<div style="padding:30px;text-align:center;background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;color:#15803D;font-weight:700">SIN PRESENTES HOY</div>'; }
+    else {
+      body += '<div style="display:flex;flex-direction:column;gap:8px">';
+      arr.forEach(o=>{
+        body += '<div style="border:1px solid #E2E8F0;border-radius:10px;background:#fff;padding:12px 16px;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center">';
+        body += '<div style="font-size:13px;font-weight:800;color:#0F172A;letter-spacing:.2px">'+escH(o.obra)+'</div>';
+        body += '<div style="text-align:right;white-space:nowrap"><span style="font-size:20px;font-weight:800;color:#047857;line-height:1">'+o.n+'</span><span style="font-size:10px;color:#94A3B8;margin-left:5px">presente'+(o.n!==1?'s':'')+'</span></div>';
+        body += '</div>';
+      });
+      body += '</div>';
+    }
+    window.prConfirm({ title:'PRESENTES POR OBRA', bodyHTML: body, okText:'CERRAR', cancelText:'', wide:true });
+  }catch(e){ if(typeof showToast==='function') showToast('NO SE PUDO ABRIR EL RESUMEN','red'); }
+};
+
 function renderPersonal(){
   const personal=_getPersonal();
   const empresas=_persEmpresas();
@@ -16970,13 +17010,13 @@ function renderPersonal(){
     const _avgEnt = (typeof promedioHoraHHMM==='function') ? promedioHoraHHMM(_regsDia.map(r=>r.entrada)) : '—';
     const _avgSal = (typeof promedioHoraHHMM==='function') ? promedioHoraHHMM(_regsDia.map(r=>r.salida)) : '—';
     const _projName = id => { if(id==='OTRA') return 'OTRA'; const pr=((typeof state!=='undefined'&&state.projects)?state.projects:[]).find(x=>x.id===id); return pr?String(pr.name||id):(id||'—'); };
-    const _porObra = {}; _regsDia.forEach(r=>{ const k=_projName(r.obraId||''); _porObra[k]=(_porObra[k]||0)+1; });
-    const _porObraTxt = Object.keys(_porObra).map(k=>k+' '+_porObra[k]).join(' · ') || '—';
+    // v644: agrupar por nombre en MAYÚSCULAS para que el promedio del KPI coincida exactamente con el modal (_v644ResumenPresentesPorObra).
+    const _porObra = {}; _regsDia.forEach(r=>{ const k=String(_projName(r.obraId||'')).toUpperCase(); _porObra[k]=(_porObra[k]||0)+1; });
     // v639: KPI solo para ENCARGADOS — cuánta gente tienen en el listado de su obra.
     const _genteObra = _uObraKpi ? `<div class="kpi olive"><div class="lbl">Personal en tu obra</div><div class="val">${_asistListaFiltrada().length}</div><div class="sub">${String(((state.projects||[]).find(x=>x.id===_uObraKpi)||{}).name||'').toUpperCase()}</div></div>` : '';
     const _kAsist = _genteObra + `<div class="kpi green"><div class="lbl">Hora prom. entrada</div><div class="val">${_avgEnt}</div><div class="sub">${fecha}</div></div>`
       + `<div class="kpi cafe"><div class="lbl">Hora prom. salida</div><div class="val">${_avgSal}</div><div class="sub">${fecha}</div></div>`
-      + `<div class="kpi olive"><div class="lbl">Presentes por obra</div><div class="val">${presentes}</div><div class="sub">${_porObraTxt}</div></div>`;
+      + `<div class="kpi olive" onclick="window._v644ResumenPresentesPorObra&&window._v644ResumenPresentesPorObra()" style="cursor:pointer" title="Tocá para ver los presentes de cada obra"><div class="lbl">Presentes por obra (prom.)</div><div class="val">${Object.keys(_porObra).length?Math.round(presentes/Object.keys(_porObra).length):0}</div><div class="sub">TOCÁ PARA VER POR OBRA</div></div>`;
     kp.innerHTML = (_sub==='asistencia') ? _kAsist : (_kPersonal+_kEmpresas);
   }
   const empOpts=['<option value="">TODAS LAS EMPRESAS</option>'].concat(empresas.map(e=>`<option value="${e}"${e===_persEmpresaFilter?' selected':''}>${e}</option>`)).join('');
