@@ -2903,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v646</span>
+    <span style="opacity:.5;font-size:9px">v647</span>
   </footer>
 
 </div>
@@ -8526,12 +8526,9 @@ const CloudSync = {
       if (typeof _mergeAsistencia === 'function') {
         const _rA = _mergeAsistencia(
           (state && state.asistenciaGlobal) || {},
-          (state && state.asistTomb) || {},
-          merged.asistenciaGlobal || {},
-          merged.asistTomb || {}
+          merged.asistenciaGlobal || {}
         );
         merged.asistenciaGlobal = _rA.asistencia;
-        merged.asistTomb = _rA.tomb;
         if (_rA.changed) needsResync = true;
       }
     } catch(e){ console.warn('merge de asistencia en applyRemote:', e); }
@@ -17169,7 +17166,8 @@ function _guardarAusenciaMotivo(){
 function _quitarAusencia(){
   if(!_amCanAsist()) return showToast('SIN PERMISO','red');
   const A=_getAsistencia(); const f=_asistFechaActual(); if(A[f]) delete A[f][_amPersonaId];
-  try{ _asistTombAdd(f, _amPersonaId); }catch(e){} // v646: tombstone para que el merge no la resucite desde otro dispositivo
+  // v647: sin tombstone — la UNIÓN del merge nunca borra una marca presente; quitar una ausencia
+  // no se propaga entre dispositivos (se corrige marcando el estado correcto, que gana por _ts).
   saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
   closeModal('AusenciaMotivo'); renderPersonal(); showToast('AUSENCIA QUITADA');
 }
@@ -21990,12 +21988,14 @@ function _getAsistencia(){ try { if (typeof state !== 'undefined' && state) { if
 function _getAsistTomb(){ try { if (typeof state !== 'undefined' && state) { if (!state.asistTomb || typeof state.asistTomb!=='object') state.asistTomb = {}; return state.asistTomb; } } catch(e){} return {}; }
 function _asistTombAdd(fecha,pid){ if(!fecha||!pid) return; try{ var T=_getAsistTomb(); T[fecha+'|'+pid]=Date.now(); }catch(e){} }
 function _asistTombClear(fecha,pid){ if(!fecha||!pid) return; try{ var T=_getAsistTomb(); delete T[fecha+'|'+pid]; }catch(e){} }
-// v646: FUSIÓN de asistencia entre dispositivos. Une marcas locales+remotas por (fecha,pid)
-// tomando la de _ts más nuevo; los tombstones (borrados) ganan si su ts >= a la marca. Puro.
-// Probado en _asisttest/run.js — debe quedar IDÉNTICA a esa copia.
-function _mergeAsistencia(localAsis, localTomb, remoteAsis, remoteTomb){
+// v647: FUSIÓN (UNIÓN pura) de asistencia entre dispositivos. Une marcas locales+remotas por
+// (fecha,pid) quedándose con la de _ts más nuevo (desempate: una ausencia con motivo gana a un
+// presente "pelado"). NO borra por merge: los tombstones se quitaron porque causaban pérdida de
+// marcas por desfase de reloj y por marcas legacy sin _ts (revisión adversarial v646). Puro.
+// Probado en _asisttest/run.js — debe quedar IDÉNTICA (código) a esa copia.
+function _mergeAsistencia(localAsis, remoteAsis){
   var _ts = function(r){ return (r && typeof r._ts === 'number') ? r._ts : ((r && typeof r.ausenteTs === 'number') ? r.ausenteTs : 0); };
-  var _score = function(r){ return r ? ((r.presente?2:0)+(r.entrada?1:0)+(r.salida?1:0)+(r.motivo?1:0)) : -1; };
+  var _score = function(r){ if(!r) return -1; if(r.presente===false && r.motivo) return 3; return (r.presente?2:0)+(r.entrada?1:0)+(r.salida?1:0)+(r.motivo?1:0); };
   var out = (remoteAsis && typeof remoteAsis === 'object') ? JSON.parse(JSON.stringify(remoteAsis)) : {};
   var changed = false;
   var L = (localAsis && typeof localAsis === 'object') ? localAsis : {};
@@ -22010,17 +22010,7 @@ function _mergeAsistencia(localAsis, localTomb, remoteAsis, remoteTomb){
       else if (_ts(lr) === _ts(rr) && _score(lr) > _score(rr)) { out[f][pid] = lr; changed = true; }
     });
   });
-  var tomb = {};
-  if (remoteTomb && typeof remoteTomb === 'object') Object.keys(remoteTomb).forEach(function(k){ tomb[k] = remoteTomb[k]; });
-  var LT = (localTomb && typeof localTomb === 'object') ? localTomb : {};
-  Object.keys(LT).forEach(function(k){ if (!(k in tomb) || LT[k] > tomb[k]) { tomb[k] = LT[k]; changed = true; } });
-  Object.keys(tomb).forEach(function(k){
-    var i = k.indexOf('|'); if (i < 0) return;
-    var f = k.slice(0, i), pid = k.slice(i+1), tts = tomb[k];
-    var rec = out[f] && out[f][pid];
-    if (rec && _ts(rec) <= tts) { delete out[f][pid]; changed = true; }
-  });
-  return { asistencia: out, tomb: tomb, changed: changed };
+  return { asistencia: out, changed: changed };
 }
 </script>
 <script>

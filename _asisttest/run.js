@@ -1,12 +1,15 @@
-/* Pruebas de _mergeAsistencia (fusión de asistencia entre dispositivos, v646).
+/* Pruebas de _mergeAsistencia (fusión de asistencia entre dispositivos, v647: UNIÓN pura).
    Corre con: node _asisttest/run.js
-   La función aquí DEBE ser idéntica a la de index.html. */
+   La función aquí DEBE ser idéntica (código) a la de index.html.
 
-function _mergeAsistencia(localAsis, localTomb, remoteAsis, remoteTomb){
-  // Devuelve {asistencia, tomb, changed}. Une marcas de varios dispositivos por (fecha,pid)
-  // tomando la de _ts más nuevo; los tombstones (borrados del admin) ganan si su ts >= a la marca.
+   v647: se QUITARON los tombstones. La revisión adversarial demostró que borrar por merge
+   (tombstone con ts) provocaba pérdida de marcas por desfase de reloj entre celulares y por
+   marcas legacy sin _ts. La unión pura nunca borra una marca presente; "quitar una ausencia"
+   no se propaga (se corrige marcando el estado correcto, que gana por _ts más nuevo). */
+
+function _mergeAsistencia(localAsis, remoteAsis){
   var _ts = function(r){ return (r && typeof r._ts === 'number') ? r._ts : ((r && typeof r.ausenteTs === 'number') ? r.ausenteTs : 0); };
-  var _score = function(r){ return r ? ((r.presente?2:0)+(r.entrada?1:0)+(r.salida?1:0)+(r.motivo?1:0)) : -1; };
+  var _score = function(r){ if(!r) return -1; if(r.presente===false && r.motivo) return 3; return (r.presente?2:0)+(r.entrada?1:0)+(r.salida?1:0)+(r.motivo?1:0); };
   var out = (remoteAsis && typeof remoteAsis === 'object') ? JSON.parse(JSON.stringify(remoteAsis)) : {};
   var changed = false;
   var L = (localAsis && typeof localAsis === 'object') ? localAsis : {};
@@ -21,30 +24,19 @@ function _mergeAsistencia(localAsis, localTomb, remoteAsis, remoteTomb){
       else if (_ts(lr) === _ts(rr) && _score(lr) > _score(rr)) { out[f][pid] = lr; changed = true; }
     });
   });
-  var tomb = {};
-  if (remoteTomb && typeof remoteTomb === 'object') Object.keys(remoteTomb).forEach(function(k){ tomb[k] = remoteTomb[k]; });
-  var LT = (localTomb && typeof localTomb === 'object') ? localTomb : {};
-  Object.keys(LT).forEach(function(k){ if (!(k in tomb) || LT[k] > tomb[k]) { tomb[k] = LT[k]; changed = true; } });
-  Object.keys(tomb).forEach(function(k){
-    var i = k.indexOf('|'); if (i < 0) return;
-    var f = k.slice(0, i), pid = k.slice(i+1), tts = tomb[k];
-    var rec = out[f] && out[f][pid];
-    if (rec && _ts(rec) <= tts) { delete out[f][pid]; changed = true; }
-  });
-  return { asistencia: out, tomb: tomb, changed: changed };
+  return { asistencia: out, changed: changed };
 }
 
 // ── mini framework ──
 var PASS=0, FAIL=0;
-function eq(a,b){ return JSON.stringify(a)===JSON.stringify(b); }
 function ok(name, cond){ if(cond){ PASS++; } else { FAIL++; console.log('FAIL: '+name); } }
 var F='2026-06-13';
 
-// 1. Union: dos celulares marcan personas distintas a la vez -> no se pierde ninguna.
+// 1. Unión: dos celulares marcan personas distintas a la vez -> no se pierde ninguna.
 (function(){
-  var local  = { [F]: { p1:{presente:true,_ts:100}, p2:{presente:true,_ts:101} } }; // celular A
-  var remote = { [F]: { p3:{presente:true,_ts:102} } };                              // subió B (sin p1,p2)
-  var r=_mergeAsistencia(local, {}, remote, {});
+  var local  = { [F]: { p1:{presente:true,_ts:100}, p2:{presente:true,_ts:101} } };
+  var remote = { [F]: { p3:{presente:true,_ts:102} } };
+  var r=_mergeAsistencia(local, remote);
   ok('union conserva p1', !!r.asistencia[F].p1);
   ok('union conserva p2', !!r.asistencia[F].p2);
   ok('union conserva p3', !!r.asistencia[F].p3);
@@ -54,72 +46,70 @@ var F='2026-06-13';
 // 2. El caso del bug: A tiene 3 marcas, B sube su copia SIN ellas -> A no las pierde.
 (function(){
   var A = { [F]: { p1:{presente:true,_ts:1}, p2:{presente:true,_ts:1}, p3:{presente:true,_ts:1} } };
-  var B = { [F]: {} }; // B aún no las recibió
-  var r=_mergeAsistencia(A, {}, B, {});
+  var B = { [F]: {} };
+  var r=_mergeAsistencia(A, B);
   ok('bug: no se pierde ninguna de las 3', Object.keys(r.asistencia[F]).length===3);
 })();
 
-// 3. Tombstone: el admin borra p1 (ts mayor que la marca) -> queda borrada aunque otro la tenga.
+// 3. Marca más nueva gana (salida actualiza la entrada previa).
 (function(){
-  var local  = { [F]: { p1:{presente:true,_ts:50} } };           // este celular aún tiene p1
-  var remoteTomb = { [F+'|p1']: 80 };                            // otro la borró
-  var r=_mergeAsistencia(local, {}, { [F]:{} }, remoteTomb);
-  ok('tombstone borra p1', !r.asistencia[F] || !r.asistencia[F].p1);
-  ok('tombstone se propaga', r.tomb[F+'|p1']===80);
+  var local  = { [F]: { p1:{presente:true,entrada:'07:00',salida:'17:00',_ts:500} } };
+  var remote = { [F]: { p1:{presente:true,entrada:'07:00',_ts:400} } };
+  var r=_mergeAsistencia(local, remote);
+  ok('marca más nueva (con salida) gana', r.asistencia[F].p1.salida==='17:00');
 })();
 
-// 4. Re-marca después de borrar: marca nueva (_ts > tombstone) sobrevive.
+// 4. Marcas legacy sin _ts: se unen sin perderse (NUNCA se borran por merge).
 (function(){
-  var local  = { [F]: { p1:{presente:true,_ts:200} } };          // re-marcada recién
-  var tomb   = { [F+'|p1']: 80 };                                // borrado viejo
-  var r=_mergeAsistencia(local, tomb, { [F]:{} }, tomb);
-  ok('re-marca posterior sobrevive al tombstone viejo', !!r.asistencia[F].p1);
+  var A = { [F]: { p1:{presente:true} } };
+  var B = { [F]: { p2:{presente:true} } };
+  var r=_mergeAsistencia(A, B);
+  ok('legacy: une p1 y p2', !!r.asistencia[F].p1 && !!r.asistencia[F].p2);
 })();
 
-// 5. Tombstone más viejo que la marca remota -> la marca sobrevive.
-(function(){
-  var remote = { [F]: { p1:{presente:true,_ts:300} } };
-  var tomb   = { [F+'|p1']: 100 };
-  var r=_mergeAsistencia({}, tomb, remote, {});
-  ok('marca más nueva que tombstone sobrevive', !!r.asistencia[F].p1);
-})();
-
-// 6. Idempotente: local === remote -> changed=false (no provoca resync infinito).
+// 5. Idempotente: local === remote -> changed=false (no provoca resync infinito).
 (function(){
   var s = { [F]: { p1:{presente:true,entrada:'07:00',_ts:10} } };
-  var r=_mergeAsistencia(JSON.parse(JSON.stringify(s)), {}, JSON.parse(JSON.stringify(s)), {});
+  var r=_mergeAsistencia(JSON.parse(JSON.stringify(s)), JSON.parse(JSON.stringify(s)));
   ok('idempotente: changed=false', r.changed===false);
   ok('idempotente: conserva p1', !!r.asistencia[F].p1);
 })();
 
-// 7. Marca más nueva gana (salida actualiza la entrada previa).
+// 6. Ausente reciente (más _ts) gana a un presente viejo.
 (function(){
-  var local  = { [F]: { p1:{presente:true,entrada:'07:00',salida:'17:00',_ts:500} } };
-  var remote = { [F]: { p1:{presente:true,entrada:'07:00',_ts:400} } };
-  var r=_mergeAsistencia(local, {}, remote, {});
-  ok('marca más nueva (con salida) gana', r.asistencia[F].p1.salida==='17:00');
-})();
-
-// 8. Marcas legacy sin _ts: se unen sin perderse (ts=0 ambos, score decide / conserva).
-(function(){
-  var A = { [F]: { p1:{presente:true} } };  // legacy A
-  var B = { [F]: { p2:{presente:true} } };  // legacy B
-  var r=_mergeAsistencia(A, {}, B, {});
-  ok('legacy: une p1 y p2', !!r.asistencia[F].p1 && !!r.asistencia[F].p2);
-})();
-
-// 9. Ausente (presente:false con ausenteTs) cuenta como _ts para ganar a un presente viejo.
-(function(){
-  var local  = { [F]: { p1:{presente:false,motivo:'X',ausenteTs:900} } }; // marcado ausente recién
-  var remote = { [F]: { p1:{presente:true,_ts:100} } };                   // presente viejo
-  var r=_mergeAsistencia(local, {}, remote, {});
+  var local  = { [F]: { p1:{presente:false,motivo:'X',ausenteTs:900,_ts:900} } };
+  var remote = { [F]: { p1:{presente:true,_ts:100} } };
+  var r=_mergeAsistencia(local, remote);
   ok('ausente reciente gana al presente viejo', r.asistencia[F].p1.presente===false);
 })();
 
-// 10. No resucita: si la marca local ya no existe y hay tombstone, no reaparece.
+// 7. REGRESIÓN (hallazgo #3): empate de _ts -> la ausencia con motivo NO se descarta por un presente pelado.
 (function(){
-  var r=_mergeAsistencia({ [F]:{} }, { [F+'|p1']:80 }, { [F]:{} }, {});
-  ok('no resucita marca borrada', !r.asistencia[F] || !r.asistencia[F].p1);
+  var ausente = { [F]: { p1:{presente:false,motivo:'PERMISO',ausenteTs:777,_ts:777} } };
+  var presente= { [F]: { p1:{presente:true,_ts:777} } };
+  var a=_mergeAsistencia(ausente, presente);   // local ausente vs remote presente
+  var b=_mergeAsistencia(presente, ausente);   // orden inverso
+  ok('empate: ausencia con motivo gana (orden A)', a.asistencia[F].p1.presente===false);
+  ok('empate: ausencia con motivo gana (orden B)', b.asistencia[F].p1.presente===false);
+})();
+
+// 8. REGRESIÓN (hallazgos #1/#2): sin tombstones, NINGUNA marca desaparece por merge,
+//    ni siquiera una re-marca con _ts bajo o una marca legacy sin _ts.
+(function(){
+  var remarcaBaja = { [F]: { p1:{presente:true,_ts:5} } };     // re-marca con _ts bajo (reloj atrasado)
+  var r1=_mergeAsistencia(remarcaBaja, { [F]:{} });
+  ok('re-marca con _ts bajo sobrevive', !!r1.asistencia[F].p1);
+  var legacy = { [F]: { p2:{presente:true} } };                 // marca v645 sin _ts
+  var r2=_mergeAsistencia(legacy, { [F]:{} });
+  ok('marca legacy sin _ts sobrevive', !!r2.asistencia[F].p2);
+})();
+
+// 9. Una marca presente NUNCA desaparece aunque el remoto no la tenga (no hay borrado por merge).
+(function(){
+  var local  = { [F]: { p1:{presente:true,entrada:'07:30',_ts:50} } };
+  var remote = { [F]: {} };
+  var r=_mergeAsistencia(local, remote);
+  ok('presente local se conserva contra remoto vacío', !!r.asistencia[F].p1 && r.changed===true);
 })();
 
 console.log('PASS='+PASS+' FAIL='+FAIL);
