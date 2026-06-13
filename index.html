@@ -2903,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v648</span>
+    <span style="opacity:.5;font-size:9px">v649</span>
   </footer>
 
 </div>
@@ -8172,6 +8172,20 @@ function saveState(){
   }
 }
 
+// v649: guardado LIVIANO para marcar asistencia — persiste local y sube SOLO el doc
+// appState/asistencia (NO re-sube el core entero). Mata el "trabando" con muchos marcando a la vez.
+function saveAsistencia(){
+  let localOk = true;
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e){ localOk=false; console.error('saveAsistencia: cache local lleno —', e); }
+  try { updateStorageIndicator(); } catch(e){}
+  try {
+    if (typeof CloudSync!=='undefined' && CloudSync.enabled) {
+      if (localOk) CloudSync.scheduleAsistenciaSave();
+      else Promise.resolve(CloudSync.uploadAsistencia()).catch(err=>console.warn('CloudSync uploadAsistencia:', err));
+    }
+  } catch(e){ console.warn('CloudSync asistencia error:', e); }
+}
+
 /* ═══════════════════════════════════════════════════════════════
    CLOUDSYNC · SINCRONIZACIÓN DE STATE CON FIRESTORE EN TIEMPO REAL
    ═══════════════════════════════════════════════════════════════
@@ -8332,6 +8346,10 @@ const CloudSync = {
     // arma desde el state VIVO (solo lectura) y se quitan del CLON, sin tocar lo local.
     const _facesPayload = _facesPayloadFrom(state.personalGlobal);
     if (Array.isArray(data.personalGlobal)) data.personalGlobal = data.personalGlobal.map(p => { if (p && p.face) { const c = Object.assign({}, p); delete c.face; return c; } return p; });
+    // v649: la asistencia va a su propio doc appState/asistencia. Se arma desde el state VIVO y se
+    // quita del CLON del core (no del local) para que MARCAR no re-suba el core entero.
+    const _asistPayload = (state.asistenciaGlobal && typeof state.asistenciaGlobal==='object') ? state.asistenciaGlobal : {};
+    delete data.asistenciaGlobal;
     const projects = Array.isArray(data.projects) ? data.projects : [];
     delete data.projects;
     const stamp = { ts: Date.now(), by: (currentUser && (currentUser.email || currentUser.username)) || 'sistema' };
@@ -8363,6 +8381,9 @@ const CloudSync = {
     // commit, más abajo) para que un fallo de caras NUNCA rompa el guardado del core.
     if (!this._facesHash) this._facesHash = '';
     const _facesJson = JSON.stringify(_facesPayload);
+    if (!this._asistHash) this._asistHash = '';                 // v649: hash del doc de asistencia
+    const _asistJson = JSON.stringify(_asistPayload);
+    if (_asistJson.length > 900000 && !this._asistSizeWarned) { this._asistSizeWarned = true; try { showToast('AVISO: la asistencia pesa '+Math.round(_asistJson.length/1024)+' KB (límite 1 MB). Archivá días viejos.','red'); } catch(e){} } else if (_asistJson.length < 800000) { this._asistSizeWarned = false; } // v649: telemetría de tamaño
     const seen = {};
     projects.forEach(p => {
       if (!p || !p.id) return;
@@ -8393,15 +8414,50 @@ const CloudSync = {
       try { await db.collection('appState').doc('faces').set({ faces: _facesPayload, _lastUpdate: stamp }); this._facesHash = _facesJson; }
       catch(e){ console.warn('Doc de caras no se subió (se conservan locales):', e && e.message); }
     }
+    // v649: la asistencia va en su PROPIO commit (doc appState/asistencia), solo si cambió. Si falla
+    // (reglas/red) NO rompe el guardado del core; queda local y se reintenta. Comparte _asistHash con uploadAsistencia.
+    if (this._asistHash !== _asistJson) {
+      try { await db.collection('appState').doc('asistencia').set({ asistencia: _asistPayload, _lastUpdate: stamp }); this._asistHash = _asistJson; }
+      catch(e){ console.warn('Doc de asistencia no se subió (se conserva local):', e && e.message); }
+    }
+  },
+
+  /* v649: sube SOLO el doc appState/asistencia (no el core). Lo usa el marcado de asistencia para
+     no re-subir el core entero en cada marca → mata el "trabando" con muchos marcando a la vez.
+     Comparte this._asistHash con uploadCurrent, así nunca se duplican escrituras. */
+  async uploadAsistencia(){
+    if (!this.coreRef) return;
+    const db = firebase.firestore();
+    const _asistPayload = (state.asistenciaGlobal && typeof state.asistenciaGlobal==='object') ? state.asistenciaGlobal : {};
+    if (!this._asistHash) this._asistHash = '';
+    const _asistJson = JSON.stringify(_asistPayload);
+    if (_asistJson.length > 900000 && !this._asistSizeWarned) { this._asistSizeWarned = true; try { showToast('AVISO: la asistencia pesa '+Math.round(_asistJson.length/1024)+' KB (límite 1 MB). Archivá días viejos.','red'); } catch(e){} } else if (_asistJson.length < 800000) { this._asistSizeWarned = false; } // v649: telemetría de tamaño
+    if (this._asistHash === _asistJson) return;   // sin cambios → no escribir
+    const stamp = { ts: Date.now(), by: (currentUser && (currentUser.email || currentUser.username)) || 'sistema' };
+    await db.collection('appState').doc('asistencia').set({ asistencia: _asistPayload, _lastUpdate: stamp });
+    this._asistHash = _asistJson;
+  },
+
+  /* v649: debounce del guardado liviano de asistencia (espeja scheduleSave pero solo asistencia). */
+  scheduleAsistenciaSave(){
+    if (!this.enabled) return;
+    try { setSyncStatus('syncing'); } catch(e){}
+    if (this._asistPending) clearTimeout(this._asistPending);
+    this._asistPending = setTimeout(() => {
+      this._asistPending = null;
+      this.uploadAsistencia().then(() => { try { setSyncStatus('synced'); } catch(e){} })
+        .catch((e) => { console.warn('CloudSync uploadAsistencia:', e); try { setSyncStatus('error'); } catch(err){} });
+    }, 1200);
   },
 
   /* v491: reensambla el state (forma del doc unico viejo) desde core + proj_*. */
   _assembleFromSnap(snap){
     if (!snap) return null;
-    let core = null, facesData = null; const projById = {};
+    let core = null, facesData = null, asistData = null; const projById = {};
     snap.forEach(doc => {
       if (doc.id === 'core') core = doc.data();
       else if (doc.id === 'faces') { const d = doc.data(); facesData = (d && d.faces && typeof d.faces==='object') ? d.faces : null; }
+      else if (doc.id === 'asistencia') { const d = doc.data(); asistData = (d && d.asistencia && typeof d.asistencia==='object') ? d.asistencia : null; } // v649
       else if (doc.id.indexOf('proj_') === 0) { const d = doc.data(); if (d && d.p) projById[doc.id.slice(5)] = d.p; }
     });
     if (!core) return null;
@@ -8420,6 +8476,16 @@ const CloudSync = {
     // v633: re-adjuntar las caras desde el doc appState/faces a cada persona (el core ya no las trae).
     if (facesData && Array.isArray(data.personalGlobal)) {
       data.personalGlobal = data.personalGlobal.map(p => (p && p.id && facesData[p.id]) ? Object.assign({}, p, { face: facesData[p.id] }) : p);
+    }
+    // v649: la asistencia vive en su propio doc appState/asistencia. Durante la transición el core
+    // viejo (v648) todavía puede traerla; UNIMOS ambas fuentes para no perder ninguna marca. Guardamos
+    // aparte el payload SOLO-DEL-DOC en _asistDocOnly (lo usa applyRemote para sembrar _asistHash y
+    // así migrar al doc las marcas que el core viejo aporte).
+    {
+      const _coreAsist = (data.asistenciaGlobal && typeof data.asistenciaGlobal==='object') ? data.asistenciaGlobal : {};
+      const _docAsist = (asistData && typeof asistData==='object') ? asistData : {};
+      data.asistenciaGlobal = (typeof _mergeAsistencia==='function') ? _mergeAsistencia(_coreAsist, _docAsist).asistencia : Object.assign({}, _coreAsist, _docAsist);
+      data._asistDocOnly = _docAsist;
     }
     return data;
   },
@@ -8486,6 +8552,7 @@ const CloudSync = {
     // antes de asignarlos al state. Esto remueve estimaciones vacías, normaliza
     // amortPct = anticipoPct, etc. Sin esto, los bugs de versiones viejas persisten.
     let needsResync = false;
+    let asistNeedsResync = false; // v649: la re-sync de asistencia va por la ruta LIVIANA (scheduleAsistenciaSave), NO por uploadCurrent (que re-sube el core).
     try {
       const beforeRowCount = (merged.projects || []).reduce((s, pr) => s + ((pr.cobro && pr.cobro.rows) ? pr.cobro.rows.length : 0), 0);
       ensureDataV9(merged);
@@ -8517,11 +8584,14 @@ const CloudSync = {
       }
     } catch(e){ console.warn('blindaje de caras en applyRemote:', e); }
 
-    // v646 MERGE DE ASISTENCIA entre dispositivos: en vez de dejar que el remoto PISE las marcas
-    // (last-write-wins, que borraba marcas cuando varios celulares marcaban a la vez en distintas
-    // obras), se UNEN las marcas locales + remotas por (fecha,persona) tomando la de _ts más nuevo,
-    // y se respetan los borrados del admin vía tombstones (state.asistTomb). Reemplaza el blindaje
-    // v629 (que solo protegía las marcas pendientes del propio celular y dejaba pisar las demás).
+    // v647/v649 MERGE DE ASISTENCIA entre dispositivos: el remoto NO pisa las marcas (last-write-wins);
+    // se UNEN local + remoto por (fecha,persona) tomando la de _ts más nuevo (nunca borra una presente).
+    // v649: la asistencia viene del doc appState/asistencia (unido al core viejo en _assembleFromSnap).
+    // _asistHash se siembra con lo BAJADO DEL DOC (no la unión): así, si el core viejo aportó marcas
+    // que el doc no tenía, state.asistenciaGlobal (unión) ≠ _asistHash y la próxima subida las MIGRA al
+    // doc. Si se sembrara con la unión, el strip del core las borraría sin escribirlas → pérdida.
+    try { this._asistHash = JSON.stringify(merged._asistDocOnly || {}); } catch(e){ this._asistHash = ''; }
+    try { delete merged._asistDocOnly; } catch(e){}
     try {
       if (typeof _mergeAsistencia === 'function') {
         const _rA = _mergeAsistencia(
@@ -8529,7 +8599,7 @@ const CloudSync = {
           merged.asistenciaGlobal || {}
         );
         merged.asistenciaGlobal = _rA.asistencia;
-        if (_rA.changed) needsResync = true;
+        if (_rA.changed) asistNeedsResync = true; // v649: ruta LIVIANA — unir marcas no debe re-subir el core
       }
     } catch(e){ console.warn('merge de asistencia en applyRemote:', e); }
 
@@ -8555,6 +8625,11 @@ const CloudSync = {
     // todos los dispositivos se sincronicen sin la basura.
     if (needsResync && this.ref) {
       this.uploadCurrent().catch(e => console.warn('Re-sync post-limpieza falló:', e));
+    } else if (asistNeedsResync && this.ref) {
+      // v649: SOLO cambió la asistencia (unión de marcas locales que el remoto no traía). Se migra/propaga
+      // por el doc appState/asistencia SIN re-subir el core, para que marcar no dispare el guardado pesado.
+      // (Si needsResync también estuviera activo, uploadCurrent ya sube el doc de asistencia vía _asistHash.)
+      try { this.scheduleAsistenciaSave(); } catch(e) { console.warn('Re-sync de asistencia falló:', e); }
     }
   },
 
@@ -17120,9 +17195,9 @@ async function uploadPersonaDPI(event, personaId, lado){
   finally{ event.target.value=''; }
 }
 function eliminarPersonaGlobal(id){ if(!(can('personal.edit')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; } const c=_personaById(id); if(!c) return; prConfirm({title:'ELIMINAR',body:`¿Eliminar a ${c.nombre}?`,okText:'ELIMINAR',danger:true}).then(ok=>{ if(!ok) return; if(typeof state!=='undefined'&&state) state.personalGlobal=_getPersonal().filter(p=>p.id!==id); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} try{ _notifyPersonalChange('ELIMINADO', c); }catch(e){} renderPersonal(); showToast('PERSONA ELIMINADA'); }); }
-function toggleAsistenciaGlobal(id){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; const cur=A[f][id]||{}; if(cur.presente===true){ showToast('YA ESTÁ PRESENTE · ESE CHEQUE NO SE PUEDE MODIFICAR','red'); return; } const _d=new Date(); const _h=String(_d.getHours()).padStart(2,'0')+':'+String(_d.getMinutes()).padStart(2,'0'); A[f][id]={presente:true,obraId:cur.obraId||'',obraDesc:cur.obraDesc||'',hora:_h,_ts:Date.now()}; try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){} saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
-function setAsistenciaObra(id,obraId){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; if(!A[f][id])A[f][id]={presente:true}; A[f][id].obraId=obraId; if(obraId!=='OTRA')A[f][id].obraDesc=''; A[f][id]._ts=Date.now(); try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){} saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
-function setAsistenciaObraDesc(id,desc){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return; const f=_asistFechaActual(); const A=_getAsistencia(); if(A[f]&&A[f][id]){ A[f][id].obraDesc=desc; A[f][id]._ts=Date.now(); try{ _asistPendingAdd(f, id); }catch(e){} saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} } }
+function toggleAsistenciaGlobal(id){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; const cur=A[f][id]||{}; if(cur.presente===true){ showToast('YA ESTÁ PRESENTE · ESE CHEQUE NO SE PUEDE MODIFICAR','red'); return; } const _d=new Date(); const _h=String(_d.getHours()).padStart(2,'0')+':'+String(_d.getMinutes()).padStart(2,'0'); A[f][id]={presente:true,obraId:cur.obraId||'',obraDesc:cur.obraDesc||'',hora:_h,_ts:Date.now()}; try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){} saveAsistencia(); renderPersonal(); }
+function setAsistenciaObra(id,obraId){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; if(!A[f][id])A[f][id]={presente:true}; A[f][id].obraId=obraId; if(obraId!=='OTRA')A[f][id].obraDesc=''; A[f][id]._ts=Date.now(); try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){} saveAsistencia(); renderPersonal(); }
+function setAsistenciaObraDesc(id,desc){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return; const f=_asistFechaActual(); const A=_getAsistencia(); if(A[f]&&A[f][id]){ A[f][id].obraDesc=desc; A[f][id]._ts=Date.now(); try{ _asistPendingAdd(f, id); }catch(e){} saveAsistencia(); } }
 let _colabAbiertos = new Set(); // ids de colaboradores con su ficha desplegada (se preserva entre renders)
 function _toggleColab(id){
   const d=document.getElementById('colabDet-'+id); const h=document.getElementById('colabHead-'+id);
@@ -17143,7 +17218,7 @@ function _asignarObraColaborador(personaId, obraId){
   showToast('OBRA ASIGNADA: '+(_nom?_nom.toUpperCase():'(SIN OBRA)'),'green');
   if(typeof renderPersonal==='function') renderPersonal();
 }
-function markAllPresentGlobal(){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; _asistListaFiltrada().forEach(c=>{ if(!A[f][c.id])A[f][c.id]={presente:true,obraId:'',obraDesc:''}; else A[f][c.id].presente=true; A[f][c.id]._ts=Date.now(); try{ _asistPendingAdd(f, c.id); _asistTombClear(f, c.id); }catch(e){} }); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
+function markAllPresentGlobal(){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; _asistListaFiltrada().forEach(c=>{ if(!A[f][c.id])A[f][c.id]={presente:true,obraId:'',obraDesc:''}; else A[f][c.id].presente=true; A[f][c.id]._ts=Date.now(); try{ _asistPendingAdd(f, c.id); _asistTombClear(f, c.id); }catch(e){} }); saveAsistencia(); renderPersonal(); }
 
 // ── Ausencia manual con motivo ─────────────────────────────────────────────
 let _amPersonaId='', _amTipo='';
@@ -17177,7 +17252,7 @@ function _guardarAusenciaMotivo(){
   const cur=A[f][_amPersonaId]||{};
   A[f][_amPersonaId]={presente:false, motivo, motivoTipo:_amTipo, motivoDetalle:detalle, via:'manual', ausenteTs:Date.now(), _ts:Date.now(), obraId:cur.obraId||'', obraDesc:cur.obraDesc||''};
   try{ _asistPendingAdd(f, _amPersonaId); _asistTombClear(f, _amPersonaId); }catch(e){}
-  saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  saveAsistencia();
   closeModal('AusenciaMotivo'); renderPersonal(); showToast('AUSENCIA REGISTRADA','green');
 }
 function _quitarAusencia(){
@@ -17185,7 +17260,7 @@ function _quitarAusencia(){
   const A=_getAsistencia(); const f=_asistFechaActual(); if(A[f]) delete A[f][_amPersonaId];
   // v647: sin tombstone — la UNIÓN del merge nunca borra una marca presente; quitar una ausencia
   // no se propaga entre dispositivos (se corrige marcando el estado correcto, que gana por _ts).
-  saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  saveAsistencia();
   closeModal('AusenciaMotivo'); renderPersonal(); showToast('AUSENCIA QUITADA');
 }
 
@@ -17209,8 +17284,7 @@ function _marcarAsistenciaFacial(personaId, obraId, obraDesc, geo){
   if (out.accion === 'entrada') reg.geoEntrada = geo || null; else reg.geoSalida = geo || null;
   asis[fecha][personaId] = reg;
   try{ _asistPendingAdd(fecha, personaId); _asistTombClear(fecha, personaId); }catch(e){}
-  saveState();
-  try { if (typeof CloudSync!=='undefined' && CloudSync.uploadCurrent) CloudSync.uploadCurrent(); } catch(e){}
+  saveAsistencia();
   return { accion: out.accion, hora: hhmm };
 }
 

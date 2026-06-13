@@ -112,5 +112,15 @@ var F='2026-06-13';
   ok('presente local se conserva contra remoto vacío', !!r.asistencia[F].p1 && r.changed===true);
 })();
 
+// 10. Transición v649: _assembleFromSnap une la asistencia del CORE viejo + el doc nuevo
+//     appState/asistencia, sin perder ninguna (la misma UNIÓN).
+(function(){
+  var core = { [F]: { p1:{presente:true,_ts:100} } };  // lo que aún trae el core viejo (v648)
+  var doc  = { [F]: { p2:{presente:true,_ts:200} } };  // lo que trae appState/asistencia (v649)
+  var r=_mergeAsistencia(core, doc);
+  ok('transición v649: une core+doc (p1)', !!r.asistencia[F].p1);
+  ok('transición v649: une core+doc (p2)', !!r.asistencia[F].p2);
+})();
+
 console.log('PASS='+PASS+' FAIL='+FAIL);
 process.exit(FAIL?1:0);
