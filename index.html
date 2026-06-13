@@ -2903,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v645</span>
+    <span style="opacity:.5;font-size:9px">v646</span>
   </footer>
 
 </div>
@@ -7767,6 +7767,7 @@ function ensureDataV9(data){
     // caras: descriptors number[][] es array anidado (prohibido en Firestore) -> [{d:[...]}] para que sincronice
     try { (data.personalGlobal||[]).forEach(pr => { if (pr && pr.face && Array.isArray(pr.face.descriptors)) { pr.face.descriptors = pr.face.descriptors.map(d => Array.isArray(d) ? { d: d } : d).filter(x => x && Array.isArray(x.d)); } }); } catch(e){}
     if (!data.asistenciaGlobal || typeof data.asistenciaGlobal !== 'object') data.asistenciaGlobal = {};
+    if (!data.asistTomb || typeof data.asistTomb !== 'object') data.asistTomb = {}; // v646: borrados de asistencia (tombstones) para que el merge no los resucite
     {
       const _nrmN = s => String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
       const _seenP = new Set(data.personalGlobal.map(p => _nrmN(p && p.nombre)).filter(Boolean));
@@ -8516,28 +8517,24 @@ const CloudSync = {
       }
     } catch(e){ console.warn('blindaje de caras en applyRemote:', e); }
 
-    // v629 BLINDAJE DE ASISTENCIA: conservar SOLO las marcas hechas localmente que aún
-    // no se confirmó que llegaron a la nube (registro _asistPending — p.ej. escaneadas
-    // SIN internet en un sótano). Así no se pierden las marcas offline, pero el admin SÍ
-    // puede borrar/corregir las YA sincronizadas (esas no están pendientes → se respeta
-    // el remoto, no se reviven). Solo agrega/mejora la marca pendiente, nunca otra.
+    // v646 MERGE DE ASISTENCIA entre dispositivos: en vez de dejar que el remoto PISE las marcas
+    // (last-write-wins, que borraba marcas cuando varios celulares marcaban a la vez en distintas
+    // obras), se UNEN las marcas locales + remotas por (fecha,persona) tomando la de _ts más nuevo,
+    // y se respetan los borrados del admin vía tombstones (state.asistTomb). Reemplaza el blindaje
+    // v629 (que solo protegía las marcas pendientes del propio celular y dejaba pisar las demás).
     try {
-      const _pend = (typeof _asistPendingKeys==='function') ? _asistPendingKeys() : [];
-      if (_pend.length) {
-        const _locAsis = (state && state.asistenciaGlobal && typeof state.asistenciaGlobal==='object') ? state.asistenciaGlobal : {};
-        if (!merged.asistenciaGlobal || typeof merged.asistenciaGlobal!=='object') merged.asistenciaGlobal = {};
-        const _asScore = r => r ? ((r.presente?1:0)+(r.entrada?1:0)+(r.salida?1:0)+(r.motivo?1:0)) : -1;
-        _pend.forEach(k => {
-          const _i = k.indexOf('|'); if (_i < 0) return;
-          const _f = k.slice(0,_i), _pid = k.slice(_i+1);
-          const _lr = _locAsis[_f] && _locAsis[_f][_pid];
-          if (!_lr) return; // ya no existe local (p.ej. se quitó) → no resucitar
-          if (!merged.asistenciaGlobal[_f] || typeof merged.asistenciaGlobal[_f]!=='object') merged.asistenciaGlobal[_f] = {};
-          const _rr = merged.asistenciaGlobal[_f][_pid];
-          if (!_rr || _asScore(_lr) > _asScore(_rr)) { merged.asistenciaGlobal[_f][_pid] = _lr; needsResync = true; }
-        });
+      if (typeof _mergeAsistencia === 'function') {
+        const _rA = _mergeAsistencia(
+          (state && state.asistenciaGlobal) || {},
+          (state && state.asistTomb) || {},
+          merged.asistenciaGlobal || {},
+          merged.asistTomb || {}
+        );
+        merged.asistenciaGlobal = _rA.asistencia;
+        merged.asistTomb = _rA.tomb;
+        if (_rA.changed) needsResync = true;
       }
-    } catch(e){ console.warn('blindaje de asistencia en applyRemote:', e); }
+    } catch(e){ console.warn('merge de asistencia en applyRemote:', e); }
 
     state = merged;
     // v495: recalcular _projHashes desde el remoteData REALMENTE aplicado en esta llamada.
@@ -17109,9 +17106,9 @@ async function uploadPersonaDPI(event, personaId, lado){
   finally{ event.target.value=''; }
 }
 function eliminarPersonaGlobal(id){ if(!(can('personal.edit')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; } const c=_personaById(id); if(!c) return; prConfirm({title:'ELIMINAR',body:`¿Eliminar a ${c.nombre}?`,okText:'ELIMINAR',danger:true}).then(ok=>{ if(!ok) return; if(typeof state!=='undefined'&&state) state.personalGlobal=_getPersonal().filter(p=>p.id!==id); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} try{ _notifyPersonalChange('ELIMINADO', c); }catch(e){} renderPersonal(); showToast('PERSONA ELIMINADA'); }); }
-function toggleAsistenciaGlobal(id){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; const cur=A[f][id]||{}; if(cur.presente===true){ showToast('YA ESTÁ PRESENTE · ESE CHEQUE NO SE PUEDE MODIFICAR','red'); return; } const _d=new Date(); const _h=String(_d.getHours()).padStart(2,'0')+':'+String(_d.getMinutes()).padStart(2,'0'); A[f][id]={presente:true,obraId:cur.obraId||'',obraDesc:cur.obraDesc||'',hora:_h}; try{ _asistPendingAdd(f, id); }catch(e){} saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
-function setAsistenciaObra(id,obraId){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; if(!A[f][id])A[f][id]={presente:true}; A[f][id].obraId=obraId; if(obraId!=='OTRA')A[f][id].obraDesc=''; try{ _asistPendingAdd(f, id); }catch(e){} saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
-function setAsistenciaObraDesc(id,desc){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return; const f=_asistFechaActual(); const A=_getAsistencia(); if(A[f]&&A[f][id]){ A[f][id].obraDesc=desc; try{ _asistPendingAdd(f, id); }catch(e){} saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} } }
+function toggleAsistenciaGlobal(id){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; const cur=A[f][id]||{}; if(cur.presente===true){ showToast('YA ESTÁ PRESENTE · ESE CHEQUE NO SE PUEDE MODIFICAR','red'); return; } const _d=new Date(); const _h=String(_d.getHours()).padStart(2,'0')+':'+String(_d.getMinutes()).padStart(2,'0'); A[f][id]={presente:true,obraId:cur.obraId||'',obraDesc:cur.obraDesc||'',hora:_h,_ts:Date.now()}; try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){} saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
+function setAsistenciaObra(id,obraId){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; if(!A[f][id])A[f][id]={presente:true}; A[f][id].obraId=obraId; if(obraId!=='OTRA')A[f][id].obraDesc=''; A[f][id]._ts=Date.now(); try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){} saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
+function setAsistenciaObraDesc(id,desc){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return; const f=_asistFechaActual(); const A=_getAsistencia(); if(A[f]&&A[f][id]){ A[f][id].obraDesc=desc; A[f][id]._ts=Date.now(); try{ _asistPendingAdd(f, id); }catch(e){} saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} } }
 let _colabAbiertos = new Set(); // ids de colaboradores con su ficha desplegada (se preserva entre renders)
 function _toggleColab(id){
   const d=document.getElementById('colabDet-'+id); const h=document.getElementById('colabHead-'+id);
@@ -17132,7 +17129,7 @@ function _asignarObraColaborador(personaId, obraId){
   showToast('OBRA ASIGNADA: '+(_nom?_nom.toUpperCase():'(SIN OBRA)'),'green');
   if(typeof renderPersonal==='function') renderPersonal();
 }
-function markAllPresentGlobal(){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; _asistListaFiltrada().forEach(c=>{ if(!A[f][c.id])A[f][c.id]={presente:true,obraId:'',obraDesc:''}; else A[f][c.id].presente=true; try{ _asistPendingAdd(f, c.id); }catch(e){} }); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
+function markAllPresentGlobal(){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; _asistListaFiltrada().forEach(c=>{ if(!A[f][c.id])A[f][c.id]={presente:true,obraId:'',obraDesc:''}; else A[f][c.id].presente=true; A[f][c.id]._ts=Date.now(); try{ _asistPendingAdd(f, c.id); _asistTombClear(f, c.id); }catch(e){} }); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} renderPersonal(); }
 
 // ── Ausencia manual con motivo ─────────────────────────────────────────────
 let _amPersonaId='', _amTipo='';
@@ -17164,14 +17161,15 @@ function _guardarAusenciaMotivo(){
   const motivo=_amTipo + (detalle ? (' — ' + detalle) : '');
   const A=_getAsistencia(); const f=_asistFechaActual(); if(!A[f])A[f]={};
   const cur=A[f][_amPersonaId]||{};
-  A[f][_amPersonaId]={presente:false, motivo, motivoTipo:_amTipo, motivoDetalle:detalle, via:'manual', ausenteTs:Date.now(), obraId:cur.obraId||'', obraDesc:cur.obraDesc||''};
-  try{ _asistPendingAdd(f, _amPersonaId); }catch(e){}
+  A[f][_amPersonaId]={presente:false, motivo, motivoTipo:_amTipo, motivoDetalle:detalle, via:'manual', ausenteTs:Date.now(), _ts:Date.now(), obraId:cur.obraId||'', obraDesc:cur.obraDesc||''};
+  try{ _asistPendingAdd(f, _amPersonaId); _asistTombClear(f, _amPersonaId); }catch(e){}
   saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
   closeModal('AusenciaMotivo'); renderPersonal(); showToast('AUSENCIA REGISTRADA','green');
 }
 function _quitarAusencia(){
   if(!_amCanAsist()) return showToast('SIN PERMISO','red');
   const A=_getAsistencia(); const f=_asistFechaActual(); if(A[f]) delete A[f][_amPersonaId];
+  try{ _asistTombAdd(f, _amPersonaId); }catch(e){} // v646: tombstone para que el merge no la resucite desde otro dispositivo
   saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
   closeModal('AusenciaMotivo'); renderPersonal(); showToast('AUSENCIA QUITADA');
 }
@@ -17192,10 +17190,10 @@ function _marcarAsistenciaFacial(personaId, obraId, obraDesc, geo){
   const prev = asis[fecha][personaId] ? migrateAsistenciaRegistro(asis[fecha][personaId]) : null;
   const out = computeAsistenciaMark(prev || {}, hhmm);
   const reg = out.reg;
-  reg.obraId = obraId; reg.obraDesc = obraDesc || ''; reg.via = 'cara';
+  reg.obraId = obraId; reg.obraDesc = obraDesc || ''; reg.via = 'cara'; reg._ts = Date.now();
   if (out.accion === 'entrada') reg.geoEntrada = geo || null; else reg.geoSalida = geo || null;
   asis[fecha][personaId] = reg;
-  try{ _asistPendingAdd(fecha, personaId); }catch(e){}
+  try{ _asistPendingAdd(fecha, personaId); _asistTombClear(fecha, personaId); }catch(e){}
   saveState();
   try { if (typeof CloudSync!=='undefined' && CloudSync.uploadCurrent) CloudSync.uploadCurrent(); } catch(e){}
   return { accion: out.accion, hora: hhmm };
@@ -21988,6 +21986,42 @@ function parseProveedoresPago(aoa){
 function _getProveedores(){ try { if (typeof state !== 'undefined' && state) { if (!Array.isArray(state.proveedoresGlobales)) state.proveedoresGlobales = []; return state.proveedoresGlobales; } } catch(e){} return []; }
 function _getPersonal(){ try { if (typeof state !== 'undefined' && state) { if (!Array.isArray(state.personalGlobal)) state.personalGlobal = []; return state.personalGlobal; } } catch(e){} return []; }
 function _getAsistencia(){ try { if (typeof state !== 'undefined' && state) { if (!state.asistenciaGlobal || typeof state.asistenciaGlobal!=='object') state.asistenciaGlobal = {}; return state.asistenciaGlobal; } } catch(e){} return {}; }
+// v646: tombstones de asistencia (borrados del admin). { 'fecha|pid': ts }. Se sincronizan en el core.
+function _getAsistTomb(){ try { if (typeof state !== 'undefined' && state) { if (!state.asistTomb || typeof state.asistTomb!=='object') state.asistTomb = {}; return state.asistTomb; } } catch(e){} return {}; }
+function _asistTombAdd(fecha,pid){ if(!fecha||!pid) return; try{ var T=_getAsistTomb(); T[fecha+'|'+pid]=Date.now(); }catch(e){} }
+function _asistTombClear(fecha,pid){ if(!fecha||!pid) return; try{ var T=_getAsistTomb(); delete T[fecha+'|'+pid]; }catch(e){} }
+// v646: FUSIÓN de asistencia entre dispositivos. Une marcas locales+remotas por (fecha,pid)
+// tomando la de _ts más nuevo; los tombstones (borrados) ganan si su ts >= a la marca. Puro.
+// Probado en _asisttest/run.js — debe quedar IDÉNTICA a esa copia.
+function _mergeAsistencia(localAsis, localTomb, remoteAsis, remoteTomb){
+  var _ts = function(r){ return (r && typeof r._ts === 'number') ? r._ts : ((r && typeof r.ausenteTs === 'number') ? r.ausenteTs : 0); };
+  var _score = function(r){ return r ? ((r.presente?2:0)+(r.entrada?1:0)+(r.salida?1:0)+(r.motivo?1:0)) : -1; };
+  var out = (remoteAsis && typeof remoteAsis === 'object') ? JSON.parse(JSON.stringify(remoteAsis)) : {};
+  var changed = false;
+  var L = (localAsis && typeof localAsis === 'object') ? localAsis : {};
+  Object.keys(L).forEach(function(f){
+    var day = L[f]; if (!day || typeof day !== 'object') return;
+    if (!out[f] || typeof out[f] !== 'object') out[f] = {};
+    Object.keys(day).forEach(function(pid){
+      var lr = day[pid]; if (!lr) return;
+      var rr = out[f][pid];
+      if (!rr) { out[f][pid] = lr; changed = true; }
+      else if (_ts(lr) > _ts(rr)) { out[f][pid] = lr; changed = true; }
+      else if (_ts(lr) === _ts(rr) && _score(lr) > _score(rr)) { out[f][pid] = lr; changed = true; }
+    });
+  });
+  var tomb = {};
+  if (remoteTomb && typeof remoteTomb === 'object') Object.keys(remoteTomb).forEach(function(k){ tomb[k] = remoteTomb[k]; });
+  var LT = (localTomb && typeof localTomb === 'object') ? localTomb : {};
+  Object.keys(LT).forEach(function(k){ if (!(k in tomb) || LT[k] > tomb[k]) { tomb[k] = LT[k]; changed = true; } });
+  Object.keys(tomb).forEach(function(k){
+    var i = k.indexOf('|'); if (i < 0) return;
+    var f = k.slice(0, i), pid = k.slice(i+1), tts = tomb[k];
+    var rec = out[f] && out[f][pid];
+    if (rec && _ts(rec) <= tts) { delete out[f][pid]; changed = true; }
+  });
+  return { asistencia: out, tomb: tomb, changed: changed };
+}
 </script>
 <script>
 let recetaV2TorreSel = null, recetaV2NivelSel = null, recetaV2AptoSel = 'TOTAL';
