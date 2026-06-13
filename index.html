@@ -2903,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v654</span>
+    <span style="opacity:.5;font-size:9px">v655</span>
   </footer>
 
 </div>
@@ -17340,10 +17340,9 @@ function _marcarAsistenciaFacial(personaId, obraId, obraDesc, geo){
   const _pMS=(_getPersonal()||[]).find(x=>x.id===personaId);
   let out, reg;
   if (_pMS && _pMS.multiSesion){
-    // v653: persona multi-sesión → varias sesiones por día. NO se migra (es registro de sesiones).
-    out = computeAsistenciaMarkMulti(asis[fecha][personaId]||null, hhmm, obraId, obraDesc, Date.now());
+    // v653/v654: persona multi-sesión → varias sesiones por día. NO se migra. El geo va EN la sesión.
+    out = computeAsistenciaMarkMulti(asis[fecha][personaId]||null, hhmm, obraId, obraDesc, Date.now(), geo);
     reg = out.reg;
-    if (out.accion === 'entrada') reg.geoEntrada = geo || null; else reg.geoSalida = geo || null;
   } else {
     const prev = asis[fecha][personaId] ? migrateAsistenciaRegistro(asis[fecha][personaId]) : null;
     out = computeAsistenciaMark(prev || {}, hhmm);
@@ -17381,7 +17380,7 @@ function descargarAsistenciaPDF(){
   const _esEnc = (typeof _getUserObraAsignada==='function') && !!_getUserObraAsignada(); // v651: PDF distinto para encargados (sin geo ni ausentes)
   let roster;
   if(_obraCtx){
-    roster=_getPersonal().filter(pn=> pn.tipo!=='OFICINA' && (pn.obraAsignada===_obraCtx || (dia[pn.id] && String(dia[pn.id].obraId||'')===_obraCtx)));
+    roster=_getPersonal().filter(pn=> pn.tipo!=='OFICINA' && (pn.obraAsignada===_obraCtx || (dia[pn.id] && String(dia[pn.id].obraId||'')===_obraCtx) || (dia[pn.id] && dia[pn.id].multiSesion && Array.isArray(dia[pn.id].sessions) && dia[pn.id].sessions.some(s=> s && String(s.obraId||'')===_obraCtx)))); // v654: multiSesion en el PDF diario por obra
   } else {
     roster=_getPersonal().filter(pn=> pn.tipo!=='OFICINA' && _personaEnObraUsuario(pn));
   }
@@ -17402,7 +17401,13 @@ function descargarAsistenciaPDF(){
   doc.text(_esEnc ? ('PRESENTES: '+presentes.length) : ('PRESENTES: '+presentes.length+'   ·   AUSENTES: '+ausentes.length), pageW/2, 66, {align:'center'});
   let _y=88;
   if(presentes.length){
-    const rows=presentes.map((pn,i)=>{ const rg=migrateAsistenciaRegistro(dia[pn.id])||dia[pn.id]||{}; const _base=[String(i+1), pn.nombre, pn.cargo||'', rg.entrada||'—', rg.salida||'—', nombreObra(dia[pn.id])]; return _esEnc ? _base : _base.concat([((_geoTxtMarca(rg,'geoEntrada')||{txt:'—'}).txt)]); });
+    const rows=[];
+    presentes.forEach((pn)=>{ const a0=dia[pn.id]||{};
+      if(a0.multiSesion && Array.isArray(a0.sessions) && a0.sessions.length){ // v654: una fila por SESIÓN
+        let _ss=a0.sessions; if(_obraCtx) _ss=_ss.filter(s=> s && String(s.obraId||'')===_obraCtx);
+        _ss.forEach(s=>{ const _b=[String(rows.length+1), pn.nombre, pn.cargo||'', s.entrada||'—', s.salida||'—', nombreObra({obraId:s.obraId,obraDesc:s.obraDesc})]; rows.push(_esEnc?_b:_b.concat([((_geoTxtMarca(s,'geoEntrada')||{txt:'—'}).txt)])); });
+      } else { const rg=migrateAsistenciaRegistro(a0)||a0||{}; const _b=[String(rows.length+1), pn.nombre, pn.cargo||'', rg.entrada||'—', rg.salida||'—', nombreObra(a0)]; rows.push(_esEnc?_b:_b.concat([((_geoTxtMarca(rg,'geoEntrada')||{txt:'—'}).txt)])); }
+    });
     doc.setFontSize(11); doc.setFont(undefined,'bold'); doc.text('PRESENTES', 40, _y);
     doc.autoTable({ startY:_y+6, head:[_esEnc ? ['#','NOMBRE','CARGO','ENTRADA','SALIDA','OBRA'] : ['#','NOMBRE','CARGO','ENTRADA','SALIDA','OBRA','UBICACIÓN']], body:rows, theme:'striped', styles:{fontSize:9,halign:'center',valign:'middle'}, headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',halign:'center'} });
     _y=doc.lastAutoTable.finalY+24;
@@ -22067,20 +22072,20 @@ function _asistResumenSesiones(sessions){
   var open=null,last=null,first=null,maxTs=0;
   ss.forEach(function(s){ if(!s) return; if(!first) first=s; last=s; if(s.entrada && !s.salida) open=s; var t=(typeof s._ts==='number')?s._ts:0; if(t>maxTs) maxTs=t; });
   var cur=open||last;
-  return { presente: ss.length>0, entrada: first?(first.entrada||''):'', salida: open?'':(last?(last.salida||''):''), obraId: cur?(cur.obraId||''):'', obraDesc: cur?(cur.obraDesc||''):'', _ts: maxTs };
+  return { presente: ss.length>0, entrada: first?(first.entrada||''):'', salida: open?'':(last?(last.salida||''):''), obraId: cur?(cur.obraId||''):'', obraDesc: cur?(cur.obraDesc||''):'', geoEntrada: cur?(cur.geoEntrada||null):null, geoSalida: cur?(cur.geoSalida||null):null, _ts: maxTs };
 }
 function _asistSesionAbierta(rec){
   var s=(rec && Array.isArray(rec.sessions))?rec.sessions:[];
   for(var i=s.length-1;i>=0;i--){ if(s[i] && s[i].entrada && !s[i].salida) return true; }
   return false;
 }
-function computeAsistenciaMarkMulti(rec, hhmm, obraId, obraDesc, nowTs){
+function computeAsistenciaMarkMulti(rec, hhmm, obraId, obraDesc, nowTs, geo){
   var sessions=(rec && Array.isArray(rec.sessions))?rec.sessions.slice():[];
   var openIdx=-1;
   for(var i=sessions.length-1;i>=0;i--){ if(sessions[i] && sessions[i].entrada && !sessions[i].salida){ openIdx=i; break; } }
   var accion, obra;
-  if(openIdx>=0){ sessions[openIdx]=Object.assign({},sessions[openIdx],{salida:hhmm,_ts:nowTs}); accion='salida'; obra=sessions[openIdx].obraId||''; }
-  else { sessions.push({obraId:obraId||'',obraDesc:obraDesc||'',entrada:hhmm,salida:null,_ts:nowTs}); accion='entrada'; obra=obraId||''; }
+  if(openIdx>=0){ sessions[openIdx]=Object.assign({},sessions[openIdx],{salida:hhmm,geoSalida:(geo||null),_ts:nowTs}); accion='salida'; obra=sessions[openIdx].obraId||''; }
+  else { sessions.push({obraId:obraId||'',obraDesc:obraDesc||'',entrada:hhmm,salida:null,geoEntrada:(geo||null),geoSalida:null,_ts:nowTs}); accion='entrada'; obra=obraId||''; }
   var resumen=_asistResumenSesiones(sessions);
   var reg=Object.assign({},resumen,{multiSesion:true,sessions:sessions,via:'cara'});
   return { reg:reg, accion:accion, obraId:obra };
@@ -22221,12 +22226,8 @@ function _mergeAsistencia(localAsis, remoteAsis){
         var _absC = (lr && lr.presente===false && lr.motivo && !Array.isArray(lr.sessions)) ? lr : ((rr && rr.presente===false && rr.motivo && !Array.isArray(rr.sessions)) ? rr : null);
         if (_sesh.length===0 && _absC) { out[f][pid] = Object.assign({}, _absC, { multiSesion:true, sessions:[] }); }
         else {
-          // v653b: arrastrar el geo del registro más nuevo (el resumen no lo trae) para que el link de ubicación no desaparezca.
-          var _newer = (_ts(lr) >= _ts(rr)) ? lr : rr;
-          var _m = Object.assign({}, _asistResumenSesiones(_sesh), { multiSesion:true, sessions:_sesh, via:((lr&&lr.via)||(rr&&rr.via)||'cara') });
-          if (_newer && _newer.geoEntrada != null) _m.geoEntrada = _newer.geoEntrada;
-          if (_newer && _newer.geoSalida != null) _m.geoSalida = _newer.geoSalida;
-          out[f][pid] = _m;
+          // v654: el geo viaja EN cada sesión; _asistResumenSesiones lo expone desde la sesión actual.
+          out[f][pid] = Object.assign({}, _asistResumenSesiones(_sesh), { multiSesion:true, sessions:_sesh, via:((lr&&lr.via)||(rr&&rr.via)||'cara') });
         }
         changed = true;
         return;

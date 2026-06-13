@@ -8,20 +8,20 @@ function _asistResumenSesiones(sessions){
   var open=null,last=null,first=null,maxTs=0;
   ss.forEach(function(s){ if(!s) return; if(!first) first=s; last=s; if(s.entrada && !s.salida) open=s; var t=(typeof s._ts==='number')?s._ts:0; if(t>maxTs) maxTs=t; });
   var cur=open||last;
-  return { presente: ss.length>0, entrada: first?(first.entrada||''):'', salida: open?'':(last?(last.salida||''):''), obraId: cur?(cur.obraId||''):'', obraDesc: cur?(cur.obraDesc||''):'', _ts: maxTs };
+  return { presente: ss.length>0, entrada: first?(first.entrada||''):'', salida: open?'':(last?(last.salida||''):''), obraId: cur?(cur.obraId||''):'', obraDesc: cur?(cur.obraDesc||''):'', geoEntrada: cur?(cur.geoEntrada||null):null, geoSalida: cur?(cur.geoSalida||null):null, _ts: maxTs };
 }
 function _asistSesionAbierta(rec){
   var s=(rec && Array.isArray(rec.sessions))?rec.sessions:[];
   for(var i=s.length-1;i>=0;i--){ if(s[i] && s[i].entrada && !s[i].salida) return true; }
   return false;
 }
-function computeAsistenciaMarkMulti(rec, hhmm, obraId, obraDesc, nowTs){
+function computeAsistenciaMarkMulti(rec, hhmm, obraId, obraDesc, nowTs, geo){
   var sessions=(rec && Array.isArray(rec.sessions))?rec.sessions.slice():[];
   var openIdx=-1;
   for(var i=sessions.length-1;i>=0;i--){ if(sessions[i] && sessions[i].entrada && !sessions[i].salida){ openIdx=i; break; } }
   var accion, obra;
-  if(openIdx>=0){ sessions[openIdx]=Object.assign({},sessions[openIdx],{salida:hhmm,_ts:nowTs}); accion='salida'; obra=sessions[openIdx].obraId||''; }
-  else { sessions.push({obraId:obraId||'',obraDesc:obraDesc||'',entrada:hhmm,salida:null,_ts:nowTs}); accion='entrada'; obra=obraId||''; }
+  if(openIdx>=0){ sessions[openIdx]=Object.assign({},sessions[openIdx],{salida:hhmm,geoSalida:(geo||null),_ts:nowTs}); accion='salida'; obra=sessions[openIdx].obraId||''; }
+  else { sessions.push({obraId:obraId||'',obraDesc:obraDesc||'',entrada:hhmm,salida:null,geoEntrada:(geo||null),geoSalida:null,_ts:nowTs}); accion='entrada'; obra=obraId||''; }
   var resumen=_asistResumenSesiones(sessions);
   var reg=Object.assign({},resumen,{multiSesion:true,sessions:sessions,via:'cara'});
   return { reg:reg, accion:accion, obraId:obra };
@@ -42,15 +42,11 @@ function _recToSessions(r){
 // espeja lo que hace _mergeAsistencia para registros de sesiones (composición pura) — v653b:
 // preserva una ausencia manual si NO hay ninguna sesión real, y arrastra el geo del registro más nuevo.
 function _mergeSessRecords(lr, rr){
-  var _ts=function(r){ return (r && typeof r._ts==='number')?r._ts:((r && typeof r.ausenteTs==='number')?r.ausenteTs:0); };
   var sesh=_mergeSesiones(_recToSessions(lr), _recToSessions(rr));
   var absC=(lr && lr.presente===false && lr.motivo && !Array.isArray(lr.sessions))?lr:((rr && rr.presente===false && rr.motivo && !Array.isArray(rr.sessions))?rr:null);
   if(sesh.length===0 && absC){ return Object.assign({}, absC, { multiSesion:true, sessions:[] }); }
-  var newer=(_ts(lr)>=_ts(rr))?lr:rr;
-  var m=Object.assign({}, _asistResumenSesiones(sesh), { multiSesion:true, sessions:sesh, via:((lr&&lr.via)||(rr&&rr.via)||'cara') });
-  if(newer && newer.geoEntrada!=null) m.geoEntrada=newer.geoEntrada;
-  if(newer && newer.geoSalida!=null) m.geoSalida=newer.geoSalida;
-  return m;
+  // v654: el geo ya viaja en cada sesión; _asistResumenSesiones lo expone desde la sesión actual.
+  return Object.assign({}, _asistResumenSesiones(sesh), { multiSesion:true, sessions:sesh, via:((lr&&lr.via)||(rr&&rr.via)||'cara') });
 }
 
 // ── mini framework ──
@@ -135,12 +131,21 @@ ok('abierta: rec undefined → false', _asistSesionAbierta(undefined)===false);
   ok('una sesión real gana a la ausencia', m2.presente===true && m2.sessions.length===1);
 })();
 
-// ── REGRESIÓN hallazgo MEDIO #3: el geo del registro más nuevo se arrastra en el merge ──
+// ── v654: geo POR SESIÓN — computeMulti lo guarda en la sesión y el resumen lo expone ──
 (function(){
-  var local  = { multiSesion:true, sessions:[{obraId:'O1',entrada:'07:00',salida:'09:00',_ts:5}], _ts:5 };
-  var remote = { multiSesion:true, sessions:[{obraId:'O2',entrada:'10:00',salida:null,_ts:6}], _ts:6, geoEntrada:{lat:1,lng:2} };
+  var r1=computeAsistenciaMarkMulti(undefined,'07:00','O1','',100,{lat:9,lng:8});
+  ok('geo: entrada guarda geoEntrada en la sesión', r1.reg.sessions[0].geoEntrada && r1.reg.sessions[0].geoEntrada.lat===9);
+  ok('geo: el resumen expone geoEntrada de la sesión actual', r1.reg.geoEntrada && r1.reg.geoEntrada.lat===9);
+  var r2=computeAsistenciaMarkMulti(r1.reg,'09:00','','',200,{lat:5,lng:4});
+  ok('geo: salida guarda geoSalida en la sesión', r2.reg.sessions[0].geoSalida && r2.reg.sessions[0].geoSalida.lat===5);
+})();
+// ── REGRESIÓN #3 (v654): el geo viaja EN la sesión y sobrevive el merge ──
+(function(){
+  var local  = { multiSesion:true, sessions:[{obraId:'O1',entrada:'07:00',salida:'09:00',geoEntrada:{lat:7},_ts:5}] };
+  var remote = { multiSesion:true, sessions:[{obraId:'O2',entrada:'10:00',salida:null,geoEntrada:{lat:1,lng:2},_ts:6}] };
   var m=_mergeSessRecords(local, remote);
-  ok('geo: arrastra geoEntrada del registro más nuevo', m.geoEntrada && m.geoEntrada.lat===1);
+  ok('geo: el resumen surfacea el geo de la sesión actual (O2 abierta) tras el merge', m.geoEntrada && m.geoEntrada.lat===1);
+  ok('geo: la sesión O1 conserva su propio geo en el merge', m.sessions.find(s=>s.obraId==='O1').geoEntrada.lat===7);
 })();
 
 console.log('PASS='+PASS+' FAIL='+FAIL);
