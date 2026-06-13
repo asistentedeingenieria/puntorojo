@@ -2903,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v650</span>
+    <span style="opacity:.5;font-size:9px">v651</span>
   </footer>
 
 </div>
@@ -17054,6 +17054,75 @@ window._v644ResumenPresentesPorObra = function(){
   }catch(e){ if(typeof showToast==='function') showToast('NO SE PUDO ABRIR EL RESUMEN','red'); }
 };
 
+// v651: KPIs de faltantes. Funciones PURAS (probadas en _asisttest/faltantes.js — deben quedar IDÉNTICAS).
+function _faltanIngreso(personalGlobal, dia, obra){
+  // Asignados FIJOS a la obra (obraAsignada===obra, sin multiObra ni OFICINA) que hoy NO marcaron
+  // entrada (presente) NI fueron marcados ausentes manualmente. obra==='' → todas las obras.
+  var out = [];
+  (personalGlobal||[]).forEach(function(p){
+    if (!p) return;
+    if (p.tipo === 'OFICINA') return;
+    if (p.multiObra) return;
+    if (!p.obraAsignada) return;
+    if (obra && p.obraAsignada !== obra) return;
+    var r = dia && dia[p.id];
+    var entered = !!(r && r.presente === true);
+    var absentManual = !!(r && r.presente === false && r.motivo);
+    if (!entered && !absentManual) out.push(p);
+  });
+  return out;
+}
+function _faltanSalida(dia, obra){
+  // Presentes (presente===true, excluye ausentes) que aún NO tienen salida. obra==='' → todas.
+  var out = [];
+  var d = dia || {};
+  Object.keys(d).forEach(function(pid){
+    var r = d[pid];
+    if (!r || r.presente !== true) return;       // solo presentes
+    if (r.salida) return;                          // ya salió
+    if (obra && String(r.obraId||'') !== obra) return;
+    out.push({ id: pid, entrada: r.entrada || r.hora || '', obraId: r.obraId || '' });
+  });
+  return out;
+}
+// v651: modal con el listado de quiénes FALTAN de ingresar (respeta el filtro de obra como los demás KPIs).
+window._v651FaltanIngreso = function(){
+  try{
+    const fecha=(typeof _asistFechaActual==='function')?_asistFechaActual():'';
+    const dia=((typeof _getAsistencia==='function')?_getAsistencia():{})[fecha]||{};
+    const filtro=(typeof _obraFiltroAsist==='function')?(_obraFiltroAsist()||''):'';
+    const projs=(typeof state!=='undefined'&&state&&Array.isArray(state.projects))?state.projects:[];
+    const projName=id=>{ if(!id) return '—'; const pr=projs.find(x=>x.id===id); return pr?String(pr.name||id).toUpperCase():String(id).toUpperCase(); };
+    const escH=s=>String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const pg=(typeof _getPersonal==='function')?_getPersonal():((typeof state!=='undefined'&&state&&state.personalGlobal)||[]);
+    const arr=_faltanIngreso(pg, dia, filtro).slice().sort((a,b)=> (String(a.obraAsignada||'').localeCompare(String(b.obraAsignada||'')) || String(a.nombre||'').localeCompare(String(b.nombre||''),'es',{sensitivity:'base'})));
+    let body='';
+    body+='<div style="font-size:12px;color:#92400E;font-weight:700;margin-bottom:12px;background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;padding:10px 12px">FALTAN INGRESO: <b>'+arr.length+'</b> '+(filtro?('· '+escH(projName(filtro))):'· TODAS LAS OBRAS')+'</div>';
+    if(!arr.length){ body+='<div style="padding:30px;text-align:center;background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;color:#15803D;font-weight:700">TODOS INGRESARON</div>'; }
+    else { body+='<div style="display:flex;flex-direction:column;gap:6px">'; arr.forEach(p=>{ body+='<div style="border:1px solid #E2E8F0;border-radius:9px;background:#fff;padding:10px 14px;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center"><div><div style="font-size:13px;font-weight:800;color:#0F172A">'+escH(p.nombre||'')+'</div><div style="font-size:10px;color:#94A3B8;margin-top:1px">'+escH(p.cargo||'')+'</div></div><div style="font-size:10px;font-weight:700;color:#64748B;text-align:right">'+escH(projName(p.obraAsignada))+'</div></div>'; }); body+='</div>'; }
+    window.prConfirm({ title:'FALTAN DE INGRESAR', bodyHTML:body, okText:'CERRAR', cancelText:'', wide:true });
+  }catch(e){ if(typeof showToast==='function') showToast('NO SE PUDO ABRIR','red'); }
+};
+// v651: modal con el listado de quiénes FALTAN de dar salida (presentes sin salida; excluye ausentes).
+window._v651FaltanSalida = function(){
+  try{
+    const fecha=(typeof _asistFechaActual==='function')?_asistFechaActual():'';
+    const dia=((typeof _getAsistencia==='function')?_getAsistencia():{})[fecha]||{};
+    const filtro=(typeof _obraFiltroAsist==='function')?(_obraFiltroAsist()||''):'';
+    const projs=(typeof state!=='undefined'&&state&&Array.isArray(state.projects))?state.projects:[];
+    const projName=id=>{ if(!id) return '—'; const pr=projs.find(x=>x.id===id); return pr?String(pr.name||id).toUpperCase():String(id).toUpperCase(); };
+    const escH=s=>String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const nom=id=>{ const p=(typeof _personaById==='function')?_personaById(id):null; return p?(p.nombre||''):id; };
+    const carg=id=>{ const p=(typeof _personaById==='function')?_personaById(id):null; return p?(p.cargo||''):''; };
+    const arr=_faltanSalida(dia, filtro).slice().sort((a,b)=> String(nom(a.id)).localeCompare(String(nom(b.id)),'es',{sensitivity:'base'}));
+    let body='';
+    body+='<div style="font-size:12px;color:#92400E;font-weight:700;margin-bottom:12px;background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;padding:10px 12px">FALTAN SALIDA: <b>'+arr.length+'</b> '+(filtro?('· '+escH(projName(filtro))):'· TODAS LAS OBRAS')+'</div>';
+    if(!arr.length){ body+='<div style="padding:30px;text-align:center;background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;color:#15803D;font-weight:700">NADIE PENDIENTE DE SALIDA</div>'; }
+    else { body+='<div style="display:flex;flex-direction:column;gap:6px">'; arr.forEach(x=>{ body+='<div style="border:1px solid #E2E8F0;border-radius:9px;background:#fff;padding:10px 14px;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center"><div><div style="font-size:13px;font-weight:800;color:#0F172A">'+escH(nom(x.id))+'</div><div style="font-size:10px;color:#94A3B8;margin-top:1px">'+escH(carg(x.id))+(x.obraId?(' · '+escH(projName(x.obraId))):'')+'</div></div><div style="text-align:right;white-space:nowrap"><div style="font-size:9px;color:#94A3B8;font-weight:700">ENTRADA</div><div style="font-size:14px;font-weight:800;color:#0F172A">'+escH(x.entrada||'—')+'</div></div></div>'; }); body+='</div>'; }
+    window.prConfirm({ title:'FALTAN DE DAR SALIDA', bodyHTML:body, okText:'CERRAR', cancelText:'', wide:true });
+  }catch(e){ if(typeof showToast==='function') showToast('NO SE PUDO ABRIR','red'); }
+};
+
 function renderPersonal(){
   const personal=_getPersonal();
   const empresas=_persEmpresas();
@@ -17089,7 +17158,9 @@ function renderPersonal(){
     const _genteObra = _uObraKpi ? `<div class="kpi olive"><div class="lbl">Personal en tu obra</div><div class="val">${_asistListaFiltrada().length}</div><div class="sub">${String(((state.projects||[]).find(x=>x.id===_uObraKpi)||{}).name||'').toUpperCase()}</div></div>` : '';
     const _kAsist = _genteObra + `<div class="kpi green"><div class="lbl">Hora prom. entrada</div><div class="val">${_avgEnt}</div><div class="sub">${fecha}</div></div>`
       + `<div class="kpi cafe"><div class="lbl">Hora prom. salida</div><div class="val">${_avgSal}</div><div class="sub">${fecha}</div></div>`
-      + `<div class="kpi olive" onclick="window._v644ResumenPresentesPorObra&&window._v644ResumenPresentesPorObra()" style="cursor:pointer" title="Tocá para ver los presentes de cada obra"><div class="lbl">Presentes por obra (prom.)</div><div class="val">${Object.keys(_porObra).length?Math.round(presentes/Object.keys(_porObra).length):0}</div><div class="sub">TOCÁ PARA VER POR OBRA</div></div>`;
+      + `<div class="kpi olive" onclick="window._v644ResumenPresentesPorObra&&window._v644ResumenPresentesPorObra()" style="cursor:pointer" title="Tocá para ver los presentes de cada obra"><div class="lbl">Presentes por obra (prom.)</div><div class="val">${Object.keys(_porObra).length?Math.round(presentes/Object.keys(_porObra).length):0}</div><div class="sub">TOCÁ PARA VER POR OBRA</div></div>`
+      + `<div class="kpi cafe" onclick="window._v651FaltanIngreso&&window._v651FaltanIngreso()" style="cursor:pointer" title="Tocá para ver quiénes faltan de ingresar"><div class="lbl">Faltan ingreso</div><div class="val">${(typeof _faltanIngreso==='function'?_faltanIngreso(_getPersonal(), dia, _obraFiltroK).length:0)}</div><div class="sub">TOCÁ PARA VER</div></div>`
+      + `<div class="kpi cafe" onclick="window._v651FaltanSalida&&window._v651FaltanSalida()" style="cursor:pointer" title="Tocá para ver quiénes faltan de dar salida"><div class="lbl">Faltan salida</div><div class="val">${(typeof _faltanSalida==='function'?_faltanSalida(dia, _obraFiltroK).length:0)}</div><div class="sub">TOCÁ PARA VER</div></div>`;
     kp.innerHTML = (_sub==='asistencia') ? _kAsist : (_kPersonal+_kEmpresas);
   }
   const empOpts=['<option value="">TODAS LAS EMPRESAS</option>'].concat(empresas.map(e=>`<option value="${e}"${e===_persEmpresaFilter?' selected':''}>${e}</option>`)).join('');
@@ -17296,6 +17367,7 @@ function descargarAsistenciaPDF(){
   // v640: TODO el personal de la obra (presentes + ausentes). Roster = asignados fijos a la
   // obra + multi-obra marcados ahí ese día; sin obra (admin "todas") = todo el personal visible.
   const _obraCtx = obraSel || ((typeof _getUserObraAsignada==='function')?_getUserObraAsignada():'');
+  const _esEnc = (typeof _getUserObraAsignada==='function') && !!_getUserObraAsignada(); // v651: PDF distinto para encargados (sin geo ni ausentes)
   let roster;
   if(_obraCtx){
     roster=_getPersonal().filter(pn=> pn.tipo!=='OFICINA' && (pn.obraAsignada===_obraCtx || (dia[pn.id] && String(dia[pn.id].obraId||'')===_obraCtx)));
@@ -17307,7 +17379,7 @@ function descargarAsistenciaPDF(){
   let ausentes=roster.filter(pn=> !(dia[pn.id] && dia[pn.id].presente))
     .map(pn=>{ const r=dia[pn.id]; return {pn, motivo:(r&&r.motivo)?r.motivo:'AUSENTE'}; })
     .sort((x,y)=>_persNorm(x.pn.nombre).localeCompare(_persNorm(y.pn.nombre),'es',{sensitivity:'base'}));
-  if(!presentes.length && !ausentes.length){ showToast(obraSel?('NADIE PRESENTE EN '+obraLabel+' ESE DÍA'):'SIN DATOS DE ASISTENCIA ESE DÍA','red'); return; }
+  if(_esEnc ? !presentes.length : (!presentes.length && !ausentes.length)){ showToast(obraSel?('NADIE PRESENTE EN '+obraLabel+' ESE DÍA'):'SIN DATOS DE ASISTENCIA ESE DÍA','red'); return; }
   if(typeof window.jspdf==='undefined'||!window.jspdf.jsPDF){ showToast('JSPDF NO CARGÓ — RECARGAR LA APP','red'); return; }
   const { jsPDF }=window.jspdf;
   const doc=new jsPDF({ unit:'pt', format:'a4', orientation:'landscape' });
@@ -17316,15 +17388,15 @@ function descargarAsistenciaPDF(){
   doc.setFontSize(14); doc.setFont(undefined,'bold');
   doc.text('ASISTENCIA · '+_fmtDMY(fecha)+(obraLabel?(' · '+obraLabel):''), pageW/2, 50, {align:'center'});
   doc.setFontSize(9); doc.setFont(undefined,'normal');
-  doc.text('PRESENTES: '+presentes.length+'   ·   AUSENTES: '+ausentes.length, pageW/2, 66, {align:'center'});
+  doc.text(_esEnc ? ('PRESENTES: '+presentes.length) : ('PRESENTES: '+presentes.length+'   ·   AUSENTES: '+ausentes.length), pageW/2, 66, {align:'center'});
   let _y=88;
   if(presentes.length){
-    const rows=presentes.map((pn,i)=>{ const rg=migrateAsistenciaRegistro(dia[pn.id])||dia[pn.id]||{}; return [String(i+1), pn.nombre, pn.cargo||'', rg.entrada||'—', rg.salida||'—', nombreObra(dia[pn.id]), ((_geoTxtMarca(rg,'geoEntrada')||{txt:'—'}).txt)]; });
+    const rows=presentes.map((pn,i)=>{ const rg=migrateAsistenciaRegistro(dia[pn.id])||dia[pn.id]||{}; const _base=[String(i+1), pn.nombre, pn.cargo||'', rg.entrada||'—', rg.salida||'—', nombreObra(dia[pn.id])]; return _esEnc ? _base : _base.concat([((_geoTxtMarca(rg,'geoEntrada')||{txt:'—'}).txt)]); });
     doc.setFontSize(11); doc.setFont(undefined,'bold'); doc.text('PRESENTES', 40, _y);
-    doc.autoTable({ startY:_y+6, head:[['#','NOMBRE','CARGO','ENTRADA','SALIDA','OBRA','UBICACIÓN']], body:rows, theme:'striped', styles:{fontSize:9,halign:'center',valign:'middle'}, headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',halign:'center'} });
+    doc.autoTable({ startY:_y+6, head:[_esEnc ? ['#','NOMBRE','CARGO','ENTRADA','SALIDA','OBRA'] : ['#','NOMBRE','CARGO','ENTRADA','SALIDA','OBRA','UBICACIÓN']], body:rows, theme:'striped', styles:{fontSize:9,halign:'center',valign:'middle'}, headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',halign:'center'} });
     _y=doc.lastAutoTable.finalY+24;
   }
-  if(ausentes.length){
+  if(!_esEnc && ausentes.length){
     if(_y>pageH-90){ doc.addPage(); _y=50; }
     const arows=ausentes.map((o,i)=>[String(i+1), o.pn.nombre, o.pn.cargo||'', o.motivo]);
     doc.setFontSize(11); doc.setFont(undefined,'bold'); doc.text('AUSENTES', 40, _y);
