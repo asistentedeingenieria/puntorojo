@@ -2903,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v667</span>
+    <span style="opacity:.5;font-size:9px">v668</span>
   </footer>
 
 </div>
@@ -8318,8 +8318,20 @@ const CloudSync = {
       this.unsubscribe = db.collection('appState').onSnapshot(
         (snap) => {
           if (snap.metadata.hasPendingWrites) return; // eco de NUESTRA escritura
-          const d = this._assembleFromSnap(snap);
-          if (d) this.applyRemote(d, { initial: false });
+          // v668: coalescer la tormenta de snapshots (con ~30 usuarios llega una escritura ajena por
+          // cada cambio). Guardamos el snap MÁS NUEVO y aplicamos UNA vez cada ~300ms, reensamblando
+          // EN EL FLUSH (nunca un intermedio viejo) para que los guards (pendingWrite/isUserBusy) y la
+          // siembra de _asistHash se evalúen contra lo ÚLTIMO. Mata el storm de renders. Los merges son
+          // UNIÓN, así que coalescer solo DEMORA aplicar, nunca pierde una marca/registro.
+          this._latestSnap = snap;
+          if (this._snapCoalesce) return;
+          this._snapCoalesce = setTimeout(() => {
+            this._snapCoalesce = null;
+            const _s = this._latestSnap; this._latestSnap = null;
+            if (!_s) return;
+            const d = this._assembleFromSnap(_s);
+            if (d) this.applyRemote(d, { initial: false });
+          }, 300);
         },
         (err) => { console.error('CloudSync onSnapshot error:', err); }
       );
