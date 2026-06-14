@@ -2903,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v662</span>
+    <span style="opacity:.5;font-size:9px">v663</span>
   </footer>
 
 </div>
@@ -8660,6 +8660,27 @@ const CloudSync = {
         if (_rA.changed) asistNeedsResync = true; // v649: ruta LIVIANA — unir marcas no debe re-subir el core
       }
     } catch(e){ console.warn('merge de asistencia en applyRemote:', e); }
+
+    // v663 BLINDAJE DE COLABORADORES: el remoto NUNCA borra un colaborador local que no trae
+    // (otro celular con lista vieja pisaba al recién agregado → "no se guarda"). Unión por id,
+    // respetando borrados deliberados vía tombstones (colaboradoresEliminados, unidos también).
+    try {
+      if (typeof _mergeColaboradores === 'function') {
+        const _tomb = Object.assign({}, (state && state.colaboradoresEliminados) || {}, merged.colaboradoresEliminados || {});
+        merged.colaboradoresEliminados = _tomb;
+        const _locProj = {}; ((state && state.projects) || []).forEach(p => { if (p && p.id) _locProj[p.id] = p; });
+        (merged.projects || []).forEach(rp => {
+          if (!rp || !rp.planilla) return;
+          const lp = _locProj[rp.id];
+          const _mc = _mergeColaboradores((lp && lp.planilla && lp.planilla.colaboradores) || [], rp.planilla.colaboradores || [], _tomb);
+          rp.planilla.colaboradores = _mc.list;
+          if (_mc.changed) needsResync = true;
+        });
+        const _mg = _mergeColaboradores((state && state.colaboradoresGlobal) || [], merged.colaboradoresGlobal || [], _tomb);
+        merged.colaboradoresGlobal = _mg.list;
+        if (_mg.changed) needsResync = true;
+      }
+    } catch(e){ console.warn('blindaje de colaboradores en applyRemote:', e); }
 
     state = merged;
     // v495: recalcular _projHashes desde el remoteData REALMENTE aplicado en esta llamada.
@@ -22277,6 +22298,19 @@ function _asistTombClear(fecha,pid){ if(!fecha||!pid) return; try{ var T=_getAsi
 // presente "pelado"). NO borra por merge: los tombstones se quitaron porque causaban pérdida de
 // marcas por desfase de reloj y por marcas legacy sin _ts (revisión adversarial v646). Puro.
 // Probado en _asisttest/run.js — debe quedar IDÉNTICA (código) a esa copia.
+/* Une dos listas de colaboradores por id (el remoto NUNCA borra uno local que no trae).
+   tombSet = {id:true} de ids borrados deliberadamente → se quitan de la unión (no resucitan).
+   changed = true cuando se preservó un colaborador local que el remoto no tenía (→ re-subir). */
+function _mergeColaboradores(localList, remoteList, tombSet){
+  function _tk(c){ return String((c && c.nombre) || '').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim().toUpperCase(); }
+  const byId = {};
+  (Array.isArray(remoteList) ? remoteList : []).forEach(function(c){ if (c && c.id) byId[c.id] = c; });
+  var changed = false;
+  (Array.isArray(localList) ? localList : []).forEach(function(c){ if (c && c.id && !byId[c.id]) { byId[c.id] = c; changed = true; } });
+  if (tombSet) Object.keys(byId).forEach(function(id){ var c = byId[id]; if (tombSet[id] || tombSet[_tk(c)]) delete byId[id]; });
+  return { list: Object.keys(byId).map(function(id){ return byId[id]; }), changed: changed };
+}
+
 function _mergeAsistencia(localAsis, remoteAsis){
   var _ts = function(r){ return (r && typeof r._ts === 'number') ? r._ts : ((r && typeof r.ausenteTs === 'number') ? r.ausenteTs : 0); };
   var _score = function(r){ if(!r) return -1; if(r.presente===false && r.motivo) return 3; return (r.presente?2:0)+(r.entrada?1:0)+(r.salida?1:0)+(r.motivo?1:0); };
@@ -33123,7 +33157,7 @@ window.addEventListener('load', () => {
     const html=`<div class="card"><div class="card-hd"><h3>LISTADO DESPLEGABLE DE INSTALADORES Y MASILLEROS</h3></div><div class="planilla-toolbar"><div class="field"><label>NOMBRE</label><input id="newColabNombre" placeholder="NOMBRE COMPLETO" ${canEdit?'':'disabled'}></div><div class="field"><label>TIPO</label><select id="newColabRol" ${canEdit?'':'disabled'}><option>COLABORADOR</option><option>INSTALADOR</option><option>MASILLERO</option><option>CUADRILLA</option><option>OTRO</option></select></div><button class="btn sm" ${canEdit?'':'disabled'} onclick="addPlanillaColaborador()">AGREGAR</button><button class="btn ghost sm" ${canEdit?'':'disabled'} onclick="cargarColaboradoresBase()">CARGAR BASE</button></div><div class="planilla-pay-list">${list.map(c=>`<div class="planilla-person-row"><div><div class="planilla-person-name">${h(c.nombre)}</div><div class="planilla-person-role">${h(c.rol||'')}</div></div><div>${(p.planilla.pagos||[]).filter(pg=>pg.colaboradorId===c.id || upper(pg.colaborador)===upper(c.nombre)).length} PAGOS</div><button class="btn-icon danger" ${canEdit?'':'disabled'} onclick="deletePlanillaColaborador('${h(c.id)}')">✕</button></div>`).join('')||'<div class="empty" style="padding:30px">SIN COLABORADORES</div>'}</div></div>`;
     const el=document.getElementById('planilla-colaboradores'); if(el) el.innerHTML=html;
   };
-  window.addPlanillaColaborador=function(){ if(!can('planilla.generate')&&!can('users.manage')) return showToast('SIN PERMISO','red'); const p=activeProj(); const nombre=upper(document.getElementById('newColabNombre')?.value||''); const rol=upper(document.getElementById('newColabRol')?.value||'PERSONAL'); if(!nombre) return showToast('ESCRIBIR EL NOMBRE','red'); if((p.planilla.colaboradores||[]).some(c=>upper(c.nombre)===nombre)) return showToast('YA EXISTE EN EL LISTADO','red'); p.planilla.colaboradores.push({id:'col-'+uid(),nombre,rol}); window.planillaSelectedColaborador=p.planilla.colaboradores[p.planilla.colaboradores.length-1].id; saveState(); renderPlanilla(); showToast('COLABORADOR AGREGADO','green'); };
+  window.addPlanillaColaborador=function(){ if(!can('planilla.generate')&&!can('users.manage')) return showToast('SIN PERMISO','red'); const p=activeProj(); const nombre=upper(document.getElementById('newColabNombre')?.value||''); const rol=upper(document.getElementById('newColabRol')?.value||'PERSONAL'); if(!nombre) return showToast('ESCRIBIR EL NOMBRE','red'); if((p.planilla.colaboradores||[]).some(c=>upper(c.nombre)===nombre)) return showToast('YA EXISTE EN EL LISTADO','red'); try{var _tkN=String(nombre).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim().toUpperCase();if(window.state&&window.state.colaboradoresEliminados)delete window.state.colaboradoresEliminados[_tkN];}catch(e){} p.planilla.colaboradores.push({id:'col-'+uid(),nombre,rol}); window.planillaSelectedColaborador=p.planilla.colaboradores[p.planilla.colaboradores.length-1].id; saveState(); renderPlanilla(); showToast('COLABORADOR AGREGADO','green'); };
   window.deletePlanillaColaborador=function(id){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE ELIMINAR COLABORADORES','red');
     // v210: buscar nombre en cualquier proyecto (no via helper).
@@ -33148,7 +33182,7 @@ window.addEventListener('load', () => {
     if(window.planillaSelectedColaborador===id) window.planillaSelectedColaborador='';
     saveState(); renderPlanilla(); showToast('COLABORADOR ELIMINADO');
   };
-  window.cargarColaboradoresBase=function(){ if(!can('planilla.generate')&&!can('users.manage')) return showToast('SIN PERMISO','red'); const p=activeProj(); if(!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores=[]; let added=0; DEFAULT_PLANILLA_COLABS.forEach(dc=>{ if(!p.planilla.colaboradores.some(c=>upper(c.nombre)===upper(dc.nombre))){ p.planilla.colaboradores.push({...dc}); added++; }}); saveState(); renderPlanilla(); showToast(added ? `COLABORADORES AGREGADOS: ${added}` : 'LISTADO YA ACTUALIZADO','green'); };
+  window.cargarColaboradoresBase=function(){ if(!can('planilla.generate')&&!can('users.manage')) return showToast('SIN PERMISO','red'); const p=activeProj(); if(!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores=[]; let added=0; DEFAULT_PLANILLA_COLABS.forEach(dc=>{ if(!p.planilla.colaboradores.some(c=>upper(c.nombre)===upper(dc.nombre))){ try{var _tkB=String(dc.nombre||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim().toUpperCase();if(window.state&&window.state.colaboradoresEliminados){delete window.state.colaboradoresEliminados[_tkB];if(dc.id)delete window.state.colaboradoresEliminados[dc.id];}}catch(e){} p.planilla.colaboradores.push({...dc}); added++; }}); saveState(); renderPlanilla(); showToast(added ? `COLABORADORES AGREGADOS: ${added}` : 'LISTADO YA ACTUALIZADO','green'); };
 
   window.renderPlanillaReporte=function(){
     const p=activeProj(); let html=`<div class="card"><div class="card-hd"><h3>REPORTE PAGADO POR APTO</h3></div><div class="cobro-matrix-row head"><div>APTO / MODELO</div>${ETAPAS_INFO.map((e,i)=>`<div>ET. ${i+1}</div>`).join('')}<div>% PROM.</div></div>`;
@@ -33989,6 +34023,9 @@ window.addEventListener('load', () => {
       if(!c) return;
       const nom = (c.nombre || c.name || c.colaborador || '').toString().trim();
       if(!nom) return;
+      // v663: NO resucitar borrados — este rebuild re-crea por nombre desde personal/pagos;
+      // si el nombre (o el id) está tombstoneado, lo saltamos.
+      try { var _tkDel = nom.normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim().toUpperCase(); var _te = window.state && window.state.colaboradoresEliminados; if (_te && (_te[_tkDel] || (c.id && _te[c.id]))) return; } catch(e){}
       const nomU = nom.toUpperCase();
       if(merged.some(x => x.nombre === nomU)) return;
       const rol = normalizeRole(c.rol || c.role || c.tipo || '');
@@ -42725,6 +42762,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           (window.state?.projects || []).forEach(p => { if (!p.planilla) p.planilla = { pagos:[], retencionesPagadas:[], ajustes:[], modelos:[], aptoModelMap:{}, colaboradores:[], etapas:[] }; if (!Array.isArray(p.planilla.colaboradores)) p.planilla.colaboradores = []; p.planilla.colaboradores.push({ ...nuevo }); });
           if (!Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal = [];
           window.state.colaboradoresGlobal.push({ ...nuevo });
+          // v663: al re-agregar, limpiar el tombstone (nombre+id) para que el sync NO lo vuelva a borrar.
+          try { if (window.state.colaboradoresEliminados) { delete window.state.colaboradoresEliminados[_normName(nombre)]; delete window.state.colaboradoresEliminados[newId]; } } catch(e){}
           try { if (typeof saveState === 'function') saveState(); } catch(e){ console.error('[v397] saveState:', e); }
           try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
           try { _notifyAdmin('NUEVO', nuevo, ''); } catch(e){ console.warn('[v397] notify:', e); }
@@ -42825,6 +42864,9 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const nombreUC = _normName(colab.nombre);
     (window.state?.projects || []).forEach(p => { if (!Array.isArray(p.planilla?.colaboradores)) return; p.planilla.colaboradores = p.planilla.colaboradores.filter(c => c.id !== id && _normName(c.nombre) !== nombreUC); });
     if (Array.isArray(window.state.colaboradoresGlobal)) window.state.colaboradoresGlobal = window.state.colaboradoresGlobal.filter(c => c.id !== id && _normName(c.nombre) !== nombreUC);
+    // v663: tombstone por NOMBRE normalizado + id, para que el sync (y el rebuild interno)
+    // NO resuciten el borrado desde otro celular.
+    try { if (window.state) { if (!window.state.colaboradoresEliminados) window.state.colaboradoresEliminados = {}; var _td = Date.now(); window.state.colaboradoresEliminados[id] = _td; if (nombreUC) window.state.colaboradoresEliminados[nombreUC] = _td; } } catch(e){}
     if (window.planillaSelectedColaborador === id) window.planillaSelectedColaborador = '';
     try { if (typeof saveState === 'function') saveState(); } catch(e){}
     try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
