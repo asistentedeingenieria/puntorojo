@@ -2903,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v664</span>
+    <span style="opacity:.5;font-size:9px">v665</span>
   </footer>
 
 </div>
@@ -8448,12 +8448,18 @@ const CloudSync = {
       }
     } catch(e){}
     if (!this._projHashes) this._projHashes = {};
+    // v664: hash del core SIN el stamp volátil (_lastUpdate cambia en CADA llamada). Solo re-escribimos
+    // el doc core si su CONTENIDO cambió de verdad → mata la contención del doc compartido más caliente
+    // (un check de etapa solo toca su proj_, no el core). Mismo patrón ya probado en proj_/faces/asistencia.
+    if (!this._coreHash) this._coreHash = '';
+    const _coreForHash = Object.assign({}, data); delete _coreForHash._lastUpdate;
+    const _coreHashStr = JSON.stringify(_coreForHash);
     // v498: armar la lista de operaciones y trocear en lotes <=450 (Firestore rechaza batches >500).
-    // Los hashes/borrados se aplican a _projHashes SOLO tras el commit exitoso de SU lote: si un
-    // commit falla (red, limite), el cambio se reintenta en la proxima subida (no queda un hash
-    // "ya subido" para un proyecto que en realidad no se subio). El core va siempre primero.
+    // Los hashes/borrados se aplican SOLO tras el commit exitoso de SU lote: si un commit falla (red,
+    // limite), el cambio se reintenta en la proxima subida (no queda un hash "ya subido" para algo que
+    // en realidad no se subio).
     const ops = [];
-    ops.push({ kind: 'set', ref: this.coreRef, data: data });   // core siempre (es chico)
+    if (this._coreHash !== _coreHashStr) ops.push({ kind: 'set', ref: this.coreRef, data: data, _coreNewHash: _coreHashStr });   // core SOLO si cambió de verdad
     // v633: el hash de caras se calcula acá; el doc appState/faces se sube APARTE (su propio
     // commit, más abajo) para que un fallo de caras NUNCA rompa el guardado del core.
     if (!this._facesHash) this._facesHash = '';
@@ -8478,13 +8484,16 @@ const CloudSync = {
       const batch = db.batch();
       slice.forEach(op => { if (op.kind === 'del') batch.delete(op.ref); else batch.set(op.ref, op.data); });
       await batch.commit();
-      slice.forEach(op => {                                     // aplicar _projHashes SOLO tras confirmar este lote
+      slice.forEach(op => {                                     // aplicar hashes SOLO tras confirmar este lote
         if (op._setId) this._projHashes[op._setId] = op._setJson;
         if (op._delId) delete this._projHashes[op._delId];
+        if (op._coreNewHash) this._coreHash = op._coreNewHash;   // v664: hash del core tras confirmar su commit
       });
     }
-    this.lastUploadAt = Date.now();
-    if (_pendUp.length && typeof _asistPendingClear==='function') _asistPendingClear(_pendUp); // v629: confirmadas en la nube
+    if (ops.length) {                                           // v664: solo si de verdad se subió algo (con el hash-skip, ops puede quedar vacío)
+      this.lastUploadAt = Date.now();
+      if (_pendUp.length && typeof _asistPendingClear==='function') _asistPendingClear(_pendUp); // v629: confirmadas en la nube
+    }
     // v633: el doc de caras se sube APARTE (su propio commit). Si falla (reglas/red) NO rompe
     // el guardado del core; las caras quedan locales + el blindaje las conserva y se reintenta.
     if (this._facesHash !== _facesJson) {
@@ -8723,6 +8732,7 @@ const CloudSync = {
     // Si la limpieza removió filas, re-subir el state limpio a la nube para que
     // todos los dispositivos se sincronicen sin la basura.
     if (needsResync && this.ref) {
+      this._coreHash = '';   // v664: forzar la re-subida del core — la limpieza/blindaje modificó datos (p.ej. colaboradores/caras preservados) que DEBEN propagarse aunque el hash coincidiera por casualidad.
       this.uploadCurrent().catch(e => console.warn('Re-sync post-limpieza falló:', e));
     } else if (asistNeedsResync && this.ref) {
       // v649: SOLO cambió la asistencia (unión de marcas locales que el remoto no traía). Se migra/propaga
