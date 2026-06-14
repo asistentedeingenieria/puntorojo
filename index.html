@@ -2903,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v658</span>
+    <span style="opacity:.5;font-size:9px">v659</span>
   </footer>
 
 </div>
@@ -4692,6 +4692,56 @@ function unsubscribeFromMyNotifications(){
 /* ═══ NOTIFICACIONES DEL SISTEMA (navegador / celular) ═══ */
 const NOTIF_PERM_KEY = 'puntorojo_notif_perm_asked';
 
+/* ═══════════════════════════════════════════════════════════════
+   CAPACITOR NATIVE BRIDGE — push + biometría dentro de la app de Play
+   La app (wrapper Capacitor) carga esta misma PWA en un WebView donde
+   NO existen Web Push / Notification ni WebAuthn. En la app usamos los
+   plugins nativos; en el navegador, el camino web de siempre. Todo va
+   detrás de isNativeApp() → en Chrome es no-op.
+   ═══════════════════════════════════════════════════════════════ */
+function isNativeApp(){
+  try { return !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform()); }
+  catch(e){ return false; }
+}
+function _capPlugin(name){
+  try { return (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins[name]) || null; }
+  catch(e){ return null; }
+}
+function nativeBio(){ return _capPlugin('BiometricAuth'); }
+
+/* Registra el token FCM NATIVO en la MISMA ruta que el web
+   (users/{uid}/fcmTokens/{hash}) para que la Cloud Function lo use sin
+   cambios. Devuelve true si quedó registrado. */
+let _natPushWired = false;
+async function registerNativePush(uid){
+  const PN = _capPlugin('PushNotifications');
+  if (!PN || !uid) return false;
+  try {
+    if (!_natPushWired) {
+      _natPushWired = true;
+      PN.addListener('registration', async (t) => {
+        try {
+          const token = t && t.value; if (!token) return;
+          const tokenId = await _fcmTokenHash(token);
+          if (firebase.firestore) {
+            await firebase.firestore().collection('users').doc(uid)
+              .collection('fcmTokens').doc(tokenId)
+              .set({ token, ua: (navigator.userAgent || '').slice(0, 200), platform: 'Android-native',
+                     updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          }
+        } catch(e){ console.warn('registro token nativo fail:', e); }
+      });
+      PN.addListener('registrationError', (e) => console.warn('FCM nativo error:', e && e.error));
+      PN.addListener('pushNotificationReceived', () => { /* la lista in-app ya se actualiza por el onSnapshot de Firestore */ });
+    }
+    let perm = await PN.checkPermissions();
+    if (perm && (perm.receive === 'prompt' || perm.receive === 'prompt-with-rationale')) perm = await PN.requestPermissions();
+    if (!perm || perm.receive !== 'granted') return false;
+    await PN.register();
+    return true;
+  } catch(e){ console.warn('registerNativePush fail:', e); return false; }
+}
+
 function notificationsSupported(){
   return 'Notification' in window;
 }
@@ -4702,6 +4752,12 @@ function notificationsPermission(){
 }
 
 async function requestNotificationPermission(){
+  if (isNativeApp()) {
+    const ok = await registerNativePush(currentUser && currentUser.uid);
+    showToast(ok ? 'NOTIFICACIONES ACTIVADAS — SE RECIBIRÁN ALERTAS EN EL CELULAR' : 'NO SE PUDO ACTIVAR NOTIFICACIONES', ok ? 'green' : 'red');
+    try { if (ok) localStorage.setItem(NOTIF_PERM_KEY, '1'); } catch(e){}
+    return ok;
+  }
   if (!notificationsSupported()) {
     showToast('EL NAVEGADOR NO SOPORTA NOTIFICACIONES', 'red');
     return false;
@@ -4787,6 +4843,7 @@ async function _fcmTokenHash(token){
    Idempotente: se puede llamar varias veces sin duplicar.
    Devuelve el token o null. */
 async function ensureFCMRegistered(){
+  if (isNativeApp()) return await registerNativePush(currentUser && currentUser.uid);
   if (!fcmSupported()) {
     console.warn('FCM no soportado en este navegador/dispositivo.');
     return null;
@@ -28797,6 +28854,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
 const BIO_KEY_PREFIX = 'puntorojo_bio_';
 
 function isBiometricSupported(){
+  if (isNativeApp()) return !!nativeBio();
   return !!(window.PublicKeyCredential
     && navigator.credentials
     && navigator.credentials.create
@@ -28804,6 +28862,10 @@ function isBiometricSupported(){
 }
 
 async function isPlatformAuthenticatorAvailable(){
+  if (isNativeApp()) {
+    try { const bio = nativeBio(); if (!bio) return false; const info = await bio.checkBiometry(); return !!(info && info.isAvailable); }
+    catch(e){ return false; }
+  }
   if (!isBiometricSupported()) return false;
   try {
     return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
@@ -28844,6 +28906,23 @@ function b64ToAb(str){
 /* Registra una passkey biométrica para el currentUser en este dispositivo. */
 async function setupBiometricForCurrentUser(){
   if (!currentUser) { showToast('INICIAR SESIÓN PRIMERO', 'red'); return false; }
+  if (isNativeApp()) {
+    const bio = nativeBio();
+    if (!bio) { showToast('BIOMETRÍA NO DISPONIBLE EN LA APP', 'red'); return false; }
+    try {
+      const info = await bio.checkBiometry();
+      if (!info || !info.isAvailable) { showToast('ESTE DISPOSITIVO NO TIENE HUELLA / ROSTRO CONFIGURADO', 'red'); return false; }
+      await bio.authenticate({ reason: 'Confirma tu identidad para activar el acceso biométrico', androidTitle: 'PUNTO ROJO', androidSubtitle: 'Usá tu huella o rostro', cancelTitle: 'Cancelar', allowDeviceCredential: true });
+      saveStoredBiometric(currentUser.uid, { credentialId: 'native', registeredAt: Date.now(), deviceLabel: 'Android (huella/rostro)' });
+      showToast('ACCESO BIOMÉTRICO ACTIVADO EN ESTE DISPOSITIVO', 'green');
+      try { logActivity('auth', 'Biometría activada', 'Android (huella/rostro)'); } catch(e){}
+      return true;
+    } catch(e) {
+      if (e && (e.code === 'userCancel' || e.code === 'userCancelled')) showToast('CANCELADO', '');
+      else showToast('NO SE PUDO ACTIVAR BIOMETRÍA: ' + ((e && (e.message || e.code)) || ''), 'red');
+      return false;
+    }
+  }
   if (!isBiometricSupported()) { showToast('EL NAVEGADOR NO SOPORTA BIOMETRÍA', 'red'); return false; }
   if (!(await isPlatformAuthenticatorAvailable())) {
     showToast('ESTE DISPOSITIVO NO TIENE LECTOR BIOMÉTRICO DISPONIBLE', 'red');
@@ -28914,6 +28993,14 @@ async function authenticateBiometric(){
   if (!currentUser) return false;
   const stored = getStoredBiometric(currentUser.uid);
   if (!stored || !stored.credentialId) return false;
+  if (isNativeApp()) {
+    const bio = nativeBio();
+    if (!bio) return false;
+    try {
+      await bio.authenticate({ reason: 'Desbloqueá PUNTO ROJO', androidTitle: 'PUNTO ROJO', androidSubtitle: 'Usá tu huella o rostro', cancelTitle: 'Cancelar', allowDeviceCredential: true });
+      return true;
+    } catch(e) { console.warn('Bio nativa auth error:', e && (e.code || e.message)); return false; }
+  }
   if (!isBiometricSupported()) return false;
 
   try {
