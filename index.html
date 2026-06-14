@@ -2903,7 +2903,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v663</span>
+    <span style="opacity:.5;font-size:9px">v664</span>
   </footer>
 
 </div>
@@ -8334,20 +8334,39 @@ const CloudSync = {
     }
   },
 
+  /* v664: el chip de sync NO se prende en cada cambio. El dato queda guardado local
+     al instante; solo mostramos "SINCRONIZANDO" si una subida REAL lleva >2.5s en
+     curso (cola real con muchos usuarios). Así el chip dice la verdad y no parece
+     trabado. NO toca ningún guardado ni merge — es solo CUÁNDO cambia el cartel. */
+  _armSyncingChip(){
+    try { clearTimeout(this._syncChipTimer); } catch(e){}
+    this._syncChipTimer = setTimeout(() => {
+      if (this.uploadingNow || this._asistUploading) { try { setSyncStatus('syncing'); } catch(e){} }
+    }, 2500);
+  },
+  _chipDone(){
+    if (this.uploadingNow || this._asistUploading) return;   // todavía sube otra cosa
+    try { clearTimeout(this._syncChipTimer); } catch(e){} this._syncChipTimer = null;
+    try { setSyncStatus('synced'); } catch(e){}
+  },
+  _chipError(){
+    try { clearTimeout(this._syncChipTimer); } catch(e){} this._syncChipTimer = null;
+    try { setSyncStatus('error'); } catch(e){}
+  },
+
   /* Programa una escritura a la nube. Si hay otra pendiente, se reemplaza. */
   scheduleSave(){
     if (!this.enabled) return;
-    try { setSyncStatus('syncing'); } catch(e){}
     if (this.pendingWrite) clearTimeout(this.pendingWrite);
     this.pendingWrite = setTimeout(() => {
       this.pendingWrite = null;
       this.uploadingNow = true;
+      this._armSyncingChip();
       this.uploadCurrent().then(() => {
-        try { setSyncStatus('synced'); } catch(e){}
+        this.uploadingNow = false; this._chipDone();
       }).catch((e) => {
-        console.error('CloudSync auto-save error:', e);
-        try { setSyncStatus('error'); } catch(err){}
-      }).finally(() => { this.uploadingNow = false; });
+        this.uploadingNow = false; console.error('CloudSync auto-save error:', e); this._chipError();
+      });
     }, 1200);
   },
 
@@ -8360,15 +8379,15 @@ const CloudSync = {
       this.pendingWrite = null;
     }
     this.uploadingNow = true;
+    this._armSyncingChip();
     try {
       await this.uploadCurrent();
-      try { setSyncStatus('synced'); } catch(e){}
+      this.uploadingNow = false; this._chipDone();
     } catch(e) {
-      console.error('CloudSync forceUploadNow error:', e);
-      try { setSyncStatus('error'); } catch(err){}
-      throw e;
-    } finally {
       this.uploadingNow = false;
+      console.error('CloudSync forceUploadNow error:', e);
+      this._chipError();
+      throw e;
     }
   },
 
@@ -8499,12 +8518,13 @@ const CloudSync = {
   /* v649: debounce del guardado liviano de asistencia (espeja scheduleSave pero solo asistencia). */
   scheduleAsistenciaSave(){
     if (!this.enabled) return;
-    try { setSyncStatus('syncing'); } catch(e){}
     if (this._asistPending) clearTimeout(this._asistPending);
     this._asistPending = setTimeout(() => {
       this._asistPending = null;
-      this.uploadAsistencia().then(() => { try { setSyncStatus('synced'); } catch(e){} })
-        .catch((e) => { console.warn('CloudSync uploadAsistencia:', e); try { setSyncStatus('error'); } catch(err){} });
+      this._asistUploading = true;
+      this._armSyncingChip();
+      this.uploadAsistencia().then(() => { this._asistUploading = false; this._chipDone(); })
+        .catch((e) => { this._asistUploading = false; console.warn('CloudSync uploadAsistencia:', e); this._chipError(); });
     }, 1200);
   },
 
