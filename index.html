@@ -2907,7 +2907,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v671</span>
+    <span style="opacity:.5;font-size:9px">v672</span>
   </footer>
 
 </div>
@@ -18061,7 +18061,7 @@ function _personaModalGlobal(c){
   const faceSection = c ? ('<div style="border-top:1px solid var(--line);margin-top:8px;padding-top:8px;font-size:10px;color:var(--mute);letter-spacing:.5px">RECONOCIMIENTO FACIAL</div>'
     +'<div style="display:flex;align-items:center;gap:10px;margin-top:6px">'
     +'<div id="_faceStatus" style="font-size:11px;color:var(--mute)"></div>'
-    +'<button type="button" class="btn ghost sm" onclick="_abrirEnrolarCara(\''+c.id+'\')">REGISTRAR CARA</button>'
+    +'<button type="button" class="btn ghost sm" onclick="_abrirEnrolarCaraLive(\''+c.id+'\')">REGISTRAR CARA</button>'
     +'</div>') : '';
   const html=`<div class="modal-bg show" id="_pgModal" style="z-index:100040" onclick="if(event.target===this)_pgCloseModal()">
     <div class="modal" style="max-width:440px" onclick="event.stopPropagation()">
@@ -18147,6 +18147,48 @@ async function _subirAStorage(blob, path){
   return await snap.ref.getDownloadURL();
 }
 let _enrolDesc=[], _enrolThumb=null;
+
+// v672: decide si un cuadro del enrolamiento EN VIVO está bien (PURA, testeable).
+// m = { score, faceFrac, dx, dy, brillo, yaw, roll }. anguloPedido = 'frente'|'lado1'|'lado2'.
+// ladoPrevioDir = signo del yaw capturado en lado1 (para exigir que lado2 sea el OPUESTO).
+function _evalCalidadFoto(m, anguloPedido, ladoPrevioDir){
+  m = m || {};
+  var motivos = [];
+  if ((m.score||0) < 0.6) motivos.push('CARA POCO CLARA · REPETÍ');
+  if ((m.brillo||0) < 60) motivos.push('MÁS LUZ · EVITÁ EL CONTRALUZ');
+  else if ((m.brillo||0) > 205) motivos.push('DEMASIADA LUZ · MENOS REFLEJO');
+  if ((m.faceFrac||0) < 0.18) motivos.push('ACERCATE');
+  else if ((m.faceFrac||0) > 0.70) motivos.push('ALEJATE UN POCO');
+  if (Math.abs(m.dx||0) > 0.22 || Math.abs(m.dy||0) > 0.22) motivos.push('CENTRÁ LA CARA');
+  if (Math.abs(m.roll||0) > 15) motivos.push('ENDEREZÁ LA CABEZA');
+  var TURN = 0.14, FRONT = 0.10, yaw = m.yaw||0;
+  var yawDir = yaw > TURN ? 1 : (yaw < -TURN ? -1 : 0);
+  if (anguloPedido === 'frente'){
+    if (Math.abs(yaw) > FRONT) motivos.push('MIRÁ DE FRENTE');
+  } else {
+    if (Math.abs(yaw) < TURN) motivos.push('GIRÁ UN POCO LA CABEZA');
+    else if (anguloPedido === 'lado2' && ladoPrevioDir && yawDir === ladoPrevioDir) motivos.push('GIRÁ AL OTRO LADO');
+  }
+  return { ok: motivos.length === 0, motivos: motivos, yawDir: yawDir };
+}
+// v672: auto-prueba — confirma que las tomas son la MISMA persona (consistentes).
+// Si una toma capturó a otra persona o un cuadro basura, la distancia se dispara → falla.
+function _autoPruebaCaras(descriptors, umbral){
+  var u = (typeof umbral === 'number') ? umbral : 0.6;
+  var ds = (descriptors || []).map(function(d){ return Array.isArray(d) ? d : Array.prototype.slice.call(d || []); });
+  if (ds.length < 2) return { ok: ds.length === 1, maxDist: 0 };
+  var maxD = 0;
+  for (var i = 0; i < ds.length; i++){
+    for (var j = i + 1; j < ds.length; j++){
+      var a = ds[i], b = ds[j], n = Math.min(a.length, b.length), s = 0;
+      for (var k = 0; k < n; k++){ var diff = a[k] - b[k]; s += diff * diff; }
+      var dist = Math.sqrt(s);
+      if (dist > maxD) maxD = dist;
+    }
+  }
+  return { ok: maxD < u, maxDist: maxD };
+}
+
 async function _abrirEnrolarCara(personaId){
   if (!(can('personal.edit') || can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
   const p=(_getPersonal()||[]).find(x=>x.id===personaId); if(!p) return;
@@ -18218,15 +18260,8 @@ async function _guardarCara(personaId){
     consent:{at:Date.now(),by:(u&&(u.email||u.uid))||''},
     enrolledAt:Date.now()
   };
-  saveState();
-  // v611: subir + VERIFICAR que la cara llegó a la nube + respaldo aparte (faceBackups).
-  let _okNube=false;
-  const _doSync=(async()=>{
-    if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent){ await CloudSync.uploadCurrent(); }
-    try{ await _respaldarCara(personaId, p); }catch(e){}
-    _okNube = await _verificarCaraEnNube(personaId);
-  })();
-  try{ await (typeof _withTimeout==='function' ? _withTimeout(_doSync, 15000) : _doSync); }catch(e){ _okNube=false; }
+  // v672: subir + respaldar + VERIFICAR (extraído a _persistirCaraEnNube; lo usan el modo foto y el modo en vivo).
+  const _okNube = await _persistirCaraEnNube(personaId, p);
   _cerrarEnrolar();
   const _fs = document.getElementById('_faceStatus');
   const _n = (p && p.face && p.face.descriptors ? p.face.descriptors.length : 0);
@@ -18238,6 +18273,164 @@ async function _guardarCara(personaId){
   else { showToast('⚠ CARA GUARDADA PERO NO SUBIÓ A LA NUBE · REVISÁ INTERNET Y VOLVÉ A GUARDAR','red'); }
   if(typeof renderPersonal==='function') renderPersonal();
 }
+// v672: subir + respaldar + VERIFICAR la cara en la nube. Compartido por el modo foto y el modo en vivo.
+async function _persistirCaraEnNube(personaId, p){
+  saveState();
+  let _okNube=false;
+  const _doSync=(async()=>{
+    if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent){ await CloudSync.uploadCurrent(); }
+    try{ await _respaldarCara(personaId, p); }catch(e){}
+    _okNube = await _verificarCaraEnNube(personaId);
+  })();
+  try{ await (typeof _withTimeout==='function' ? _withTimeout(_doSync, 15000) : _doSync); }catch(e){ _okNube=false; }
+  return _okNube;
+}
+
+// ── ENROLAMIENTO EN VIVO (v672) — cámara en vivo + guía de calidad + auto-prueba ──
+let _enrolStream=null, _enrolLoop=null, _enrolBusy=false, _enrolAngulo='frente', _enrolLado1Dir=0, _enrolStreak=0, _enrolFacing='user', _enrolPersonaId='', _enrolLumaCv=null, _enrolGuardando=false;
+const _ENROL_PASOS = { frente:'MIRÁ DE FRENTE', lado1:'GIRÁ LA CABEZA A UN LADO', lado2:'AHORA GIRÁ AL OTRO LADO' };
+function _enrolSetMsg(txt,color){ const r=document.getElementById('_enrolLiveMsg'); if(r){ r.textContent=txt; r.style.color=color||'#fff'; } }
+function _enrolSetPaso(){
+  const n=document.getElementById('_enrolLivePaso');
+  if(n){ n.textContent = (_enrolAngulo==='done') ? 'PROCESANDO…' : ('FOTO '+Math.min(_enrolDesc.length+1,3)+' DE 3 · '+(_ENROL_PASOS[_enrolAngulo]||'')); }
+  for(let i=1;i<=3;i++){ const d=document.getElementById('_enrolDot'+i); if(d){ d.style.background=(i<=_enrolDesc.length)?'#34D399':'rgba(255,255,255,.25)'; } }
+}
+async function _abrirEnrolarCaraLive(personaId){
+  if (!(can('personal.edit') || can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
+  if (document.getElementById('_enrolLiveScreen')) return;
+  const p=(_getPersonal()||[]).find(x=>x.id===personaId); if(!p) return;
+  _enrolDesc=[]; _enrolThumb=null; _enrolAngulo='frente'; _enrolLado1Dir=0; _enrolStreak=0; _enrolFacing='user'; _enrolPersonaId=personaId; _enrolGuardando=false;
+  const nombre=String(p.nombre||'').replace(/</g,'&lt;');
+  const html='<div id="_enrolLiveScreen" style="position:fixed;inset:0;z-index:100072;background:#0B0B0C;display:flex;flex-direction:column">'
+    + '<div style="display:flex;align-items:center;gap:8px;padding:calc(env(safe-area-inset-top,22px) + 14px) 14px 10px;color:#fff">'
+    +   '<span style="font-size:12px;letter-spacing:1.5px;font-weight:800">REGISTRAR CARA · '+nombre+'</span>'
+    +   '<button id="_enrolLuzBtn" style="margin-left:auto;background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:8px;padding:8px 13px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit" onclick="_enrolToggleCam()">CÁMARA</button>'
+    +   '<button style="background:rgba(220,38,38,.28);color:#fff;border:1px solid rgba(248,113,113,.7);border-radius:8px;padding:8px 13px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit" onclick="_cerrarEnrolarLive()">CERRAR</button>'
+    + '</div>'
+    + '<div id="_enrolLivePaso" style="text-align:center;color:#FCD34D;font-size:13px;font-weight:800;letter-spacing:.5px;padding:2px 14px 8px">FOTO 1 DE 3 · MIRÁ DE FRENTE</div>'
+    + '<div style="display:flex;justify-content:center;gap:8px;padding-bottom:8px">'
+    +   '<span id="_enrolDot1" style="width:22px;height:6px;border-radius:3px;background:rgba(255,255,255,.25)"></span>'
+    +   '<span id="_enrolDot2" style="width:22px;height:6px;border-radius:3px;background:rgba(255,255,255,.25)"></span>'
+    +   '<span id="_enrolDot3" style="width:22px;height:6px;border-radius:3px;background:rgba(255,255,255,.25)"></span>'
+    + '</div>'
+    + '<div style="position:relative;flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#000">'
+    +   '<video id="_enrolVideo" autoplay playsinline muted style="max-width:100%;max-height:100%"></video>'
+    +   '<div id="_enrolLiveMsg" style="position:absolute;bottom:0;left:0;right:0;padding:16px;text-align:center;color:#fff;font-size:18px;font-weight:800;background:linear-gradient(transparent,rgba(0,0,0,.78))">Preparando cámara…</div>'
+    + '</div>'
+    + '<label style="display:flex;align-items:flex-start;gap:8px;padding:12px 16px calc(env(safe-area-inset-bottom,10px) + 12px);font-size:11px;color:#ddd;background:#111"><input type="checkbox" id="_enrolConsentLive" style="margin-top:2px"><span>La persona da su consentimiento para guardar su rostro (dato biométrico) con fines de control de asistencia.</span></label>'
+    + '</div>';
+  const w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);
+  if(window._prLockScroll) window._prLockScroll();
+  try{
+    _enrolStream=await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:_enrolFacing }, width:{ ideal:1280 }, height:{ ideal:720 } }, audio:false });
+    const v=document.getElementById('_enrolVideo'); if(v){ v.srcObject=_enrolStream; v.style.transform=(_enrolFacing==='user')?'scaleX(-1)':'none'; }
+  }catch(e){
+    _cerrarEnrolarLive();
+    showToast('NO SE PUDO ABRIR LA CÁMARA EN VIVO · USANDO FOTO','');
+    return _abrirEnrolarCara(personaId);
+  }
+  _enrolSetMsg('Cargando reconocimiento…','#fff');
+  loadFaceModels().then(()=>{
+    if(!document.getElementById('_enrolLiveScreen')) return;
+    _enrolLoop=1; _enrolAgendarTick(); _enrolSetPaso(); _enrolSetMsg('Acercate y mirá a la cámara','#fff');
+  }).catch(()=>{ _enrolSetMsg('No se pudo cargar el reconocimiento','#FBBF24'); });
+}
+function _enrolToggleCam(){
+  _enrolFacing=(_enrolFacing==='user')?'environment':'user';
+  try{ if(_enrolStream){ _enrolStream.getTracks().forEach(t=>{try{t.stop();}catch(_){}}); } }catch(e){}
+  navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:_enrolFacing }, width:{ ideal:1280 }, height:{ ideal:720 } }, audio:false })
+    .then(s=>{ _enrolStream=s; const v=document.getElementById('_enrolVideo'); if(v){ v.srcObject=s; v.style.transform=(_enrolFacing==='user')?'scaleX(-1)':'none'; } })
+    .catch(()=>{ _enrolSetMsg('No se pudo cambiar de cámara','#FBBF24'); });
+}
+function _enrolAgendarTick(){
+  if(!_enrolStream || !document.getElementById('_enrolLiveScreen')){ _enrolLoop=null; return; }
+  Promise.resolve(_enrolTick()).catch(function(){}).then(function(){
+    if(_enrolStream && document.getElementById('_enrolLiveScreen') && _enrolAngulo!=='done'){ _enrolLoop=setTimeout(_enrolAgendarTick, 80); }
+    else { _enrolLoop=null; }
+  });
+}
+function _enrolBrilloCara(v, box){
+  try{
+    if(!_enrolLumaCv) _enrolLumaCv=document.createElement('canvas');
+    const cw=40, ch=50; _enrolLumaCv.width=cw; _enrolLumaCv.height=ch;
+    const ctx=_enrolLumaCv.getContext('2d',{willReadFrequently:true});
+    ctx.drawImage(v, Math.max(0,box.x), Math.max(0,box.y), Math.max(1,box.width), Math.max(1,box.height), 0,0,cw,ch);
+    const d=ctx.getImageData(0,0,cw,ch).data; let s=0; const n=d.length/4;
+    for(let i=0;i<d.length;i+=4){ s+=(d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114); }
+    return s/n;
+  }catch(e){ return 130; }
+}
+function _medirCaraEnrol(v, det){
+  const box=det.detection.box, W=v.videoWidth||1280, H=v.videoHeight||720;
+  let yaw=0, roll=0;
+  try{
+    const pts=det.landmarks.positions;
+    const avg=(a,b)=>{ let sx=0,sy=0; for(let i=a;i<=b;i++){ sx+=pts[i].x; sy+=pts[i].y; } const k=b-a+1; return {x:sx/k,y:sy/k}; };
+    const le=avg(36,41), re=avg(42,47), nose=pts[30];
+    const eyeMid={x:(le.x+re.x)/2,y:(le.y+re.y)/2}, eyeDist=Math.hypot(re.x-le.x, re.y-le.y)||1;
+    yaw=(nose.x-eyeMid.x)/eyeDist;
+    roll=Math.atan2(re.y-le.y, re.x-le.x)*180/Math.PI;
+  }catch(e){}
+  return { score:(det.detection.score||0.9), faceFrac:box.width/W, dx:(box.x+box.width/2)/W-0.5, dy:(box.y+box.height/2)/H-0.5, brillo:_enrolBrilloCara(v,box), yaw:yaw, roll:roll };
+}
+async function _enrolTick(){
+  if(_enrolBusy || _enrolGuardando || _enrolAngulo==='done') return;
+  const v=document.getElementById('_enrolVideo'); if(!v||!v.videoWidth) return;
+  _enrolBusy=true;
+  try{
+    const det=await _detectOneDescriptor(v);
+    if(!det){ _enrolStreak=0; _enrolSetMsg('NO SE VE UNA CARA · ACERCATE','#FBBF24'); return; }
+    const consent=document.getElementById('_enrolConsentLive');
+    if(!consent || !consent.checked){ _enrolStreak=0; _enrolSetMsg('MARCÁ EL CONSENTIMIENTO PARA EMPEZAR','#FBBF24'); return; }
+    const med=_medirCaraEnrol(v, det);
+    const r=_evalCalidadFoto(med, _enrolAngulo, _enrolLado1Dir);
+    if(!r.ok){ _enrolStreak=0; _enrolSetMsg(r.motivos.join(' · '),'#FBBF24'); return; }
+    _enrolStreak++; _enrolSetMsg('✓ QUEDATE QUIETO…','#34D399');
+    if(_enrolStreak>=3){
+      _enrolStreak=0;
+      _enrolDesc.push(Array.from(det.descriptor));
+      if(_enrolAngulo==='lado1') _enrolLado1Dir=r.yawDir||1;
+      if(_enrolDesc.length===1){ try{ const b=det.detection.box; const cv=document.createElement('canvas'); cv.width=120; cv.height=150; cv.getContext('2d').drawImage(v, Math.max(0,b.x-b.width*0.15),Math.max(0,b.y-b.height*0.2), b.width*1.3,b.height*1.5, 0,0,120,150); _enrolThumb=cv; }catch(e){} }
+      _enrolAngulo = (_enrolDesc.length===1)?'lado1':((_enrolDesc.length===2)?'lado2':'done');
+      _enrolSetPaso();
+      if(_enrolAngulo==='done') _enrolFinalizar();
+      else _enrolSetMsg('✓ TOMA '+_enrolDesc.length+' · '+(_ENROL_PASOS[_enrolAngulo]||''),'#34D399');
+    }
+  }catch(e){} finally{ _enrolBusy=false; }
+}
+async function _enrolFinalizar(){
+  if(_enrolGuardando) return; _enrolGuardando=true;
+  _enrolSetMsg('Comprobando…','#fff');
+  const prueba=_autoPruebaCaras(_enrolDesc, 0.6);
+  if(!prueba.ok){
+    _enrolDesc=[]; _enrolAngulo='frente'; _enrolLado1Dir=0; _enrolStreak=0; _enrolGuardando=false; _enrolSetPaso();
+    _enrolSetMsg('LAS TOMAS NO COINCIDEN · REPETÍ DESDE EL FRENTE','#FBBF24');
+    if(_enrolStream && document.getElementById('_enrolLiveScreen')){ _enrolLoop=1; _enrolAgendarTick(); }
+    return;
+  }
+  _enrolSetMsg('✓ REGISTRO PERFECTO · GUARDANDO…','#34D399');
+  const personaId=_enrolPersonaId, p=(_getPersonal()||[]).find(x=>x.id===personaId);
+  if(!p){ _cerrarEnrolarLive(); return; }
+  let thumbURL=(p.face&&p.face.thumbURL)||'';
+  try{ if(_enrolThumb){ const blob=await new Promise(res=>_enrolThumb.toBlob(res,'image/jpeg',0.8)); thumbURL=await _subirAStorage(blob,'personal-faces/'+personaId+'.jpg'); } }catch(e){}
+  const u=(typeof currentUser!=='undefined')?currentUser:null;
+  p.face={ descriptors:_enrolDesc.slice(0,3).map(d=>({d:Array.from(d)})), thumbURL:thumbURL, consent:{at:Date.now(),by:(u&&(u.email||u.uid))||''}, enrolledAt:Date.now() };
+  const okNube=await _persistirCaraEnNube(personaId, p);
+  _cerrarEnrolarLive();
+  if(okNube) showToast('CARA REGISTRADA Y RESPALDADA EN LA NUBE ✓ · TE RECONOCE','green');
+  else showToast('⚠ CARA GUARDADA PERO NO SUBIÓ A LA NUBE · REVISÁ INTERNET','red');
+  if(typeof renderPersonal==='function') renderPersonal();
+}
+function _cerrarEnrolarLive(){
+  try{ if(_enrolLoop){ clearTimeout(_enrolLoop); } }catch(e){} _enrolLoop=null;
+  try{ if(_enrolStream){ _enrolStream.getTracks().forEach(t=>t.stop()); _enrolStream=null; } }catch(e){}
+  const s=document.getElementById('_enrolLiveScreen'); if(s) s.remove();
+  if(window._prUnlockScroll) window._prUnlockScroll();
+}
+window._abrirEnrolarCaraLive=_abrirEnrolarCaraLive;
+window._cerrarEnrolarLive=_cerrarEnrolarLive;
+window._enrolToggleCam=_enrolToggleCam;
+
 // v611/v633: VERIFICAR que la cara llegó a la nube. Desde v633 las caras viven en
 // el doc appState/faces (se QUITAN del core antes de subir), así que hay que leer
 // AHÍ — el kiosko de los otros equipos también lee de appState/faces. Leer core
