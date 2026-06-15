@@ -2907,7 +2907,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v687</span>
+    <span style="opacity:.5;font-size:9px">v688</span>
   </footer>
 
 </div>
@@ -17750,32 +17750,47 @@ async function _detectAllDescriptors(input, lowLight){
 
 // ── KIOSKO FACIAL ────────────────────────────────────────────────────────────
 let _kioskMatcher=null, _kioskStream=null, _kioskLoop=null, _kioskBusy=false, _kioskGeo=null, _kioskGeoWatch=null, _kioskStreaks={}, _kioskFacing='environment', _kioskHoldResultUntil=0;
-let _kioskTorchTrack=null, _kioskTorchOn=false, _kioskLuzManual=false, _kioskLowLight=false, _kioskLumaCanvas=null, _kioskFrameCanvas=null;
+let _kioskTorchTrack=null, _kioskTorchOn=false, _kioskLuzManual=false, _kioskLowLight=false, _kioskLumaCanvas=null, _kioskFrameCanvas=null, _kioskTorchUnsupported=false;
 const _kioskLast = {}; // personaId -> timestamp ultima marca (debounce 5s)
 // ── Linterna (torch) + poca luz ───────────────────────────────────────────────
+// Optimista: en la cámara TRASERA tratamos el track como candidato a linterna AUNQUE
+// getCapabilities() NO anuncie `torch`. Muchos WebView de Android (justo los teléfonos de
+// oficina en los sótanos) soportan applyConstraints({torch:true}) pero NO listan la
+// capacidad → el código viejo gateaba por caps.torch y dejaba el botón en "no disponible".
+// En SELFIE (frontal) no hay flash físico, así que ahí nunca se ofrece.
+function _kioskTorchCandidato(track, facing){
+  if(!track) return null;
+  if(facing==='user') return null;
+  return track;
+}
+// Apariencia/disponibilidad del botón LUZ (pura, testeable).
+function _kioskLuzBtnState(hasTrack, facing, unsupported, on){
+  var avail = !!hasTrack && facing!=='user' && !unsupported;
+  return { avail: avail, opacity: avail?'1':'.4', bg: on?'rgba(251,191,36,.34)':'rgba(255,255,255,.16)', label: on?'LUZ ✓':'LUZ' };
+}
 function _kioskInitTorch(stream){
-  _kioskTorchTrack=null;
-  try{
-    var tr = stream && stream.getVideoTracks && stream.getVideoTracks()[0];
-    if(tr && tr.getCapabilities){ var caps=tr.getCapabilities(); if(caps && caps.torch){ _kioskTorchTrack=tr; } }
-  }catch(e){}
+  _kioskTorchUnsupported=false;
+  var tr=null;
+  try{ tr = stream && stream.getVideoTracks && stream.getVideoTracks()[0]; }catch(e){ tr=null; }
+  _kioskTorchTrack = _kioskTorchCandidato(tr, _kioskFacing); // no gatear por getCapabilities()
   if(!_kioskTorchTrack){ _kioskTorchOn=false; }
   _kioskUpdateLuzBtn();
 }
 async function _kioskSetTorch(on){
   if(!_kioskTorchTrack) return false;
   try{ await _kioskTorchTrack.applyConstraints({ advanced:[{ torch: !!on }] }); _kioskTorchOn=!!on; _kioskUpdateLuzBtn(); return true; }
-  catch(e){ return false; }
+  catch(e){ if(on){ _kioskTorchUnsupported=true; _kioskTorchOn=false; _kioskUpdateLuzBtn(); } return false; } // recién acá sabemos que este WebView no maneja torch
 }
 function _kioskToggleLuz(){
-  if(!_kioskTorchTrack){ showToast('ESTE TELÉFONO NO PERMITE LINTERNA DESDE LA WEB',''); return; }
-  _kioskLuzManual=true; _kioskSetTorch(!_kioskTorchOn);
+  if(_kioskFacing==='user'){ showToast('LA LINTERNA SOLO FUNCIONA CON LA CÁMARA TRASERA',''); return; }
+  if(!_kioskTorchTrack || _kioskTorchUnsupported){ showToast('ESTE TELÉFONO NO PERMITE LINTERNA DESDE LA WEB',''); return; }
+  _kioskLuzManual=true;
+  _kioskSetTorch(!_kioskTorchOn).then(function(okk){ if(!okk){ showToast('ESTE TELÉFONO NO PERMITE LINTERNA DESDE LA WEB',''); } });
 }
 function _kioskUpdateLuzBtn(){
   var b=document.getElementById('_kioskLuzBtn'); if(!b) return;
-  b.style.opacity=_kioskTorchTrack?'1':'.4';
-  b.style.background=_kioskTorchOn?'rgba(251,191,36,.34)':'rgba(255,255,255,.16)';
-  b.textContent=_kioskTorchOn?'LUZ ✓':'LUZ';
+  var st=_kioskLuzBtnState(!!_kioskTorchTrack, _kioskFacing, _kioskTorchUnsupported, _kioskTorchOn);
+  b.style.opacity=st.opacity; b.style.background=st.bg; b.textContent=st.label;
 }
 // Brillo promedio del cuadro (0..255) en baja resolución (barato).
 function _kioskBrillo(v){
@@ -17913,7 +17928,7 @@ async function _kioskTick(){
   try{
     const _brillo=_kioskBrillo(v);
     _kioskLowLight = _brillo < 75;
-    if(_kioskTorchTrack && !_kioskLuzManual){
+    if(_kioskTorchTrack && !_kioskLuzManual && !_kioskTorchUnsupported){
       if(_kioskLowLight && !_kioskTorchOn) _kioskSetTorch(true);
       else if(!_kioskLowLight && _brillo>115 && _kioskTorchOn) _kioskSetTorch(false);
     }
@@ -18072,7 +18087,7 @@ function _kioskConfirmar(id){ const cc=document.getElementById('_kioskCandidates
 function _cerrarKiosko(){
   try{ if(_kioskLoop){ clearTimeout(_kioskLoop); } }catch(e){} _kioskLoop=null;
   try{ if(_kioskTorchTrack && _kioskTorchOn){ _kioskTorchTrack.applyConstraints({advanced:[{torch:false}]}); } }catch(e){}
-  _kioskTorchTrack=null; _kioskTorchOn=false; _kioskLuzManual=false; _kioskLowLight=false;
+  _kioskTorchTrack=null; _kioskTorchOn=false; _kioskLuzManual=false; _kioskLowLight=false; _kioskTorchUnsupported=false;
   try{ if(_kioskStream){ _kioskStream.getTracks().forEach(t=>t.stop()); _kioskStream=null; } }catch(e){}
   try{ if(_kioskGeoWatch!=null && navigator.geolocation){ navigator.geolocation.clearWatch(_kioskGeoWatch); _kioskGeoWatch=null; } }catch(e){}
   _kioskGeo=null;
