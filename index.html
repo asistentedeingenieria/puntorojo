@@ -2907,7 +2907,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v684</span>
+    <span style="opacity:.5;font-size:9px">v685</span>
   </footer>
 
 </div>
@@ -4126,6 +4126,8 @@ table{max-width:100%}
       <button class="btn ghost sm" onclick="openEncargados()">ENCARGADOS DE ASISTENCIA</button>
       <button class="btn cafe sm" onclick="openNewUser()">+ AGREGAR USUARIO</button>
     </div>
+
+    <input id="usersBuscar" placeholder="Buscar usuario por nombre, correo o cargo…" autocomplete="off" oninput="setUsersBuscar(this.value)" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid var(--line);border-radius:6px;font:inherit;font-size:13px;margin-bottom:10px">
 
     <div id="usersList" style="max-height:55vh;max-height:55dvh;overflow-y:auto"></div>
 
@@ -6147,27 +6149,38 @@ let editingEmail = null;      // Email del usuario en edición
 async function openUsersModal(){
   if (!can('users.manage')) return showToast('SIN PERMISO', 'red');
   document.getElementById('modalUsers').classList.add('show');
+  _usersBuscar=''; try{ var _ub=document.getElementById('usersBuscar'); if(_ub) _ub.value=''; }catch(e){} // v685: arrancar sin filtro
   // Refrescar la cache desde Firestore antes de mostrar la lista
   await refreshUsersCache();
   renderUsersList();
 }
 
+let _usersBuscar = ''; // v685: término del buscador de usuarios
+function setUsersBuscar(v){ _usersBuscar = String(v==null?'':v); renderUsersList(); }
+window.setUsersBuscar = setUsersBuscar;
 function renderUsersList(){
-  const users = loadUsers();
+  let users = loadUsers();
   const me = getCurrentUser();
   const list = document.getElementById('usersList');
-  // Orden fijo: el usuario actual ("TÚ") siempre primero; PLAY REVIEW siempre último.
-  // .sort() es estable, así que el resto de usuarios conserva su orden actual.
+  // v685: BUSCADOR — filtra por nombre, correo/teléfono o cargo.
+  const _q = (typeof _usersBuscar==='string' ? _usersBuscar : '').trim().toUpperCase();
+  if (_q){
+    const _n = s => String(s||'').toUpperCase();
+    users = users.filter(u => _n(u.displayName).includes(_q) || _n(u.email).includes(_q) || _n(u.phoneNumber).includes(_q) || _n(u.cargo).includes(_q));
+  }
+  // v685: ORDEN — TÚ primero, luego ADMINS, luego el resto (todos alfabéticos), PLAY REVIEW al final.
   const PLAY_REVIEW_EMAIL = 'play-review@puntorojosa.com';
   const userRank = (u) => {
     const isSelf = !u._isPending && me && (u.uid === me.uid || (u.email && u.email === me.email));
     if (isSelf) return 0;
     const isPlayReview = (u.email && u.email.toLowerCase() === PLAY_REVIEW_EMAIL)
                        || (u.displayName && u.displayName.toUpperCase().includes('PLAY REVIEW'));
-    if (isPlayReview) return 2;
-    return 1;
+    if (isPlayReview) return 3;
+    if (u.perms && u.perms.includes('*')) return 1; // admins
+    return 2;
   };
-  const sortedUsers = users.slice().sort((a, b) => userRank(a) - userRank(b));
+  const _nm = u => String(u.displayName || u.email || u.phoneNumber || '').toUpperCase();
+  const sortedUsers = users.slice().sort((a, b) => (userRank(a) - userRank(b)) || _nm(a).localeCompare(_nm(b), 'es'));
   list.innerHTML = sortedUsers.map(u => {
     const isAdmin = u.perms && u.perms.includes('*');
     const isSelf = !u._isPending && me && (u.uid === me.uid || (u.email && u.email === me.email));
@@ -6189,6 +6202,7 @@ function renderUsersList(){
       </div>
     </div>`;
   }).join('');
+  if (!sortedUsers.length){ list.innerHTML = '<div style="padding:24px;text-align:center;color:var(--mute);font-size:12px">Sin resultados</div>'; }
 }
 
 /* ════════ ENCARGADOS DE ASISTENCIA (v631) ════════
