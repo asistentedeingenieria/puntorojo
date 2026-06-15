@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v683-borrar-caras-oficina';
+const CACHE_VERSION = 'v684-permiso-agregar-poliza';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
