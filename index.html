@@ -2907,7 +2907,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v676</span>
+    <span style="opacity:.5;font-size:9px">v677</span>
   </footer>
 
 </div>
@@ -17680,11 +17680,22 @@ async function loadFaceModels(){
   if (!window.faceapi) throw new Error('face-api no cargó (sin internet en el primer arranque)');
   const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
   _faceModelsLoading = (async () => {
+    // v677: usar la GPU (WebGL) EXPLÍCITAMENTE — suele ser mucho más rápido que el procesador,
+    // y algunos WebView de Android caen al backend lento si no se fuerza. Si no hay WebGL, cae solo.
+    try { if (faceapi.tf && faceapi.tf.setBackend) { await faceapi.tf.setBackend('webgl'); await faceapi.tf.ready(); } } catch(e){ console.warn('WebGL no disponible, backend por defecto:', e&&e.message); }
+    try { window.__prFaceBackend = (faceapi.tf && faceapi.tf.getBackend) ? faceapi.tf.getBackend() : '?'; } catch(e){ window.__prFaceBackend = '?'; }
     await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
     await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
     await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
     // SSD MobileNet: detector preciso (mejor de lejos y rechaza caras mal capturadas). Fallback a Tiny si no carga.
     try { await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL); } catch(e){ console.warn('SSD no cargó, se usa TinyFaceDetector:', e&&e.message); }
+    // v677: WARM-UP — la 1ra detección compila los shaders de la GPU (siempre lenta). La hacemos
+    // sobre un lienzo en blanco para que el PRIMER escaneo real ya salga rápido.
+    try {
+      const _wc = document.createElement('canvas'); _wc.width = 160; _wc.height = 160;
+      const _wo = new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.5 });
+      await faceapi.detectSingleFace(_wc, _wo).withFaceLandmarks().withFaceDescriptor();
+    } catch(e){}
     _faceModelsReady = true;
     return true;
   })();
@@ -17784,6 +17795,7 @@ async function _abrirKioskoCaras(){
   const html = '<div id="_kioskScreen" style="position:fixed;inset:0;z-index:100070;background:#0B0B0C;display:flex;flex-direction:column">'
     + '<div style="display:flex;align-items:center;gap:8px;padding:calc(env(safe-area-inset-top, 22px) + 14px) 14px 12px;color:#fff">'
     +   '<span style="font-size:12px;letter-spacing:2px;font-weight:800">MARCAR ASISTENCIA</span>'
+    +   '<span id="_kioskPerf" style="font-size:9px;color:rgba(255,255,255,.45);margin-left:8px"></span>'
     +   '<button id="_kioskLuzBtn" style="margin-left:auto;background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:8px;padding:9px 15px;font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer;font-family:inherit" onclick="_kioskToggleLuz()">LUZ</button>'
     +   '<button id="_kioskSelfieBtn" style="background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:8px;padding:9px 15px;font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer;font-family:inherit" onclick="_kioskCambiarCamara()">SELFIE</button>'
     +   '<button style="background:rgba(220,38,38,.28);color:#fff;border:1px solid rgba(248,113,113,.7);border-radius:8px;padding:9px 15px;font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer;font-family:inherit" onclick="_cerrarKiosko()">CERRAR</button>'
@@ -17875,7 +17887,9 @@ async function _kioskTick(){
       if(_kioskLowLight && !_kioskTorchOn) _kioskSetTorch(true);
       else if(!_kioskLowLight && _brillo>115 && _kioskTorchOn) _kioskSetTorch(false);
     }
+    const _t0 = (window.performance&&performance.now)?performance.now():0; // v677: medir tiempo de detección
     const dets=await _detectAllDescriptors(_kioskFrameInput(v), _kioskLowLight); // TODAS las caras del cuadro (multi-persona)
+    try{ if(_t0){ var _dt=performance.now()-_t0; window.__prDetMs=window.__prDetMs?(window.__prDetMs*0.8+_dt*0.2):_dt; var _pf=document.getElementById('_kioskPerf'); if(_pf) _pf.textContent=(window.__prFaceBackend||'?')+' · '+Math.round(window.__prDetMs)+'ms'; } }catch(e){}
     const vistos=new Set();   // personas auto-detectadas en este frame
     let _algunAuto=false;
     for(const det of dets){
