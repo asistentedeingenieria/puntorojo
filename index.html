@@ -2907,7 +2907,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v674</span>
+    <span style="opacity:.5;font-size:9px">v675</span>
   </footer>
 
 </div>
@@ -18523,6 +18523,36 @@ function _clasificarCaras(personal, backupIds){
 }
 window._clasificarCaras = _clasificarCaras;
 
+// v675: analiza CUÁLES caras conviene re-tomar para un buen reconocimiento. PURA y testeable.
+// personas: [{id, nombre, descs:[[..],..]}] (descriptores ya como arrays). Umbrales atados a los
+// del kiosko (auto<0.44, margen 0.10): sep<0.40 = se confunde (crítico), 0.40–0.52 = se parece
+// (recomendado); 1 toma = crítico; 2 tomas = recomendado; tomas propias inconsistentes (>0.60) = crítico.
+function _analizarCaras(personas){
+  function dist(a,b){ var s=0, n=Math.min(a.length,b.length); for(var k=0;k<n;k++){ var d=a[k]-b[k]; s+=d*d; } return Math.sqrt(s); }
+  var P = (personas||[]).filter(function(p){ return p && p.descs && p.descs.length; });
+  var out = [];
+  P.forEach(function(p, i){
+    var nDesc = p.descs.length;
+    var intraMax = 0;
+    for(var a=0;a<p.descs.length;a++){ for(var b=a+1;b<p.descs.length;b++){ var d=dist(p.descs[a],p.descs[b]); if(d>intraMax) intraMax=d; } }
+    var sep = Infinity, conNombre = null;
+    P.forEach(function(q, j){
+      if(j===i) return;
+      q.descs.forEach(function(qd){ p.descs.forEach(function(pd){ var d=dist(pd,qd); if(d<sep){ sep=d; conNombre=q.nombre||q.id; } }); });
+    });
+    if(!isFinite(sep)) sep = null;
+    var motivos = [], nivel = 'ok';
+    if(sep != null && sep < 0.40){ motivos.push('SE CONFUNDE CON '+(conNombre||'OTRA PERSONA')); nivel = 'critico'; }
+    else if(sep != null && sep < 0.52){ motivos.push('SE PARECE A '+(conNombre||'OTRA PERSONA')); if(nivel!=='critico') nivel = 'recomendado'; }
+    if(nDesc <= 1){ motivos.push('SOLO 1 TOMA'); nivel = 'critico'; }
+    else if(nDesc < 3){ motivos.push('SOLO '+nDesc+' TOMAS (mejor 3)'); if(nivel==='ok') nivel = 'recomendado'; }
+    if(intraMax > 0.60){ motivos.push('TOMAS INCONSISTENTES'); nivel = 'critico'; }
+    out.push({ id:p.id, nombre:p.nombre, nivel:nivel, motivos:motivos, colisionaCon:conNombre, sep:sep, intraMax:intraMax, nDesc:nDesc });
+  });
+  return out;
+}
+window._analizarCaras = _analizarCaras;
+
 // v671: reporte "quién NO tiene cara registrada" + recuperar de respaldo. Admin.
 async function _abrirDiagnosticoCaras(){
   if(!can('users.manage')){ showToast('SOLO ADMINISTRADOR','red'); return; }
@@ -18537,6 +18567,15 @@ async function _abrirDiagnosticoCaras(){
   const pg = (state && Array.isArray(state.personalGlobal)) ? state.personalGlobal : [];
   const activos = pg.filter(p => p && p.activo!==false && String(p.nombre||'').replace(/[\s\-_]/g,'').toUpperCase()!=='PREAPP');
   const r = _clasificarCaras(activos, backupIds);
+  // v675: análisis de calidad — quién conviene re-tomar para un buen reconocimiento.
+  const conCaraPersonas = activos.filter(p => p && p.face && Array.isArray(p.face.descriptors) && p.face.descriptors.length)
+    .map(p => ({ id:p.id, nombre:p.nombre, descs: p.face.descriptors.map(d => Array.isArray(d) ? d : ((d && d.d) || [])) }));
+  const analisis = (typeof _analizarCaras === 'function') ? _analizarCaras(conCaraPersonas) : [];
+  const aCritico = analisis.filter(x => x.nivel === 'critico');
+  const aRecom = analisis.filter(x => x.nivel === 'recomendado');
+  const filaRet = x => '<div style="padding:6px 2px;border-bottom:1px solid rgba(0,0,0,.07);font-size:13px"><b>'+esc(x.nombre||x.id)+'</b><div style="font-size:11px;color:var(--mute)">'+esc((x.motivos||[]).join(' · '))+'</div></div>';
+  const listaRet = arr => arr.length ? arr.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))).map(filaRet).join('') : '<div style="color:var(--mute);font-size:12px;padding:6px 2px">— ninguno —</div>';
+  const seccionRet = (titulo,color,arr) => '<div style="margin-bottom:14px"><b style="color:'+color+';font-size:12px;letter-spacing:.5px;display:block;margin-bottom:6px">'+titulo+' ('+arr.length+')</b>'+listaRet(arr)+'</div>';
   const fila = x => '<div style="padding:6px 2px;border-bottom:1px solid rgba(0,0,0,.07);font-size:13px">'+esc(x.nombre||x.id)+'</div>';
   const lista = arr => arr.length ? arr.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))).map(fila).join('') : '<div style="color:var(--mute);font-size:12px;padding:6px 2px">— ninguno —</div>';
   const btnRestaurar = r.recuperables.length ? '<button class="btn primary sm" onclick="_diagRestaurarYRefrescar()" style="margin-left:auto">RESTAURAR TODAS</button>' : '';
@@ -18547,7 +18586,9 @@ async function _abrirDiagnosticoCaras(){
     +   '<div style="padding:16px 18px;overflow:auto">'
     +     seccion('SIN CARA · RECUPERABLES','var(--rojo,#B91C1C)', r.recuperables, btnRestaurar)
     +     seccion('SIN CARA · HAY QUE ENROLAR','#B45309', r.sinRespaldo, '')
-    +     '<div style="color:var(--mute);font-size:12px;margin-top:4px">Con cara registrada: <b>'+r.conCara.length+'</b></div>'
+    +     seccionRet('RE-TOMAR YA · pueden fallar','var(--rojo,#B91C1C)', aCritico)
+    +     seccionRet('CONVIENE MEJORAR','#B45309', aRecom)
+    +     '<div style="color:var(--mute);font-size:12px;margin-top:4px">Caras OK: <b>'+Math.max(0, r.conCara.length - aCritico.length - aRecom.length)+'</b> de '+r.conCara.length+' registradas</div>'
     +   '</div>'
     + '</div></div>';
   const w = document.createElement('div'); w.innerHTML = html; document.body.appendChild(w.firstElementChild);
