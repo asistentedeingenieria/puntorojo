@@ -34,10 +34,11 @@ ok('selfie => NO disponible (gris .4)', (s=>s.avail===false && s.opacity==='.4')
 ok('sin track => NO disponible', (s=>s.avail===false)(btn(false,'environment',false,false)));
 ok('unsupported (applyConstraints falló) => NO disponible', (s=>s.avail===false)(btn(true,'environment',true,false)));
 
-// _kioskTorchFailMsg: el aviso diagnóstico DEBE incluir el motivo real del rechazo.
-ok('mensaje incluye el motivo (NotSupportedError)', /NotSupportedError/.test(fmsg('NotSupportedError')));
-ok('mensaje con motivo vacío no rompe', typeof fmsg('')==='string' && fmsg('').length>0);
-ok('mensaje es distinto al texto viejo (prueba de que actualizó)', !/^ESTE TELÉFONO NO PERMITE LINTERNA DESDE LA WEB$/.test(fmsg('X')));
+// _kioskTorchFailMsg: para el día a día, el aviso DEBE ser claro y accionable
+// (apuntar a usar una luz externa); el motivo técnico va a consola, no al usuario.
+ok('mensaje sugiere usar luz externa (accionable)', /LUZ EXTERNA/i.test(fmsg('OverConstrainedError')));
+ok('mensaje no rompe con motivo vacío', typeof fmsg('')==='string' && fmsg('').length>0);
+ok('mensaje no muestra jerga técnica al usuario', !/OverConstrainedError|NotSupportedError/i.test(fmsg('OverConstrainedError')));
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
