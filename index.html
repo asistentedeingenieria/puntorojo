@@ -2804,6 +2804,7 @@ table{max-width:100%}
             <button class="btn cafe sm" data-perm="personal.asistenciaPdfTodas" onclick="descargarAsistenciaSemanalPDF(true)" style="flex:0 0 auto">PDF TODAS LAS OBRAS</button>
             <button class="btn primary sm" data-perm="personal.asistencia" onclick="_abrirKioskoCaras()" style="flex:0 0 auto">ESCANEAR CARAS</button>
             <button class="btn ghost sm" data-perm="obra.ubicacion" onclick="_abrirUbicacionObra()" style="flex:0 0 auto" title="Fijar el punto de ubicación de esta obra">UBICACIÓN DE OBRA</button>
+            <button class="btn ghost sm" data-perm="users.manage" onclick="_abrirDiagnosticoCaras()" style="flex:0 0 auto" title="Ver quién NO tiene cara registrada y restaurar de respaldo">CARAS SIN REGISTRAR</button>
           </div>
         </div>
         <div class="asist-grid" id="asistGrid"></div>
@@ -2906,7 +2907,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v670</span>
+    <span style="opacity:.5;font-size:9px">v671</span>
   </footer>
 
 </div>
@@ -18284,6 +18285,64 @@ async function _restaurarCarasDesdeBackup(){
   }catch(e){ showToast('ERROR AL RESTAURAR: '+(e.message||e),'red'); return 0; }
 }
 window._restaurarCarasDesdeBackup = _restaurarCarasDesdeBackup;
+
+// v671: clasifica el personal para el reporte de caras. PURA y testeable.
+// conCara = ya tiene descriptores; recuperables = no tiene pero hay respaldo en
+// faceBackups; sinRespaldo = no tiene y no hay respaldo (hay que enrolar).
+function _clasificarCaras(personal, backupIds){
+  const tiene = f => f && Array.isArray(f.descriptors) && f.descriptors.length > 0;
+  const ids = (backupIds instanceof Set) ? backupIds : new Set(backupIds || []);
+  const conCara = [], recuperables = [], sinRespaldo = [];
+  (Array.isArray(personal) ? personal : []).forEach(p => {
+    if (!p || !p.id) return;
+    const item = { id: p.id, nombre: String(p.nombre || '').toUpperCase() };
+    if (tiene(p.face)) conCara.push(item);
+    else if (ids.has(p.id)) recuperables.push(item);
+    else sinRespaldo.push(item);
+  });
+  return { conCara, recuperables, sinRespaldo };
+}
+window._clasificarCaras = _clasificarCaras;
+
+// v671: reporte "quién NO tiene cara registrada" + recuperar de respaldo. Admin.
+async function _abrirDiagnosticoCaras(){
+  if(!can('users.manage')){ showToast('SOLO ADMINISTRADOR','red'); return; }
+  if(document.getElementById('_diagCarasModal')) return;
+  showToast('REVISANDO CARAS…','');
+  const esc = s => String(s==null?'':s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  let backupIds = new Set();
+  try{
+    const snap = await firebase.firestore().collection('faceBackups').get();
+    snap.forEach(doc => { const b = doc.data()||{}; if(b.descriptors && b.descriptors.length) backupIds.add(b.personaId || doc.id); });
+  }catch(e){ /* sin acceso a respaldos → quedan como "sin respaldo" */ }
+  const pg = (state && Array.isArray(state.personalGlobal)) ? state.personalGlobal : [];
+  const activos = pg.filter(p => p && p.activo!==false && String(p.nombre||'').replace(/[\s\-_]/g,'').toUpperCase()!=='PREAPP');
+  const r = _clasificarCaras(activos, backupIds);
+  const fila = x => '<div style="padding:6px 2px;border-bottom:1px solid rgba(0,0,0,.07);font-size:13px">'+esc(x.nombre||x.id)+'</div>';
+  const lista = arr => arr.length ? arr.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))).map(fila).join('') : '<div style="color:var(--mute);font-size:12px;padding:6px 2px">— ninguno —</div>';
+  const btnRestaurar = r.recuperables.length ? '<button class="btn primary sm" onclick="_diagRestaurarYRefrescar()" style="margin-left:auto">RESTAURAR TODAS</button>' : '';
+  const seccion = (titulo,color,arr,extra) => '<div style="margin-bottom:14px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><b style="color:'+color+';font-size:12px;letter-spacing:.5px">'+titulo+' ('+arr.length+')</b>'+(extra||'')+'</div>'+lista(arr)+'</div>';
+  const html = '<div id="_diagCarasModal" style="position:fixed;inset:0;z-index:100075;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px">'
+    + '<div style="background:var(--card,#fff);color:var(--ink,#1C1917);border-radius:14px;max-width:520px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden">'
+    +   '<div style="display:flex;align-items:center;gap:8px;padding:16px 18px;border-bottom:1px solid rgba(0,0,0,.08)"><b style="font-size:14px;letter-spacing:.5px">DIAGNÓSTICO DE CARAS</b><button class="btn ghost sm" onclick="_cerrarDiagCaras()" style="margin-left:auto">CERRAR</button></div>'
+    +   '<div style="padding:16px 18px;overflow:auto">'
+    +     seccion('SIN CARA · RECUPERABLES','var(--rojo,#B91C1C)', r.recuperables, btnRestaurar)
+    +     seccion('SIN CARA · HAY QUE ENROLAR','#B45309', r.sinRespaldo, '')
+    +     '<div style="color:var(--mute);font-size:12px;margin-top:4px">Con cara registrada: <b>'+r.conCara.length+'</b></div>'
+    +   '</div>'
+    + '</div></div>';
+  const w = document.createElement('div'); w.innerHTML = html; document.body.appendChild(w.firstElementChild);
+  if(window._prLockScroll) window._prLockScroll();
+}
+function _cerrarDiagCaras(){ const m=document.getElementById('_diagCarasModal'); if(m) m.remove(); if(window._prUnlockScroll) window._prUnlockScroll(); }
+async function _diagRestaurarYRefrescar(){
+  await _restaurarCarasDesdeBackup();   // restaura + sube + renderPersonal
+  _cerrarDiagCaras();
+  _abrirDiagnosticoCaras();             // reabrir para ver el estado actualizado
+}
+window._abrirDiagnosticoCaras = _abrirDiagnosticoCaras;
+window._cerrarDiagCaras = _cerrarDiagCaras;
+window._diagRestaurarYRefrescar = _diagRestaurarYRefrescar;
 // === fin enrolamiento ===
 let _pgDpiBlobs = { frente:null, reverso:null };
 function _pgCloseModal(){ const m=document.getElementById('_pgModal'); if(m) m.remove(); if(typeof window._prUnlockScroll==='function') window._prUnlockScroll(); }
