@@ -2907,7 +2907,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v672</span>
+    <span style="opacity:.5;font-size:9px">v673</span>
   </footer>
 
 </div>
@@ -8735,6 +8735,19 @@ const CloudSync = {
         if (_mg.changed) needsResync = true;
       }
     } catch(e){ console.warn('blindaje de colaboradores en applyRemote:', e); }
+
+    // v673 BLINDAJE DE PERSONAL: la lista de personal (personalGlobal) NUNCA se pisa por
+    // last-write-wins. Unión por id (NO se pierde nadie agregado → Bug1), gana el _ts más nuevo
+    // (NO se revierte el cambio de obra → Bug2), tombstones por id = borrados reales (no revivir).
+    try {
+      if (typeof _mergePersonal === 'function') {
+        const _ptomb = Object.assign({}, (state && state.personalEliminados) || {}, merged.personalEliminados || {});
+        merged.personalEliminados = _ptomb;
+        const _mp = _mergePersonal((state && state.personalGlobal) || [], merged.personalGlobal || [], _ptomb);
+        merged.personalGlobal = _mp.list;
+        if (_mp.changed) needsResync = true;
+      }
+    } catch(e){ console.warn('blindaje de personal en applyRemote:', e); }
 
     state = merged;
     // v495: recalcular _projHashes desde el remoteData REALMENTE aplicado en esta llamada.
@@ -17367,7 +17380,7 @@ function renderPersonal(){
 }
 
 function _notifyPersonalChange(accion, persona){ try { if (typeof _notifyByPerm !== 'function') return; const u=(typeof currentUser!=='undefined')?currentUser:null; const actorName=((u&&(u.displayName||u.username||u.email))||'USUARIO').toUpperCase(); const nm=(persona&&persona.nombre)?persona.nombre:'—'; _notifyByPerm('users.manage', { type:'personal-'+String(accion).toLowerCase(), title:actorName+' · PERSONAL '+accion, body:(nm+(persona&&persona.empresa?(' · '+persona.empresa):'')+(persona&&persona.cargo?(' · '+persona.cargo):'')).slice(0,300), projectId:(typeof state!=='undefined'&&state)?(state.activeProjectId||null):null }).catch(()=>{}); } catch(e){ console.warn('[notif personal]',e); } }
-function _guardarPersonaGlobal(data,id){ const arr=_getPersonal(); let _pers; if(id){ const c=arr.find(p=>p.id===id); if(c){ Object.assign(c,data); _pers=c; } } else { _pers=Object.assign({id:'pg-'+uid(),activo:true,ts:Date.now()},data); arr.push(_pers); } saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} try{ _notifyPersonalChange(id?'EDITADO':'NUEVO', _pers||{nombre:data.nombre}); }catch(e){} renderPersonal(); return _pers; }
+function _guardarPersonaGlobal(data,id){ const arr=_getPersonal(); let _pers; if(id){ const c=arr.find(p=>p.id===id); if(c){ Object.assign(c,data); c._ts=Date.now(); _pers=c; } } else { _pers=Object.assign({id:'pg-'+uid(),activo:true,ts:Date.now()},data); _pers._ts=Date.now(); arr.push(_pers); } saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} try{ _notifyPersonalChange(id?'EDITADO':'NUEVO', _pers||{nombre:data.nombre}); }catch(e){} renderPersonal(); return _pers; }
 async function uploadPersonaDPI(event, personaId, lado){
   if(!(can('personal.edit')||can('users.manage'))) return showToast('SIN PERMISO','red');
   const file=event.target.files&&event.target.files[0]; if(!file){ return; }
@@ -17380,6 +17393,7 @@ async function uploadPersonaDPI(event, personaId, lado){
     await ref.put(file,{contentType:file.type||'image/jpeg'});
     const url=await ref.getDownloadURL();
     c[lado==='frente'?'dpiFrenteURL':'dpiReversoURL']=url;
+    c._ts=Date.now(); // v673: sellar para que el merge no revierta el DPI
     saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) await CloudSync.uploadCurrent(); }catch(e){}
     window._prUploadHide&&window._prUploadHide();
     showToast('DPI '+(lado==='frente'?'FRENTE':'ATRÁS')+' GUARDADO','green');
@@ -17388,7 +17402,7 @@ async function uploadPersonaDPI(event, personaId, lado){
   }catch(e){ window._prUploadHide&&window._prUploadHide(); console.error('[DPI]',e); showToast('ERROR AL SUBIR DPI','red'); }
   finally{ event.target.value=''; }
 }
-function eliminarPersonaGlobal(id){ if(!(can('personal.edit')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; } const c=_personaById(id); if(!c) return; prConfirm({title:'ELIMINAR',body:`¿Eliminar a ${c.nombre}?`,okText:'ELIMINAR',danger:true}).then(ok=>{ if(!ok) return; if(typeof state!=='undefined'&&state) state.personalGlobal=_getPersonal().filter(p=>p.id!==id); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} try{ _notifyPersonalChange('ELIMINADO', c); }catch(e){} renderPersonal(); showToast('PERSONA ELIMINADA'); }); }
+function eliminarPersonaGlobal(id){ if(!(can('personal.edit')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; } const c=_personaById(id); if(!c) return; prConfirm({title:'ELIMINAR',body:`¿Eliminar a ${c.nombre}?`,okText:'ELIMINAR',danger:true}).then(ok=>{ if(!ok) return; if(typeof state!=='undefined'&&state){ if(!state.personalEliminados||typeof state.personalEliminados!=='object') state.personalEliminados={}; state.personalEliminados[id]=Date.now(); state.personalGlobal=_getPersonal().filter(p=>p.id!==id); } saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} try{ _notifyPersonalChange('ELIMINADO', c); }catch(e){} renderPersonal(); showToast('PERSONA ELIMINADA'); }); }
 function toggleAsistenciaGlobal(id){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const _pms=(_getPersonal()||[]).find(x=>x.id===id); if(_pms&&_pms.multiSesion){ showToast('ESTA PERSONA MARCA POR ESCANEO EN VARIAS OBRAS','red'); return; } const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; const cur=A[f][id]||{}; if(cur.presente===true){ showToast('YA ESTÁ PRESENTE · ESE CHEQUE NO SE PUEDE MODIFICAR','red'); return; } const _d=new Date(); const _h=String(_d.getHours()).padStart(2,'0')+':'+String(_d.getMinutes()).padStart(2,'0'); A[f][id]={presente:true,obraId:cur.obraId||'',obraDesc:cur.obraDesc||'',hora:_h,_ts:Date.now()}; try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){} saveAsistencia(); renderPersonal(); }
 function setAsistenciaObra(id,obraId){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; if(!A[f][id])A[f][id]={presente:true}; A[f][id].obraId=obraId; if(obraId!=='OTRA')A[f][id].obraDesc=''; A[f][id]._ts=Date.now(); try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){} saveAsistencia(); renderPersonal(); }
 function setAsistenciaObraDesc(id,desc){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return; const f=_asistFechaActual(); const A=_getAsistencia(); if(A[f]&&A[f][id]){ A[f][id].obraDesc=desc; A[f][id]._ts=Date.now(); try{ _asistPendingAdd(f, id); }catch(e){} saveAsistencia(); } }
@@ -17407,7 +17421,8 @@ function _asignarObraColaborador(personaId, obraId){
   if(obraId==='__MULTISESION__'){ p.multiSesion=true; p.multiObra=false; p.obraAsignada=''; } // v653
   else if(obraId==='__MULTI__'){ p.multiObra=true; p.multiSesion=false; p.obraAsignada=''; }
   else { p.multiObra=false; p.multiSesion=false; p.obraAsignada = obraId||''; }
-  const _nom = p.multiObra ? 'VARIAS OBRAS' : (p.obraAsignada ? (String(((state.projects||[]).find(x=>x.id===p.obraAsignada)||{}).name||'')) : '');
+  p._ts = Date.now(); // v673: sellar para que el merge entre dispositivos NO revierta el cambio de obra
+  const _nom = p.multiSesion ? 'VARIAS OBRAS (MARCA POR OBRA)' : (p.multiObra ? 'VARIAS OBRAS' : (p.obraAsignada ? (String(((state.projects||[]).find(x=>x.id===p.obraAsignada)||{}).name||'')) : ''));
   try{ if(typeof logActivity==='function') logActivity('update','Obra de colaborador asignada', (p.nombre||'')+' → '+(_nom||'sin obra')); }catch(e){}
   saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
   showToast('OBRA ASIGNADA: '+(_nom?_nom.toUpperCase():'(SIN OBRA)'),'green');
@@ -17479,14 +17494,24 @@ function _marcarAsistenciaFacial(personaId, obraId, obraDesc, geo){
   const asis = _getAsistencia();
   if (!asis[fecha]) asis[fecha] = {};
   const _pMS=(_getPersonal()||[]).find(x=>x.id===personaId);
+  const _MIN_SALIDA = 15; // v673 Bug3: mínimo 15 min entre entrada y salida por escaneo (anti doble-escaneo)
   let out, reg;
   if (_pMS && _pMS.multiSesion){
     // v653/v654: persona multi-sesión → varias sesiones por día. NO se migra. El geo va EN la sesión.
-    out = computeAsistenciaMarkMulti(asis[fecha][personaId]||null, hhmm, obraId, obraDesc, Date.now(), geo);
+    // v673: si hay una sesión ABIERTA hace < 15 min, ignorar (no cerrarla por un escaneo accidental).
+    const _recMS = asis[fecha][personaId] || null;
+    if (_recMS && Array.isArray(_recMS.sessions)){
+      for (let _i = _recMS.sessions.length - 1; _i >= 0; _i--){
+        const _s = _recMS.sessions[_i];
+        if (_s && _s.entrada && !_s.salida){ if (typeof _s._ts === 'number' && (Date.now() - _s._ts) < _MIN_SALIDA*60000) return { accion:'ignorado', hora:hhmm }; break; }
+      }
+    }
+    out = computeAsistenciaMarkMulti(_recMS, hhmm, obraId, obraDesc, Date.now(), geo);
     reg = out.reg;
   } else {
     const prev = asis[fecha][personaId] ? migrateAsistenciaRegistro(asis[fecha][personaId]) : null;
-    out = computeAsistenciaMark(prev || {}, hhmm);
+    out = computeAsistenciaMark(prev || {}, hhmm, _MIN_SALIDA);
+    if (out.accion === 'ignorado') return { accion:'ignorado', hora:hhmm };
     reg = out.reg;
     reg.obraId = obraId; reg.obraDesc = obraDesc || ''; reg.via = 'cara'; reg._ts = Date.now();
     if (out.accion === 'entrada') reg.geoEntrada = geo || null; else reg.geoSalida = geo || null;
@@ -17982,6 +18007,7 @@ function _kioskMarcarConObra(personaId, obraId, obraDesc){
   _kioskStreaks={};
   const r=_marcarAsistenciaFacial(personaId, obraId, obraDesc||'', _kioskGeo);
   if(!r) return;
+  if(r.accion==='ignorado'){ const _pn=(_getPersonal()||[]).find(x=>x.id===personaId); _kioskHoldResultUntil=Date.now()+2600; _kioskSetResult('YA MARCÓ HACE POCO · '+(((_pn&&_pn.nombre)||'').toUpperCase()),'#FBBF24'); if(_kioskLoop){ setTimeout(function(){ if(_kioskLoop && document.getElementById('_kioskScreen')) _kioskSetResult('Escaneando…','#fff'); }, 2600); } return; }
   const p=(_getPersonal()||[]).find(x=>x.id===personaId);
   let _matchTxt='';
   try{ const _ge=_geoTxtMarca({geoEntrada:_kioskGeo, obraId:obraId}, 'geoEntrada'); if(_ge&&_ge.txt) _matchTxt=' · '+_ge.txt; }catch(e){}
@@ -22486,10 +22512,18 @@ function parsePersonalExcel(sheets){
   return { personas, avisos };
 }
 // Marca entrada (1ra del día) o salida (siguiente, actualiza a la última). Puro.
-function computeAsistenciaMark(reg, hhmm){
+function computeAsistenciaMark(reg, hhmm, minGapMin){
   const base = (reg && typeof reg === 'object') ? reg : {};
   if (!base.entrada){
     return { reg: Object.assign({}, base, { presente:true, entrada:hhmm, salida:(base.salida||null) }), accion:'entrada' };
+  }
+  // v673 Bug3: exigir un mínimo de minutos antes de marcar salida (anti doble-escaneo accidental).
+  if (minGapMin && minGapMin > 0){
+    var _toMin = function(s){ var mm = String(s||'').match(/^(\d{1,2}):(\d{2})/); return mm ? (Number(mm[1])*60 + Number(mm[2])) : null; };
+    var _e = _toMin(base.entrada), _n = _toMin(hhmm);
+    if (_e != null && _n != null && (_n - _e) >= 0 && (_n - _e) < minGapMin){
+      return { reg: base, accion:'ignorado' };
+    }
   }
   return { reg: Object.assign({}, base, { presente:true, salida:hhmm }), accion:'salida' };
 }
@@ -22643,6 +22677,25 @@ function _mergeColaboradores(localList, remoteList, tombSet){
   var changed = false;
   (Array.isArray(localList) ? localList : []).forEach(function(c){ if (c && c.id && !byId[c.id]) { byId[c.id] = c; changed = true; } });
   if (tombSet) Object.keys(byId).forEach(function(id){ var c = byId[id]; if (tombSet[id] || tombSet[_tk(c)]) delete byId[id]; });
+  return { list: Object.keys(byId).map(function(id){ return byId[id]; }), changed: changed };
+}
+/* v673: Une dos listas de PERSONAL (personalGlobal) por id. Bug 1: el remoto NUNCA borra uno
+   local que no trae (se preserva → changed). Bug 2: para los que están en ambos, gana el de
+   _ts más nuevo (una edición local de obra no se revierte por una copia vieja remota).
+   tombSet={id:true} = borrados reales (eliminarPersonaGlobal) → no revivir. Puro. */
+function _mergePersonal(localList, remoteList, tombSet){
+  var byId = {};
+  (Array.isArray(remoteList) ? remoteList : []).forEach(function(p){ if (p && p.id) byId[p.id] = p; });
+  var changed = false;
+  (Array.isArray(localList) ? localList : []).forEach(function(p){
+    if (!p || !p.id) return;
+    var r = byId[p.id];
+    if (!r){ byId[p.id] = p; changed = true; return; }            // local-only → preservar (Bug 1)
+    var lt = (typeof p._ts === 'number') ? p._ts : 0;
+    var rt = (typeof r._ts === 'number') ? r._ts : 0;
+    if (lt > rt){ byId[p.id] = p; changed = true; }               // edición local más nueva gana (Bug 2)
+  });
+  if (tombSet) Object.keys(byId).forEach(function(id){ if (tombSet[id]) delete byId[id]; });
   return { list: Object.keys(byId).map(function(id){ return byId[id]; }), changed: changed };
 }
 
