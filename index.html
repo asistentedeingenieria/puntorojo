@@ -2907,7 +2907,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v682</span>
+    <span style="opacity:.5;font-size:9px">v683</span>
   </footer>
 
 </div>
@@ -8683,7 +8683,7 @@ const CloudSync = {
         merged.personalGlobal.forEach(rp => {
           if (!rp || !rp.id) return;
           const lp = _locById[rp.id];
-          if (lp && _hasFace(lp.face) && !_hasFace(rp.face)) { rp.face = lp.face; needsResync = true; } // v614: re-subir para que la cara local llegue a la nube y a todos los equipos
+          if (lp && _hasFace(lp.face) && !_hasFace(rp.face) && rp.tipo!=='OFICINA') { rp.face = lp.face; needsResync = true; } // v614: re-subir...; v683: NUNCA revivir una cara de OFICINA (se borran a propósito)
         });
       }
     } catch(e){ console.warn('blindaje de caras en applyRemote:', e); }
@@ -18604,6 +18604,7 @@ async function _abrirDiagnosticoCaras(){
   const aRecom = analisis.filter(x => x.nivel === 'recomendado');
   // v676: las más parecidas primero, y tope de 15 para que la lista sea corta y accionable.
   const aRecomTop = aRecom.slice().sort((a,b)=>((a.sep==null?9:a.sep)-(b.sep==null?9:b.sep))).slice(0,15);
+  const _ofiCaras = activos.filter(p=>p && p.tipo==='OFICINA' && p.face && Array.isArray(p.face.descriptors) && p.face.descriptors.length).length; // v683
   const filaRet = x => '<div style="padding:6px 2px;border-bottom:1px solid rgba(0,0,0,.07);font-size:13px"><b>'+esc(x.nombre||x.id)+'</b><div style="font-size:11px;color:var(--mute)">'+esc((x.motivos||[]).join(' · '))+'</div></div>';
   const listaRet = arr => arr.length ? arr.slice().sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre))).map(filaRet).join('') : '<div style="color:var(--mute);font-size:12px;padding:6px 2px">— ninguno —</div>';
   const seccionRet = (titulo,color,arr) => '<div style="margin-bottom:14px"><b style="color:'+color+';font-size:12px;letter-spacing:.5px;display:block;margin-bottom:6px">'+titulo+' ('+arr.length+')</b>'+listaRet(arr)+'</div>';
@@ -18620,6 +18621,7 @@ async function _abrirDiagnosticoCaras(){
     +     seccionRet('RE-TOMAR YA · pueden fallar','var(--rojo,#B91C1C)', aCritico)
     +     '<div style="margin-bottom:14px"><b style="color:#B45309;font-size:12px;letter-spacing:.5px;display:block;margin-bottom:6px">CONVIENE MEJORAR ('+aRecom.length+(aRecom.length>15?' · se muestran las 15 más parecidas':'')+')</b>'+listaRet(aRecomTop)+'</div>'
     +     '<div style="color:var(--mute);font-size:12px;margin-top:4px">Caras OK: <b>'+Math.max(0, r.conCara.length - aCritico.length - aRecom.length)+'</b> de '+r.conCara.length+' registradas</div>'
+    +     (_ofiCaras ? '<div style="margin-top:14px;border-top:1px solid rgba(0,0,0,.08);padding-top:12px"><button class="btn ghost sm" onclick="_eliminarCarasOficina()" style="border-color:#B91C1C;color:#B91C1C">ELIMINAR CARAS DE OFICINA ('+_ofiCaras+')</button><div style="font-size:10px;color:var(--mute);margin-top:5px">Los de oficina no marcan por cara; esto borra su registro (permanente).</div></div>' : '')
     +   '</div>'
     + '</div></div>';
   const w = document.createElement('div'); w.innerHTML = html; document.body.appendChild(w.firstElementChild);
@@ -18631,6 +18633,21 @@ async function _diagRestaurarYRefrescar(){
   _cerrarDiagCaras();
   _abrirDiagnosticoCaras();             // reabrir para ver el estado actualizado
 }
+// v683: eliminar el registro de cara SOLO de las personas de OFICINA. Admin. Permanente.
+async function _eliminarCarasOficina(){
+  if(!can('users.manage')){ showToast('SOLO ADMINISTRADOR','red'); return; }
+  const pg=(state&&Array.isArray(state.personalGlobal))?state.personalGlobal:[];
+  const _obj=pg.filter(p=>p && p.tipo==='OFICINA' && p.face && Array.isArray(p.face.descriptors) && p.face.descriptors.length);
+  if(!_obj.length){ showToast('NINGUNA CARA DE OFICINA PARA ELIMINAR',''); return; }
+  let ok=true; try{ ok=await prConfirm({title:'ELIMINAR CARAS DE OFICINA', body:'¿Eliminar el registro de cara de '+_obj.length+' persona(s) de OFICINA? Es permanente.', okText:'ELIMINAR', danger:true}); }catch(e){ ok=false; }
+  if(!ok) return;
+  for(const p of _obj){ delete p.face; p._ts=Date.now(); try{ await firebase.firestore().collection('faceBackups').doc(p.id).delete(); }catch(e){} }
+  saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) await CloudSync.uploadCurrent(); }catch(e){}
+  try{ _cerrarDiagCaras(); }catch(e){}
+  if(typeof renderPersonal==='function') renderPersonal();
+  showToast('CARAS DE OFICINA ELIMINADAS: '+_obj.length,'green');
+}
+window._eliminarCarasOficina=_eliminarCarasOficina;
 window._abrirDiagnosticoCaras = _abrirDiagnosticoCaras;
 window._cerrarDiagCaras = _cerrarDiagCaras;
 window._diagRestaurarYRefrescar = _diagRestaurarYRefrescar;
