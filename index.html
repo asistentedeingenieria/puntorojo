@@ -2906,7 +2906,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v669</span>
+    <span style="opacity:.5;font-size:9px">v670</span>
   </footer>
 
 </div>
@@ -17684,7 +17684,7 @@ async function _detectAllDescriptors(input, lowLight){
 }
 
 // ── KIOSKO FACIAL ────────────────────────────────────────────────────────────
-let _kioskMatcher=null, _kioskStream=null, _kioskLoop=null, _kioskBusy=false, _kioskGeo=null, _kioskGeoWatch=null, _kioskStreaks={}, _kioskFacing='environment';
+let _kioskMatcher=null, _kioskStream=null, _kioskLoop=null, _kioskBusy=false, _kioskGeo=null, _kioskGeoWatch=null, _kioskStreaks={}, _kioskFacing='environment', _kioskHoldResultUntil=0;
 let _kioskTorchTrack=null, _kioskTorchOn=false, _kioskLuzManual=false, _kioskLowLight=false, _kioskLumaCanvas=null, _kioskFrameCanvas=null;
 const _kioskLast = {}; // personaId -> timestamp ultima marca (debounce 5s)
 // ── Linterna (torch) + poca luz ───────────────────────────────────────────────
@@ -17828,6 +17828,16 @@ function _kioskPedirUbicacion(){
     { enableHighAccuracy:false, timeout:25000, maximumAge:30000 }
   );
 }
+// v670: decide el cartel del kiosko en cada tick. PURO y testeable. Devuelve
+// null = no tocar el cartel. NO confirma a mano (regla del usuario): si no es un
+// match claro, avisa "no te reconozco" en vez de quedarse mudo en "Escaneando…".
+function _kioskFeedbackMsg(o){
+  o = o || {};
+  if (o.holdActivo || o.pidiendoObra || !o.hayGeo) return null; // no pisar marca/selector/ubicación
+  if (o.algunAuto) return null;                                  // está reconociendo a alguien
+  if (!o.caras) return { txt:'Acercate y mirá a la cámara', color:'#fff' };
+  return { txt:'No te reconozco — acercate, buscá mejor luz o pedí que te registren de nuevo', color:'#FBBF24' };
+}
 async function _kioskTick(){
   if (_kioskBusy || !_kioskMatcher) return;
   const v=document.getElementById('_kioskVideo'); if(!v||!v.videoWidth) return;
@@ -17841,10 +17851,12 @@ async function _kioskTick(){
     }
     const dets=await _detectAllDescriptors(_kioskFrameInput(v), _kioskLowLight); // TODAS las caras del cuadro (multi-persona)
     const vistos=new Set();   // personas auto-detectadas en este frame
+    let _algunAuto=false;
     for(const det of dets){
       const all=_kioskMatcher.labeledDescriptors.map(ld=>({id:ld.label, distance:Math.min.apply(null, ld.descriptors.map(d=>faceapi.euclideanDistance(d, det.descriptor)))}));
       const pick=pickFaceCandidates(all,0.44,0.54,0.10); // umbrales estrictos + margen 0.10
       if(pick.status==='auto'){
+        _algunAuto=true;
         vistos.add(pick.matchId);
         // Anti falso positivo: exigir 2 lecturas SEGUIDAS de la MISMA persona (cada una con su racha).
         _kioskStreaks[pick.matchId]=(_kioskStreaks[pick.matchId]||0)+1;
@@ -17854,6 +17866,11 @@ async function _kioskTick(){
     }
     // Resetear la racha de quien NO apareció (deben ser cuadros SEGUIDOS).
     for(const id in _kioskStreaks){ if(!vistos.has(id)) _kioskStreaks[id]=0; }
+    // v670: que el kiosko NUNCA se quede mudo (sin confirmar a mano). No pisa marca/selector/ubicación.
+    try{
+      const _fb=_kioskFeedbackMsg({ caras:dets.length, algunAuto:_algunAuto, hayGeo:!!_kioskGeo, pidiendoObra:!!_kioskPidiendoObra, holdActivo: Date.now() < _kioskHoldResultUntil });
+      if(_fb) _kioskSetResult(_fb.txt, _fb.color);
+    }catch(e){}
   }catch(e){} finally{ _kioskBusy=false; }
 }
 function _tomarFotoMarcar(){
@@ -17968,6 +17985,7 @@ function _kioskMarcarConObra(personaId, obraId, obraDesc){
   let _matchTxt='';
   try{ const _ge=_geoTxtMarca({geoEntrada:_kioskGeo, obraId:obraId}, 'geoEntrada'); if(_ge&&_ge.txt) _matchTxt=' · '+_ge.txt; }catch(e){}
   const _offTxt = (!navigator.onLine) ? ' · SIN INTERNET (SE SUBE SOLO AL VOLVER)' : '';
+  _kioskHoldResultUntil=Date.now()+2600; // v670: no dejar que el tick pise el "✓ ENTRADA/SALIDA"
   _kioskSetResult((r.accion==='entrada'?'✓ ENTRADA · ':'✓ SALIDA · ')+((p&&p.nombre)||'')+' · '+r.hora+_matchTxt+_offTxt, r.accion==='entrada'?'#34D399':'#FBBF24');
   if (_kioskLoop){ setTimeout(function(){ if(_kioskLoop && document.getElementById('_kioskScreen')) _kioskSetResult('Escaneando…','#fff'); }, 2600); }
 }
@@ -18219,13 +18237,16 @@ async function _guardarCara(personaId){
   else { showToast('⚠ CARA GUARDADA PERO NO SUBIÓ A LA NUBE · REVISÁ INTERNET Y VOLVÉ A GUARDAR','red'); }
   if(typeof renderPersonal==='function') renderPersonal();
 }
-// v611: VERIFICAR que la cara llegó a la nube (lee appState/core).
+// v611/v633: VERIFICAR que la cara llegó a la nube. Desde v633 las caras viven en
+// el doc appState/faces (se QUITAN del core antes de subir), así que hay que leer
+// AHÍ — el kiosko de los otros equipos también lee de appState/faces. Leer core
+// (como antes) daba SIEMPRE falso "no subió" aunque la cara hubiera subido bien.
 async function _verificarCaraEnNube(personaId){
   try{
-    const doc = await firebase.firestore().collection('appState').doc('core').get();
+    const doc = await firebase.firestore().collection('appState').doc('faces').get();
     const d = (doc && doc.data && doc.data()) || {};
-    const per = (d.personalGlobal||[]).find(x=>x && x.id===personaId);
-    return !!(per && per.face && Array.isArray(per.face.descriptors) && per.face.descriptors.length);
+    const f = (d.faces && d.faces[personaId]) || null;
+    return !!(f && Array.isArray(f.descriptors) && f.descriptors.length);
   }catch(e){ return false; }
 }
 // v611: respaldo append-only de la cara en una colección aparte que la sync NO toca.
