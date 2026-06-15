@@ -2907,7 +2907,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v688</span>
+    <span style="opacity:.5;font-size:9px">v689</span>
   </footer>
 
 </div>
@@ -17750,7 +17750,7 @@ async function _detectAllDescriptors(input, lowLight){
 
 // ── KIOSKO FACIAL ────────────────────────────────────────────────────────────
 let _kioskMatcher=null, _kioskStream=null, _kioskLoop=null, _kioskBusy=false, _kioskGeo=null, _kioskGeoWatch=null, _kioskStreaks={}, _kioskFacing='environment', _kioskHoldResultUntil=0;
-let _kioskTorchTrack=null, _kioskTorchOn=false, _kioskLuzManual=false, _kioskLowLight=false, _kioskLumaCanvas=null, _kioskFrameCanvas=null, _kioskTorchUnsupported=false;
+let _kioskTorchTrack=null, _kioskTorchOn=false, _kioskLuzManual=false, _kioskLowLight=false, _kioskLumaCanvas=null, _kioskFrameCanvas=null, _kioskTorchUnsupported=false, _kioskTorchErr='';
 const _kioskLast = {}; // personaId -> timestamp ultima marca (debounce 5s)
 // ── Linterna (torch) + poca luz ───────────────────────────────────────────────
 // Optimista: en la cámara TRASERA tratamos el track como candidato a linterna AUNQUE
@@ -17768,6 +17768,12 @@ function _kioskLuzBtnState(hasTrack, facing, unsupported, on){
   var avail = !!hasTrack && facing!=='user' && !unsupported;
   return { avail: avail, opacity: avail?'1':'.4', bg: on?'rgba(251,191,36,.34)':'rgba(255,255,255,.16)', label: on?'LUZ ✓':'LUZ' };
 }
+// Aviso DIAGNÓSTICO cuando el intento real de prender el torch falla: incluye el motivo
+// (ej. NotSupportedError) para saber si el WebView de verdad no maneja torch (→ nativo).
+// Texto NUEVO a propósito: si todavía ves el texto viejo, el celular no actualizó.
+function _kioskTorchFailMsg(err){
+  return 'EL TELÉFONO RECHAZÓ LA LINTERNA · ' + (err || 'sin motivo');
+}
 function _kioskInitTorch(stream){
   _kioskTorchUnsupported=false;
   var tr=null;
@@ -17778,14 +17784,16 @@ function _kioskInitTorch(stream){
 }
 async function _kioskSetTorch(on){
   if(!_kioskTorchTrack) return false;
-  try{ await _kioskTorchTrack.applyConstraints({ advanced:[{ torch: !!on }] }); _kioskTorchOn=!!on; _kioskUpdateLuzBtn(); return true; }
-  catch(e){ if(on){ _kioskTorchUnsupported=true; _kioskTorchOn=false; _kioskUpdateLuzBtn(); } return false; } // recién acá sabemos que este WebView no maneja torch
+  try{ await _kioskTorchTrack.applyConstraints({ advanced:[{ torch: !!on }] }); _kioskTorchOn=!!on; _kioskTorchErr=''; _kioskUpdateLuzBtn(); return true; }
+  catch(e){ _kioskTorchErr=(e&&(e.name||e.message))||(''+e)||'?'; if(on){ _kioskTorchUnsupported=true; _kioskTorchOn=false; _kioskUpdateLuzBtn(); } return false; } // recién acá sabemos que este WebView no maneja torch
 }
 function _kioskToggleLuz(){
   if(_kioskFacing==='user'){ showToast('LA LINTERNA SOLO FUNCIONA CON LA CÁMARA TRASERA',''); return; }
-  if(!_kioskTorchTrack || _kioskTorchUnsupported){ showToast('ESTE TELÉFONO NO PERMITE LINTERNA DESDE LA WEB',''); return; }
+  if(!_kioskTorchTrack){ showToast('LINTERNA: NO HAY CÁMARA TRASERA ACTIVA',''); return; }
   _kioskLuzManual=true;
-  _kioskSetTorch(!_kioskTorchOn).then(function(okk){ if(!okk){ showToast('ESTE TELÉFONO NO PERMITE LINTERNA DESDE LA WEB',''); } });
+  _kioskTorchUnsupported=false; // el botón manual SIEMPRE reintenta de cero (la auto pudo haber tropezado antes)
+  var queremos = !_kioskTorchOn;
+  _kioskSetTorch(queremos).then(function(okk){ if(!okk){ showToast(_kioskTorchFailMsg(_kioskTorchErr),''); } });
 }
 function _kioskUpdateLuzBtn(){
   var b=document.getElementById('_kioskLuzBtn'); if(!b) return;

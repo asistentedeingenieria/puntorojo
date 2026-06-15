@@ -9,10 +9,13 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
 const mCand = html.match(/function _kioskTorchCandidato\([\s\S]*?\n\}/);
 const mBtn  = html.match(/function _kioskLuzBtnState\([\s\S]*?\n\}/);
+const mMsg  = html.match(/function _kioskTorchFailMsg\([\s\S]*?\n\}/);
 if(!mCand){ console.log('NO _kioskTorchCandidato FOUND'); process.exit(2); }
 if(!mBtn){ console.log('NO _kioskLuzBtnState FOUND'); process.exit(2); }
+if(!mMsg){ console.log('NO _kioskTorchFailMsg FOUND'); process.exit(2); }
 const cand = new Function(mCand[0] + '\nreturn _kioskTorchCandidato;')();
 const btn  = new Function(mBtn[0]  + '\nreturn _kioskLuzBtnState;')();
+const fmsg = new Function(mMsg[0]  + '\nreturn _kioskTorchFailMsg;')();
 
 let pass=0, fail=0;
 const ok=(name,cond)=>cond?pass++:(fail++,console.log('FAIL '+name));
@@ -30,6 +33,11 @@ ok('encendida => label "LUZ ✓" + fondo ámbar', (s=>s.label==='LUZ ✓' && /25
 ok('selfie => NO disponible (gris .4)', (s=>s.avail===false && s.opacity==='.4')(btn(true,'user',false,false)));
 ok('sin track => NO disponible', (s=>s.avail===false)(btn(false,'environment',false,false)));
 ok('unsupported (applyConstraints falló) => NO disponible', (s=>s.avail===false)(btn(true,'environment',true,false)));
+
+// _kioskTorchFailMsg: el aviso diagnóstico DEBE incluir el motivo real del rechazo.
+ok('mensaje incluye el motivo (NotSupportedError)', /NotSupportedError/.test(fmsg('NotSupportedError')));
+ok('mensaje con motivo vacío no rompe', typeof fmsg('')==='string' && fmsg('').length>0);
+ok('mensaje es distinto al texto viejo (prueba de que actualizó)', !/^ESTE TELÉFONO NO PERMITE LINTERNA DESDE LA WEB$/.test(fmsg('X')));
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
