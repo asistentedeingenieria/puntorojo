@@ -2907,7 +2907,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v692</span>
+    <span style="opacity:.5;font-size:9px">v693</span>
   </footer>
 
 </div>
@@ -18119,6 +18119,23 @@ function _enrolPickFiltrar(lista, query){
     .slice()
     .sort(function(a,b){ var x=_n(a.nombre), y=_n(b.nombre); return x<y?-1:(x>y?1:0); });
 }
+// Pura: estado de la cara para el badge del selector.
+//  SIN CARA (no registrada) · MEJORAR (registrada pero el análisis la marca floja) · OK.
+function _enrolPickEstado(p, mejorarSet){
+  var tiene = !!(p && p.face && p.face.descriptors && p.face.descriptors.length);
+  if(!tiene) return { label:'SIN CARA', color:'#F87171', orden:0 };
+  if(mejorarSet && typeof mejorarSet.has==='function' && mejorarSet.has(p.id)) return { label:'MEJORAR', color:'#FB923C', orden:1 };
+  return { label:'OK', color:'#34D399', orden:2 };
+}
+// Set de IDs cuya foto CONVIENE MEJORAR (reusa el análisis de calidad: crítico o recomendado).
+function _enrolMejorarSet(personal){
+  var conCara=(personal||[]).filter(function(p){ return p && p.face && Array.isArray(p.face.descriptors) && p.face.descriptors.length; })
+    .map(function(p){ return { id:p.id, nombre:p.nombre, descs:p.face.descriptors.map(function(d){ return Array.isArray(d)?d:((d&&d.d)||[]); }) }; });
+  var set=new Set();
+  try{ var an=(typeof _analizarCaras==='function')?_analizarCaras(conCara):[]; an.forEach(function(x){ if(x && (x.nivel==='critico'||x.nivel==='recomendado')) set.add(x.id); }); }catch(e){}
+  return set;
+}
+let _kioskRegBase=[], _kioskRegMejorar=new Set(); // se calculan UNA vez al abrir el selector (no en cada tecla)
 // Suelta la cámara del kiosko (sin cerrar la pantalla) para que el registro en vivo pueda abrirla.
 function _kioskSoltarCamara(){
   try{ if(_kioskLoop){ clearTimeout(_kioskLoop); } }catch(e){} _kioskLoop=null;
@@ -18139,6 +18156,9 @@ async function _kioskReanudarCamara(){
 function _kioskAbrirRegistro(){
   if(document.getElementById('_kioskRegScreen')) return;
   if(!_puedeEnrolarCara()){ showToast('SIN PERMISO','red'); return; }
+  var _o=(typeof _getUserObraAsignada==='function')?_getUserObraAsignada():'';
+  _kioskRegBase=(_getPersonal()||[]).filter(function(p){ return !_o || (p && p.obraAsignada===_o); }); // SOLO asignados a SU obra (admin _o='' → todos)
+  _kioskRegMejorar=_enrolMejorarSet(_kioskRegBase); // calidad: quiénes conviene mejorar (una sola vez)
   var html='<div id="_kioskRegScreen" style="position:fixed;inset:0;z-index:100071;background:#0B0B0C;display:flex;flex-direction:column;color:#fff">'
     + '<div style="display:flex;align-items:center;gap:8px;padding:calc(env(safe-area-inset-top,22px) + 14px) 14px 8px">'
     +   '<span style="font-size:12px;letter-spacing:1px;font-weight:800;flex:1">¿A QUIÉN LE REGISTRÁS LA CARA?</span>'
@@ -18153,15 +18173,15 @@ function _kioskAbrirRegistro(){
 }
 function _kioskRegRender(query){
   var cont=document.getElementById('_kioskRegLista'); if(!cont) return;
-  var base=(_getPersonal()||[]).filter(function(p){ return _personaEnObraUsuario(p); }); // scope a la obra del encargado (admin ve todos)
-  var lista=_enrolPickFiltrar(base, query);
+  var lista=_enrolPickFiltrar(_kioskRegBase, query)
+    .sort(function(a,b){ return _enrolPickEstado(a,_kioskRegMejorar).orden - _enrolPickEstado(b,_kioskRegMejorar).orden; }); // accionables (SIN CARA / MEJORAR) arriba
   if(!lista.length){ cont.innerHTML='<div style="color:rgba(255,255,255,.5);text-align:center;padding:24px;font-size:13px">Sin resultados</div>'; return; }
   cont.innerHTML=lista.map(function(p){
-    var tieneCara=!!(p.face&&p.face.descriptors&&p.face.descriptors.length);
+    var est=_enrolPickEstado(p, _kioskRegMejorar);
     var sub=String(p.cargo||p.empresa||'');
     return '<button onclick="_kioskLanzarEnrol(\''+p.id+'\')" style="width:100%;text-align:left;display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:11px 12px;margin-bottom:8px;color:#fff;cursor:pointer;font-family:inherit">'
       +'<span style="flex:1;min-width:0"><span style="display:block;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+String(p.nombre||'').replace(/</g,'&lt;')+'</span>'+(sub?'<span style="display:block;font-size:10px;color:rgba(255,255,255,.5)">'+sub.replace(/</g,'&lt;')+'</span>':'')+'</span>'
-      +'<span style="font-size:10px;font-weight:700;color:'+(tieneCara?'#34D399':'#FBBF24')+'">'+(tieneCara?'TIENE CARA':'SIN CARA')+'</span>'
+      +'<span style="font-size:10px;font-weight:800;letter-spacing:.5px;color:'+est.color+'">'+est.label+'</span>'
       +'</button>';
   }).join('');
 }
