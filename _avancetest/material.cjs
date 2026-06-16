@@ -7,6 +7,7 @@ function ext(name){ const m=html.match(new RegExp('function '+name+'\\([\\s\\S]*
 const D=new Function(ext('_itemsDespachadosEtapa')+'\nreturn _itemsDespachadosEtapa;')();
 const P=new Function(ext('_etapaDespachoPct')+'\nreturn _etapaDespachoPct;')();
 const M=new Function(ext('_avanceAptoNivelMaterial')+'\nreturn _avanceAptoNivelMaterial;')();
+const Y=new Function(ext('_itemsYaPedidosEtapa')+'\nreturn _itemsYaPedidosEtapa;')();
 
 let pass=0, fail=0;
 const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
@@ -44,6 +45,18 @@ ok('mat e4@50 => 4', M([100,100,100,50]).n===4 && !M([100,100,100,50]).green);
 ok('mat e4@49 sigue => 3', M([100,100,100,49]).n===3);
 ok('mat e4@100 => cheque', M([100,100,100,100]).green===true);
 ok('mat nada => 0', M([0,0,0,0]).n===0);
+
+// _itemsYaPedidosEtapa: union de items de TODOS los pedidos de receta (level,etapa), sin importar OC.
+const peds2=[
+  {esDeReceta:true, recetaLevelId:'L1', recetaEtapaIdx:0, items:{a:1,b:2}},
+  {esDeReceta:true, recetaLevelId:'L1', recetaEtapaIdx:0, items:{c:1}},
+  {esDeReceta:true, recetaLevelId:'L1', recetaEtapaIdx:1, items:{x:1}},
+  {esDeReceta:false, recetaLevelId:'L1', recetaEtapaIdx:0, items:{z:1}},
+];
+ok('yaPedidos L1/0 = a,b,c (todos los pedidos de receta, con o sin OC)', Object.keys(Y(peds2,'L1',0)).sort().join(',')==='a,b,c');
+ok('yaPedidos L1/1 = x', Object.keys(Y(peds2,'L1',1)).sort().join(',')==='x');
+ok('yaPedidos otro nivel = vacio', Object.keys(Y(peds2,'L2',0)).length===0);
+ok('yaPedidos no incluye pedidos que no son de receta', !Y(peds2,'L1',0).z);
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);

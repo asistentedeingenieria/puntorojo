@@ -2901,7 +2901,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v699</span>
+    <span style="opacity:.5;font-size:9px">v700</span>
   </footer>
 
 </div>
@@ -11727,8 +11727,8 @@ function _avanceAptoNivelMaterial(pcts){
   var n = P(3)>=50?4 : P(2)>=100?3 : P(1)>=100?2 : P(0)>=100?1 : 0;
   return { green:false, n:n };
 }
-// Keys de los items de una etapa/nivel (mismo origen que pedirEtapaCompleta: PDF per-nivel o receta clásica).
-function _recetaEtapaItemKeys(p, t, l, stageIdx){
+// Resuelve la fuente de items de una etapa/nivel: PDF per-nivel (totales) o receta clásica.
+function _recetaEtapaResuelta(p, t, l, stageIdx){
   var data = p && p.materiales && p.materiales.recetaPorTorreYNivel, per=null;
   if(data && t && l){
     var norm=function(s){return String(s||'').toUpperCase().trim();};
@@ -11737,8 +11737,39 @@ function _recetaEtapaItemKeys(p, t, l, stageIdx){
     var tk=Object.keys(data).find(function(k){return norm(k)===tN;}); if(!tk&&tNo!=null) tk=Object.keys(data).find(function(k){return num(k)===tNo;});
     if(tk){ var td=data[tk]||{}; var lk=Object.keys(td).find(function(k){return norm(k)===lN;}); if(!lk&&lNo!=null) lk=Object.keys(td).find(function(k){return num(k)===lNo;});
       if(lk) per=(td[lk]&&td[lk][stageIdx])||null; } }
-  var src = (per && Object.keys(per).length) ? per : ((p&&p.materiales&&p.materiales.receta&&p.materiales.receta[stageIdx])||{});
-  return Object.keys(src);
+  if(per && Object.keys(per).length) return { src:per, usarTotalesPDF:true };
+  return { src:(p&&p.materiales&&p.materiales.receta&&p.materiales.receta[stageIdx])||{}, usarTotalesPDF:false };
+}
+function _recetaEtapaItemKeys(p, t, l, stageIdx){ return Object.keys(_recetaEtapaResuelta(p, t, l, stageIdx).src); }
+// Items YA pedidos de una etapa/nivel (unión de items de TODOS los pedidos de receta de esa etapa/nivel,
+// sin importar el estado de la OC). Sirve para no pedir dos veces. PURA.
+function _itemsYaPedidosEtapa(pedidos, levelId, stageIdx){
+  var keys={};
+  (pedidos||[]).forEach(function(pd){
+    if(pd && pd.esDeReceta && pd.recetaLevelId===levelId && pd.recetaEtapaIdx===stageIdx){
+      Object.keys(pd.items||{}).forEach(function(k){ keys[k]=true; });
+    }
+  });
+  return keys;
+}
+// Items DISPONIBLES para pedir de una etapa/nivel: receta resuelta − metal-ya-a-medida − ya-pedidos.
+// Devuelve [{key, name, qtyFinal}]. Centraliza la lógica del pedido para el selector.
+function _etapaItemsParaPedir(p, t, l, stageIdx){
+  var R=_recetaEtapaResuelta(p, t, l, stageIdx), etapaReceta=R.src, usarTotalesPDF=R.usarTotalesPDF;
+  var numAptos=((l&&l.aptos)||[]).length;
+  var metalKeywords=['POSTE','CANAL','CANALETA','CANALILLO','ANGULAR'];
+  var yaMetal = stageIdx===0 && p.materiales && p.materiales.metalMedidaPedida && Array.isArray(p.materiales.metalMedidaPedida[l.id]) && p.materiales.metalMedidaPedida[l.id].length>0;
+  var ya=_itemsYaPedidosEtapa(p.materiales&&p.materiales.pedidos, l.id, stageIdx);
+  var out=[];
+  Object.keys(etapaReceta).forEach(function(key){
+    var itemName=(key.split('::')[1]||key).toUpperCase();
+    if(yaMetal && metalKeywords.some(function(k){return itemName.indexOf(k)>=0;})) return;
+    if(ya[key]) return;
+    var qtyBase=etapaReceta[key];
+    var name=(key.split('::').length>1)?key.split('::').slice(1).join('::'):key;
+    out.push({ key:key, name:name, qtyFinal:Math.ceil(usarTotalesPDF?qtyBase:qtyBase*numAptos) });
+  });
+  return out;
 }
 // Leyenda "CÓMO LEER" unificada (Foto 1): 4 etapas en MAYÚSCULAS + cheque con texto por vista.
 function _leyendaAvanceApto(greenTxt){
@@ -23798,6 +23829,41 @@ function saveRecetaAdd(){
   showToast('MATERIAL AGREGADO A LA RECETA', 'green');
 }
 
+// v699b: selector de ítems para pedido PARCIAL de una etapa. Todos marcados = etapa completa.
+function _abrirSelectorItemsEtapa(towerId, levelId, stageIdx){
+  if(!can('pedidos.create')) return showToast('SIN PERMISO PARA CREAR PEDIDOS','red');
+  if(document.getElementById('_selItemsModal')) return;
+  var p=(typeof activeProj==='function')?activeProj():null; if(!p) return;
+  var t=(p.towers||[]).find(function(x){return x.id===towerId;}); var l=t&&(t.levels||[]).find(function(x){return x.id===levelId;});
+  if(!t||!l) return;
+  var items=_etapaItemsParaPedir(p, t, l, stageIdx);
+  if(!items.length){ showToast('YA SE PIDIÓ TODO LO DISPONIBLE DE ESTA ETAPA',''); return; }
+  var esc=function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(m){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]);}); };
+  var rows=items.map(function(it){
+    return '<label style="display:flex;align-items:center;gap:10px;padding:9px 6px;border-bottom:1px solid rgba(0,0,0,.06);font-size:13px;cursor:pointer">'
+      +'<input type="checkbox" class="_selItemChk" data-key="'+esc(it.key)+'" checked style="width:17px;height:17px;flex:0 0 auto">'
+      +'<span style="flex:1;min-width:0">'+esc(it.name)+'</span>'
+      +'<span style="color:var(--mute);font-size:11px;font-weight:700;white-space:nowrap">'+it.qtyFinal+'</span></label>';
+  }).join('');
+  var html='<div id="_selItemsModal" style="position:fixed;inset:0;z-index:100080;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)_cerrarSelectorItems()">'
+    +'<div style="background:var(--card,#fff);color:var(--ink,#1C1917);border-radius:14px;max-width:520px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden" onclick="event.stopPropagation()">'
+    +'<div style="padding:16px 18px;border-bottom:1px solid rgba(0,0,0,.08)"><b style="font-size:13px;letter-spacing:.5px">PEDIR ETAPA '+(stageIdx+1)+' · '+esc(t.name)+' · '+esc(l.name)+'</b><div style="font-size:11px;color:var(--mute);margin-top:4px">Dejá todos marcados para pedir la etapa COMPLETA, o desmarcá lo que no querés pedir todavía.</div></div>'
+    +'<div style="padding:8px 14px;border-bottom:1px solid rgba(0,0,0,.06);display:flex;gap:8px"><button class="btn ghost sm" onclick="_selItemTodos(true)">TODOS</button><button class="btn ghost sm" onclick="_selItemTodos(false)">NINGUNO</button></div>'
+    +'<div style="padding:6px 14px;overflow:auto;flex:1">'+rows+'</div>'
+    +'<div style="padding:14px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;justify-content:flex-end"><button class="btn ghost" onclick="_cerrarSelectorItems()">CANCELAR</button><button class="btn primary" onclick="_selItemPedir(\''+escapeAttr(towerId)+'\',\''+escapeAttr(levelId)+'\','+stageIdx+')">PEDIR SELECCIONADOS</button></div>'
+    +'</div></div>';
+  var w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);
+  if(window._prLockScroll) window._prLockScroll();
+}
+function _cerrarSelectorItems(){ var m=document.getElementById('_selItemsModal'); if(m) m.remove(); if(window._prUnlockScroll) window._prUnlockScroll(); }
+function _selItemTodos(val){ document.querySelectorAll('._selItemChk').forEach(function(c){ c.checked=!!val; }); }
+function _selItemPedir(towerId, levelId, stageIdx){
+  var keys=[]; document.querySelectorAll('._selItemChk').forEach(function(c){ if(c.checked) keys.push(c.getAttribute('data-key')); });
+  if(!keys.length){ showToast('SELECCIONÁ AL MENOS UN ÍTEM','red'); return; }
+  _cerrarSelectorItems();
+  pedirEtapaCompleta(towerId, levelId, stageIdx, keys);
+}
+window._abrirSelectorItemsEtapa=_abrirSelectorItemsEtapa; window._cerrarSelectorItems=_cerrarSelectorItems; window._selItemTodos=_selItemTodos; window._selItemPedir=_selItemPedir;
 function renderRecetaPedir(){
   const p = activeProj();
   const cont = document.getElementById('recetaPedirContent');
@@ -23873,7 +23939,7 @@ function renderRecetaPedir(){
           action = `title="Definir la receta primero" disabled`;
         } else {
           btnText = `PEDIR ET. ${i+1}`;
-          action = `onclick="pedirEtapaCompleta('${t.id}','${l.id}',${i})"`;
+          action = `onclick="_abrirSelectorItemsEtapa('${escapeAttr(t.id)}','${escapeAttr(l.id)}',${i})"`;
         }
         html += `<button class="rpr-stage-btn ${btnClass}" ${action}>${btnText}</button>`;
       }
@@ -23966,7 +24032,7 @@ function showConfirmarPedidoModal(data){
   });
 }
 
-async function pedirEtapaCompleta(towerId, levelId, stageIdx){
+async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys){
   if (!can('pedidos.create')) return showToast('SIN PERMISO PARA CREAR PEDIDOS', 'red');
 
   const p = activeProj();
@@ -24002,9 +24068,8 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx){
   if (Object.keys(etapaReceta).length === 0) return showToast('ESTA ETAPA NO TIENE RECETA DEFINIDA', 'red');
   if (!usarTotalesPDF && numAptos === 0) return showToast('EL NIVEL NO TIENE APTOS', 'red');
 
-  // Verificar que no se haya pedido ya
-  const pedidas = (p.materiales.etapasPedidas || {})[levelId] || [false,false,false,false,false,false];
-  if (pedidas[stageIdx]) return showToast('ESTA ETAPA YA FUE PEDIDA PARA ESTE NIVEL', 'red');
+  // v699b: ya NO se bloquea la etapa completa. La dedup es por ÍTEM (se pueden pedir
+  // los items que falten en otro pedido). Ver recetaDisponible más abajo.
 
   // Etapa display name: usar labels del PDF si existen, sino fallback a ETAPAS_INFO
   const etapaLabel = (Array.isArray(p.materiales.recetaEtapaLabels) && p.materiales.recetaEtapaLabels[stageIdx])
@@ -24037,22 +24102,37 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx){
     return showToast('TODO EL METAL DE ESTA ETAPA YA FUE PEDIDO COMO METAL A LA MEDIDA', 'red');
   }
 
-  // Mostrar modal de confirmación estilizado.
-  const confirmado = await showConfirmarPedidoModal({
-    torre: t.name,
-    nivel: l.name,
-    numAptos,
-    etapa: `${stageIdx + 1} · ${etapaLabel}`,
-    usarTotalesPDF,
-    itemsExcluidos,
-    materiales: Object.entries(recetaFiltrada).map(([key, qtyBase]) => {
-      const parts = key.split('::');
-      const name = parts.length > 1 ? parts.slice(1).join('::') : key;
-      const qtyFinal = usarTotalesPDF ? qtyBase : qtyBase * numAptos;
-      return { name, qtyBase, qtyFinal };
-    })
+  // v699b: dedup — sacar items YA pedidos antes; y si vienen selectedKeys (del selector), sólo esos.
+  const _yaPedidos = _itemsYaPedidosEtapa(p.materiales.pedidos, levelId, stageIdx);
+  const _selSet = Array.isArray(selectedKeys) ? new Set(selectedKeys) : null;
+  const recetaDisponible = {};
+  Object.keys(recetaFiltrada).forEach(key => {
+    if (_yaPedidos[key]) return;                      // ya pedido en otro pedido
+    if (_selSet && !_selSet.has(key)) return;         // no seleccionado en el selector
+    recetaDisponible[key] = recetaFiltrada[key];
   });
-  if (!confirmado) return;
+  if (Object.keys(recetaDisponible).length === 0) {
+    return showToast(_selSet ? 'NO SELECCIONASTE NINGÚN ÍTEM DISPONIBLE' : 'YA SE PIDIÓ TODO LO DISPONIBLE DE ESTA ETAPA', 'red');
+  }
+
+  // Modal de confirmación: sólo cuando NO viene del selector (el selector ya es la confirmación).
+  if (!_selSet) {
+    const confirmado = await showConfirmarPedidoModal({
+      torre: t.name,
+      nivel: l.name,
+      numAptos,
+      etapa: `${stageIdx + 1} · ${etapaLabel}`,
+      usarTotalesPDF,
+      itemsExcluidos,
+      materiales: Object.entries(recetaDisponible).map(([key, qtyBase]) => {
+        const parts = key.split('::');
+        const name = parts.length > 1 ? parts.slice(1).join('::') : key;
+        const qtyFinal = usarTotalesPDF ? qtyBase : qtyBase * numAptos;
+        return { name, qtyBase, qtyFinal };
+      })
+    });
+    if (!confirmado) return;
+  }
 
   // Generar el pedido
   p.materiales.pedidoCounter = (p.materiales.pedidoCounter || 0) + 1;
@@ -24066,7 +24146,7 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx){
   // Items: si vienen del PDF como totales del nivel → tal cual.
   // Si vienen de receta clásica → multiplicados por # aptos.
   const items = {};
-  Object.entries(recetaFiltrada).forEach(([key, qtyBase]) => {
+  Object.entries(recetaDisponible).forEach(([key, qtyBase]) => {
     items[key] = Math.ceil(usarTotalesPDF ? qtyBase : qtyBase * numAptos);
   });
 
@@ -24096,10 +24176,11 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx){
 
   p.materiales.pedidos.push(pedido);
 
-  // Marcar la etapa como pedida
+  // Marcar la etapa como PEDIDA sólo si ya no queda NINGÚN ítem de la etapa por pedir.
   if (!p.materiales.etapasPedidas) p.materiales.etapasPedidas = {};
   if (!p.materiales.etapasPedidas[levelId]) p.materiales.etapasPedidas[levelId] = [false,false,false,false,false,false];
-  p.materiales.etapasPedidas[levelId][stageIdx] = true;
+  const _todoPedido = Object.keys(recetaFiltrada).every(k => _yaPedidos[k] || items[k] != null);
+  p.materiales.etapasPedidas[levelId][stageIdx] = _todoPedido;
 
   logActivity('create', `Pedido ${numero} generado desde receta`, `${p.name} · ${t.name} ${l.name} · Etapa ${stageIdx+1}`);
   saveState();
