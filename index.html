@@ -2907,7 +2907,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v695</span>
+    <span style="opacity:.5;font-size:9px">v696</span>
   </footer>
 
 </div>
@@ -2939,12 +2939,16 @@ table{max-width:100%}
   <div class="modal" style="max-width:460px" onclick="event.stopPropagation()">
     <div class="modal-hd"><h3>UBICACIÓN DE LA OBRA</h3><button class="modal-x" onclick="closeModal('UbicacionObra')">&times;</button></div>
     <div class="modal-bd">
-      <p style="font-size:12px;color:var(--mute);margin-bottom:10px;line-height:1.5">Parado <strong>en la obra</strong>, tocá "USAR MI UBICACIÓN ACTUAL" para fijar el punto. El <strong>radio</strong> define hasta dónde cuenta como EN OBRA al marcar asistencia.</p>
+      <p style="font-size:12px;color:var(--mute);margin-bottom:10px;line-height:1.5">Fijá el punto de la obra de dos formas: parado <strong>en la obra</strong> tocá USAR MI UBICACIÓN ACTUAL, <strong>o pegá las coordenadas</strong> (de Google Maps) abajo. El <strong>radio</strong> define hasta dónde cuenta como EN OBRA al marcar asistencia.</p>
       <div id="uoStatus" style="font-size:12px;color:var(--mute);margin-bottom:10px">Sin configurar</div>
       <input type="hidden" id="uoLat"><input type="hidden" id="uoLng">
       <div id="uoEditRow" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button type="button" id="uoUsarBtn" class="btn primary sm" onclick="_uoUsarUbicacion()">USAR MI UBICACIÓN ACTUAL</button>
         <label style="font-size:11px;color:var(--mute)">Radio (m): <input id="uoRadio" type="number" class="inline" style="width:90px" value="150" min="10"></label>
+        <div style="flex-basis:100%;display:flex;gap:8px;align-items:center;margin-top:4px">
+          <input id="uoCoords" type="text" placeholder="Pegá coordenadas (ej: 14°34'56.9 N 90°31'27.3 W  ·  o  14.58, -90.52)" style="flex:1;min-width:0;font-size:12px">
+          <button type="button" class="btn ghost sm" style="flex:0 0 auto" onclick="_uoUsarCoordenadas()">USAR COORDENADAS</button>
+        </div>
       </div>
       <div id="uoLockNote" style="display:none;margin-top:6px;font-size:11px;color:#92400E;background:#FEF3C7;border:1px solid #FCD34D;border-radius:6px;padding:8px 10px">🔒 La ubicación de esta obra ya quedó configurada y no se puede cambiar.</div>
       <button type="button" id="uoReconfigBtn" class="btn ghost sm" style="display:none;margin-top:8px;border-color:#92400E;color:#92400E" onclick="_uoReconfigurar()">RECONFIGURAR UBICACIÓN</button>
@@ -19203,6 +19207,7 @@ function _abrirUbicacionObra(){
   var a=document.getElementById('uoLat'); if(a) a.value=(g.lat!=null?g.lat:'');
   var b=document.getElementById('uoLng'); if(b) b.value=(g.lng!=null?g.lng:'');
   var r=document.getElementById('uoRadio'); if(r) r.value=(g.radio!=null?g.radio:150);
+  var _co=document.getElementById('uoCoords'); if(_co) _co.value=''; // v696: limpiar el campo de pegar coordenadas
   var s=document.getElementById('uoStatus'); if(s) s.textContent=(g.lat!=null)?('✓ '+Number(g.lat).toFixed(6)+', '+Number(g.lng).toFixed(6)+' · '+(p.name||'')):('Sin configurar · '+(p.name||''));
   var _admin=(typeof can==='function')&&can('users.manage');
   var _soloAdmin=_obraSoloAdminUbicacion(p);
@@ -19241,6 +19246,16 @@ function _uoUsarUbicacion(){
     var s=document.getElementById('uoStatus'); if(s) s.textContent='✓ '+la.toFixed(6)+', '+ln.toFixed(6)+' (±'+Math.round(pos.coords.accuracy)+'m)';
     showToast('UBICACIÓN TOMADA','green');
   }, function(err){ showToast('NO SE PUDO OBTENER LA UBICACIÓN (activá el permiso)','red'); }, { enableHighAccuracy:true, timeout:10000, maximumAge:0 });
+}
+// v696: fijar la ubicación PEGANDO coordenadas (DMS o decimal de Google Maps). Setea uoLat/uoLng
+// igual que el GPS; el GUARDAR es el mismo (_guardarUbicacionObra).
+function _uoUsarCoordenadas(){
+  var inp=document.getElementById('uoCoords'); var raw=inp?inp.value:'';
+  var c=(typeof parseCoordenadas==='function')?parseCoordenadas(raw):null;
+  if(!c){ showToast('NO ENTENDÍ LAS COORDENADAS · revisá el formato (ej: 14°34\'56.9"N 90°31\'27.3"W)','red'); return; }
+  document.getElementById('uoLat').value=c.lat; document.getElementById('uoLng').value=c.lng;
+  var s=document.getElementById('uoStatus'); if(s) s.textContent='✓ '+c.lat.toFixed(6)+', '+c.lng.toFixed(6)+' (por coordenadas)';
+  showToast('COORDENADAS LISTAS · tocá GUARDAR','green');
 }
 function _guardarUbicacionObra(){
   if(!(can('obra.ubicacion')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
@@ -22837,6 +22852,40 @@ function evalGeocerca(markGeo, obraGeo){
   const dist = haversineMeters(markGeo.lat, markGeo.lng, obraGeo.lat, obraGeo.lng);
   const radio = Number(obraGeo.radio) || 150;
   return { enObra: dist <= radio, distancia: dist };
+}
+// ¿lat/lng válidas? Puro.
+function _coordValida(lat,lng){ return typeof lat==='number' && typeof lng==='number' && !isNaN(lat) && !isNaN(lng) && lat>=-90 && lat<=90 && lng>=-180 && lng<=180; }
+// Parsea coordenadas PEGADAS por el usuario → {lat,lng} decimal, o null. PURO. Acepta:
+//  DMS: 14°34'56.9"N 90°31'27.3"W   ·   decimal: 14.5824722, -90.5242500   ·   "Oeste = O".
+function parseCoordenadas(str){
+  if(str==null) return null;
+  var s=String(str).trim(); if(!s) return null;
+  s=s.replace(/[′’]/g,"'").replace(/[″”]/g,'"').replace(/º/g,'°'); // ′’→' ″”→" º→°
+  var up=s.toUpperCase().replace(/\bO\b/g,'W'); // Oeste (español) → W
+  // 1) DMS: D°[M'][S"]H  (minutos/segundos y símbolos opcionales; H = N/S/E/W)
+  var dmsRe=/(\d+(?:\.\d+)?)\s*°\s*(?:(\d+(?:\.\d+)?)\s*'?)?\s*(?:(\d+(?:\.\d+)?)\s*"?)?\s*([NSEW])/g;
+  var dms=[], m;
+  while((m=dmsRe.exec(up))!==null){
+    var val=(parseFloat(m[1])||0)+(parseFloat(m[2])||0)/60+(parseFloat(m[3])||0)/3600;
+    if(m[4]==='S'||m[4]==='W') val=-val;
+    dms.push({ val:val, eje:(m[4]==='N'||m[4]==='S')?'lat':'lng' });
+  }
+  if(dms.length===2){
+    var la=null, ln=null;
+    dms.forEach(function(d){ if(d.eje==='lat') la=d.val; else ln=d.val; });
+    if(la==null||ln==null){ la=dms[0].val; ln=dms[1].val; }
+    return _coordValida(la,ln) ? { lat:la, lng:ln } : null;
+  }
+  // 2) Decimal: dos números (con signo) y/o hemisferio N/S/E/W
+  var decRe=/(-?\d+(?:\.\d+)?)\s*([NSEW])?/g, dec=[];
+  while((m=decRe.exec(up))!==null){
+    if(!m[0] || m[0].trim()==='') { if(m.index===decRe.lastIndex) decRe.lastIndex++; continue; }
+    var v=parseFloat(m[1]); if(isNaN(v)) continue;
+    if(m[2]==='S'||m[2]==='W') v=-Math.abs(v); else if(m[2]==='N'||m[2]==='E') v=Math.abs(v);
+    dec.push(v); if(dec.length===2) break;
+  }
+  if(dec.length===2 && _coordValida(dec[0],dec[1])) return { lat:dec[0], lng:dec[1] };
+  return null;
 }
 // Promedio de horas 'HH:MM' -> 'HH:MM' (o '—' si no hay válidas). Puro.
 function promedioHoraHHMM(arr){
