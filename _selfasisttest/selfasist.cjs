@@ -37,9 +37,10 @@ ok('devuelve dist', M([0,0],[{d:[3,4]}],0.5).dist===5);
 // _puedeAutoEnrolarCara
 ok('admin enrola cualquiera', P({perms:['users.manage']},'pg-1')===true);
 ok('personal.edit enrola cualquiera', P({perms:['personal.edit']},'pg-1')===true);
-ok('self enrola SU ficha', P({perms:['self.asistencia'],colaboradorId:'pg-1'},'pg-1')===true);
-ok('self NO enrola otra ficha', P({perms:['self.asistencia'],colaboradorId:'pg-1'},'pg-2')===false);
-ok('sin perms => false', P({perms:[]},'pg-1')===false);
+ok('usuario vinculado enrola SU ficha', P({perms:['self.asistencia'],colaboradorId:'pg-1'},'pg-1')===true);
+ok('vinculado NO enrola otra ficha', P({perms:['self.asistencia'],colaboradorId:'pg-1'},'pg-2')===false);
+ok('vinculado SIN permiso especial igual enrola SU ficha', P({perms:[],colaboradorId:'pg-1'},'pg-1')===true);
+ok('sin link ni perms => false', P({perms:[]},'pg-1')===false);
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
