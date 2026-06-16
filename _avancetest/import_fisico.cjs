@@ -80,5 +80,32 @@ res=A(tw, P('N1=4; 999=0').niveles);
 ok('override sin match -> overridesNotMatched', res.overridesNotMatched.length===1);
 ok('stagesTs se setea para stages nuevas', Array.isArray(tw.levels[0].aptos[0].stagesTs) && tw.levels[0].aptos[0].stagesTs.filter(Boolean).length===6);
 
+// v704: mapeos pago/despacho (round-trip con sus _avanceAptoNivel*)
+const PG=new Function(ext('_nCuadrosPagoToPcts')+'\nreturn _nCuadrosPagoToPcts;')();
+const MT=new Function(ext('_nCuadrosMatToPcts')+'\nreturn _nCuadrosMatToPcts;')();
+const NP=new Function(ext('_avanceAptoNivelPago')+'\nreturn _avanceAptoNivelPago;')();
+const NM=new Function(ext('_avanceAptoNivelMaterial')+'\nreturn _avanceAptoNivelMaterial;')();
+for(let n=0;n<=4;n++) ok('pago round-trip n='+n, NP(PG(n)).n===n);
+ok('pago n=4 NO es cheque', NP(PG(4)).green===false);
+ok('pago largo 5', PG(2).length===5);
+for(let n=0;n<=4;n++) ok('despacho round-trip n='+n, NM(MT(n)).n===n);
+ok('despacho n=4 NO es cheque', NM(MT(4)).green===false);
+ok('despacho largo 4', MT(2).length===4);
+
+// v704: aplicador genérico con setter (pago/despacho)
+const AG=new Function(ext('_aplicarImportAvance')+'\nreturn _aplicarImportAvance;')();
+tw=mkTower();
+let cap={};
+let rg=AG(tw, P('N1=3; 101=1').niveles, function(a,nn){ cap[a.name]=nn; });
+ok('genérico aplica def a aptos', cap['102']===3 && cap['PASILLO']===3);
+ok('genérico respeta override', cap['101']===1);
+ok('genérico cuenta aptos/niveles', rg.aptos===3 && rg.niveles===1);
+tw=mkTower();
+AG(tw, P('N12=4').niveles, function(a,nn){ a.pagoManual=PG(nn); });
+ok('setter pago escribe a.pagoManual', Array.isArray(tw.levels[1].aptos[0].pagoManual) && NP(tw.levels[1].aptos[0].pagoManual).n===4);
+tw=mkTower();
+AG(tw, P('N1=2').niveles, function(a,nn){ a.despachoManual=MT(nn); });
+ok('setter despacho escribe a.despachoManual', Array.isArray(tw.levels[0].aptos[0].despachoManual) && NM(tw.levels[0].aptos[0].despachoManual).n===2);
+
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);

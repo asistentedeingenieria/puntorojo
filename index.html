@@ -2536,7 +2536,7 @@ table{max-width:100%}
       </div>
 
       <div data-perm="avance.edit" style="display:flex;justify-content:flex-end;margin-bottom:12px">
-        <button onclick="abrirImportarFisico()" style="display:inline-flex;align-items:center;gap:7px;padding:9px 16px;background:var(--cafe);color:#fff;border:none;border-radius:4px;font-family:inherit;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer">IMPORTAR AVANCE FÍSICO</button>
+        <button onclick="abrirImportarAvance('FISICO')" style="display:inline-flex;align-items:center;gap:7px;padding:9px 16px;background:var(--cafe);color:#fff;border:none;border-radius:4px;font-family:inherit;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer">IMPORTAR AVANCE</button>
       </div>
 
       <div class="card" style="padding:14px 20px;margin-bottom:14px">
@@ -2905,7 +2905,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v703</span>
+    <span style="opacity:.5;font-size:9px">v704</span>
   </footer>
 
 </div>
@@ -11697,6 +11697,24 @@ function _nCuadrosFisToStages(n){
   for(var i=0;i<trues;i++) arr[i]=true;
   return arr;
 }
+// v704 — Pago: cuadros (0-4) -> array de 5 %s [e1..e5] (inverso de _avanceAptoNivelPago).
+function _nCuadrosPagoToPcts(n){
+  var k=Number(n)||0;
+  if(k>=4) return [100,100,100,100,90];
+  if(k===3) return [100,100,100,100,0];
+  if(k===2) return [100,100,100,0,0];
+  if(k===1) return [100,0,0,0,0];
+  return [0,0,0,0,0];
+}
+// v704 — Despacho/material: cuadros (0-4) -> array de 4 %s (inverso de _avanceAptoNivelMaterial).
+function _nCuadrosMatToPcts(n){
+  var k=Number(n)||0;
+  if(k>=4) return [100,100,100,50];
+  if(k===3) return [100,100,100,0];
+  if(k===2) return [100,100,0,0];
+  if(k===1) return [100,0,0,0];
+  return [0,0,0,0];
+}
 // Parsea el texto del importador. Una línea por nivel:
 //   N<num>=<0-4>  (o "NIVEL <num>=...")  define TODOS los aptos del nivel.
 //   ; <apto>=<0-4>  sobreescribe aptos puntuales (ej: 1205=0, PASILLO=0).
@@ -11747,6 +11765,28 @@ function _aplicarImportFisico(tower, niveles){
       if(!Array.isArray(a.stagesTs)) a.stagesTs=[];
       for(var i=0;i<6;i++){ if(st[i] && !old[i]) a.stagesTs[i]=_now; }
       a.stages=st.slice();
+      res.aptos++;
+    });
+    Object.keys(nv.overrides||{}).forEach(function(k){ if(!usedOv[k]) res.overridesNotMatched.push('N'+nv.nivel+'·'+k); });
+  });
+  return res;
+}
+// v704 — Aplicador genérico (pago/despacho): igual estructura que el físico pero
+// el `setter(a, n)` decide qué campo VISUAL muta (a.pagoManual / a.despachoManual).
+function _aplicarImportAvance(tower, niveles, setter){
+  var res={aptos:0, niveles:0, levelsNotFound:[], overridesNotMatched:[]};
+  var lvlNum=function(s){ var d=String(s||'').replace(/\D/g,''); return d?parseInt(d,10):null; };
+  (niveles||[]).forEach(function(nv){
+    var lvl=((tower&&tower.levels)||[]).find(function(l){ return lvlNum(l.name)===nv.nivel; });
+    if(!lvl){ res.levelsNotFound.push(nv.nivel); return; }
+    res.niveles++;
+    var usedOv={};
+    (lvl.aptos||[]).forEach(function(a){
+      var nm=String(a.name||'').toUpperCase().replace(/[#\s]/g,'');
+      var hasOv = nv.overrides && Object.prototype.hasOwnProperty.call(nv.overrides, nm);
+      var n = hasOv ? nv.overrides[nm] : nv.def;
+      if(hasOv) usedOv[nm]=true;
+      setter(a, n);
       res.aptos++;
     });
     Object.keys(nv.overrides||{}).forEach(function(k){ if(!usedOv[k]) res.overridesNotMatched.push('N'+nv.nivel+'·'+k); });
@@ -11879,7 +11919,7 @@ function renderAvanceMateriales(){
   }
   if(!window._matAvanceOpen) window._matAvanceOpen=new Set();
   var openSet=window._matAvanceOpen;
-  var html='<div class="card"><div class="card-hd"><h3>AVANCE POR APARTAMENTO</h3></div>'+_leyendaAvanceApto('DESPACHADO AL 100%');
+  var html='<div class="card"><div class="card-hd" style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3>AVANCE POR APARTAMENTO</h3>'+((typeof can==='function'&&can('avance.edit'))?'<button onclick="abrirImportarAvance(\'DESPACHO\')" style="padding:7px 13px;background:var(--cafe);color:#fff;border:none;border-radius:4px;font-family:inherit;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;flex-shrink:0">IMPORTAR</button>':'')+'</div>'+_leyendaAvanceApto('DESPACHADO AL 100%');
   var hayAlgo=false;
   (p.towers||[]).forEach(function(t){
     var levels=(t.levels||[]).filter(function(l){ return (l.aptos||[]).length; });
@@ -11894,20 +11934,24 @@ function renderAvanceMateriales(){
     html+='<div class="tower-summary"><div class="tower-summary-head simple'+(collapsed?'':' open')+'" onclick="toggleMatAvanceTorre(\''+t.id+'\')" title="Click para '+(collapsed?'expandir':'colapsar')+'"><span class="ts-chevron" aria-hidden="true"></span><div class="ts-name-wrap"><div class="ts-name">'+String(t.name||'').replace(/</g,'&lt;')+'</div></div><div class="ts-prom">'+towerPct+'%<small>DESPACHO</small></div></div>';
     if(!collapsed){
       levels.forEach(function(l, li){
-        var pcts=levelPcts[li];
+        var basePcts=levelPcts[li];
         var aptos=(window._sortPasilloUltimo?window._sortPasilloUltimo(l.aptos||[]):(l.aptos||[]));
+        // v704: override visual por apto del importador de despacho (a.despachoManual). No toca OCs.
+        var aptoPctsList=aptos.map(function(a){ return (a.despachoManual&&Array.isArray(a.despachoManual))?a.despachoManual:basePcts; });
+        var pcts=[0,1,2,3].map(function(ei){ if(!aptos.length) return basePcts[ei]; var s=0; aptoPctsList.forEach(function(ap){ s+=Number(ap[ei]||0); }); return Math.round(s/aptos.length); });
         function chip(lab, pct){
           var col = pct>=100?'var(--green-dark)':(pct>0?'#B45309':'var(--mute)');
           var bg  = pct>=100?'#E8F5E0':(pct>0?'#FEF3C7':'#FFFFFF');
           return '<span style="display:inline-flex;align-items:center;justify-content:center;padding:2px 5px;border-radius:6px;background:'+bg+';font-size:9px;font-weight:700;letter-spacing:.2px;color:'+col+';border:1px solid rgba(0,0,0,.07)">'+lab+' '+pct+'%</span>';
         }
-        html+='<div style="display:grid;grid-template-columns:108px 1fr;gap:0;align-items:center;border-bottom:1px solid var(--line-soft)">'
-          +'<div style="padding:8px 10px;background:var(--cream);border-right:1px solid var(--line)">'
-            +'<div style="font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;text-align:center;margin-bottom:5px">'+String(l.name||'').replace(/</g,'&lt;')+'</div>'
-            +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:3px">'+chip('1RA',pcts[0])+chip('2DA',pcts[1])+chip('3RA',pcts[2])+chip('4TA',pcts[3])+'</div>'
+        // v704: nombre del nivel a la izquierda + chips de % arriba a la derecha; aptos debajo, alineados a la izquierda.
+        html+='<div style="border-bottom:1px solid var(--line-soft);padding:8px 10px">'
+          +'<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:7px">'
+            +'<div style="font-size:11px;font-weight:800;letter-spacing:.5px;text-transform:uppercase">'+String(l.name||'').replace(/</g,'&lt;')+'</div>'
+            +'<div style="display:flex;gap:3px;flex-wrap:wrap;justify-content:flex-end">'+chip('1RA',pcts[0])+chip('2DA',pcts[1])+chip('3RA',pcts[2])+chip('4TA',pcts[3])+'</div>'
           +'</div>'
-          +'<div style="display:flex;gap:6px;flex-wrap:wrap;padding:6px 10px">';
-        aptos.forEach(function(a){ html+=aptoCard(a, pcts); });
+          +'<div style="display:flex;gap:6px;flex-wrap:wrap">';
+        aptos.forEach(function(a, ai){ html+=aptoCard(a, aptoPctsList[ai]); });
         html+='</div></div>';
       });
     }
@@ -12351,9 +12395,11 @@ function stagePhotosFaltantes(a, stageIdx){
   return faltan;
 }
 
-// v703 — IMPORTAR AVANCE FÍSICO desde los reportes "AVANCE DE OBRA".
-// Elegís la torre en un menú y pegás los niveles; vista previa antes de aplicar.
-async function abrirImportarFisico(){
+// v704 — IMPORTAR AVANCE (físico / pagos / despacho) desde los reportes.
+// Elegís tipo + torre y pegás los niveles; vista previa antes de aplicar.
+// FÍSICO escribe a.stages (dato real). PAGOS/DESPACHO escriben overrides VISUALES
+// (a.pagoManual / a.despachoManual) sin tocar planillas ni órdenes de compra.
+async function abrirImportarAvance(tipoDefault){
   try{
     if(!can('avance.edit')){ showToast('SIN PERMISO PARA EDITAR AVANCE','red'); return; }
     var p=activeProj();
@@ -12361,17 +12407,24 @@ async function abrirImportarFisico(){
     var lbC='display:block;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#64748B;font-weight:700;margin-bottom:6px';
     var inC='width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #CBD5E1;border-radius:6px;font-family:inherit;font-size:13px';
     var torreOpts=p.towers.map(function(t,i){ return '<option value="'+i+'">'+esc(String(t.name||('TORRE '+(i+1))))+'</option>'; }).join('');
-    window._impFisForm={ torreIdx:0, text:'' };
+    var TIPOS=[['FISICO','AVANCE FÍSICO'],['PAGOS','AVANCE DE PAGOS'],['DESPACHO','DESPACHO DE MATERIAL']];
+    var td=(tipoDefault==='PAGOS'||tipoDefault==='DESPACHO')?tipoDefault:'FISICO';
+    var tipoOpts=TIPOS.map(function(o){ return '<option value="'+o[0]+'"'+(o[0]===td?' selected':'')+'>'+o[1]+'</option>'; }).join('');
+    window._impAvForm={ tipo:td, torreIdx:0, text:'' };
     var body='<div style="text-align:left">'
-      +'<div style="margin-bottom:12px"><label style="'+lbC+'">TORRE</label>'
-      +'<select id="impFisTorre" onchange="(window._impFisForm=window._impFisForm||{}).torreIdx=this.value" style="'+inC+'">'+torreOpts+'</select></div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'
+        +'<div><label style="'+lbC+'">QUÉ IMPORTÁS</label><select onchange="(window._impAvForm=window._impAvForm||{}).tipo=this.value" style="'+inC+'">'+tipoOpts+'</select></div>'
+        +'<div><label style="'+lbC+'">TORRE</label><select onchange="(window._impAvForm=window._impAvForm||{}).torreIdx=this.value" style="'+inC+'">'+torreOpts+'</select></div>'
+      +'</div>'
       +'<div><label style="'+lbC+'">AVANCE POR NIVEL (una línea por nivel)</label>'
-      +'<textarea id="impFisText" oninput="(window._impFisForm=window._impFisForm||{}).text=this.value" placeholder="N1=4&#10;N8=4; PASILLO=3&#10;N12=1; 1205=0; PASILLO=0" style="'+inC+';height:220px;resize:vertical;white-space:pre;font-family:monospace;font-size:12px"></textarea></div>'
-      +'<div style="font-size:10.5px;color:#94A3B8;margin-top:8px;line-height:1.55">Cada línea: <b>N&lt;nivel&gt;=&lt;etapa&gt;</b> aplica esa etapa a TODOS los aptos del nivel. Agregá <b>; apto=etapa</b> para excepciones (ej: <b>; 1205=0</b> o <b>; PASILLO=0</b>).<br>Etapas (Foto 1): <b>0</b> sin iniciar · <b>1</b> 1RA tabique 1 cara · <b>2</b> 2DA tabique 2 caras · <b>3</b> 3RA estructura+forro · <b>4</b> 4TA masilla.</div>'
+      +'<textarea oninput="(window._impAvForm=window._impAvForm||{}).text=this.value" placeholder="N1=4&#10;N8=4; PASILLO=3&#10;N12=1; 1205=0; PASILLO=0" style="'+inC+';height:200px;resize:vertical;white-space:pre;font-family:monospace;font-size:12px"></textarea></div>'
+      +'<div style="font-size:10.5px;color:#94A3B8;margin-top:8px;line-height:1.55">Cada línea: <b>N&lt;nivel&gt;=&lt;etapa&gt;</b> aplica esa etapa a TODOS los aptos del nivel. Agregá <b>; apto=etapa</b> para excepciones (ej: <b>; 1205=0</b> o <b>; PASILLO=0</b>).<br>Etapas (Foto 1): <b>0</b> sin iniciar · <b>1</b> 1RA · <b>2</b> 2DA · <b>3</b> 3RA · <b>4</b> 4TA (completo).</div>'
       +'</div>';
-    var ok=await window.prConfirm({ title:'IMPORTAR AVANCE FÍSICO', bodyHTML:body, okText:'VISTA PREVIA', cancelText:'CANCELAR' });
+    var ok=await window.prConfirm({ title:'IMPORTAR AVANCE', bodyHTML:body, okText:'VISTA PREVIA', cancelText:'CANCELAR' });
     if(!ok) return;
-    var f=window._impFisForm||{};
+    var f=window._impAvForm||{};
+    var tipo=(f.tipo==='PAGOS'||f.tipo==='DESPACHO')?f.tipo:'FISICO';
+    var tipoLbl=(tipo==='PAGOS')?'AVANCE DE PAGOS':(tipo==='DESPACHO')?'DESPACHO DE MATERIAL':'AVANCE FÍSICO';
     var tower=p.towers[parseInt(f.torreIdx,10)||0];
     var parsed=_parseImportFisico(f.text||'');
     if(!parsed.ok){ await window.prAlert({ title:'REVISÁ EL TEXTO', body: parsed.errors.slice(0,8).join('\n') }); return; }
@@ -12387,25 +12440,32 @@ async function abrirImportarFisico(){
       lines.push('NIVEL '+nv.nivel+': '+na+' apto(s) → '+ETAQ[nv.def]+(ovTxt?'  ('+ovTxt+')':''));
     });
     var pv='<div style="text-align:left;font-size:12px;line-height:1.6;color:#333">'
-      +'<div style="font-weight:700;margin-bottom:8px">'+esc(String(tower.name||''))+' — se actualizarán '+totalAptos+' apartamento(s):</div>'
+      +'<div style="font-weight:700;margin-bottom:8px">'+tipoLbl+' · '+esc(String(tower.name||''))+' — '+totalAptos+' apartamento(s):</div>'
       +'<div style="max-height:300px;overflow:auto;font-family:monospace;font-size:11px;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;padding:10px;white-space:pre-wrap">'+esc(lines.join('\n'))+'</div>';
     if(notFound.length) pv+='<div style="margin-top:10px;padding:8px;background:#FEF2F2;border:1px solid #FCA5A5;border-radius:6px;color:#991B1B;font-size:11px">Niveles no encontrados en esta torre (se omiten): '+esc(notFound.join(', '))+'</div>';
-    pv+='<div style="margin-top:10px;font-size:11px;color:#B45309">Esto SOBREESCRIBE el avance físico actual de esos aptos con lo del reporte.</div></div>';
+    pv+='<div style="margin-top:10px;font-size:11px;color:#B45309">'+(tipo==='FISICO'?'Esto SOBREESCRIBE el avance físico de esos aptos con lo del reporte.':'Esto fija un avance VISUAL para esos aptos (no toca planillas ni órdenes de compra).')+'</div></div>';
     var ok2=await window.prConfirm({ title:'CONFIRMAR IMPORTACIÓN', bodyHTML:pv, okText:'APLICAR', cancelText:'CANCELAR' });
     if(!ok2) return;
-    var r=_aplicarImportFisico(tower, parsed.niveles);
+    var r;
+    if(tipo==='PAGOS') r=_aplicarImportAvance(tower, parsed.niveles, function(a,n){ a.pagoManual=_nCuadrosPagoToPcts(n); });
+    else if(tipo==='DESPACHO') r=_aplicarImportAvance(tower, parsed.niveles, function(a,n){ a.despachoManual=_nCuadrosMatToPcts(n); });
+    else r=_aplicarImportFisico(tower, parsed.niveles);
     try{ if(typeof saveState==='function') saveState(); }catch(e){}
     try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); }catch(e){}
-    try{ if(typeof logActivity==='function') logActivity('update','Importó avance físico', (p.name||'')+' · '+(tower.name||'')+' · '+r.aptos+' aptos'); }catch(e){}
-    try{ if(typeof renderAvance==='function') renderAvance(); }catch(e){}
-    var msg='IMPORTADO · '+(tower.name||'')+' · '+r.aptos+' APTO(S)';
-    showToast(msg,'green');
+    try{ if(typeof logActivity==='function') logActivity('update','Importó '+tipoLbl, (p.name||'')+' · '+(tower.name||'')+' · '+r.aptos+' aptos'); }catch(e){}
+    try{
+      if(tipo==='PAGOS'){ if(typeof window.renderPlanillaReporte==='function') window.renderPlanillaReporte(); }
+      else if(tipo==='DESPACHO'){ if(typeof window.renderAvanceMateriales==='function') window.renderAvanceMateriales(); }
+      else if(typeof renderAvance==='function') renderAvance();
+    }catch(e){}
+    showToast('IMPORTADO · '+tipoLbl+' · '+(tower.name||'')+' · '+r.aptos+' APTO(S)','green');
     if(r.overridesNotMatched.length) await window.prAlert({ title:'AVISO', body:'Estas excepciones no coincidieron con ningún apto (revisá el número):\n'+r.overridesNotMatched.join('\n') });
   }catch(err){
-    console.error('abrirImportarFisico:', err);
+    console.error('abrirImportarAvance:', err);
     try{ showToast('ERROR: '+(err&&err.message?err.message:err),'red'); }catch(e){}
   }
 }
+function abrirImportarFisico(){ return abrirImportarAvance('FISICO'); }
 function toggleStage(towerId, levelId, aptoId, stageIdx){
   if (!can('avance.edit')) return;
   const p = activeProj();
@@ -35690,7 +35750,11 @@ window.addEventListener('load', () => {
     // v697: nomenclatura unificada Foto 1 (4 etapas). e1→1, e2&e3→2, e4→3, e5@90→4, e5@100→cheque (PAGADO AL 100%).
     const ROJO_DARK = '#C8141C', VACIO = '#FFFFFF', BORDE = '#CBD5E1';
     const ne = (getEtapasP(p)||[]).length;
-    const pcts = [0,1,2,3,4].map(i => i < ne ? paidPct5(p, apto.id, i) : 0); // % pagado de cada etapa 1..5
+    // v704: si el apto tiene override del importador de pagos (a.pagoManual), lo usamos
+    // SOLO para esta vista; nunca toca los registros reales de planilla.pagos.
+    const pcts = (apto.pagoManual && Array.isArray(apto.pagoManual))
+      ? apto.pagoManual
+      : [0,1,2,3,4].map(i => i < ne ? paidPct5(p, apto.id, i) : 0); // % pagado de cada etapa 1..5
     const niv = _avanceAptoNivelPago(pcts);
     const aptoNombre = apto.name.replace(/^APARTAMENTO\s+/i, '').replace(/^APTO\s+/i, '').toUpperCase();
 
@@ -35735,7 +35799,7 @@ window.addEventListener('load', () => {
 
     let html = `
       <div class="card">
-        <div class="card-hd"><h3>AVANCE DE PAGOS POR APARTAMENTO</h3></div>
+        <div class="card-hd" style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3>AVANCE DE PAGOS POR APARTAMENTO</h3>${can('avance.edit')?'<button onclick="abrirImportarAvance(\'PAGOS\')" style="padding:7px 13px;background:var(--cafe);color:#fff;border:none;border-radius:4px;font-family:inherit;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;flex-shrink:0">IMPORTAR</button>':''}</div>
         ${_leyendaAvanceApto('PAGADO AL 100%')}
     `;
 
