@@ -18611,6 +18611,7 @@ function _personaModalGlobal(c){
         <label class="fld"><span>TELÉFONO</span><input id="_pgFTel" value="${esc(f.telefono)}"></label>
         ${dpiSection}
         ${faceSection}
+        ${ (c && e.tipo==='OFICINA' && typeof can==='function' && can('users.manage')) ? ('<button type="button" onclick="_crearAccesoAutoMarcado(\''+c.id+'\')" style="margin-top:4px;width:100%;padding:11px;background:var(--cafe);color:#fff;border:none;border-radius:6px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer">CREAR ACCESO DE AUTO-MARCADO</button>') : '' }
       </div>
       <div class="modal-ft" style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px"><button class="btn ghost" onclick="_pgCloseModal()">CANCELAR</button><button class="btn primary" onclick="_savePersonaModal('${c?c.id:''}')">GUARDAR</button></div>
     </div></div>`;
@@ -18721,6 +18722,56 @@ function _autoPruebaCaras(descriptors, umbral){
   return { ok: maxD < u, maxDist: maxD };
 }
 
+// v705 — crea un login usuario+clave vinculado a un colaborador, con perms=['self.asistencia'].
+async function _crearAccesoAutoMarcado(personaId){
+  if (!can('users.manage')){ showToast('SOLO EL ADMIN PUEDE CREAR ACCESOS','red'); return; }
+  const p=(_getPersonal()||[]).find(x=>x.id===personaId); if(!p){ return; }
+  const form='<div style="text-align:left">'
+    +'<div style="font-size:12px;color:#475569;margin-bottom:10px">Acceso de auto-marcado para <b>'+esc(p.nombre||'')+'</b>. Entrará con este usuario y clave y solo verá "MI ASISTENCIA".</div>'
+    +'<label style="display:block;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#64748B;font-weight:700;margin-bottom:4px">USUARIO</label>'
+    +'<input id="_amUser" autocomplete="off" oninput="(window._amForm=window._amForm||{}).user=this.value" placeholder="ej: jperez" style="width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #CBD5E1;border-radius:6px;margin-bottom:10px">'
+    +'<label style="display:block;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#64748B;font-weight:700;margin-bottom:4px">CLAVE (6+ dígitos)</label>'
+    +'<input id="_amPin" inputmode="numeric" autocomplete="off" oninput="(window._amForm=window._amForm||{}).pin=this.value" placeholder="ej: 123456" style="width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #CBD5E1;border-radius:6px">'
+    +'</div>';
+  window._amForm={user:'',pin:''};
+  const ok=await window.prConfirm({ title:'CREAR ACCESO DE AUTO-MARCADO', bodyHTML:form, okText:'CREAR', cancelText:'CANCELAR' });
+  if(!ok) return;
+  const f=window._amForm||{};
+  const userRaw=String(f.user||'').trim();
+  const pin=String(f.pin||'').trim();
+  const email=_userToEmail(userRaw);
+  if(!email){ showToast('USUARIO INVÁLIDO','red'); return; }
+  if(!/^[0-9]{6,}$/.test(pin)){ showToast('LA CLAVE DEBE SER SOLO NÚMEROS · 6+ DÍGITOS','red'); return; }
+  const secondaryName='pr-secondary-'+Date.now();
+  const secondaryApp=firebase.initializeApp(FIREBASE_CONFIG, secondaryName);
+  try{
+    const cred=await secondaryApp.auth().createUserWithEmailAndPassword(email, pin);
+    const uid=cred.user.uid;
+    await saveUserDoc(uid, {
+      email: email,
+      username: userRaw.toLowerCase().replace(/[^a-z0-9]/g,''),
+      displayName: (p.nombre||'').toUpperCase(),
+      cargo: p.cargo||'',
+      perms: ['self.asistencia'],
+      colaboradorId: personaId,
+      isFounder: false,
+      createdAt: Date.now(),
+      createdBy: currentUser ? (currentUser.email||currentUser.uid) : null,
+      mustChangePassword: false
+    });
+    await secondaryApp.auth().signOut();
+    p.multiSesion=true; p.multiObra=false;
+    try{ saveState(); }catch(e){}
+    try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); }catch(e){}
+    try{ await refreshUsersCache(); }catch(e){}
+    showToast('ACCESO CREADO · USUARIO: '+userRaw.toLowerCase(),'green');
+  }catch(err){
+    const msg=(err&&err.code==='auth/email-already-in-use')?'ESE USUARIO YA EXISTE':(err&&err.message?err.message:String(err));
+    showToast('ERROR: '+msg,'red');
+  }finally{
+    try{ await secondaryApp.delete(); }catch(e){}
+  }
+}
 async function _abrirEnrolarCara(personaId){
   if (!_puedeAutoEnrolarCara(getCurrentUser(), personaId)){ showToast('SIN PERMISO','red'); return; }
   const p=(_getPersonal()||[]).find(x=>x.id===personaId); if(!p) return;
