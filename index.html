@@ -2535,6 +2535,10 @@ table{max-width:100%}
         </div>
       </div>
 
+      <div data-perm="avance.edit" style="display:flex;justify-content:flex-end;margin-bottom:12px">
+        <button onclick="abrirImportarFisico()" style="display:inline-flex;align-items:center;gap:7px;padding:9px 16px;background:var(--cafe);color:#fff;border:none;border-radius:4px;font-family:inherit;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer">IMPORTAR AVANCE FÍSICO</button>
+      </div>
+
       <div class="card" style="padding:14px 20px;margin-bottom:14px">
         <div class="avance-search-bar" style="grid-template-columns:1fr">
           <input id="avanceSearch" type="search" placeholder="BUSCAR APTO, NIVEL O TORRE — EJ: 501, TORRE III, PASILLO..." oninput="filterAvanceDebounced(this.value)" style="padding:10px 14px;border:1px solid var(--line);border-radius:2px;font-family:inherit;font-size:12px;background:var(--paper);text-transform:uppercase;letter-spacing:.5px;width:100%;min-width:0;box-sizing:border-box">
@@ -2901,7 +2905,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v702</span>
+    <span style="opacity:.5;font-size:9px">v703</span>
   </footer>
 
 </div>
@@ -11682,6 +11686,73 @@ function setAvanceSubTab(tab){
 /* ─── VISTA POR APTO (avance físico) — cuadritos por etapa, igual que aptos cobrados ─── */
 /* v697: helpers compartidos de las vistas "AVANCE POR APARTAMENTO" (nomenclatura unificada Foto 1:
    4 etapas + cheque verde). Cada vista decide el NIVEL (0..4 cuadritos rojos, o cheque verde). PUROS. */
+// v703 — IMPORTADOR de avance físico desde reportes "AVANCE DE OBRA".
+// Mapea los cuadritos de la Foto 1 (0..4) a las 6 stages internas (inverso de
+// _avanceAptoNivelFisico): 0 sin iniciar, 1 (1RA tabique 1 cara)=2 stages,
+// 2 (2DA tabique 2 caras)=4, 3 (3RA estructura+forro)=5, 4 (4TA masilla+lija)=6.
+function _nCuadrosFisToStages(n){
+  var k=Number(n)||0;
+  var trues = k>=4?6 : k===3?5 : k===2?4 : k===1?2 : 0;
+  var arr=[false,false,false,false,false,false];
+  for(var i=0;i<trues;i++) arr[i]=true;
+  return arr;
+}
+// Parsea el texto del importador. Una línea por nivel:
+//   N<num>=<0-4>  (o "NIVEL <num>=...")  define TODOS los aptos del nivel.
+//   ; <apto>=<0-4>  sobreescribe aptos puntuales (ej: 1205=0, PASILLO=0).
+// Devuelve {ok, niveles:[{nivel, def, overrides}], errors}. PURA.
+function _parseImportFisico(text){
+  var out={ok:true, niveles:[], errors:[]};
+  var lines=String(text||'').split(/\r?\n/);
+  for(var li=0; li<lines.length; li++){
+    var raw=lines[li].trim();
+    if(!raw) continue;
+    if(raw.substring(0,2)==='//' || (raw.charAt(0)==='#' && raw.indexOf('=')<0)) continue;
+    var parts=raw.split(';').map(function(s){return s.trim();}).filter(Boolean);
+    if(!parts.length) continue;
+    var mNiv=parts[0].match(/^N(?:IVEL)?\s*(\d+)\s*=\s*(\d+)$/i);
+    if(!mNiv){ out.ok=false; out.errors.push('Línea '+(li+1)+': no entendí "'+parts[0]+'"'); continue; }
+    var def=parseInt(mNiv[2],10);
+    if(def<0||def>4){ out.ok=false; out.errors.push('Línea '+(li+1)+': etapa '+def+' fuera de rango (0-4)'); continue; }
+    var overrides={};
+    for(var pi=1; pi<parts.length; pi++){
+      var mOv=parts[pi].match(/^(.+?)\s*=\s*(\d+)$/);
+      if(!mOv){ out.ok=false; out.errors.push('Línea '+(li+1)+': override inválido "'+parts[pi]+'"'); continue; }
+      var ov=parseInt(mOv[2],10);
+      if(ov<0||ov>4){ out.ok=false; out.errors.push('Línea '+(li+1)+': etapa '+ov+' fuera de rango'); continue; }
+      overrides[mOv[1].trim().toUpperCase().replace(/[#\s]/g,'')]=ov;
+    }
+    out.niveles.push({nivel:parseInt(mNiv[1],10), def:def, overrides:overrides});
+  }
+  return out;
+}
+// Aplica las directivas parseadas a una TORRE: muta a.stages/a.stagesTs de cada apto.
+// Override por nombre normalizado (#/espacios fuera, mayúsculas). Devuelve resumen. (Casi pura.)
+function _aplicarImportFisico(tower, niveles){
+  var res={aptos:0, niveles:0, levelsNotFound:[], overridesNotMatched:[]};
+  var _now=(typeof Date!=='undefined'&&Date.now)?Date.now():0;
+  var lvlNum=function(s){ var d=String(s||'').replace(/\D/g,''); return d?parseInt(d,10):null; };
+  (niveles||[]).forEach(function(nv){
+    var lvl=((tower&&tower.levels)||[]).find(function(l){ return lvlNum(l.name)===nv.nivel; });
+    if(!lvl){ res.levelsNotFound.push(nv.nivel); return; }
+    res.niveles++;
+    var usedOv={};
+    (lvl.aptos||[]).forEach(function(a){
+      var nm=String(a.name||'').toUpperCase().replace(/[#\s]/g,'');
+      var hasOv = nv.overrides && Object.prototype.hasOwnProperty.call(nv.overrides, nm);
+      var n = hasOv ? nv.overrides[nm] : nv.def;
+      if(hasOv) usedOv[nm]=true;
+      var st=_nCuadrosFisToStages(n);
+      var old=Array.isArray(a.stages)?a.stages:[];
+      if(!Array.isArray(a.stagesTs)) a.stagesTs=[];
+      for(var i=0;i<6;i++){ if(st[i] && !old[i]) a.stagesTs[i]=_now; }
+      a.stages=st.slice();
+      res.aptos++;
+    });
+    Object.keys(nv.overrides||{}).forEach(function(k){ if(!usedOv[k]) res.overridesNotMatched.push('N'+nv.nivel+'·'+k); });
+  });
+  return res;
+}
 function _avanceAptoNivelFisico(termFisico, acuseFirmado){
   if(acuseFirmado) return { green:true, n:4 };
   var t=Number(termFisico)||0;
@@ -12280,6 +12351,61 @@ function stagePhotosFaltantes(a, stageIdx){
   return faltan;
 }
 
+// v703 — IMPORTAR AVANCE FÍSICO desde los reportes "AVANCE DE OBRA".
+// Elegís la torre en un menú y pegás los niveles; vista previa antes de aplicar.
+async function abrirImportarFisico(){
+  try{
+    if(!can('avance.edit')){ showToast('SIN PERMISO PARA EDITAR AVANCE','red'); return; }
+    var p=activeProj();
+    if(!p || !Array.isArray(p.towers) || !p.towers.length){ showToast('NO HAY TORRES EN ESTE PROYECTO','red'); return; }
+    var lbC='display:block;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#64748B;font-weight:700;margin-bottom:6px';
+    var inC='width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #CBD5E1;border-radius:6px;font-family:inherit;font-size:13px';
+    var torreOpts=p.towers.map(function(t,i){ return '<option value="'+i+'">'+esc(String(t.name||('TORRE '+(i+1))))+'</option>'; }).join('');
+    window._impFisForm={ torreIdx:0, text:'' };
+    var body='<div style="text-align:left">'
+      +'<div style="margin-bottom:12px"><label style="'+lbC+'">TORRE</label>'
+      +'<select id="impFisTorre" onchange="(window._impFisForm=window._impFisForm||{}).torreIdx=this.value" style="'+inC+'">'+torreOpts+'</select></div>'
+      +'<div><label style="'+lbC+'">AVANCE POR NIVEL (una línea por nivel)</label>'
+      +'<textarea id="impFisText" oninput="(window._impFisForm=window._impFisForm||{}).text=this.value" placeholder="N1=4&#10;N8=4; PASILLO=3&#10;N12=1; 1205=0; PASILLO=0" style="'+inC+';height:220px;resize:vertical;white-space:pre;font-family:monospace;font-size:12px"></textarea></div>'
+      +'<div style="font-size:10.5px;color:#94A3B8;margin-top:8px;line-height:1.55">Cada línea: <b>N&lt;nivel&gt;=&lt;etapa&gt;</b> aplica esa etapa a TODOS los aptos del nivel. Agregá <b>; apto=etapa</b> para excepciones (ej: <b>; 1205=0</b> o <b>; PASILLO=0</b>).<br>Etapas (Foto 1): <b>0</b> sin iniciar · <b>1</b> 1RA tabique 1 cara · <b>2</b> 2DA tabique 2 caras · <b>3</b> 3RA estructura+forro · <b>4</b> 4TA masilla.</div>'
+      +'</div>';
+    var ok=await window.prConfirm({ title:'IMPORTAR AVANCE FÍSICO', bodyHTML:body, okText:'VISTA PREVIA', cancelText:'CANCELAR' });
+    if(!ok) return;
+    var f=window._impFisForm||{};
+    var tower=p.towers[parseInt(f.torreIdx,10)||0];
+    var parsed=_parseImportFisico(f.text||'');
+    if(!parsed.ok){ await window.prAlert({ title:'REVISÁ EL TEXTO', body: parsed.errors.slice(0,8).join('\n') }); return; }
+    if(!parsed.niveles.length){ showToast('NO HAY NIVELES PARA IMPORTAR','red'); return; }
+    var lvlNum=function(s){ var d=String(s||'').replace(/\D/g,''); return d?parseInt(d,10):null; };
+    var ETAQ=['SIN INICIAR','1RA','2DA','3RA','4TA'];
+    var lines=[], totalAptos=0, notFound=[];
+    parsed.niveles.forEach(function(nv){
+      var lvl=(tower.levels||[]).find(function(l){ return lvlNum(l.name)===nv.nivel; });
+      if(!lvl){ notFound.push('N'+nv.nivel); return; }
+      var na=(lvl.aptos||[]).length; totalAptos+=na;
+      var ovTxt=Object.keys(nv.overrides||{}).map(function(k){ return k+'→'+ETAQ[nv.overrides[k]]; }).join(', ');
+      lines.push('NIVEL '+nv.nivel+': '+na+' apto(s) → '+ETAQ[nv.def]+(ovTxt?'  ('+ovTxt+')':''));
+    });
+    var pv='<div style="text-align:left;font-size:12px;line-height:1.6;color:#333">'
+      +'<div style="font-weight:700;margin-bottom:8px">'+esc(String(tower.name||''))+' — se actualizarán '+totalAptos+' apartamento(s):</div>'
+      +'<div style="max-height:300px;overflow:auto;font-family:monospace;font-size:11px;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;padding:10px;white-space:pre-wrap">'+esc(lines.join('\n'))+'</div>';
+    if(notFound.length) pv+='<div style="margin-top:10px;padding:8px;background:#FEF2F2;border:1px solid #FCA5A5;border-radius:6px;color:#991B1B;font-size:11px">Niveles no encontrados en esta torre (se omiten): '+esc(notFound.join(', '))+'</div>';
+    pv+='<div style="margin-top:10px;font-size:11px;color:#B45309">Esto SOBREESCRIBE el avance físico actual de esos aptos con lo del reporte.</div></div>';
+    var ok2=await window.prConfirm({ title:'CONFIRMAR IMPORTACIÓN', bodyHTML:pv, okText:'APLICAR', cancelText:'CANCELAR' });
+    if(!ok2) return;
+    var r=_aplicarImportFisico(tower, parsed.niveles);
+    try{ if(typeof saveState==='function') saveState(); }catch(e){}
+    try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); }catch(e){}
+    try{ if(typeof logActivity==='function') logActivity('update','Importó avance físico', (p.name||'')+' · '+(tower.name||'')+' · '+r.aptos+' aptos'); }catch(e){}
+    try{ if(typeof renderAvance==='function') renderAvance(); }catch(e){}
+    var msg='IMPORTADO · '+(tower.name||'')+' · '+r.aptos+' APTO(S)';
+    showToast(msg,'green');
+    if(r.overridesNotMatched.length) await window.prAlert({ title:'AVISO', body:'Estas excepciones no coincidieron con ningún apto (revisá el número):\n'+r.overridesNotMatched.join('\n') });
+  }catch(err){
+    console.error('abrirImportarFisico:', err);
+    try{ showToast('ERROR: '+(err&&err.message?err.message:err),'red'); }catch(e){}
+  }
+}
 function toggleStage(towerId, levelId, aptoId, stageIdx){
   if (!can('avance.edit')) return;
   const p = activeProj();
