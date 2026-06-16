@@ -18211,6 +18211,78 @@ function _renderMiAsistencia(){
 }
 function _miAsisLogout(){ try{ firebase.auth().signOut(); }catch(e){} try{ location.reload(); }catch(e){} }
 function _miAsisRefrescar(){ if(document.getElementById('_miAsisScreen')) _renderMiAsistencia(); }
+// v705 — escaneo facial 1-a-1 para auto-marcado. Sin respaldo: si no reconoce, no marca.
+let _miAsisStream=null, _miAsisLoop=0, _miAsisBusy=false, _miAsisStreak=0, _miAsisGeo=null;
+async function _miAsisEscanear(){
+  const u=getCurrentUser(); const pid=u&&u.colaboradorId;
+  const p=(_getPersonal()||[]).find(x=>x.id===pid);
+  if(!p || !(p.face && p.face.descriptors && p.face.descriptors.length)){ showToast('PRIMERO REGISTRÁ TU CARA','red'); return; }
+  const sel=document.getElementById('_miAsisObra'); const obraId=sel?sel.value:'';
+  if(!obraId){ showToast('ELEGÍ LA OBRA','red'); return; }
+  const misDesc=p.face.descriptors.map(d=>(Array.isArray(d)?d:((d&&d.d)||[])));
+  const old=document.getElementById('_miAsisCam'); if(old) old.remove();
+  const cam='<div id="_miAsisCam" style="position:fixed;inset:0;z-index:100070;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center">'
+    +'<video id="_miAsisVideo" autoplay playsinline muted style="max-width:100%;max-height:70vh"></video>'
+    +'<div id="_miAsisMsg" style="color:#fff;font-size:15px;font-weight:700;margin-top:14px;text-align:center;padding:0 20px">Preparando cámara…</div>'
+    +'<button onclick="_miAsisCerrarCam()" style="margin-top:16px;padding:10px 18px;background:transparent;color:#9CA3AF;border:1px solid #333;border-radius:8px;font-weight:700;letter-spacing:1px;cursor:pointer">CANCELAR</button>'
+    +'</div>';
+  document.body.insertAdjacentHTML('beforeend', cam);
+  _miAsisGeo=null;
+  if(navigator.geolocation){
+    navigator.geolocation.getCurrentPosition(
+      pos=>{ _miAsisGeo={lat:pos.coords.latitude,lng:pos.coords.longitude,acc:pos.coords.accuracy,ts:Date.now()}; },
+      ()=>{ _miAsisGeo=null; }, { enableHighAccuracy:false, maximumAge:30000, timeout:25000 });
+  }
+  try{
+    _miAsisStream=await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:'user'}, width:{ideal:1280}, height:{ideal:720} }, audio:false });
+    const v=document.getElementById('_miAsisVideo'); if(v){ v.srcObject=_miAsisStream; v.style.transform='scaleX(-1)'; }
+  }catch(e){ _miAsisSetMsg('NO SE PUDO ABRIR LA CÁMARA · ACTIVÁ EL PERMISO'); return; }
+  _miAsisSetMsg('Cargando reconocimiento…');
+  try{ await loadFaceModels(); }catch(e){ _miAsisSetMsg('NO SE PUDO CARGAR EL RECONOCIMIENTO'); return; }
+  _miAsisStreak=0; _miAsisLoop=1; _miAsisTick(pid, obraId, misDesc);
+}
+function _miAsisSetMsg(t){ const m=document.getElementById('_miAsisMsg'); if(m) m.textContent=t; }
+function _miAsisCerrarCam(){
+  _miAsisLoop=0;
+  try{ if(_miAsisStream) _miAsisStream.getTracks().forEach(t=>t.stop()); }catch(e){}
+  _miAsisStream=null;
+  const el=document.getElementById('_miAsisCam'); if(el) el.remove();
+}
+async function _miAsisTick(pid, obraId, misDesc){
+  if(!_miAsisLoop) return;
+  if(_miAsisBusy){ setTimeout(()=>_miAsisTick(pid,obraId,misDesc), 350); return; }
+  const v=document.getElementById('_miAsisVideo');
+  if(!v || !v.videoWidth){ setTimeout(()=>_miAsisTick(pid,obraId,misDesc), 350); return; }
+  _miAsisBusy=true;
+  try{
+    const det=await _detectOneDescriptor(v, 416);
+    if(det && det.descriptor){
+      const r=_faceMatch1a1(Array.from(det.descriptor), misDesc, 0.50);
+      if(r.match){
+        _miAsisStreak++;
+        _miAsisSetMsg('Reconocido ✓');
+        if(_miAsisStreak>=2){
+          _miAsisLoop=0; _miAsisBusy=false;
+          if(!_miAsisGeo){ _miAsisSetMsg('FALTA UBICACIÓN · ACTIVÁ EL GPS Y REINTENTÁ'); _miAsisStreak=0; _miAsisLoop=1; _miAsisTick(pid,obraId,misDesc); return; }
+          const res=_marcarAsistenciaFacial(pid, obraId, '', _miAsisGeo);
+          _miAsisCerrarCam();
+          if(res && res.accion==='entrada') showToast('ENTRADA MARCADA · '+res.hora,'green');
+          else if(res && res.accion==='salida') showToast('SALIDA MARCADA · '+res.hora,'green');
+          else if(res && res.accion==='ignorado') showToast('YA MARCASTE HACE UN MOMENTO','');
+          else showToast('NO SE PUDO MARCAR','red');
+          _miAsisRefrescar();
+          return;
+        }
+      } else {
+        _miAsisStreak=0; _miAsisSetMsg('No te reconozco · acercá la cara con buena luz');
+      }
+    } else {
+      _miAsisSetMsg('Buscando tu cara…');
+    }
+  }catch(e){}
+  _miAsisBusy=false;
+  setTimeout(()=>_miAsisTick(pid,obraId,misDesc), 300);
+}
 async function _abrirKioskoCaras(){
   if (document.getElementById('_kioskScreen')) return;
   if (!(can('personal.asistencia')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
