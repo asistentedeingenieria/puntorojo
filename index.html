@@ -2907,7 +2907,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v691</span>
+    <span style="opacity:.5;font-size:9px">v692</span>
   </footer>
 
 </div>
@@ -4438,6 +4438,7 @@ const PERMS_DISPONIBLES = [
   { key: 'precios.proponer', label: 'Ver catálogo de precios y proponer cambios', group: 'EDICIÓN MATERIALES' },
   { key: 'personal.add',     label: 'Agregar nuevos colaboradores', group: 'EDICIÓN PERSONAL' },
   { key: 'personal.edit',    label: 'Editar o eliminar colaboradores',    group: 'EDICIÓN PERSONAL' },
+  { key: 'personal.enrolarCara', label: 'Registrar cara (desde el escáner)', group: 'EDICIÓN PERSONAL' },
   { key: 'personal.asistencia', label: 'Marcar asistencia',    group: 'EDICIÓN PERSONAL' },
   { key: 'obra.ubicacion',     label: 'Configurar la ubicación de la obra', group: 'EDICIÓN PERSONAL' },
   { key: 'personal.asignarObra', label: 'Asignar/cambiar obra de colaboradores', group: 'EDICIÓN PERSONAL' },
@@ -17853,6 +17854,7 @@ async function _abrirKioskoCaras(){
     +   '<button id="_kioskSelfieBtn" style="flex:0 0 auto;height:38px;box-sizing:border-box;background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:8px;padding:0 12px;font-size:11px;font-weight:700;letter-spacing:.5px;white-space:nowrap;cursor:pointer;font-family:inherit" onclick="_kioskCambiarCamara()">SELFIE</button>'
     +   '<button style="flex:0 0 auto;height:38px;box-sizing:border-box;background:rgba(220,38,38,.28);color:#fff;border:1px solid rgba(248,113,113,.7);border-radius:8px;padding:0 12px;font-size:11px;font-weight:700;letter-spacing:.5px;white-space:nowrap;cursor:pointer;font-family:inherit" onclick="_cerrarKiosko()">CERRAR</button>'
     + '</div>'
+    + (_puedeEnrolarCara() ? '<div style="padding:0 12px 8px"><button onclick="_kioskAbrirRegistro()" style="width:100%;background:rgba(59,130,246,.22);color:#fff;border:1px solid rgba(96,165,250,.6);border-radius:8px;padding:9px;font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer;font-family:inherit">+ REGISTRAR CARA DE UNA PERSONA</button></div>' : '')
     + '<div style="position:relative;flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#000">'
     +   '<video id="_kioskVideo" autoplay playsinline muted style="max-width:100%;max-height:100%"></video>'
     +   '<div id="_kioskResult" style="position:absolute;bottom:0;left:0;right:0;padding:16px;text-align:center;color:#fff;font-size:18px;font-weight:800;background:linear-gradient(transparent,rgba(0,0,0,.75))"></div>'
@@ -18104,6 +18106,75 @@ function _cerrarKiosko(){
   if (window._prUnlockScroll) window._prUnlockScroll();
   if (typeof renderPersonal==='function') renderPersonal();
 }
+// ── v692: REGISTRAR CARA DESDE EL KIOSKO (el encargado lo hace en el momento) ──
+function _puedeEnrolarCara(){ return (typeof can==='function') && (can('personal.enrolarCara')||can('personal.edit')||can('users.manage')); }
+// Pura: arma la lista del selector. Saca OFICINA e inactivos; busca por nombre/cargo/empresa
+// (sin acentos ni mayúsculas) y ordena alfabético. El scope por obra lo hace el caller.
+function _enrolPickFiltrar(lista, query){
+  function _n(s){ return String(s==null?'':s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
+  var q=_n(query).trim();
+  return (lista||[])
+    .filter(function(p){ return p && p.activo!==false && p.tipo!=='OFICINA'; })
+    .filter(function(p){ return !q || _n(p.nombre).indexOf(q)>=0 || _n(p.cargo).indexOf(q)>=0 || _n(p.empresa).indexOf(q)>=0; })
+    .slice()
+    .sort(function(a,b){ var x=_n(a.nombre), y=_n(b.nombre); return x<y?-1:(x>y?1:0); });
+}
+// Suelta la cámara del kiosko (sin cerrar la pantalla) para que el registro en vivo pueda abrirla.
+function _kioskSoltarCamara(){
+  try{ if(_kioskLoop){ clearTimeout(_kioskLoop); } }catch(e){} _kioskLoop=null;
+  try{ if(_kioskTorchTrack && _kioskTorchOn){ _kioskTorchTrack.applyConstraints({advanced:[{torch:false}]}); } }catch(e){}
+  try{ if(_kioskStream){ _kioskStream.getTracks().forEach(function(t){ try{t.stop();}catch(_){} }); _kioskStream=null; } }catch(e){}
+  _kioskTorchTrack=null; _kioskTorchOn=false; _kioskTorchUnsupported=false;
+}
+// Reabre la cámara del kiosko y reanuda el escaneo (al volver del registro en vivo).
+async function _kioskReanudarCamara(){
+  if(!document.getElementById('_kioskScreen')) return; // el kiosko ya se cerró
+  try{
+    _kioskStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:_kioskFacing }, width:{ ideal:1280 }, height:{ ideal:720 } }, audio:false });
+    var v=document.getElementById('_kioskVideo'); if(v){ v.srcObject=_kioskStream; v.style.transform=(_kioskFacing==='user')?'scaleX(-1)':'none'; }
+    _kioskLuzManual=false; _kioskTorchOn=false; _kioskInitTorch(_kioskStream);
+    if(_kioskStream && document.getElementById('_kioskScreen') && !_kioskLoop){ _kioskLoop=1; _kioskAgendarTick(); _kioskSetResult('Escaneando…','#fff'); }
+  }catch(e){ _kioskSetResult('NO SE PUDO REABRIR LA CÁMARA · CERRÁ Y VOLVÉ A ABRIR','#FBBF24'); }
+}
+function _kioskAbrirRegistro(){
+  if(document.getElementById('_kioskRegScreen')) return;
+  if(!_puedeEnrolarCara()){ showToast('SIN PERMISO','red'); return; }
+  var html='<div id="_kioskRegScreen" style="position:fixed;inset:0;z-index:100071;background:#0B0B0C;display:flex;flex-direction:column;color:#fff">'
+    + '<div style="display:flex;align-items:center;gap:8px;padding:calc(env(safe-area-inset-top,22px) + 14px) 14px 8px">'
+    +   '<span style="font-size:12px;letter-spacing:1px;font-weight:800;flex:1">¿A QUIÉN LE REGISTRÁS LA CARA?</span>'
+    +   '<button onclick="_kioskCerrarRegistro()" style="background:rgba(220,38,38,.28);color:#fff;border:1px solid rgba(248,113,113,.7);border-radius:8px;padding:8px 13px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">CERRAR</button>'
+    + '</div>'
+    + '<div style="padding:0 14px 8px"><input id="_kioskRegBuscar" oninput="_kioskRegRender(this.value)" placeholder="Buscar por nombre…" autocomplete="off" style="width:100%;box-sizing:border-box;padding:11px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.08);color:#fff;font-size:14px;font-family:inherit"></div>'
+    + '<div id="_kioskRegLista" style="flex:1;overflow:auto;padding:0 14px 14px"></div>'
+    + '</div>';
+  var w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);
+  _kioskRegRender('');
+  try{ var inp=document.getElementById('_kioskRegBuscar'); if(inp) inp.focus(); }catch(e){}
+}
+function _kioskRegRender(query){
+  var cont=document.getElementById('_kioskRegLista'); if(!cont) return;
+  var base=(_getPersonal()||[]).filter(function(p){ return _personaEnObraUsuario(p); }); // scope a la obra del encargado (admin ve todos)
+  var lista=_enrolPickFiltrar(base, query);
+  if(!lista.length){ cont.innerHTML='<div style="color:rgba(255,255,255,.5);text-align:center;padding:24px;font-size:13px">Sin resultados</div>'; return; }
+  cont.innerHTML=lista.map(function(p){
+    var tieneCara=!!(p.face&&p.face.descriptors&&p.face.descriptors.length);
+    var sub=String(p.cargo||p.empresa||'');
+    return '<button onclick="_kioskLanzarEnrol(\''+p.id+'\')" style="width:100%;text-align:left;display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:11px 12px;margin-bottom:8px;color:#fff;cursor:pointer;font-family:inherit">'
+      +'<span style="flex:1;min-width:0"><span style="display:block;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+String(p.nombre||'').replace(/</g,'&lt;')+'</span>'+(sub?'<span style="display:block;font-size:10px;color:rgba(255,255,255,.5)">'+sub.replace(/</g,'&lt;')+'</span>':'')+'</span>'
+      +'<span style="font-size:10px;font-weight:700;color:'+(tieneCara?'#34D399':'#FBBF24')+'">'+(tieneCara?'TIENE CARA':'SIN CARA')+'</span>'
+      +'</button>';
+  }).join('');
+}
+function _kioskCerrarRegistro(){ var s=document.getElementById('_kioskRegScreen'); if(s) s.remove(); }
+function _kioskLanzarEnrol(personaId){
+  var p=(_getPersonal()||[]).find(function(x){ return x && x.id===personaId; });
+  if(!p){ showToast('NO SE ENCONTRÓ A LA PERSONA','red'); return; } // no soltar la cámara si no vamos a registrar
+  _kioskCerrarRegistro();
+  _kioskSoltarCamara();        // liberar la cámara antes de que el registro abra la suya
+  _enrolDesdeKiosko=true;      // para que al cerrar el registro el kiosko reanude solo
+  _abrirEnrolarCaraLive(personaId);
+}
+window._kioskAbrirRegistro=_kioskAbrirRegistro; window._kioskCerrarRegistro=_kioskCerrarRegistro; window._kioskRegRender=_kioskRegRender; window._kioskLanzarEnrol=_kioskLanzarEnrol;
 // ── FIN KIOSKO ───────────────────────────────────────────────────────────────
 
 function _tomarDpiAlta(lado){
@@ -18388,8 +18459,9 @@ function _enrolSetPaso(){
   if(n){ n.textContent = (_enrolAngulo==='done') ? 'PROCESANDO…' : ('FOTO '+Math.min(_enrolDesc.length+1,3)+' DE 3 · '+(_ENROL_PASOS[_enrolAngulo]||'')); }
   for(let i=1;i<=3;i++){ const d=document.getElementById('_enrolDot'+i); if(d){ d.style.background=(i<=_enrolDesc.length)?'#34D399':'rgba(255,255,255,.25)'; } }
 }
+let _enrolDesdeKiosko=false; // v692: si el registro se lanzó desde el kiosko, al cerrar se reanuda la cámara del kiosko
 async function _abrirEnrolarCaraLive(personaId){
-  if (!(can('personal.edit') || can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
+  if (!(can('personal.edit') || can('personal.enrolarCara') || can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
   if (document.getElementById('_enrolLiveScreen')) return;
   const p=(_getPersonal()||[]).find(x=>x.id===personaId); if(!p) return;
   _enrolDesc=[]; _enrolThumb=null; _enrolAngulo='frente'; _enrolLado1Dir=0; _enrolStreak=0; _enrolFacing='user'; _enrolPersonaId=personaId; _enrolGuardando=false;
@@ -18418,6 +18490,7 @@ async function _abrirEnrolarCaraLive(personaId){
     _enrolStream=await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:_enrolFacing }, width:{ ideal:1280 }, height:{ ideal:720 } }, audio:false });
     const v=document.getElementById('_enrolVideo'); if(v){ v.srcObject=_enrolStream; v.style.transform=(_enrolFacing==='user')?'scaleX(-1)':'none'; }
   }catch(e){
+    if(_enrolDesdeKiosko){ _cerrarEnrolarLive(); showToast('NO SE PUDO ABRIR LA CÁMARA · PROBÁ DE NUEVO',''); return; } // desde el kiosko: no mezclar con el modo foto; el kiosko reanuda solo
     _cerrarEnrolarLive();
     showToast('NO SE PUDO ABRIR LA CÁMARA EN VIVO · USANDO FOTO','');
     return _abrirEnrolarCara(personaId);
@@ -18519,6 +18592,7 @@ function _cerrarEnrolarLive(){
   try{ if(_enrolStream){ _enrolStream.getTracks().forEach(t=>t.stop()); _enrolStream=null; } }catch(e){}
   const s=document.getElementById('_enrolLiveScreen'); if(s) s.remove();
   if(window._prUnlockScroll) window._prUnlockScroll();
+  if(_enrolDesdeKiosko){ _enrolDesdeKiosko=false; if(typeof _kioskReanudarCamara==='function') _kioskReanudarCamara(); } // v692: volver al kiosko y reabrir su cámara
 }
 window._abrirEnrolarCaraLive=_abrirEnrolarCaraLive;
 window._cerrarEnrolarLive=_cerrarEnrolarLive;
