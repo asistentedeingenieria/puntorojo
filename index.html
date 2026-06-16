@@ -2907,7 +2907,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v693</span>
+    <span style="opacity:.5;font-size:9px">v694</span>
   </footer>
 
 </div>
@@ -17751,7 +17751,7 @@ async function _detectAllDescriptors(input, lowLight){
 
 // ── KIOSKO FACIAL ────────────────────────────────────────────────────────────
 let _kioskMatcher=null, _kioskStream=null, _kioskLoop=null, _kioskBusy=false, _kioskGeo=null, _kioskGeoWatch=null, _kioskStreaks={}, _kioskFacing='environment', _kioskHoldResultUntil=0;
-let _kioskTorchTrack=null, _kioskTorchOn=false, _kioskLuzManual=false, _kioskLowLight=false, _kioskLumaCanvas=null, _kioskFrameCanvas=null, _kioskTorchUnsupported=false, _kioskTorchErr='';
+let _kioskTorchTrack=null, _kioskTorchOn=false, _kioskLuzManual=false, _kioskLowLight=false, _kioskLumaCanvas=null, _kioskFrameCanvas=null, _kioskTorchUnsupported=false, _kioskTorchErr='', _kioskNoMatch=0;
 const _kioskLast = {}; // personaId -> timestamp ultima marca (debounce 5s)
 // ── Linterna (torch) + poca luz ───────────────────────────────────────────────
 // Optimista: en la cámara TRASERA tratamos el track como candidato a linterna AUNQUE
@@ -17929,6 +17929,7 @@ function _kioskFeedbackMsg(o){
   if (o.holdActivo || o.pidiendoObra || !o.hayGeo) return null; // no pisar marca/selector/ubicación
   if (o.algunAuto) return null;                                  // está reconociendo a alguien
   if (!o.caras) return { txt:'Acercate y mirá a la cámara', color:'#fff' };
+  if ((o.noMatchStreak||0) < 4) return null;                     // v694: no gritar "no te reconozco" por 1-2 cuadros sueltos (parpadeo cuando reconoce intermitente); solo si es SOSTENIDO
   return { txt:'No te reconozco — acercate, buscá mejor luz o pedí que te registren de nuevo', color:'#FBBF24' };
 }
 async function _kioskTick(){
@@ -17961,9 +17962,15 @@ async function _kioskTick(){
     }
     // Resetear la racha de quien NO apareció (deben ser cuadros SEGUIDOS).
     for(const id in _kioskStreaks){ if(!vistos.has(id)) _kioskStreaks[id]=0; }
+    // v694: debounce del cartel "no te reconozco". Si ALGÚN cuadro reconoce, se resetea el
+    // contador → no parpadea cuando el reconocimiento entra/sale del umbral. Solo sube cuando
+    // hay cara presente, sin match, sin hold ni selector de obra.
+    const _holdAhora = Date.now() < _kioskHoldResultUntil;
+    if(_algunAuto || _holdAhora || _kioskPidiendoObra || dets.length===0) _kioskNoMatch=0;
+    else _kioskNoMatch++;
     // v670: que el kiosko NUNCA se quede mudo (sin confirmar a mano). No pisa marca/selector/ubicación.
     try{
-      const _fb=_kioskFeedbackMsg({ caras:dets.length, algunAuto:_algunAuto, hayGeo:!!_kioskGeo, pidiendoObra:!!_kioskPidiendoObra, holdActivo: Date.now() < _kioskHoldResultUntil });
+      const _fb=_kioskFeedbackMsg({ caras:dets.length, algunAuto:_algunAuto, hayGeo:!!_kioskGeo, pidiendoObra:!!_kioskPidiendoObra, holdActivo: _holdAhora, noMatchStreak:_kioskNoMatch });
       if(_fb) _kioskSetResult(_fb.txt, _fb.color);
     }catch(e){}
   }catch(e){} finally{ _kioskBusy=false; }

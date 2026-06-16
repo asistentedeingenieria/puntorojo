@@ -12,10 +12,13 @@ const fn = new Function(m[0] + '\nreturn _kioskFeedbackMsg;')();
 
 let pass = 0, fail = 0;
 const ok = (name, cond) => cond ? pass++ : (fail++, console.log('FAIL ' + name));
-const base = { caras: 1, algunAuto: false, hayGeo: true, pidiendoObra: false, holdActivo: false };
+const base = { caras: 1, algunAuto: false, hayGeo: true, pidiendoObra: false, holdActivo: false, noMatchStreak: 5 };
 
 ok('sin caras => acercate', (r => r && /Acercate/.test(r.txt))(fn(Object.assign({}, base, { caras: 0 }))));
-ok('cara sin match => no te reconozco', (r => r && /no te reconozco/i.test(r.txt))(fn(base)));
+ok('cara sin match SOSTENIDO (varios cuadros) => no te reconozco', (r => r && /no te reconozco/i.test(r.txt))(fn(base)));
+// v694: 1-2 cuadros sueltos sin match (parpadeo cuando SÍ reconoce intermitente) => NO mostrar el mensaje
+ok('cara sin match pero pocos cuadros (parpadeo) => null', fn(Object.assign({}, base, { noMatchStreak: 1 })) === null);
+ok('cara sin match con 0 cuadros => null', fn(Object.assign({}, base, { noMatchStreak: 0 })) === null);
 ok('reconociendo (auto) => null', fn(Object.assign({}, base, { algunAuto: true })) === null);
 ok('marca recien hecha (hold) => null', fn(Object.assign({}, base, { holdActivo: true })) === null);
 ok('pidiendo obra => null', fn(Object.assign({}, base, { pidiendoObra: true })) === null);
