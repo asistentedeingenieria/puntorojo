@@ -2604,7 +2604,10 @@ table{max-width:100%}
         <button class="mat-tab" data-mattab="pedidos" onclick="setMatTab('pedidos')">PEDIDOS DE MATERIAL</button>
         <button class="mat-tab" data-mattab="ordenes" onclick="setMatTab('ordenes')" data-perm="compras.autorizar">ÓRDENES DE COMPRA</button>
         <button class="mat-tab" data-mattab="inventario" onclick="setMatTab('inventario')">INVENTARIOS</button>
+        <button class="mat-tab" data-mattab="avanceapto" onclick="setMatTab('avanceapto')">AVANCE POR APARTAMENTO</button>
       </div>
+
+      <div id="mat-avanceapto" style="display:none"></div>
 
       <div id="mat-inventario" style="display:none">
         <div class="card">
@@ -2907,7 +2910,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v697</span>
+    <span style="opacity:.5;font-size:9px">v698</span>
   </footer>
 
 </div>
@@ -10194,6 +10197,9 @@ function setMatTab(t){
   if (ordenesBlock) ordenesBlock.style.display = t === 'ordenes' ? 'block' : 'none';
   const recetaBlock = document.getElementById('mat-receta');
   if (recetaBlock) recetaBlock.style.display = t === 'receta' ? 'block' : 'none';
+  const avanceAptoBlock = document.getElementById('mat-avanceapto');
+  if (avanceAptoBlock) avanceAptoBlock.style.display = t === 'avanceapto' ? 'block' : 'none';
+  if (t === 'avanceapto') { renderAvanceMateriales(); } // v698
   if (t === 'pedidos') {
     if (currentPedidoTab !== 'nuevo') setPedidoTab('lista');
     renderPedidosList();
@@ -11703,6 +11709,46 @@ function _avanceAptoNivelPago(pcts){
   var n = P(4)>=90?4 : P(3)>=100?3 : (P(1)>=100&&P(2)>=100)?2 : P(0)>=100?1 : 0; // e5@90→4, e4→3, e2&e3→2, e1→1
   return { green:false, n:n };
 }
+// v698 (Fase B) — MATERIALES "AVANCE POR APARTAMENTO". Despachado = OC AUTORIZADA.
+// Items despachados de una etapa/nivel: unión de items de pedidos de receta (level,etapa)
+// cuyas OC están TODAS autorizadas (≥1 OC). PURA.
+function _itemsDespachadosEtapa(pedidos, ordenes, levelId, etapaIdx){
+  var keys={};
+  (pedidos||[]).forEach(function(pd){
+    if(!pd || !pd.esDeReceta) return;
+    if(pd.recetaLevelId!==levelId || pd.recetaEtapaIdx!==etapaIdx) return;
+    var ocs=(ordenes||[]).filter(function(o){ return o && o.pedidoId===pd.id; });
+    if(!ocs.length) return;                                            // sin OC todavía → no despachado
+    if(!ocs.every(function(o){ return (o.status||'')==='AUTORIZADA'; })) return; // alguna sin autorizar
+    Object.keys(pd.items||{}).forEach(function(k){ keys[k]=true; });
+  });
+  return Object.keys(keys);
+}
+// % de la etapa por CANTIDAD de items (despachados / total). PURA.
+function _etapaDespachoPct(totalItems, despachadosCount){
+  var tot=Number(totalItems)||0; if(tot<=0) return 0;
+  return Math.round(Math.min(Number(despachadosCount)||0, tot)/tot*100);
+}
+// Cuadritos vista MATERIALES: e1@100→1, e2@100→2, e3@100→3, e4@50→4, e4@100→cheque. PURA.
+function _avanceAptoNivelMaterial(pcts){
+  function P(i){ return Number(pcts&&pcts[i])||0; }
+  if(P(3)>=100) return { green:true, n:4 };
+  var n = P(3)>=50?4 : P(2)>=100?3 : P(1)>=100?2 : P(0)>=100?1 : 0;
+  return { green:false, n:n };
+}
+// Keys de los items de una etapa/nivel (mismo origen que pedirEtapaCompleta: PDF per-nivel o receta clásica).
+function _recetaEtapaItemKeys(p, t, l, stageIdx){
+  var data = p && p.materiales && p.materiales.recetaPorTorreYNivel, per=null;
+  if(data && t && l){
+    var norm=function(s){return String(s||'').toUpperCase().trim();};
+    var num=function(s){var m=String(s||'').match(/\d+/);return m?parseInt(m[0]):null;};
+    var tN=norm(t.name), tNo=num(t.name), lN=norm(l.name), lNo=num(l.name);
+    var tk=Object.keys(data).find(function(k){return norm(k)===tN;}); if(!tk&&tNo!=null) tk=Object.keys(data).find(function(k){return num(k)===tNo;});
+    if(tk){ var td=data[tk]||{}; var lk=Object.keys(td).find(function(k){return norm(k)===lN;}); if(!lk&&lNo!=null) lk=Object.keys(td).find(function(k){return num(k)===lNo;});
+      if(lk) per=(td[lk]&&td[lk][stageIdx])||null; } }
+  var src = (per && Object.keys(per).length) ? per : ((p&&p.materiales&&p.materiales.receta&&p.materiales.receta[stageIdx])||{});
+  return Object.keys(src);
+}
 // Leyenda "CÓMO LEER" unificada (Foto 1): 4 etapas en MAYÚSCULAS + cheque con texto por vista.
 function _leyendaAvanceApto(greenTxt){
   var BORDE='#CBD5E1', R='#C8141C', V='#FFFFFF';
@@ -11720,6 +11766,47 @@ function _leyendaAvanceApto(greenTxt){
     + '</div></div>';
 }
 window._leyendaAvanceApto=_leyendaAvanceApto;
+// v698 (Fase B): vista MATERIALES "AVANCE POR APARTAMENTO". El despacho es por NIVEL (todos
+// los aptos de un nivel comparten el % de cada etapa). Despachado = OC autorizada.
+function renderAvanceMateriales(){
+  var cont=document.getElementById('mat-avanceapto'); if(!cont) return;
+  var p=(typeof activeProj==='function')?activeProj():null;
+  if(!p){ cont.innerHTML=''; return; }
+  var pedidos=(p.materiales&&p.materiales.pedidos)||[];
+  var ordenes=(p.materiales&&p.materiales.ordenes)||[];
+  var R='#C8141C', V='#FFFFFF', BORDE='#CBD5E1';
+  function aptoCard(a, pcts){
+    var niv=_avanceAptoNivelMaterial(pcts);
+    var nom=String(a.name||'').replace(/^APARTAMENTO\s+/i,'').replace(/^APTO\s+/i,'').toUpperCase();
+    var tip=(a.name+' · 1RA '+pcts[0]+'% · 2DA '+pcts[1]+'% · 3RA '+pcts[2]+'% · 4TA '+pcts[3]+'%').replace(/"/g,'&quot;');
+    var icon;
+    if(niv.green){ icon='<div style="width:30px;height:30px;background:var(--green-dark);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;font-weight:700;box-shadow:0 1px 2px rgba(0,0,0,.08)">✓</div>'; }
+    else { var c=[V,V,V,V]; for(var i=0;i<niv.n;i++)c[i]=R; icon='<div style="display:grid;grid-template-columns:14px 14px;gap:3px">'+c.map(function(x){return '<div style="width:14px;height:14px;background:'+x+';border:1px solid '+BORDE+';border-radius:2px"></div>';}).join('')+'</div>'; }
+    return '<div title="'+tip+'" style="display:flex;flex-direction:column;align-items:center;width:74px;padding:6px 4px;border-radius:4px"><div style="font-size:9px;font-weight:700;color:var(--mute);letter-spacing:.3px;margin-bottom:4px">'+nom.replace(/</g,'&lt;')+'</div>'+icon+'</div>';
+  }
+  var html='<div class="card"><div class="card-hd"><h3>AVANCE POR APARTAMENTO</h3></div>'+_leyendaAvanceApto('DESPACHADO AL 100%');
+  var hayAlgo=false;
+  (p.towers||[]).forEach(function(t){
+    var levels=(t.levels||[]).filter(function(l){ return (l.aptos||[]).length; });
+    if(!levels.length) return;
+    html+='<div style="margin-top:14px;font-size:13px;font-weight:800;letter-spacing:.5px;color:var(--ink)">'+String(t.name||'').replace(/</g,'&lt;')+'</div>';
+    levels.forEach(function(l){
+      hayAlgo=true;
+      var pcts=[0,1,2,3].map(function(ei){
+        var total=_recetaEtapaItemKeys(p, t, l, ei).length;
+        var desp=_itemsDespachadosEtapa(pedidos, ordenes, l.id, ei).length;
+        return _etapaDespachoPct(total, desp);
+      });
+      var cards=(l.aptos||[]).map(function(a){ return aptoCard(a, pcts); }).join('');
+      html+='<div style="margin:8px 0 4px;font-size:10px;font-weight:700;letter-spacing:.5px;color:var(--mute)">'+String(l.name||'').replace(/</g,'&lt;')+' · 1RA '+pcts[0]+'% · 2DA '+pcts[1]+'% · 3RA '+pcts[2]+'% · 4TA '+pcts[3]+'%</div>';
+      html+='<div style="display:flex;flex-wrap:wrap;gap:6px">'+cards+'</div>';
+    });
+  });
+  if(!hayAlgo) html+='<div style="padding:20px;color:var(--mute);font-size:13px">No hay niveles con apartamentos en este proyecto.</div>';
+  html+='</div>';
+  cont.innerHTML=html;
+}
+window.renderAvanceMateriales=renderAvanceMateriales;
 window.renderAvanceFisicoCuadritos = function(){
   const cont = document.getElementById('avanceCuadritosCont');
   if (!cont) return;
