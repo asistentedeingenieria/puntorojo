@@ -2911,7 +2911,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v713</span>
+    <span style="opacity:.5;font-size:9px">v714</span>
   </footer>
 
 </div>
@@ -18060,9 +18060,9 @@ async function _detectOneDescriptor(input, inputSize){
 async function _detectAllDescriptors(input, lowLight){
   let opt;
   if (faceapi.nets.ssdMobilenetv1 && faceapi.nets.ssdMobilenetv1.params){
-    opt = new faceapi.SsdMobilenetv1Options({ minConfidence: lowLight?0.2:0.35, maxResults: 10 }); // v680: más sensible (antes 0.3/0.45) para no perder caras
+    opt = new faceapi.SsdMobilenetv1Options({ minConfidence: lowLight?0.15:0.35, maxResults: 10 }); // v680: más sensible (antes 0.3/0.45); v714: poca-luz 0.2->0.15
   } else {
-    opt = new faceapi.TinyFaceDetectorOptions({ inputSize: lowLight?640:512, scoreThreshold: lowLight?0.3:0.4 }); // v680: más sensible (antes 0.35/0.5)
+    opt = new faceapi.TinyFaceDetectorOptions({ inputSize: lowLight?640:512, scoreThreshold: lowLight?0.25:0.4 }); // v680: más sensible (antes 0.35/0.5); v714: poca-luz 0.3->0.25
   }
   const dets = await faceapi.detectAllFaces(input, opt).withFaceLandmarks().withFaceDescriptors();
   return dets || [];
@@ -18102,14 +18102,31 @@ function _kioskInitTorch(stream){
   if(!_kioskTorchTrack){ _kioskTorchOn=false; }
   _kioskUpdateLuzBtn();
 }
+// v714: linterna NATIVA (dentro de la app de Play, vía Capacitor). No-op en el navegador
+// o si el wrapper no tiene un plugin de linterna instalado → cae al torch web de abajo.
+async function _kioskTorchNativo(on){
+  try{
+    if(typeof isNativeApp!=='function' || !isNativeApp()) return false;
+    var P=(typeof _capPlugin==='function')?(_capPlugin('Flashlight')||_capPlugin('Torch')||_capPlugin('CapacitorFlash')||_capPlugin('Flash')):null;
+    if(!P) return false;
+    if(on){ if(typeof P.switchOn==='function'){ await P.switchOn({intensity:1}); return true; } if(typeof P.enable==='function'){ await P.enable(); return true; } if(typeof P.on==='function'){ await P.on(); return true; } if(typeof P.toggle==='function'){ await P.toggle({on:true}); return true; } }
+    else { if(typeof P.switchOff==='function'){ await P.switchOff(); return true; } if(typeof P.disable==='function'){ await P.disable(); return true; } if(typeof P.off==='function'){ await P.off(); return true; } if(typeof P.toggle==='function'){ await P.toggle({on:false}); return true; } }
+  }catch(e){ try{ console.warn('[torch-nativo]', e&&e.message); }catch(_){} }
+  return false;
+}
 async function _kioskSetTorch(on){
+  if(await _kioskTorchNativo(on)){ _kioskTorchOn=!!on; _kioskTorchErr=''; _kioskTorchUnsupported=false; _kioskUpdateLuzBtn(); return true; } // v714: primero la linterna nativa
   if(!_kioskTorchTrack) return false;
   try{ await _kioskTorchTrack.applyConstraints({ advanced:[{ torch: !!on }] }); _kioskTorchOn=!!on; _kioskTorchErr=''; _kioskUpdateLuzBtn(); return true; }
   catch(e){ _kioskTorchErr=(e&&(e.name||e.message))||(''+e)||'?'; if(on){ _kioskTorchUnsupported=true; _kioskTorchOn=false; _kioskUpdateLuzBtn(); } return false; } // recién acá sabemos que este WebView no maneja torch
 }
 function _kioskToggleLuz(){
-  if(_kioskFacing==='user'){ showToast('LA LINTERNA SOLO FUNCIONA CON LA CÁMARA TRASERA',''); return; }
-  if(!_kioskTorchTrack){ showToast('LINTERNA: NO HAY CÁMARA TRASERA ACTIVA',''); return; }
+  if(_kioskFacing==='user'){ // v714: en selfie la linterna no sirve → pantalla-flash (caja del video en blanco para iluminar la cara)
+    var _box=document.getElementById('_kioskVideoBox');
+    if(_box){ var _on=_box.getAttribute('data-flash')==='1'; _box.style.background=_on?'#000':'#ffffff'; _box.setAttribute('data-flash', _on?'0':'1'); }
+    return;
+  }
+  if(!_kioskTorchTrack && !(typeof isNativeApp==='function' && isNativeApp())){ showToast('LINTERNA: NO HAY CÁMARA TRASERA ACTIVA',''); return; } // v714: en la app nativa intentamos igual (plugin)
   _kioskLuzManual=true;
   _kioskTorchUnsupported=false; // el botón manual SIEMPRE reintenta de cero (la auto pudo haber tropezado antes)
   var queremos = !_kioskTorchOn;
@@ -18247,10 +18264,14 @@ async function _miAsisEscanear(){
   if(!obraId){ showToast('ELEGÍ LA OBRA','red'); return; }
   const misDesc=p.face.descriptors.map(d=>(Array.isArray(d)?d:((d&&d.d)||[])));
   const old=document.getElementById('_miAsisCam'); if(old) old.remove();
-  const cam='<div id="_miAsisCam" style="position:fixed;inset:0;z-index:100070;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center">'
-    +'<video id="_miAsisVideo" autoplay playsinline muted style="max-width:100%;max-height:70vh"></video>'
-    +'<div id="_miAsisMsg" style="color:#fff;font-size:15px;font-weight:700;margin-top:14px;text-align:center;padding:0 20px">Preparando cámara…</div>'
-    +'<button onclick="_miAsisCerrarCam()" style="margin-top:16px;padding:10px 18px;background:transparent;color:#9CA3AF;border:1px solid #333;border-radius:8px;font-weight:700;letter-spacing:1px;cursor:pointer">CANCELAR</button>'
+  _miAsisFlash=false; _miAsisFlashLocked=false; // v714: pantalla-flash arranca apagada
+  const cam='<div id="_miAsisCam" style="position:fixed;inset:0;z-index:100070;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:background .15s">'
+    +'<video id="_miAsisVideo" autoplay playsinline muted style="max-width:100%;max-height:62vh;border-radius:10px"></video>'
+    +'<div id="_miAsisMsg" style="color:#fff;font-size:15px;font-weight:700;margin-top:14px;text-align:center;padding:8px 16px;border-radius:8px;background:rgba(0,0,0,.55)">Preparando cámara…</div>'
+    +'<div style="display:flex;gap:10px;margin-top:16px">'
+    +'<button id="_miAsisLuzBtn" onclick="_miAsisToggleFlash()" style="padding:10px 18px;background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:8px;font-weight:700;letter-spacing:1px;cursor:pointer">LUZ</button>'
+    +'<button onclick="_miAsisCerrarCam()" style="padding:10px 18px;background:transparent;color:#9CA3AF;border:1px solid #6B7280;border-radius:8px;font-weight:700;letter-spacing:1px;cursor:pointer">CANCELAR</button>'
+    +'</div>'
     +'</div>';
   document.body.insertAdjacentHTML('beforeend', cam);
   _miAsisGeo=null;
@@ -18268,6 +18289,14 @@ async function _miAsisEscanear(){
   _miAsisStreak=0; _miAsisLoop=1; _miAsisTick(pid, obraId, misDesc);
 }
 function _miAsisSetMsg(t){ const m=document.getElementById('_miAsisMsg'); if(m) m.textContent=t; }
+// v714: pantalla-flash — pone la pantalla blanca para iluminar la cara (cámara frontal).
+let _miAsisFlash=false, _miAsisFlashLocked=false;
+function _miAsisSetFlash(on){
+  _miAsisFlash=!!on;
+  const c=document.getElementById('_miAsisCam'); if(c) c.style.background=_miAsisFlash?'#ffffff':'#000000';
+  const b=document.getElementById('_miAsisLuzBtn'); if(b){ b.style.background=_miAsisFlash?'#FCD34D':'rgba(255,255,255,.16)'; b.style.color=_miAsisFlash?'#1F2937':'#fff'; b.textContent=_miAsisFlash?'LUZ ✓':'LUZ'; }
+}
+function _miAsisToggleFlash(){ _miAsisFlashLocked=true; _miAsisSetFlash(!_miAsisFlash); } // manual: el auto ya no la vuelve a tocar
 function _miAsisCerrarCam(){
   _miAsisLoop=0;
   try{ if(_miAsisStream) _miAsisStream.getTracks().forEach(t=>t.stop()); }catch(e){}
@@ -18281,6 +18310,7 @@ async function _miAsisTick(pid, obraId, misDesc){
   if(!v || !v.videoWidth){ setTimeout(()=>_miAsisTick(pid,obraId,misDesc), 350); return; }
   _miAsisBusy=true;
   try{
+    if(!_miAsisFlashLocked && !_miAsisFlash){ try{ if(_kioskBrillo(v) < 70) _miAsisSetFlash(true); }catch(e){} } // v714: auto pantalla-flash si hay poca luz
     const det=await _detectOneDescriptor(v, 416);
     if(det && det.descriptor){
       const r=_faceMatch1a1(Array.from(det.descriptor), misDesc, 0.50);
@@ -18327,7 +18357,7 @@ async function _abrirKioskoCaras(){
     +   '<button style="flex:0 0 auto;height:38px;box-sizing:border-box;background:rgba(220,38,38,.28);color:#fff;border:1px solid rgba(248,113,113,.7);border-radius:8px;padding:0 12px;font-size:11px;font-weight:700;letter-spacing:.5px;white-space:nowrap;cursor:pointer;font-family:inherit" onclick="_cerrarKiosko()">CERRAR</button>'
     + '</div>'
     + (_puedeEnrolarCara() ? '<div style="padding:0 12px 8px"><button onclick="_kioskAbrirRegistro()" style="width:100%;background:rgba(59,130,246,.22);color:#fff;border:1px solid rgba(96,165,250,.6);border-radius:8px;padding:9px;font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer;font-family:inherit">+ REGISTRAR CARA DE UNA PERSONA</button></div>' : '')
-    + '<div style="position:relative;flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#000">'
+    + '<div id="_kioskVideoBox" style="position:relative;flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#000;transition:background .15s">'
     +   '<video id="_kioskVideo" autoplay playsinline muted style="max-width:100%;max-height:100%"></video>'
     +   '<div id="_kioskResult" style="position:absolute;bottom:0;left:0;right:0;padding:16px;text-align:center;color:#fff;font-size:18px;font-weight:800;background:linear-gradient(transparent,rgba(0,0,0,.75))"></div>'
     + '</div>'
@@ -18410,7 +18440,7 @@ async function _kioskTick(){
   _kioskBusy=true;
   try{
     const _brillo=_kioskBrillo(v);
-    _kioskLowLight = _brillo < 75;
+    _kioskLowLight = _brillo < 85; // v714: engancha poca-luz un poco antes (antes 75)
     if(_kioskTorchTrack && !_kioskLuzManual && !_kioskTorchUnsupported){
       if(_kioskLowLight && !_kioskTorchOn) _kioskSetTorch(true);
       else if(!_kioskLowLight && _brillo>115 && _kioskTorchOn) _kioskSetTorch(false);
@@ -18486,6 +18516,7 @@ function _obraDeGPS(geo){
 }
 async function _kioskCambiarCamara(){
   _kioskFacing = (_kioskFacing==='user') ? 'environment' : 'user';
+  try{ var _bx=document.getElementById('_kioskVideoBox'); if(_bx){ _bx.style.background='#000'; _bx.setAttribute('data-flash','0'); } }catch(e){} // v714: apagar pantalla-flash al cambiar de cámara
   try{ if(_kioskStream){ _kioskStream.getTracks().forEach(t=>{ try{t.stop();}catch(_){} }); } }catch(e){}
   const v=document.getElementById('_kioskVideo');
   try{
