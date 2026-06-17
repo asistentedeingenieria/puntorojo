@@ -2592,6 +2592,7 @@ table{max-width:100%}
 
       <!-- Solicitudes pendientes de adelantar etapa de acuse (visible solo para admin) -->
       <div id="solicitudesSaltoAcuseBox"></div>
+      <div id="solicitudesDesmarcarBox"></div>
     </section>
 
     <!-- ── MATERIALES ── -->
@@ -2913,7 +2914,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v727</span>
+    <span style="opacity:.5;font-size:9px">v728</span>
   </footer>
 
 </div>
@@ -11542,6 +11543,7 @@ function renderAvance(){
   // Render de los listados de solicitudes pendientes (solo admin los ve)
   try { if (typeof window.renderSolicitudesEliminarFoto === 'function') window.renderSolicitudesEliminarFoto(); } catch(e){}
   try { if (typeof window.renderSolicitudesSaltoAcuse === 'function') window.renderSolicitudesSaltoAcuse(); } catch(e){}
+  try { if (typeof window.renderSolicitudesDesmarcar === 'function') window.renderSolicitudesDesmarcar(); } catch(e){}
   const p = activeProj();
   let totalAptos = 0, totalPct = 0, completos = 0, fotosCount = 0, acusesCount = 0;
   p.towers.forEach(t => t.levels.forEach(l => {
@@ -12484,6 +12486,14 @@ async function abrirImportarAvance(tipoDefault){
   }
 }
 function abrirImportarFisico(){ return abrirImportarAvance('FISICO'); }
+/* v728: decide la acción de un clic de etapa física (PURA, testeable).
+   wasActive: la etapa estaba marcada · esGerente: planilla.authorize||users.manage
+   tienePhotos: todas las etapas hasta stageIdx tienen sus 2 fotos. */
+function _avanceToggleAccion(wasActive, esGerente, tienePhotos){
+  if (wasActive) return esGerente ? 'unmark' : 'request-unmark';
+  if (esGerente) return 'mark';                 // gerente/admin corrige sin exigir fotos
+  return tienePhotos ? 'mark' : 'block-photos';
+}
 function toggleStage(towerId, levelId, aptoId, stageIdx){
   if (!can('avance.edit')) return;
   const p = activeProj();
@@ -12492,44 +12502,108 @@ function toggleStage(towerId, levelId, aptoId, stageIdx){
   const a = (l.aptos || []).find(x => x.id === aptoId); if (!a) return;
 
   if (!Array.isArray(a.stages)) a.stages = [false,false,false,false,false,false];
-  const oldCompleted = aptoCompleted(a);
   const wasActive = a.stages[stageIdx];
+  const esGerente = (typeof can==='function') && (can('planilla.authorize') || can('users.manage'));
+  // ¿todas las etapas hasta stageIdx tienen sus 2 fotos? (gerente las omite)
+  const sinFoto = [];
+  for (let i = 0; i <= stageIdx; i++) { if (!stageHasPhoto(a, i)) sinFoto.push(i + 1); }
+  const accion = _avanceToggleAccion(wasActive, esGerente, sinFoto.length === 0);
 
-  if (wasActive) {
-    // Si ya estaba activa, desactivar esta y TODAS las posteriores
-    for (let i = stageIdx; i < 6; i++) a.stages[i] = false;
-  } else {
-    // Foto-primero: solo se puede activar una etapa si TODAS las etapas
-    // hasta esa (inclusive) tienen LAS DOS fotos requeridas (de áreas diferentes).
-    const sinFoto = [];
-    for (let i = 0; i <= stageIdx; i++) {
-      if (!stageHasPhoto(a, i)) sinFoto.push(i + 1);
-    }
-    if (sinFoto.length > 0) {
-      const labels = sinFoto.map(n => 'ETAPA ' + n).join(', ');
-      showToast('FALTAN LAS 2 FOTOS REQUERIDAS DE: ' + labels, 'red');
-      return;
-    }
-    // Marcar etapas completadas con timestamp para reportes semanales.
-    if (!a.stagesTs) a.stagesTs = [];
-    const _now = Date.now();
-    for (let i = 0; i <= stageIdx; i++) {
-      if (!a.stages[i]) a.stagesTs[i] = _now;
-      a.stages[i] = true;
-    }
-  }
+  // v728: una etapa marcada NO se desmarca con un clic. Gerente confirma; el resto envía solicitud.
+  if (accion === 'request-unmark') { _avanceSolicitarDesmarcar(towerId, levelId, aptoId, stageIdx); return; }
+  if (accion === 'unmark')         { _avanceConfirmDesmarcar(towerId, levelId, aptoId, stageIdx); return; }
+  if (accion === 'block-photos') { showToast('FALTAN LAS 2 FOTOS REQUERIDAS DE: ' + sinFoto.map(n => 'ETAPA ' + n).join(', '), 'red'); return; }
 
+  // accion === 'mark'
+  const oldCompleted = aptoCompleted(a);
+  if (!a.stagesTs) a.stagesTs = [];
+  const _now = Date.now();
+  for (let i = 0; i <= stageIdx; i++) { if (!a.stages[i]) a.stagesTs[i] = _now; a.stages[i] = true; }
   saveState();
   const newCompleted = aptoCompleted(a);
-
-  // Log de actividad si subió de etapa
   if (newCompleted > oldCompleted) {
-    logActivity('update',
-      `${t.name} · ${l.name} · ${a.name}: ${ETAPAS[newCompleted-1].name}`,
-      `${p.name} · ${aptoPct(a)}%`);
+    logActivity('update', `${t.name} · ${l.name} · ${a.name}: ${ETAPAS[newCompleted-1].name}`, `${p.name} · ${aptoPct(a)}%`);
   }
   renderAvance();
 }
+// v728: el gerente/admin desmarca DIRECTO (con confirmación). Desmarca la etapa y las posteriores.
+async function _avanceConfirmDesmarcar(towerId, levelId, aptoId, stageIdx){
+  const p = activeProj(); const t = p && p.towers.find(x => x.id === towerId); if (!t) return;
+  const l = t.levels.find(x => x.id === levelId); if (!l) return;
+  const a = (l.aptos || []).find(x => x.id === aptoId); if (!a) return;
+  const nom = (typeof ETAPAS!=='undefined' && ETAPAS[stageIdx]) ? ETAPAS[stageIdx].name : ('ETAPA '+(stageIdx+1));
+  const ok = await window.prConfirm({ title:'DESMARCAR ETAPA', bodyHTML:'<div style="font-size:12.5px;color:#333;line-height:1.5">Vas a desmarcar <b>'+nom+'</b> y las etapas posteriores de <b>'+(a.name||'')+'</b>. Baja el avance del apartamento.</div>', okText:'DESMARCAR', cancelText:'CANCELAR' });
+  if (!ok) return;
+  if (!Array.isArray(a.stages)) a.stages = [false,false,false,false,false,false];
+  for (let i = stageIdx; i < 6; i++) a.stages[i] = false;
+  saveState();
+  try { if (typeof logActivity==='function') logActivity('update', t.name+' · '+l.name+' · '+a.name+': DESMARCÓ '+nom, p.name+' · '+aptoPct(a)+'%'); } catch(e){}
+  try { if (typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  renderAvance();
+}
+// v728: el usuario normal NO desmarca; envía SOLICITUD a la gerente de proyectos.
+async function _avanceSolicitarDesmarcar(towerId, levelId, aptoId, stageIdx){
+  const p = activeProj(); const t = p && p.towers.find(x => x.id === towerId); if (!t) return;
+  const l = t.levels.find(x => x.id === levelId); if (!l) return;
+  const a = (l.aptos || []).find(x => x.id === aptoId); if (!a) return;
+  if (!Array.isArray(p.desmarcarSolicitudes)) p.desmarcarSolicitudes = [];
+  if (p.desmarcarSolicitudes.some(s => s.estado==='pendiente' && s.aptoId===aptoId && s.stageIdx===stageIdx)) { showToast('YA HAY UNA SOLICITUD PENDIENTE PARA ESA ETAPA','red'); return; }
+  const nom = (typeof ETAPAS!=='undefined' && ETAPAS[stageIdx]) ? ETAPAS[stageIdx].name : ('ETAPA '+(stageIdx+1));
+  const razon = await window.prPrompt({ title:'SOLICITAR DESMARCAR', body:'Una etapa marcada solo la puede quitar la gerente de proyectos. Escribí el motivo; se le envía la solicitud.', placeholder:'Motivo (ej: se marcó por error)', multiline:true, required:true, okText:'ENVIAR SOLICITUD', cancelText:'CANCELAR' });
+  if (razon === null) return;
+  const id = 'desm-' + Date.now() + '-' + Math.floor(Math.random()*1000);
+  p.desmarcarSolicitudes.push({ id, projectId:p.id, towerId, levelId, aptoId, stageIdx, aptoNombre:a.name, torreNombre:t.name, nivelNombre:l.name, etapaNombre:nom, razon:String(razon||'').trim(), supervisorEmail:(typeof currentUser!=='undefined'&&currentUser&&currentUser.email)||'', supervisorNombre:(typeof currentUser!=='undefined'&&currentUser&&(currentUser.displayName||currentUser.email))||'SUPERVISOR', solicitadoEn:Date.now(), estado:'pendiente', decididoEn:null, decididoPor:null, decididoPorNombre:null, notaDecision:null });
+  saveState();
+  try { if (typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  try { if (typeof _notifyByPerm==='function') _notifyByPerm('planilla.authorize', { type:'desmarcar-etapa', title:'SOLICITUD: DESMARCAR ETAPA', body:(a.name+' · '+nom+' · '+t.name).slice(0,300), projectId:p.id }).catch(()=>{}); } catch(e){}
+  try { if (typeof logActivity==='function') logActivity('create','Solicitud desmarcar etapa', p.name+' · '+a.name+' · '+nom); } catch(e){}
+  showToast('SOLICITUD ENVIADA · LA GERENTE DECIDE','green');
+  try { renderSolicitudesDesmarcar(); } catch(e){}
+}
+window.aprobarDesmarcar = async function(solId){
+  if (!(can('planilla.authorize') || can('users.manage'))) return showToast('SOLO LA GERENTE','red');
+  const p = activeProj(); const sol = (p.desmarcarSolicitudes||[]).find(x => x.id === solId);
+  if (!sol || sol.estado !== 'pendiente') return showToast('SOLICITUD YA RESUELTA','red');
+  const ok = await window.prConfirm({ title:'APROBAR DESMARCADO', bodyHTML:'<div style="font-size:12.5px;color:#333;line-height:1.5">Se desmarcará <b>'+(sol.etapaNombre||'')+'</b> y las posteriores de <b>'+(sol.aptoNombre||'')+'</b>.</div>', okText:'APROBAR', cancelText:'CANCELAR' });
+  if (!ok) return;
+  const t = p.towers.find(x => x.id === sol.towerId); const l = t && t.levels.find(x => x.id === sol.levelId); const a = l && (l.aptos||[]).find(x => x.id === sol.aptoId);
+  if (a && Array.isArray(a.stages)) { for (let i = sol.stageIdx; i < 6; i++) a.stages[i] = false; }
+  sol.estado='aprobada'; sol.decididoEn=Date.now(); sol.decididoPor=(currentUser&&currentUser.email)||''; sol.decididoPorNombre=(currentUser&&(currentUser.displayName||currentUser.email))||'';
+  saveState();
+  try { if (typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  try { renderSolicitudesDesmarcar(); } catch(e){}
+  try { if (typeof renderAvance==='function') renderAvance(); } catch(e){}
+  showToast('DESMARCADO APROBADO','green');
+  try { if (typeof logActivity==='function') logActivity('approve','Desmarcado de etapa aprobado', p.name+' · '+sol.aptoNombre+' · '+sol.etapaNombre); } catch(e){}
+};
+window.rechazarDesmarcar = async function(solId){
+  if (!(can('planilla.authorize') || can('users.manage'))) return showToast('SOLO LA GERENTE','red');
+  const p = activeProj(); const sol = (p.desmarcarSolicitudes||[]).find(x => x.id === solId);
+  if (!sol || sol.estado !== 'pendiente') return showToast('SOLICITUD YA RESUELTA','red');
+  const nota = await window.prPrompt({ title:'RECHAZAR', body:'El solicitante verá esta nota.', placeholder:'Motivo del rechazo (opcional)', multiline:true, required:false, okText:'RECHAZAR', cancelText:'CANCELAR' });
+  if (nota === null) return;
+  sol.estado='rechazada'; sol.decididoEn=Date.now(); sol.decididoPor=(currentUser&&currentUser.email)||''; sol.decididoPorNombre=(currentUser&&(currentUser.displayName||currentUser.email))||''; sol.notaDecision=nota||null;
+  saveState();
+  try { if (typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  try { renderSolicitudesDesmarcar(); } catch(e){}
+  showToast('SOLICITUD RECHAZADA','');
+  try { if (typeof logActivity==='function') logActivity('reject','Desmarcado de etapa rechazado', p.name+' · '+sol.aptoNombre+' · '+sol.etapaNombre); } catch(e){}
+};
+window.renderSolicitudesDesmarcar = function(){
+  const cont = document.getElementById('solicitudesDesmarcarBox'); if (!cont) return;
+  if (!(can('planilla.authorize') || can('users.manage'))) { cont.innerHTML=''; return; }
+  const p = activeProj(); if (!p) { cont.innerHTML=''; return; }
+  const lista = (p.desmarcarSolicitudes||[]).slice().sort((a,b)=>{ const ord={pendiente:0,aprobada:1,rechazada:2}; return (ord[a.estado]??9)-(ord[b.estado]??9) || (b.solicitadoEn||0)-(a.solicitadoEn||0); });
+  if (lista.length === 0) { cont.innerHTML=''; return; }
+  const pend = lista.filter(x => x.estado==='pendiente').length;
+  cont.innerHTML = '<div class="card" style="margin-top:14px"><div class="card-hd"><h3>SOLICITUDES DE DESMARCAR ETAPA</h3><span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">'+pend+' PENDIENTE'+(pend!==1?'S':'')+' · '+lista.length+' TOTAL</span></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>ESTADO</th><th>UBICACIÓN</th><th>ETAPA</th><th>SOLICITANTE</th><th>MOTIVO</th><th>FECHA</th><th></th></tr></thead><tbody>'+lista.map(function(s){
+    const badge = s.estado==='pendiente' ? '<span class="planilla-badge" style="background:var(--red-soft-2);color:var(--red-dark);border:1px solid var(--red)">PENDIENTE</span>' : s.estado==='aprobada' ? '<span class="planilla-badge" style="background:#DCFCE7;color:var(--green-dark);border:1px solid var(--green-dark)">APROBADA</span>' : '<span class="planilla-badge" style="background:#FEE2E2;color:var(--red);border:1px solid var(--red)">RECHAZADA</span>';
+    const fecha = s.solicitadoEn ? new Date(s.solicitadoEn).toLocaleDateString('es-GT') : '—';
+    const acc = s.estado==='pendiente' ? '<button class="btn sm" onclick="aprobarDesmarcar(\''+s.id+'\')">APROBAR</button> <button class="btn ghost sm" style="color:var(--red)" onclick="rechazarDesmarcar(\''+s.id+'\')">RECHAZAR</button>' : '';
+    const motivo = (s.razon||'').length>50 ? (s.razon.slice(0,50)+'…') : (s.razon||'');
+    return '<tr><td>'+badge+'</td><td style="font-size:10px"><div style="font-weight:700">'+(s.aptoNombre||'')+'</div><div style="color:var(--mute);font-size:9px">'+(s.torreNombre||'')+' · '+(s.nivelNombre||'')+'</div></td><td style="font-size:10px">'+(s.etapaNombre||'')+'</td><td style="font-size:10px">'+(s.supervisorNombre||s.supervisorEmail||'—')+'</td><td style="font-size:10px">'+motivo+'</td><td style="font-size:10px">'+fecha+'</td><td>'+acc+'</td></tr>';
+  }).join('')+'</tbody></table></div></div>';
+};
 
 function deleteApto(towerId, levelId, aptoId){
   if (!can('avance.edit')) return;
