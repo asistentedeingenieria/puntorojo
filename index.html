@@ -2915,7 +2915,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v744</span>
+    <span style="opacity:.5;font-size:9px">v745</span>
   </footer>
 
 </div>
@@ -15135,6 +15135,46 @@ function buildToreloTowers(){
   for (var n=14; n<=21; n++) levels.push(mkLevel(tid, 'n'+n, 'NIVEL '+n, ['E VOLCANES','E CIUDAD']));    // 14-21
   return [ { id: tid, name: 'TORRE ÚNICA', levels: levels } ];
 }
+/* v745: modelos de planilla para TORELO. El modelo de cada apto = su nombre
+   (A, B, C, D, E MONTAÑAS, E VOLCANES, E CIUDAD). Devuelve los modelos (con costos
+   por etapa) + el mapa apto→modelo. Preserva costos ya ingresados (por key) al re-correr. */
+function buildToreloModelos(towers, existingModelos){
+  var prev = {};
+  (existingModelos||[]).forEach(function(m){ if(m && m.key) prev[String(m.key).toUpperCase()] = m.costos; });
+  var seen = {}, modelos = [], aptoModelMap = {};
+  (towers||[]).forEach(function(t){ (t.levels||[]).forEach(function(l){ (l.aptos||[]).forEach(function(a){
+    var key = String(a.name||'').toUpperCase().trim();
+    if(!key) return;
+    if(!seen[key]){ seen[key]=1; modelos.push({ key:key, nombre:key, costos:(Array.isArray(prev[key]) ? prev[key].slice() : [0,0,0,0,0,0]) }); }
+    aptoModelMap[a.id] = key;
+  }); }); });
+  return { modelos: modelos, aptoModelMap: aptoModelMap };
+}
+/* v745: texto compacto de los niveles donde aplica un modelo (según aptoModelMap),
+   p.ej. "Niveles 3-13". Se muestra al lado de cada modelo en MODELOS Y COSTOS. */
+function _modeloNivelesTexto(towers, aptoModelMap, modelKey){
+  aptoModelMap = aptoModelMap || {};
+  var keyU = String(modelKey==null?'':modelKey).toUpperCase();
+  var nums = {}, hasOtros = false, any = false;
+  (towers||[]).forEach(function(t){ (t.levels||[]).forEach(function(l){
+    var mm = String(l.name||'').match(/(\d+)/);
+    var lvlNum = mm ? parseInt(mm[1],10) : null;
+    (l.aptos||[]).forEach(function(a){
+      var mk = aptoModelMap[a.id];
+      if(mk==null || mk==='') return;
+      if(String(mk).toUpperCase()!==keyU) return;
+      any = true;
+      if(lvlNum!=null) nums[lvlNum]=1; else hasOtros = true;
+    });
+  }); });
+  if(!any) return '';
+  var arr = Object.keys(nums).map(Number).sort(function(a,b){ return a-b; });
+  var parts = [], i = 0;
+  while(i<arr.length){ var s=arr[i], e=arr[i]; while(i+1<arr.length && arr[i+1]===e+1){ e=arr[i+1]; i++; } parts.push(s===e ? (''+s) : (s+'-'+e)); i++; }
+  var txt = parts.length ? ('Niveles '+parts.join(', ')) : '';
+  if(hasOtros) txt = txt ? (txt+' + otros') : 'Otras áreas';
+  return txt;
+}
 async function cargarEstructuraTorelo(){
   if(!can('users.manage')) return showToast('SOLO ADMINISTRADOR','red');
   var p = activeProj();
@@ -15142,11 +15182,19 @@ async function cargarEstructuraTorelo(){
   var _ok = await window.prConfirm({
     title:'CARGAR ESTRUCTURA TORELO',
     bodyHTML:'<div>Esto pone en <strong>'+String(p.name||'').replace(/[&<>]/g,'')+'</strong> la estructura oficial: <strong>1 torre, niveles 2 al 21</strong> con los apartamentos A, B, C, D, E MONTAÑAS, E VOLCANES y E CIUDAD según el nivel (57 aptos).</div>'+
+             '<div style="margin-top:8px">También deja listos los <strong>7 modelos en PLANILLAS → MODELOS Y COSTOS</strong> (uno por modelo) y asigna cada apto a su modelo. Los montos que ya hayas ingresado por modelo se conservan.</div>'+
              '<div style="margin-top:12px;color:#7C2D12;background:#FEF3C7;border-left:3px solid #F59E0B;padding:10px 12px;border-radius:4px;line-height:1.5">Reemplaza la estructura actual del avance físico. Si ya hubiera avances o fotos, <strong>se pueden perder</strong>.</div>',
     okText:'CARGAR ESTRUCTURA', cancelText:'CANCELAR', danger:true
   });
   if(!_ok) return;
   p.towers = buildToreloTowers();
+  // v745: dar de alta los modelos de TORELO + asignar cada apto a su modelo (preserva costos por key)
+  try {
+    if(!p.planilla || typeof p.planilla!=='object') p.planilla = { recetaCostos:[0,0,0,0,0,0], pagos:[], retencionesPagadas:[], ajustes:[], modelos:[], aptoModelMap:{}, colaboradores:[] };
+    var _mm = buildToreloModelos(p.towers, p.planilla.modelos);
+    p.planilla.modelos = _mm.modelos;
+    p.planilla.aptoModelMap = _mm.aptoModelMap;
+  } catch(e){ console.warn('seed modelos TORELO:', e); }
   saveState();
   try { if(avanceUIState){ avanceUIState.openTowers.clear(); avanceUIState.openLevels.clear(); } } catch(e){}
   try { if(typeof renderAvance==='function') renderAvance(); } catch(e){}
@@ -36818,7 +36866,7 @@ window.addEventListener('load', () => {
       <div${expModelos ? '' : ' style="display:none"'}>
         ${adminLockMsg}
         <p class="receta-intro">CADA APARTAMENTO TIENE UN MODELO ASIGNADO. EL MODELO DEFINE EL COSTO DE CADA ETAPA. CADA ETAPA SE PUEDE PAGAR AL 30%, 50%, 70% O 100%. EL BOTÓN <strong>IMPORTAR PDF</strong> DETECTA AUTOMÁTICAMENTE NOMBRES DE MODELO Y SUS COSTOS POR ETAPA.</p>
-        <div class="tbl-wrap"><table class="planilla-model-table"><thead><tr><th>MODELO</th>${ETAPAS_PROJ.map((e,i)=>`<th>ET. ${i+1}<br>${h(e.name)}</th>`).join('')}</tr></thead><tbody>${modelos.map(m=>`<tr><td><input style="width:100%;text-align:left;font-family:inherit" value="${h(m.nombre)}" ${canEdit?'':'disabled'} onchange="updatePlanillaModeloNombre('${h(m.key)}',this.value)"></td>${ETAPAS_PROJ.map((e,i)=>`<td><input type="number" step="0.01" value="${Number(m.costos?.[i]||0)}" ${canEdit?'':'disabled'} onchange="updatePlanillaModeloCosto('${h(m.key)}',${i},this.value)"></td>`).join('')}</tr>`).join('')}</tbody></table></div>
+        <div class="tbl-wrap"><table class="planilla-model-table"><thead><tr><th>MODELO</th>${ETAPAS_PROJ.map((e,i)=>`<th>ET. ${i+1}<br>${h(e.name)}</th>`).join('')}</tr></thead><tbody>${modelos.map(m=>`<tr><td><input style="width:100%;text-align:left;font-family:inherit" value="${h(m.nombre)}" ${canEdit?'':'disabled'} onchange="updatePlanillaModeloNombre('${h(m.key)}',this.value)">${(function(){ var _nv=(typeof _modeloNivelesTexto==='function')?_modeloNivelesTexto(p.towers, p.planilla.aptoModelMap, m.key):''; return _nv?('<div style="font-size:9px;color:var(--mute);margin-top:3px;letter-spacing:.3px;text-transform:none">'+h(_nv)+'</div>'):''; })()}</td>${ETAPAS_PROJ.map((e,i)=>`<td><input type="number" step="0.01" value="${Number(m.costos?.[i]||0)}" ${canEdit?'':'disabled'} onchange="updatePlanillaModeloCosto('${h(m.key)}',${i},this.value)"></td>`).join('')}</tr>`).join('')}</tbody></table></div>
       </div>
     </div>`;
 
