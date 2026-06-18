@@ -2543,6 +2543,9 @@ table{max-width:100%}
         </div>
       </div>
 
+      <!-- v744: botón admin para cargar la estructura oficial de TORELO (solo aparece en TORELO) -->
+      <div id="toreloStructBox"></div>
+
       <div data-perm="avance.edit" style="display:flex;justify-content:flex-end;margin-bottom:12px">
         <button onclick="abrirImportarAvance('FISICO')" style="display:inline-flex;align-items:center;gap:7px;padding:9px 16px;background:var(--cafe);color:#fff;border:none;border-radius:4px;font-family:inherit;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer">IMPORTAR AVANCE</button>
       </div>
@@ -2912,7 +2915,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v743</span>
+    <span style="opacity:.5;font-size:9px">v744</span>
   </footer>
 
 </div>
@@ -11580,6 +11583,17 @@ function renderAvance(){
   try { if (typeof window.renderSolicitudesSaltoAcuse === 'function') window.renderSolicitudesSaltoAcuse(); } catch(e){}
   try { if (typeof window.renderSolicitudesDesmarcar === 'function') window.renderSolicitudesDesmarcar(); } catch(e){}
   const p = activeProj();
+  // v744: botón de carga de estructura oficial de TORELO (solo proyecto TORELO + admin)
+  try {
+    const _tb = document.getElementById('toreloStructBox');
+    if (_tb) {
+      const _isTorelo = String((p&&p.name)||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim() === 'TORELO';
+      const _adminTb = (typeof can==='function') && can('users.manage');
+      _tb.innerHTML = (_isTorelo && _adminTb)
+        ? '<div class="card" style="padding:14px 18px;margin-bottom:14px;background:#FFFBEB;border-left:3px solid #F59E0B"><div style="font-size:11.5px;color:#7C2D12;line-height:1.5;margin-bottom:10px">Cargar la estructura oficial de <strong>TORELO</strong>: 1 torre · niveles 2 al 21 · apartamentos A, B, C, D, E MONTAÑAS, E VOLCANES y E CIUDAD según el nivel. Reemplaza la estructura actual del avance físico.</div><button class="btn primary sm" onclick="cargarEstructuraTorelo()">CARGAR ESTRUCTURA TORELO</button></div>'
+        : '';
+    }
+  } catch(e){}
   let totalAptos = 0, totalPct = 0, completos = 0, fotosCount = 0, acusesCount = 0;
   p.towers.forEach(t => t.levels.forEach(l => {
     (l.aptos || []).forEach(a => {
@@ -15105,6 +15119,40 @@ async function deleteAcuseRecepcion(towerId, levelId, aptoId, slotKey){
   renderAcusesRecepcion();
   renderAvance();
   showToast(`ACUSE ELIMINADO · ${slotLabel}`, 'red');
+}
+
+/* ─────────────── ESTRUCTURA OFICIAL DE TORELO (v744) ───────────────
+   1 torre · niveles 2-21 · A,B,C,D / E MONTAÑAS / E VOLCANES / E CIUDAD
+   según el listado del cliente. Función pura (testeada en _avancetest/torelo.cjs). */
+function buildToreloTowers(){
+  var mkApto = function(idPrefix, idx, name){ return { id: idPrefix+'-a'+idx, name: String(name).toUpperCase(), stages:[false,false,false,false,false,false], photos:{}, acuseRecepciones:{} }; };
+  var mkLevel = function(idPrefix, levelKey, levelName, aptoNames){ var lid = idPrefix+'-'+levelKey; return { id: lid, name: levelName, aptos: aptoNames.map(function(n,i){ return mkApto(lid, i+1, n); }) }; };
+  var tid = 'torelo-t1';
+  var levels = [];
+  levels.push(mkLevel(tid, 'n2', 'NIVEL 2', ['B','C']));                       // nivel 2: B, C
+  for (var n=3;  n<=8;  n++) levels.push(mkLevel(tid, 'n'+n, 'NIVEL '+n, ['A','B','C','D']));            // 3-8
+  for (var n=9;  n<=13; n++) levels.push(mkLevel(tid, 'n'+n, 'NIVEL '+n, ['A','E MONTAÑAS','D']));       // 9-13
+  for (var n=14; n<=21; n++) levels.push(mkLevel(tid, 'n'+n, 'NIVEL '+n, ['E VOLCANES','E CIUDAD']));    // 14-21
+  return [ { id: tid, name: 'TORRE ÚNICA', levels: levels } ];
+}
+async function cargarEstructuraTorelo(){
+  if(!can('users.manage')) return showToast('SOLO ADMINISTRADOR','red');
+  var p = activeProj();
+  if(!p) return;
+  var _ok = await window.prConfirm({
+    title:'CARGAR ESTRUCTURA TORELO',
+    bodyHTML:'<div>Esto pone en <strong>'+String(p.name||'').replace(/[&<>]/g,'')+'</strong> la estructura oficial: <strong>1 torre, niveles 2 al 21</strong> con los apartamentos A, B, C, D, E MONTAÑAS, E VOLCANES y E CIUDAD según el nivel (57 aptos).</div>'+
+             '<div style="margin-top:12px;color:#7C2D12;background:#FEF3C7;border-left:3px solid #F59E0B;padding:10px 12px;border-radius:4px;line-height:1.5">Reemplaza la estructura actual del avance físico. Si ya hubiera avances o fotos, <strong>se pueden perder</strong>.</div>',
+    okText:'CARGAR ESTRUCTURA', cancelText:'CANCELAR', danger:true
+  });
+  if(!_ok) return;
+  p.towers = buildToreloTowers();
+  saveState();
+  try { if(avanceUIState){ avanceUIState.openTowers.clear(); avanceUIState.openLevels.clear(); } } catch(e){}
+  try { if(typeof renderAvance==='function') renderAvance(); } catch(e){}
+  try { if(typeof logActivity==='function') logActivity('update','Estructura oficial de TORELO cargada en avance físico', p.name); } catch(e){}
+  try { if(typeof CloudSync!=='undefined' && CloudSync.uploadCurrent) CloudSync.uploadCurrent(); } catch(e){}
+  showToast('ESTRUCTURA TORELO CARGADA','green');
 }
 
 async function loadNotasStructureToCurrentProject(){
