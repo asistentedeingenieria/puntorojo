@@ -2910,7 +2910,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v741</span>
+    <span style="opacity:.5;font-size:9px">v742</span>
   </footer>
 
 </div>
@@ -42719,6 +42719,83 @@ function _descGenAgrupar(rows){
   return { grupos: grupos, granTotal: granTotal, count: (rows||[]).length, numPersonas: grupos.length };
 }
 
+/* ─────────────── CONTROL DE ANTICIPOS (v742) — por préstamo, avance de pago ───────────────
+   Recorre los descuentos con anticipoId (ignora rechazadas) y arma, por cada
+   anticipo: cuotas pagadas (inicial + descuentos), saldo, estado y la lista de pagos. */
+function _antCtrlPagosByAnt(projects){
+  var out = {};
+  (projects||[]).forEach(function(pr){
+    var arr = (pr && pr.planilla && pr.planilla.planillasArmadas) || [];
+    arr.forEach(function(pl){
+      if (!pl || pl.estado==='rechazada') return;
+      var ymd = _descGenSabadoYMD(pl.fechaEnvio || pl.fechaCreacion);
+      (pl.descuentosPlanilla||[]).forEach(function(d){
+        if (!d || !d.anticipoId) return;
+        (out[d.anticipoId] = out[d.anticipoId] || []).push({
+          fechaYMD: ymd,
+          cuotaActual: (d.cuotaActual!=null?d.cuotaActual:null),
+          cuotasTotales: (d.cuotasTotales!=null?d.cuotasTotales:null),
+          monto: Number(d.monto)||0,
+          planillaNumero: (pl.numero!=null?pl.numero:''),
+          proyecto: String((pr&&pr.name)||'')
+        });
+      });
+    });
+  });
+  Object.keys(out).forEach(function(k){ out[k].sort(function(a,b){ return String(a.fechaYMD).localeCompare(String(b.fechaYMD)); }); });
+  return out;
+}
+function _antCtrlBuild(anticipos, pagosByAnt){
+  pagosByAnt = pagosByAnt || {};
+  return (anticipos||[]).map(function(a){
+    var pagos = pagosByAnt[a.id] || [];
+    // Fallback de cantidadCuotas a 1 (IGUAL que _estadoAnticipo) para no contradecir
+    // las pestañas RESUMEN/LISTADO ante datos con cantidadCuotas 0/vacío/no numérico.
+    var totalCuotas = Number(a.cantidadCuotas)||1;
+    var inicial = Number(a.cuotasPagadasInicial)||0;
+    var pagadas = inicial + pagos.length; // mismo criterio que _calcCuotasPagadas (no se capa)
+    var restantes = Math.max(0, totalCuotas - pagadas);
+    var montoTotal = Number(a.montoTotal)||0;
+    var montoCuota = montoTotal/totalCuotas;
+    var saldo = montoCuota * restantes;
+    var estado = (pagadas>=totalCuotas) ? 'CANCELADO' : 'PENDIENTE';
+    var descontadoApp = pagos.reduce(function(s,p){ return s + (Number(p.monto)||0); }, 0);
+    return {
+      id: a.id, nombre: String(a.colaboradorNombre||'').trim(), subtipo: a.subtipo||'', desc: a.desc||'',
+      montoTotal: montoTotal, cantidadCuotas: totalCuotas, cuotasPagadasInicial: inicial,
+      cuotasPagadas: pagadas, cuotasRestantes: restantes, montoCuota: montoCuota, saldo: saldo,
+      estado: estado, descontadoApp: descontadoApp, pagos: pagos
+    };
+  });
+}
+function _antCtrlAgrupar(items, filter){
+  filter = filter || {};
+  var persona = _descGenNorm(filter.persona||'');
+  var estado = (filter.estado||'TODOS');
+  var byP = {}, order = [];
+  (items||[]).forEach(function(it){
+    if (persona && _descGenNorm(it.nombre).indexOf(persona)<0) return;
+    if (estado==='PENDIENTE' && it.estado!=='PENDIENTE') return;
+    if (estado==='CANCELADO' && it.estado!=='CANCELADO') return;
+    var k = _descGenNorm(it.nombre) || '?';
+    if (!byP[k]){ byP[k] = { nombre: it.nombre||'—', prestamos: [], totalPrestado: 0, saldoTotal: 0, descontadoTotal: 0 }; order.push(k); }
+    byP[k].prestamos.push(it);
+    byP[k].totalPrestado += Number(it.montoTotal)||0;
+    byP[k].saldoTotal += Number(it.saldo)||0;
+    byP[k].descontadoTotal += Number(it.descontadoApp)||0;
+  });
+  order.sort(function(a,b){ return String(byP[a].nombre).localeCompare(String(byP[b].nombre),'es',{sensitivity:'base'}); });
+  var grupos = order.map(function(k){ byP[k].prestamos.sort(function(x,y){ return String(x.subtipo).localeCompare(String(y.subtipo)); }); return byP[k]; });
+  return {
+    grupos: grupos,
+    totalPrestado: grupos.reduce(function(s,g){ return s+g.totalPrestado; },0),
+    saldoTotal: grupos.reduce(function(s,g){ return s+g.saldoTotal; },0),
+    descontadoTotal: grupos.reduce(function(s,g){ return s+g.descontadoTotal; },0),
+    nPrestamos: grupos.reduce(function(s,g){ return s+g.prestamos.length; },0),
+    numPersonas: grupos.length
+  };
+}
+
 /* ── display helpers ── */
 function _descGenMoney(n){ var v = Number(n)||0; return 'Q ' + v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function _descGenEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -42757,6 +42834,7 @@ function _descGenRender(cont){
   html += '<button onclick="window._antView=\'resumen\'; window._antFiltroPersona=\'\'; window._antFiltroEstado=\'todos\'; window.renderPlanillaAnticipos()" style="'+tabBtn+tabIdle+'">RESUMEN</button>';
   html += '<button onclick="window._antView=\'listado\'; window.renderPlanillaAnticipos()" style="'+tabBtn+tabIdle+'">LISTADO COMPLETO</button>';
   html += '<button style="'+tabBtn+tabAct+'">DESCUENTOS GENERADOS</button>';
+  html += '<button onclick="window._antView=\'anticontrol\'; window.renderPlanillaAnticipos()" style="'+tabBtn+tabIdle+'">CONTROL DE ANTICIPOS</button>';
   html += '</div>';
   // KPIs
   html += '<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:14px 16px;background:var(--cream);border-bottom:1px solid var(--line)">';
@@ -42846,6 +42924,128 @@ function _descGenPDF(){
   doc.save('DESCUENTOS GENERADOS '+_descGenHoyTxt().replace(/\//g,'-')+'.pdf');
   try { showToast('PDF GENERADO','green'); } catch(e){}
 }
+
+/* ── CONTROL DE ANTICIPOS: render (por préstamo, con avance de pago) ── */
+function _antCtrlRender(cont){
+  if(!cont) return;
+  var persona = window._antCtrlPersona||'', estado = window._antCtrlEstado||'TODOS';
+  var anticipos = (typeof state!=='undefined' && state && Array.isArray(state.anticiposGlobales)) ? state.anticiposGlobales : [];
+  var pb = _antCtrlPagosByAnt((typeof state!=='undefined' && state && state.projects)||[]);
+  var items = _antCtrlBuild(anticipos, pb);
+  var ag = _antCtrlAgrupar(items, {persona:persona, estado:estado});
+  var esc = _descGenEsc, escA = (typeof _invEscAttr==='function') ? _invEscAttr : _descGenEsc;
+  var subL = function(st){ return (typeof window._subtipoLabelAnt==='function') ? window._subtipoLabelAnt(st) : String(st||'').replace(/_/g,' '); };
+  var tabAct = 'background:#0F172A;color:#fff;border-color:#0F172A;font-weight:700';
+  var tabIdle = 'background:#fff;color:#475569;border-color:#E5E7EB;font-weight:600';
+  var tabBtn = 'padding:8px 14px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.4px;cursor:pointer;';
+  var selStyle = 'padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px';
+  var kpi = function(label,val,color,border){ return '<div style="background:#fff;border:1px solid '+(border||'#E5E7EB')+';border-radius:8px;padding:10px 12px"><div style="font-size:9px;letter-spacing:1.2px;color:#888;font-weight:700">'+label+'</div><div style="font-size:clamp(13px,4.2vw,18px);font-weight:800;color:'+(color||'#0F172A')+';margin-top:3px;line-height:1.15;white-space:nowrap">'+val+'</div></div>'; };
+  var loanCard = function(it){
+    var pct = it.cantidadCuotas>0 ? Math.min(100, Math.round(it.cuotasPagadas/it.cantidadCuotas*100)) : 0;
+    var estadoBadge = it.estado==='CANCELADO'
+      ? '<span style="background:#DCFCE7;color:#166534;border-radius:10px;padding:2px 9px;font-size:9.5px;font-weight:800">CANCELADO</span>'
+      : '<span style="background:#FEF3C7;color:#92400E;border-radius:10px;padding:2px 9px;font-size:9.5px;font-weight:800">PENDIENTE</span>';
+    var lbl = subL(it.subtipo);
+    var titulo = lbl + (it.desc && _descGenNorm(it.desc)!==_descGenNorm(lbl) ? (' — '+it.desc) : '');
+    var h = '<div style="border:1px solid #E5E7EB;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px"><div style="font-weight:700;font-size:12px;line-height:1.3">'+esc(titulo)+'</div><div style="text-align:right;white-space:nowrap"><div style="font-weight:800;font-size:13px">'+_descGenMoney(it.montoTotal)+'</div>'+estadoBadge+'</div></div>';
+    h += '<div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--mute);margin-bottom:3px"><span>Cuota '+_descGenMoney(it.montoCuota)+' · '+it.cuotasPagadas+'/'+it.cantidadCuotas+' pagadas'+(it.cuotasPagadasInicial>0?(' (incluye '+it.cuotasPagadasInicial+' inicial'+(it.cuotasPagadasInicial!==1?'es':'')+')'):'')+'</span><span style="font-weight:700;color:#C62828">Saldo '+_descGenMoney(it.saldo)+'</span></div>';
+    h += '<div style="height:7px;background:#EEF2F7;border-radius:4px;overflow:hidden;margin-bottom:'+(it.pagos.length?'8px':'0')+'"><div style="height:100%;width:'+pct+'%;background:'+(it.estado==='CANCELADO'?'#16A34A':'#1565C0')+'"></div></div>';
+    if(it.pagos.length){
+      h += '<table class="tbl" style="margin:0"><thead><tr><th style="width:84px">FECHA</th><th style="width:54px">CUOTA</th><th class="num" style="width:96px">MONTO</th><th>PLANILLA</th></tr></thead><tbody>';
+      it.pagos.forEach(function(pg){
+        var cuota = (pg.cuotaActual&&pg.cuotasTotales)?(pg.cuotaActual+'/'+pg.cuotasTotales):(pg.cuotaActual?String(pg.cuotaActual):'—');
+        var plan = (pg.planillaNumero!==''?('#'+pg.planillaNumero):'')+(pg.proyecto?(' · '+pg.proyecto):'');
+        h += '<tr><td>'+esc(_descGenFmtYMD(pg.fechaYMD))+'</td><td style="text-align:center">'+cuota+'</td><td class="num">'+_descGenMoney(pg.monto)+'</td><td style="font-size:10.5px">'+esc(plan)+'</td></tr>';
+      });
+      h += '</tbody></table>';
+    } else {
+      h += '<div style="font-size:10.5px;color:var(--mute);font-style:italic">Sin cuotas descontadas en la app todavía.</div>';
+    }
+    h += '</div>';
+    return h;
+  };
+  var html = '<div class="card">';
+  html += '<div class="card-hd"><h3>CONTROL DE ANTICIPOS</h3><span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Avance de pago por préstamo — cuotas, saldo y PDF</span></div>';
+  html += '<div style="display:flex;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);background:#FAFBFC;flex-wrap:wrap">';
+  html += '<button onclick="window._antView=\'resumen\'; window._antFiltroPersona=\'\'; window._antFiltroEstado=\'todos\'; window.renderPlanillaAnticipos()" style="'+tabBtn+tabIdle+'">RESUMEN</button>';
+  html += '<button onclick="window._antView=\'listado\'; window.renderPlanillaAnticipos()" style="'+tabBtn+tabIdle+'">LISTADO COMPLETO</button>';
+  html += '<button onclick="window._antView=\'descuentos\'; window.renderPlanillaAnticipos()" style="'+tabBtn+tabIdle+'">DESCUENTOS GENERADOS</button>';
+  html += '<button style="'+tabBtn+tabAct+'">CONTROL DE ANTICIPOS</button>';
+  html += '</div>';
+  html += '<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:14px 16px;background:var(--cream);border-bottom:1px solid var(--line)">';
+  html += kpi('TOTAL PRESTADO', _descGenMoney(ag.totalPrestado), '#0F172A');
+  html += kpi('SALDO PENDIENTE', _descGenMoney(ag.saldoTotal), '#C62828', '#EF9A9A');
+  html += kpi('PRÉSTAMOS', String(ag.nPrestamos), '#0F172A');
+  html += '</div>';
+  var seenP={}, personasAll=[];
+  items.forEach(function(it){ var k=_descGenNorm(it.nombre); if(!k||seenP[k])return; seenP[k]=1; personasAll.push(it.nombre); });
+  personasAll.sort(function(a,b){ return String(a).localeCompare(String(b),'es',{sensitivity:'base'}); });
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)">';
+  html += '<select onchange="window._antCtrlPersona=this.value; window.renderPlanillaAnticipos()" style="'+selStyle+'"><option value="">TODAS LAS PERSONAS</option>';
+  personasAll.forEach(function(nm){ html += '<option value="'+escA(nm)+'"'+(_descGenNorm(nm)===_descGenNorm(persona)?' selected':'')+'>'+esc(nm)+'</option>'; });
+  html += '</select>';
+  html += '<select onchange="window._antCtrlEstado=this.value; window.renderPlanillaAnticipos()" style="'+selStyle+'">';
+  [['TODOS','TODOS'],['PENDIENTE','PENDIENTES'],['CANCELADO','CANCELADOS']].forEach(function(o){ html += '<option value="'+o[0]+'"'+(estado===o[0]?' selected':'')+'>'+o[1]+'</option>'; });
+  html += '</select>';
+  html += '<button class="btn ghost sm" onclick="window._antCtrlPersona=\'\';window._antCtrlEstado=\'TODOS\'; window.renderPlanillaAnticipos()" style="font-size:10px">LIMPIAR</button>';
+  html += '<button class="btn sm" style="background:#C62828;border-color:#C62828;color:#fff;margin-left:auto" onclick="_antCtrlPDF()">DESCARGAR PDF</button>';
+  html += '</div>';
+  if(!ag.nPrestamos){
+    html += '<div style="padding:34px 16px;text-align:center;color:var(--mute);font-size:13px">No hay anticipos para el filtro seleccionado.</div>';
+  } else {
+    html += '<div style="padding:8px 12px 16px">';
+    ag.grupos.forEach(function(g){
+      html += '<div style="margin-bottom:16px">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;background:#0F172A;color:#fff;border-radius:6px 6px 0 0;padding:8px 12px"><span style="font-weight:700;font-size:12px">'+esc(g.nombre)+'</span><span style="font-size:11px">Saldo <strong style="font-size:13px">'+_descGenMoney(g.saldoTotal)+'</strong></span></div>';
+      html += '<div style="border:1px solid var(--line);border-top:none;border-radius:0 0 6px 6px;padding:8px">';
+      g.prestamos.forEach(function(it){ html += loanCard(it); });
+      html += '</div></div>';
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+  cont.innerHTML = html;
+}
+
+/* ── CONTROL DE ANTICIPOS: PDF (tabla por préstamo + total saldo) ── */
+function _antCtrlPDF(){
+  if(typeof window.jspdf==='undefined' || !window.jspdf.jsPDF){ showToast('JSPDF NO CARGÓ — RECARGAR LA APP','red'); return; }
+  var persona = window._antCtrlPersona||'', estado = window._antCtrlEstado||'TODOS';
+  var anticipos = (typeof state!=='undefined' && state && Array.isArray(state.anticiposGlobales)) ? state.anticiposGlobales : [];
+  var pb = _antCtrlPagosByAnt((typeof state!=='undefined' && state && state.projects)||[]);
+  var items = _antCtrlBuild(anticipos, pb);
+  var ag = _antCtrlAgrupar(items, {persona:persona, estado:estado});
+  if(!ag.nPrestamos){ showToast('NO HAY ANTICIPOS PARA EXPORTAR','red'); return; }
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({unit:'pt',format:'a4',orientation:'landscape'});
+  var pageW = doc.internal.pageSize.width;
+  try { if(typeof _pdfLogo==='function') _pdfLogo(doc); } catch(e){}
+  doc.setFontSize(15); doc.setFont(undefined,'bold'); doc.setTextColor(20);
+  doc.text('CONTROL DE ANTICIPOS', pageW/2, 42, {align:'center'});
+  var sub=[];
+  if(persona) sub.push('Persona: '+persona);
+  if(estado && estado!=='TODOS') sub.push('Estado: '+(estado==='PENDIENTE'?'Pendientes':'Cancelados'));
+  sub.push('Generado '+_descGenHoyTxt());
+  doc.setFontSize(9); doc.setFont(undefined,'normal'); doc.setTextColor(100);
+  doc.text(sub.join('     ·     '), pageW/2, 58, {align:'center'});
+  var subL = function(st){ return (typeof window._subtipoLabelAnt==='function') ? window._subtipoLabelAnt(st) : String(st||'').replace(/_/g,' '); };
+  var body=[];
+  ag.grupos.forEach(function(g){
+    g.prestamos.forEach(function(it){
+      var lbl = subL(it.subtipo);
+      var titulo = lbl + (it.desc && _descGenNorm(it.desc)!==_descGenNorm(lbl) ? (' — '+it.desc) : '');
+      body.push([ it.nombre, titulo, _descGenMoney(it.montoTotal), _descGenMoney(it.montoCuota), it.cuotasPagadas+'/'+it.cantidadCuotas, _descGenMoney(it.saldo), (it.estado==='CANCELADO'?'Cancelado':'Pendiente') ]);
+    });
+  });
+  doc.autoTable({ startY:72, head:[['TRABAJADOR','PRÉSTAMO','MONTO TOTAL','CUOTA','PAGADAS','SALDO','ESTADO']], body:body, theme:'striped',
+    styles:{fontSize:8, cellPadding:3}, headStyles:{fillColor:[21,101,192], textColor:255, fontStyle:'bold'},
+    columnStyles:{2:{halign:'right'},3:{halign:'right'},4:{halign:'center'},5:{halign:'right'},6:{halign:'center'}},
+    foot:[['','TOTALES ('+ag.nPrestamos+' préstamos · '+ag.numPersonas+' personas)','','','', _descGenMoney(ag.saldoTotal), '']],
+    footStyles:{fillColor:[254,243,199], textColor:[20,20,20], fontStyle:'bold'} });
+  doc.save('CONTROL DE ANTICIPOS '+_descGenHoyTxt().replace(/\//g,'-')+'.pdf');
+  try { showToast('PDF GENERADO','green'); } catch(e){}
+}
 </script>
 
 <!-- v346 · CATÁLOGO DE ANTICIPOS (Fase 1) — ver doc completa en puntorojo.html -->
@@ -42916,6 +43116,11 @@ function _descGenPDF(){
       try { _descGenRender(cont); } catch(e){ console.warn('descGenRender:', e); }
       return;
     }
+    // v742: vista CONTROL DE ANTICIPOS (por préstamo, avance de pago + PDF).
+    if (window._antView === 'anticontrol' && typeof _antCtrlRender === 'function'){
+      try { _antCtrlRender(cont); } catch(e){ console.warn('antCtrlRender:', e); }
+      return;
+    }
     // v355: anticipos globales — sin proyecto activo requerido.
     const ant = _getAnticipos();
     const puedeEditar = _puedeEditar();
@@ -42968,6 +43173,7 @@ function _descGenPDF(){
     html += '<button onclick="window._antView=\'resumen\'; window._antFiltroPersona=\'\'; window._antFiltroEstado=\'todos\'; window.renderPlanillaAnticipos()" style="padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;'+(_antView==='resumen'?_tabBtnActive:_tabBtnIdle)+'">RESUMEN</button>';
     html += '<button onclick="window._antView=\'listado\'; window.renderPlanillaAnticipos()" style="padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;'+(_antView==='listado'?_tabBtnActive:_tabBtnIdle)+'">LISTADO COMPLETO · '+_antTotalCount+'</button>';
     html += '<button onclick="window._antView=\'descuentos\'; window.renderPlanillaAnticipos()" style="padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;'+_tabBtnIdle+'">DESCUENTOS GENERADOS</button>'; // v741
+    html += '<button onclick="window._antView=\'anticontrol\'; window.renderPlanillaAnticipos()" style="padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;'+_tabBtnIdle+'">CONTROL DE ANTICIPOS</button>'; // v742
     html += '</div>';
 
     // === VISTA RESUMEN === KPIs no toggleables, click lleva al listado
