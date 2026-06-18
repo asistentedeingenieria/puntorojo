@@ -7,7 +7,9 @@ const html=fs.readFileSync(path.join(__dirname,'..','index.html'),'utf8');
 function ext(name){ const m=html.match(new RegExp('function '+name+'\\([\\s\\S]*?\\n\\}')); if(!m){ console.log('NO '+name+' FOUND'); process.exit(2);} return m[0]; }
 
 const CALC  = new Function(ext('_estadoFuerzaCalc')+'\nreturn _estadoFuerzaCalc;')();
-const LINES = new Function(ext('_estadoFuerzaLineas')+'\nreturn _estadoFuerzaLineas;')();
+const PLBL  = new Function(ext('_efPuestoLabel')+'\nreturn _efPuestoLabel;')();
+const APORD = new Function(ext('_efApoyoOrden')+'\nreturn _efApoyoOrden;')();
+const LINES = new Function('_efPuestoLabel','_efApoyoOrden', ext('_estadoFuerzaLineas')+'\nreturn _estadoFuerzaLineas;')(PLBL, APORD);
 
 let pass=0, fail=0;
 const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
@@ -64,6 +66,20 @@ ok('sección AMBAS OBRAS', lines.some(l=>l.t==='AMBAS OBRAS' && l.b));
 ok('sección Horarios', lines.some(l=>l.t==='Horarios' && l.b));
 ok('horario incluido', lines.some(l=>/Subcontratistas/.test(l.t)));
 ok('sin clasificar mencionado', lines.some(l=>/sin clasificar/i.test(l.t)));
+
+// ── v749: puestos nuevos ayudante de instalador / masillero (cuentan como APOYO) ──
+ok('label ayudante de instalador (sing)', PLBL('AYUDANTE_INSTALADOR',1)==='ayudante de instalador');
+ok('label ayudantes de instalador (plur)', PLBL('AYUDANTE_INSTALADOR',2)==='ayudantes de instalador');
+ok('label ayudante de masillero', PLBL('AYUDANTE_MASILLERO',1)==='ayudante de masillero');
+ok('label desconocido -> sin guion bajo', PLBL('FOO_BAR',1)==='foo bar');
+const resAyu=CALC([
+  {id:'p',tipo:'OBRA',puesto:'AYUDANTE_INSTALADOR',sexo:'M',obraAsignada:'t3'},
+  {id:'q',tipo:'OBRA',puesto:'AYUDANTE_MASILLERO',sexo:'F',obraAsignada:'t3'}
+], {p:{presente:true,obraId:'t3'},q:{presente:true,obraId:'t3'}}, projects);
+ok('ayudante de instalador cuenta como APOYO (no por obra)', resAyu.apoyo.AYUDANTE_INSTALADOR===1 && !resAyu.porObra['TORRE 3']);
+ok('ayudante de masillero cuenta como APOYO', resAyu.apoyo.AYUDANTE_MASILLERO===1);
+const linAyu=LINES(resAyu,'18/06/2026','');
+ok('líneas: aparece ayudante de instalador', linAyu.some(l=>/ayudante de instalador/.test(l.t)));
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
