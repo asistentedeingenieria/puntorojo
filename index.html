@@ -2914,7 +2914,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v735</span>
+    <span style="opacity:.5;font-size:9px">v736</span>
   </footer>
 
 </div>
@@ -11990,6 +11990,16 @@ function _avNivelHeader(tId, lId, name, pctTxt, extraRight){
     +'<div style="font-size:13px;font-weight:700;color:#2547B0;flex-shrink:0">'+pctTxt+'</div>'
     +'</div>';
 }
+// v736: fila de KPIs uniforme (SIN INICIAR · EN PROCESO · <completos> · AVANCE GENERAL).
+function _avKpisHtml(sin, proc, comp, compLbl, avgPct){
+  function k(lbl, val, col, bg){ return '<div style="text-align:center;padding:8px 10px;background:'+(bg||'var(--white)')+';border:1px solid var(--line);border-left:3px solid '+col+';border-radius:4px"><div style="font-size:8.5px;letter-spacing:1.2px;color:'+col+';font-weight:700">'+lbl+'</div><div style="font-size:18px;font-weight:700;color:'+col+';margin-top:2px">'+val+'</div></div>'; }
+  return '<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:8px;margin:0 0 14px">'
+    + k('SIN INICIAR', sin, 'var(--mute)')
+    + k('EN PROCESO', proc, 'var(--rojo)')
+    + k(compLbl, comp, '#1e6b1e', '#e8f5e0')
+    + k('AVANCE GENERAL', avgPct+'%', 'var(--rojo)')
+    + '</div>';
+}
 // v698 (Fase B): vista MATERIALES "AVANCE POR APARTAMENTO". El despacho es por NIVEL (todos
 // los aptos de un nivel comparten el % de cada etapa). Despachado = OC autorizada.
 function renderAvanceMateriales(){
@@ -12010,7 +12020,20 @@ function renderAvanceMateriales(){
   }
   if(!window._matAvanceOpen) window._matAvanceOpen=new Set();
   var openSet=window._matAvanceOpen;
-  var html='<div class="card"><div class="card-hd" style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3>AVANCE POR APARTAMENTO</h3>'+((typeof can==='function'&&can('avance.edit'))?'<button onclick="abrirImportarAvance(\'DESPACHO\')" style="padding:7px 13px;background:var(--cafe);color:#fff;border:none;border-radius:4px;font-family:inherit;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;flex-shrink:0">IMPORTAR</button>':'')+'</div>'+_leyendaAvanceApto('DESPACHADO AL 100%');
+  // v736: KPIs de despacho (override-aware, igual que el % de torre/niveles)
+  var _kSin=0,_kProc=0,_kComp=0,_kSum=0,_kN=0;
+  (p.towers||[]).forEach(function(t){ (t.levels||[]).forEach(function(l){
+    var bp=[0,1,2,3].map(function(ei){ return _etapaDespachoPct(_recetaEtapaItemKeys(p,t,l,ei).length, _itemsDespachadosEtapa(pedidos,ordenes,l.id,ei).length); });
+    (l.aptos||[]).forEach(function(a){
+      var ap=(a.despachoManual&&Array.isArray(a.despachoManual))?a.despachoManual:bp;
+      var niv=_avanceAptoNivelMaterial(ap);
+      var pct=Math.round((Number(ap[0]||0)+Number(ap[1]||0)+Number(ap[2]||0)+Number(ap[3]||0))/4);
+      _kN++; _kSum+=pct;
+      if(niv.green) _kComp++; else if(pct<=0) _kSin++; else _kProc++;
+    });
+  }); });
+  var _kpisDesp=_avKpisHtml(_kSin,_kProc,_kComp,'DESPACHADOS',(_kN?Math.round(_kSum/_kN):0));
+  var html='<div class="card"><div class="card-hd" style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3>AVANCE POR APARTAMENTO</h3>'+((typeof can==='function'&&can('avance.edit'))?'<button onclick="abrirImportarAvance(\'DESPACHO\')" style="padding:7px 13px;background:var(--cafe);color:#fff;border:none;border-radius:4px;font-family:inherit;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;flex-shrink:0">IMPORTAR</button>':'')+'</div>'+_kpisDesp+_leyendaAvanceApto('DESPACHADO AL 100%');
   var hayAlgo=false;
   (p.towers||[]).forEach(function(t){
     var levels=(t.levels||[]).filter(function(l){ return (l.aptos||[]).length; });
@@ -36215,9 +36238,16 @@ window.addEventListener('load', () => {
     const checkVerde = `<div style="width:30px;height:30px;background:var(--green-dark);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;font-weight:700;flex-shrink:0;box-shadow:0 1px 2px rgba(0,0,0,.08)">✓</div>`;
     const _lbl = (strong, rest) => `<strong style="color:var(--ink);font-weight:700">${strong}</strong> · ${rest}`;
 
+    // v736: KPIs de pago (override-aware con pagoManual)
+    const _neK = (getEtapasP(p)||[]).length;
+    let _pSin=0,_pProc=0,_pComp=0,_pSum=0,_pN=0;
+    (p.towers||[]).forEach(t=>(t.levels||[]).forEach(l=>(l.aptos||[]).forEach(a=>{ const _pc=(a.pagoManual&&Array.isArray(a.pagoManual))?a.pagoManual:[0,1,2,3,4].map(i=>i<_neK?paidPct5(p,a.id,i):0); const _nv=_avanceAptoNivelPago(_pc); const _pct=_nv.green?100:Math.round(_nv.n/4*100); _pN++; _pSum+=_pct; if(_nv.green) _pComp++; else if(_pct<=0) _pSin++; else _pProc++; })));
+    const _kpisPago = (typeof _avKpisHtml==='function') ? _avKpisHtml(_pSin,_pProc,_pComp,'PAGADOS',(_pN?Math.round(_pSum/_pN):0)) : '';
+
     let html = `
       <div class="card">
         <div class="card-hd" style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3>AVANCE DE PAGOS POR APARTAMENTO</h3>${can('avance.edit')?'<button onclick="abrirImportarAvance(\'PAGOS\')" style="padding:7px 13px;background:var(--cafe);color:#fff;border:none;border-radius:4px;font-family:inherit;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;flex-shrink:0">IMPORTAR</button>':''}</div>
+        ${_kpisPago}
         ${_leyendaAvanceApto('PAGADO AL 100%')}
     `;
 
