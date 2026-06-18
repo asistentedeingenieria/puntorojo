@@ -2614,14 +2614,10 @@ table{max-width:100%}
       <div id="mat-avanceapto" style="display:none"></div>
 
       <div id="mat-inventario" style="display:none">
-        <div class="card">
-          <div class="card-hd"><h3>INVENTARIO DE MATERIALES</h3>
-            <button class="btn primary sm" onclick="openNewMaterial()">+ AGREGAR MATERIAL</button>
-          </div>
-          <div class="tbl-wrap">
-            <div id="matBody"></div>
-          </div>
-        </div>
+        <!-- v740: TOMA DE INVENTARIO (drill-down por ubicación + historial). -->
+        <div id="invRoot"></div>
+        <!-- matBody legado: renderMateriales aún lo llena; queda oculto. -->
+        <div id="matBody" style="display:none"></div>
       </div>
 
       <div id="mat-pedidos" style="display:none">
@@ -2914,7 +2910,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v739</span>
+    <span style="opacity:.5;font-size:9px">v740</span>
   </footer>
 
 </div>
@@ -7611,6 +7607,9 @@ function ensureDataV9(data){
     if (!Array.isArray(p.materiales.ordenes)) p.materiales.ordenes = [];
     if (!Array.isArray(p.materiales.receta)) p.materiales.receta = [{},{},{},{},{},{}];
     if (!p.materiales.etapasPedidas) p.materiales.etapasPedidas = {};
+    // v740: tomas de inventario físico (por ubicación, con historial fechado)
+    if (!Array.isArray(p.materiales.tomas)) p.materiales.tomas = [];
+    if (!p.materiales.tomasEliminadas || typeof p.materiales.tomasEliminadas !== 'object' || Array.isArray(p.materiales.tomasEliminadas)) p.materiales.tomasEliminadas = {};
     // Fase 1 receta v2 + precios + solicitudes de cambio de receta
     if (p.materiales.recetaV2 !== null && (typeof p.materiales.recetaV2 !== 'object')) p.materiales.recetaV2 = null;
     if (p.materiales.recetaV2 === undefined) p.materiales.recetaV2 = null;
@@ -8784,6 +8783,31 @@ const CloudSync = {
         if (_mp.changed) needsResync = true;
       }
     } catch(e){ console.warn('blindaje de personal en applyRemote:', e); }
+
+    // v740 BLINDAJE DE TOMAS DE INVENTARIO: el remoto NUNCA pisa una toma local
+    // (last-write-wins perdía conteos entre celulares, mismo patrón que asistencia).
+    // Unión por id: toma CERRADA gana sobre ABIERTA; dos abiertas unen sus líneas
+    // por (locKey+material) tomando el ts más nuevo; tombstones por id = borrados reales.
+    try {
+      if (typeof _mergeTomas === 'function') {
+        const _locProj = {}; ((state && state.projects) || []).forEach(p => { if (p && p.id) _locProj[p.id] = p; });
+        (merged.projects || []).forEach(rp => {
+          if (!rp || !rp.materiales) return;
+          const lp = _locProj[rp.id];
+          const _tomb = Object.assign({},
+            (lp && lp.materiales && lp.materiales.tomasEliminadas) || {},
+            rp.materiales.tomasEliminadas || {});
+          rp.materiales.tomasEliminadas = _tomb;
+          const _mt = _mergeTomas(
+            (lp && lp.materiales && lp.materiales.tomas) || [],
+            rp.materiales.tomas || [],
+            _tomb
+          );
+          rp.materiales.tomas = _mt.list;
+          if (_mt.changed) needsResync = true;
+        });
+      }
+    } catch(e){ console.warn('blindaje de tomas de inventario en applyRemote:', e); }
 
     state = merged;
     // v495: recalcular _projHashes desde el remoteData REALMENTE aplicado en esta llamada.
@@ -10212,6 +10236,7 @@ function setMatTab(t){
   const avanceAptoBlock = document.getElementById('mat-avanceapto');
   if (avanceAptoBlock) avanceAptoBlock.style.display = t === 'avanceapto' ? 'block' : 'none';
   if (t === 'avanceapto') { renderAvanceMateriales(); } // v698
+  if (t === 'inventario') { invUI.view='root'; invUI.loc=null; invUI.histId=null; try { renderInventarios(); } catch(e){ console.warn('renderInventarios:', e); } } // v740
   if (t === 'pedidos') {
     if (currentPedidoTab !== 'nuevo') setPedidoTab('lista');
     renderPedidosList();
@@ -10303,6 +10328,14 @@ function setActiveProject(id){
   // Evita que un filtro viejo (p.ej. otra obra) oculte los marcados del proyecto nuevo y parezca
   // que "no marcó nadie". El encargado lo vuelve a fijar a su obra en renderPersonal.
   try{ const _s=document.getElementById('asistObraPdf'); if(_s) _s.value=''; }catch(e){}
+  // v740-fix: reiniciar el estado de INVENTARIOS al cambiar de proyecto. invUI es un
+  // singleton de módulo (torreId/nivelId/loc apuntan al proyecto anterior); sin esto, la
+  // vista de captura quedaría con ubicaciones de otro proyecto. Re-render si está visible.
+  try {
+    if (typeof invUI === 'object' && invUI){ invUI.view='root'; invUI.loc=null; invUI.torreId=''; invUI.nivelId=''; invUI.histId=null; }
+    var _mi=document.getElementById('mat-inventario');
+    if (_mi && _mi.style.display!=='none' && typeof renderInventarios==='function') renderInventarios();
+  } catch(e){}
   saveState();
   renderAll();
 }
@@ -15092,6 +15125,399 @@ async function loadNotasStructureToCurrentProject(){
   renderAvance();
   logActivity('update', 'Estructura oficial cargada en avance físico', p.name);
   showToast('ESTRUCTURA OFICIAL CARGADA', 'green');
+}
+
+/* ─────────────── TOMA DE INVENTARIO — lógica pura (v740) ───────────────
+   Modelo: p.materiales.tomas = [ { id, estado:'ABIERTA'|'CERRADA',
+     fechaInicio, fechaCierre, by, byNombre,
+     lineas:[ {id, locKey, locLabel, torreId,nivelId,aptoId, bodega,
+               material, unidad, cantidad, ts, by} ] } ].
+   - locKey: 'BODEGA' o el aptoId. SOBRESCRIBE: una línea por (locKey + material).
+   - Toma CERRADA = inmutable, queda en historial fechado.
+   - _mergeTomas: unión multidispositivo (cerrada gana; abiertas unen líneas por
+     loc+material con ts mayor; tombstones por id). Mismo patrón que asistencia. */
+function _invNorm(s){
+  return String(s==null?'':s).trim().toUpperCase().replace(/\s+/g,' ');
+}
+function _invEscAttr(s){
+  // Escaper de ATRIBUTO HTML (para value="..."): NO usar escapeAttr global (ese
+  // escapa ' como \' para strings JS y mete backslashes en el datalist → corrompe
+  // los nombres con pie/pulgada del catálogo). El apóstrofo es seguro entre comillas dobles.
+  return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function _invLocInfo(sel){
+  if (sel && sel.bodega){
+    return { locKey:'BODEGA', locLabel:'BODEGA', bodega:true, torreId:'', nivelId:'', aptoId:'' };
+  }
+  return {
+    locKey: String((sel&&sel.aptoId)||''),
+    locLabel: [sel&&sel.torreName, sel&&sel.nivelName, sel&&sel.aptoName].filter(Boolean).join(' · '),
+    bodega:false,
+    torreId: String((sel&&sel.torreId)||''),
+    nivelId: String((sel&&sel.nivelId)||''),
+    aptoId: String((sel&&sel.aptoId)||'')
+  };
+}
+function _invUpsertLinea(lineas, linea){
+  var k = _invNorm(linea.locKey)+'||'+_invNorm(linea.material);
+  var arr = Array.isArray(lineas) ? lineas.slice() : [];
+  var idx = -1;
+  for (var i=0;i<arr.length;i++){
+    if ((_invNorm(arr[i].locKey)+'||'+_invNorm(arr[i].material)) === k){ idx=i; break; }
+  }
+  if (idx >= 0){
+    arr[idx] = Object.assign({}, arr[idx], { unidad: linea.unidad, cantidad: linea.cantidad, ts: linea.ts, by: linea.by });
+  } else {
+    arr.push(linea);
+  }
+  return arr;
+}
+function _invDelLinea(lineas, lineaId){
+  return (Array.isArray(lineas)?lineas:[]).filter(function(x){ return x.id !== lineaId; });
+}
+function _invCerrarToma(toma, fechaCierre){
+  return Object.assign({}, toma, { estado:'CERRADA', fechaCierre: fechaCierre });
+}
+function _invCountByLoc(toma){
+  var out = {};
+  (((toma&&toma.lineas))||[]).forEach(function(l){ out[l.locKey] = (out[l.locKey]||0) + 1; });
+  return out;
+}
+function _mergeOneToma(a, b){
+  var aC = a.estado==='CERRADA', bC = b.estado==='CERRADA';
+  if (aC && !bC) return a;
+  if (bC && !aC) return b;
+  if (aC && bC){
+    return (String(b.fechaCierre||'') > String(a.fechaCierre||'')) ? b : a;
+  }
+  // ambas ABIERTAS: unir líneas por (locKey+material), el ts mayor gana
+  var map = {}; var order = [];
+  var put = function(l){
+    if (!l) return;
+    var k = _invNorm(l.locKey)+'||'+_invNorm(l.material);
+    if (!(k in map)){ map[k]=l; order.push(k); }
+    else if ((Number(l.ts)||0) >= (Number(map[k].ts)||0)) map[k]=l;
+  };
+  (a.lineas||[]).forEach(put);
+  (b.lineas||[]).forEach(put);
+  var lineas = order.map(function(k){ return map[k]; });
+  var fi = (String(a.fechaInicio||'') && String(b.fechaInicio||''))
+    ? (String(a.fechaInicio) <= String(b.fechaInicio) ? a.fechaInicio : b.fechaInicio)
+    : (a.fechaInicio || b.fechaInicio);
+  return Object.assign({}, a, { lineas: lineas, fechaInicio: fi });
+}
+function _mergeTomas(localList, remoteList, tombSet){
+  // Unión por id. `changed`/needsResync = "el merge preservó datos LOCALES que el
+  // REMOTO no tiene → hay que subir". Se mide contra el REMOTO (no contra el local),
+  // igual que _mergePersonal/_mergeColaboradores: así NO se pierde un conteo local
+  // (se sube) y NO se re-sube el core al recibir datos que ya están en la nube (no thrash).
+  tombSet = tombSet || {};
+  var byId = {}; var remoteById = {};
+  (remoteList||[]).forEach(function(t){
+    if (!t || !t.id) return;
+    remoteById[t.id] = t;
+    if (!(t.id in tombSet)) byId[t.id] = t;
+  });
+  var changed = false;
+  (localList||[]).forEach(function(t){
+    if (!t || !t.id || (t.id in tombSet)) return;
+    if (!byId[t.id]){ byId[t.id] = t; changed = true; return; } // toma solo-local → el remoto la necesita
+    var merged = _mergeOneToma(remoteById[t.id], t); // a=remoto, b=local
+    try { if (JSON.stringify(merged) !== JSON.stringify(remoteById[t.id])) changed = true; } catch(e){ changed = true; }
+    byId[t.id] = merged;
+  });
+  var list = Object.keys(byId).map(function(k){ return byId[k]; });
+  return { list: list, changed: changed };
+}
+
+/* ─────────────── TOMA DE INVENTARIO — UI (v740) ───────────────
+   Pestaña INVENTARIOS: sub-tabs TOMA ACTUAL / HISTORIAL.
+   TOMA ACTUAL: navegación drill-down en LISTA (BODEGA + TORRE→NIVEL→APTO),
+   un nivel a la vez; al entrar a una ubicación, panel de captura con buscador
+   del catálogo (datalist) + texto libre. HISTORIAL: tomas cerradas por fecha. */
+var invUI = { sub:'actual', view:'root', torreId:'', nivelId:'', loc:null, histId:null };
+
+function _invEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function _invFmtFecha(iso){
+  try { var d=new Date(iso); if(isNaN(d.getTime())) return String(iso||''); return d.toLocaleDateString('es-GT',{day:'2-digit',month:'2-digit',year:'numeric'}); }
+  catch(e){ return String(iso||''); }
+}
+function _invTomasAbiertas(){
+  var p=activeProj(); if(!p||!p.materiales) return [];
+  return (p.materiales.tomas||[]).filter(function(t){ return t && t.estado==='ABIERTA'; });
+}
+function _invActiveToma(){
+  var abiertas=_invTomasAbiertas();
+  if(!abiertas.length) return null;
+  abiertas.sort(function(a,b){ return String(b.fechaInicio||'').localeCompare(String(a.fechaInicio||'')); });
+  return abiertas[0];
+}
+function _invCatalogOptionsHtml(){
+  var seen={}, out='';
+  try {
+    (typeof _nmGetAllMaterials==='function' ? _nmGetAllMaterials() : []).forEach(function(it){
+      var nm=it && it.name; if(!nm || seen[nm]) return; seen[nm]=1;
+      out+='<option value="'+_invEscAttr(nm)+'"></option>';
+    });
+  } catch(e){}
+  return out;
+}
+function _invUpload(){ try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); } catch(e){} }
+
+function setInvSub(s){ invUI.sub=s; invUI.view='root'; invUI.loc=null; invUI.histId=null; renderInventarios(); }
+function invNavRoot(){ invUI.view='root'; invUI.loc=null; renderInventarios(); }
+function invNavTorre(tId){ invUI.view='torre'; invUI.torreId=tId; renderInventarios(); }
+function invNavNivel(tId,nId){ invUI.view='nivel'; invUI.torreId=tId; invUI.nivelId=nId; renderInventarios(); }
+function invNavLocBodega(){ invUI.view='loc'; invUI.loc=_invLocInfo({bodega:true}); renderInventarios(); }
+function invNavLocApto(tId,nId,aId){
+  var p=activeProj(); var t=(p.towers||[]).find(function(x){return x.id===tId;});
+  var l=t&&(t.levels||[]).find(function(x){return x.id===nId;});
+  var a=l&&(l.aptos||[]).find(function(x){return x.id===aId;});
+  var info=_invLocInfo({torreId:tId,torreName:(t&&(t.name||t.id))||'',nivelId:nId,nivelName:(l&&(l.name||l.id))||'',aptoId:aId,aptoName:(a&&(a.name||a.numero||a.id))||''});
+  info.aptoName=(a&&(a.name||a.numero||a.id))||'';
+  invUI.torreId=tId; invUI.nivelId=nId; invUI.view='loc'; invUI.loc=info;
+  renderInventarios();
+}
+function verTomaHistorial(id){ invUI.histId=id; renderInventarios(); }
+function cerrarVistaHistorial(){ invUI.histId=null; renderInventarios(); }
+
+function renderInventarios(){
+  var root=document.getElementById('invRoot'); if(!root) return;
+  var p=activeProj();
+  if(!p || !p.materiales){ root.innerHTML=''; return; }
+  var tabBtn=function(key,label){
+    var on=invUI.sub===key;
+    return '<button class="mat-tab'+(on?' active':'')+'" onclick="setInvSub(\''+key+'\')"'+(on?' style="color:var(--cafe);border-bottom-color:var(--cafe)"':'')+'>'+label+'</button>';
+  };
+  var subTabs='<div style="display:flex;gap:0;margin-bottom:16px;border-bottom:1px solid var(--line)">'+tabBtn('actual','TOMA ACTUAL')+tabBtn('historial','HISTORIAL')+'</div>';
+  var body=invUI.sub==='historial' ? _invRenderHistorial(p) : _invRenderActual(p);
+  root.innerHTML='<div class="card"><div class="card-hd"><h3>TOMA DE INVENTARIO</h3></div><div style="padding:6px 4px 4px">'+subTabs+body+'</div></div>';
+}
+
+function _invRenderActual(p){
+  var toma=_invActiveToma();
+  if(!toma){
+    return '<div style="padding:34px 16px;text-align:center">'+
+      '<div style="font-size:13px;color:var(--mute);margin-bottom:18px">No hay ninguna toma de inventario en progreso.</div>'+
+      '<button class="btn primary" onclick="iniciarTomaInventario()">INICIAR NUEVA TOMA</button></div>';
+  }
+  var email=(window._getUserEmail&&window._getUserEmail())||'';
+  var esAdmin=(typeof can==='function')&&can('users.manage');
+  var puedeCerrar=esAdmin || !toma.by || (email && toma.by===email);
+  var n=(toma.lineas||[]).length;
+  var head='<div style="background:var(--cream);border-radius:8px;padding:10px 12px;margin-bottom:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+    '<div style="flex:1;min-width:150px"><div style="font-weight:800;font-size:12px;letter-spacing:.5px">TOMA EN PROGRESO</div>'+
+    '<div style="font-size:11px;color:var(--mute)">Iniciada '+_invEsc(_invFmtFecha(toma.fechaInicio))+' · '+_invEsc(toma.byNombre||toma.by||'')+' · '+n+' contado(s)</div></div>'+
+    (puedeCerrar?'<button class="btn sm" style="background:var(--green-dark);color:#fff;border-color:var(--green-dark)" onclick="cerrarTomaInventario()">CERRAR TOMA</button>':'')+
+    (esAdmin?'<button class="btn-icon danger" title="DESCARTAR TOMA" onclick="eliminarTomaInventario(\''+toma.id+'\')">✕</button>':'')+'</div>';
+  var abiertasN=_invTomasAbiertas().length;
+  var aviso=(abiertasN>1)
+    ? '<div style="background:#FFF4E5;border:1px solid #F0B96B;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;line-height:1.4">ATENCIÓN: hay <strong>'+abiertasN+'</strong> tomas abiertas (probablemente iniciadas en distintos dispositivos). <span onclick="unificarTomasAbiertas()" style="color:var(--rojo);font-weight:700;cursor:pointer;text-decoration:underline">UNIFICARLAS EN UNA</span> para no perder conteos.</div>'
+    : '';
+  var nav=(invUI.view==='loc') ? _invCapture(p,toma) : _invDrill(p,toma);
+  return head+aviso+nav;
+}
+
+function _invDrill(p,toma){
+  var counts=_invCountByLoc(toma);
+  var towers=p.towers||[];
+  var rowStyle='display:flex;align-items:center;gap:10px;padding:13px 14px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;cursor:pointer;background:#fff';
+  var chev='<span style="margin-left:auto;color:var(--mute);font-size:20px;line-height:1">›</span>';
+  var badge=function(nn){ return nn?('<span style="background:var(--cafe);color:#fff;border-radius:11px;padding:2px 9px;font-size:11px;font-weight:700">'+nn+'</span>'):''; };
+  var backBtn=function(onc){ return '<div onclick="'+onc+'" style="display:inline-flex;align-items:center;gap:6px;color:var(--rojo);font-weight:700;font-size:12px;cursor:pointer;margin-bottom:12px">‹ ATRÁS</div>'; };
+
+  if(invUI.view==='root'){
+    var html='<div style="'+rowStyle+';border-color:var(--green-dark);background:var(--cream)" onclick="invNavLocBodega()">'+
+      '<span style="font-weight:800;letter-spacing:.5px">BODEGA</span>'+badge(counts['BODEGA']||0)+chev+'</div>';
+    towers.forEach(function(t){
+      var sum=0; (t.levels||[]).forEach(function(l){ (l.aptos||[]).forEach(function(a){ sum+=counts[a.id]||0; }); });
+      html+='<div style="'+rowStyle+'" onclick="invNavTorre(\''+t.id+'\')"><span style="font-weight:700">'+_invEsc(t.name||t.id)+'</span>'+badge(sum)+chev+'</div>';
+    });
+    if(!towers.length) html+='<div style="padding:20px;text-align:center;color:var(--mute);font-size:12px">No hay torres en este proyecto (solo BODEGA).</div>';
+    return html;
+  }
+  if(invUI.view==='torre'){
+    var t=towers.find(function(x){return x.id===invUI.torreId;});
+    if(!t){ invUI.view='root'; return _invDrill(p,toma); }
+    var h2=backBtn('invNavRoot()')+'<div style="font-weight:800;margin-bottom:10px">'+_invEsc(t.name||t.id)+'</div>';
+    (t.levels||[]).forEach(function(l){
+      var sum=0; (l.aptos||[]).forEach(function(a){ sum+=counts[a.id]||0; });
+      h2+='<div style="'+rowStyle+'" onclick="invNavNivel(\''+t.id+'\',\''+l.id+'\')"><span style="font-weight:700">'+_invEsc(l.name||l.id)+'</span>'+badge(sum)+chev+'</div>';
+    });
+    if(!(t.levels||[]).length) h2+='<div style="padding:20px;text-align:center;color:var(--mute);font-size:12px">Esta torre no tiene niveles.</div>';
+    return h2;
+  }
+  var t2=towers.find(function(x){return x.id===invUI.torreId;});
+  var l2=t2&&(t2.levels||[]).find(function(x){return x.id===invUI.nivelId;});
+  if(!t2||!l2){ invUI.view='root'; return _invDrill(p,toma); }
+  var h3=backBtn('invNavTorre(\''+t2.id+'\')')+'<div style="font-weight:800;margin-bottom:1px">'+_invEsc(l2.name||l2.id)+'</div><div style="font-size:11px;color:var(--mute);margin-bottom:10px">'+_invEsc(t2.name||t2.id)+'</div>';
+  (l2.aptos||[]).forEach(function(a){
+    h3+='<div style="'+rowStyle+'" onclick="invNavLocApto(\''+t2.id+'\',\''+l2.id+'\',\''+a.id+'\')"><span style="font-weight:700">'+_invEsc(a.name||a.numero||a.id)+'</span>'+badge(counts[a.id]||0)+chev+'</div>';
+  });
+  if(!(l2.aptos||[]).length) h3+='<div style="padding:20px;text-align:center;color:var(--mute);font-size:12px">Este nivel no tiene apartamentos.</div>';
+  return h3;
+}
+
+function _invCapture(p,toma){
+  var loc=invUI.loc; if(!loc){ invUI.view='root'; return _invDrill(p,toma); }
+  var backOnc=loc.bodega ? 'invNavRoot()' : ('invNavNivel(\''+invUI.torreId+'\',\''+invUI.nivelId+'\')');
+  var lineas=(toma.lineas||[]).filter(function(l){ return String(l.locKey)===String(loc.locKey); });
+  var back='<div onclick="'+backOnc+'" style="display:inline-flex;align-items:center;gap:6px;color:var(--rojo);font-weight:700;font-size:12px;cursor:pointer;margin-bottom:12px">‹ ATRÁS</div>';
+  var titulo='<div style="font-weight:800;margin-bottom:1px">'+_invEsc(loc.bodega?'BODEGA':(loc.aptoName||loc.locLabel))+'</div>'+
+    (loc.bodega?'':'<div style="font-size:11px;color:var(--mute);margin-bottom:10px">'+_invEsc(loc.locLabel)+'</div>');
+  var inStyle='width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:6px;font:inherit;font-size:13px';
+  var lblStyle='display:block;font-size:9px;letter-spacing:1px;color:var(--mute);font-weight:700;margin-bottom:3px';
+  var form='<datalist id="invCatalogo">'+_invCatalogOptionsHtml()+'</datalist>'+
+    '<div style="background:var(--cream);border-radius:8px;padding:10px;margin:6px 0 14px"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end">'+
+      '<div style="flex:2;min-width:150px"><label style="'+lblStyle+'">MATERIAL</label><input id="invMatInput" list="invCatalogo" autocomplete="off" placeholder="Elegí o escribí…" style="'+inStyle+'"></div>'+
+      '<div style="flex:0 0 66px"><label style="'+lblStyle+'">UNIDAD</label><input id="invUnidadInput" autocomplete="off" value="U" style="'+inStyle+';text-transform:uppercase"></div>'+
+      '<div style="flex:0 0 78px"><label style="'+lblStyle+'">CANTIDAD</label><input id="invCantInput" type="number" inputmode="decimal" min="0" step="any" placeholder="0" style="'+inStyle+'"></div>'+
+      '<button class="btn primary" style="flex:0 0 auto" onclick="invAgregarLinea()">AGREGAR</button>'+
+    '</div></div>';
+  var lista;
+  if(!lineas.length){ lista='<div style="padding:24px;text-align:center;color:var(--mute);font-size:12px">Todavía no contaste materiales en esta ubicación.</div>'; }
+  else {
+    lista='<table class="tbl" style="margin:0"><thead><tr><th>MATERIAL</th><th style="width:60px">UNIDAD</th><th style="width:84px" class="num">CANT.</th><th style="width:34px"></th></tr></thead><tbody>'+
+      lineas.map(function(l){
+        return '<tr><td>'+_invEsc(l.material)+'</td><td>'+_invEsc(l.unidad||'')+'</td>'+
+          '<td class="num"><input type="number" inputmode="decimal" min="0" step="any" value="'+(l.cantidad!=null?l.cantidad:0)+'" onchange="invSetCantidad(\''+l.id+'\',this.value)" style="width:70px;padding:5px;border:1px solid var(--line);border-radius:5px;text-align:right;font:inherit"></td>'+
+          '<td><button class="btn-icon danger" title="QUITAR" onclick="invEliminarLinea(\''+l.id+'\')">✕</button></td></tr>';
+      }).join('')+'</tbody></table>';
+  }
+  return back+titulo+form+lista;
+}
+
+function _invRenderHistorial(p){
+  if(invUI.histId){
+    var td=(p.materiales.tomas||[]).find(function(x){return x.id===invUI.histId;});
+    if(td) return _invHistDetalle(td);
+    invUI.histId=null;
+  }
+  var cerradas=(p.materiales.tomas||[]).filter(function(t){return t && t.estado==='CERRADA';});
+  cerradas.sort(function(a,b){ return String(b.fechaCierre||'').localeCompare(String(a.fechaCierre||'')); });
+  if(!cerradas.length) return '<div style="padding:34px 16px;text-align:center;color:var(--mute);font-size:13px">No hay tomas cerradas todavía.<br>Cuando cierres una toma en TOMA ACTUAL, aparecerá acá.</div>';
+  var esAdmin=(typeof can==='function')&&can('users.manage');
+  return cerradas.map(function(t){
+    var n=(t.lineas||[]).length;
+    var ubics=Object.keys(_invCountByLoc(t)).length;
+    return '<div style="display:flex;align-items:center;gap:8px;padding:13px 14px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:#fff">'+
+      '<div style="flex:1;cursor:pointer" onclick="verTomaHistorial(\''+t.id+'\')"><div style="font-weight:700">'+_invEsc(_invFmtFecha(t.fechaCierre))+'</div>'+
+      '<div style="font-size:11px;color:var(--mute)">'+_invEsc(t.byNombre||t.by||'')+' · '+n+' material(es) · '+ubics+' ubicación(es)</div></div>'+
+      '<span style="color:var(--mute);font-size:20px;cursor:pointer" onclick="verTomaHistorial(\''+t.id+'\')">›</span>'+
+      (esAdmin?'<button class="btn-icon danger" title="ELIMINAR" onclick="eliminarTomaInventario(\''+t.id+'\')">✕</button>':'')+'</div>';
+  }).join('');
+}
+function _invHistDetalle(t){
+  var back='<div onclick="cerrarVistaHistorial()" style="display:inline-flex;align-items:center;gap:6px;color:var(--rojo);font-weight:700;font-size:12px;cursor:pointer;margin-bottom:12px">‹ VOLVER AL HISTORIAL</div>';
+  var hd='<div style="font-weight:800">'+_invEsc(_invFmtFecha(t.fechaCierre))+'</div><div style="font-size:11px;color:var(--mute);margin-bottom:12px">'+_invEsc(t.byNombre||t.by||'')+'</div>';
+  var groups={}, order=[];
+  (t.lineas||[]).forEach(function(l){ var key=l.locLabel||l.locKey; if(!(key in groups)){groups[key]=[];order.push(key);} groups[key].push(l); });
+  if(!order.length) return back+hd+'<div style="padding:20px;text-align:center;color:var(--mute)">Esta toma no tiene materiales.</div>';
+  var body=order.map(function(key){
+    var rows=groups[key].map(function(l){ return '<tr><td>'+_invEsc(l.material)+'</td><td style="width:60px">'+_invEsc(l.unidad||'')+'</td><td class="num" style="width:84px">'+(l.cantidad!=null?l.cantidad:0)+'</td></tr>'; }).join('');
+    return '<div style="margin-bottom:12px"><div style="font-weight:700;font-size:12px;background:var(--cream);padding:7px 10px;border-radius:6px;margin-bottom:4px">'+_invEsc(key)+'</div>'+
+      '<table class="tbl" style="margin:0"><thead><tr><th>MATERIAL</th><th>UNIDAD</th><th class="num">CANT.</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  }).join('');
+  return back+hd+body;
+}
+
+function iniciarTomaInventario(){
+  var p=activeProj(); if(!p||!p.materiales) return;
+  if(_invActiveToma()){ invUI.sub='actual'; invUI.view='root'; renderInventarios(); return; }
+  var toma={ id:'toma-'+uid(), estado:'ABIERTA', fechaInicio:new Date().toISOString(), fechaCierre:'',
+    by:(window._getUserEmail&&window._getUserEmail())||'', byNombre:(window._getUserDisplayName&&window._getUserDisplayName())||'', lineas:[] };
+  p.materiales.tomas.push(toma);
+  saveState(); _invUpload();
+  try { if(typeof logActivity==='function') logActivity('create','Toma de inventario iniciada', p.name); } catch(e){}
+  invUI.sub='actual'; invUI.view='root'; invUI.loc=null;
+  renderInventarios();
+  showToast('TOMA INICIADA','green');
+}
+async function unificarTomasAbiertas(){
+  var p=activeProj(); if(!p||!p.materiales) return;
+  var abiertas=_invTomasAbiertas();
+  if(abiertas.length<2){ renderInventarios(); return; }
+  var okc=await window.prConfirm({ title:'UNIFICAR TOMAS', bodyHTML:'<div style="font-size:13px">Se encontraron <strong>'+abiertas.length+'</strong> tomas de inventario abiertas. Se van a unir en una sola; se conservan todos los conteos y, si un material se contó en dos, queda el más reciente. ¿Continuar?</div>', okText:'UNIFICAR', cancelText:'CANCELAR' });
+  if(!okc) return;
+  var survivor=_invActiveToma(); if(!survivor) return;
+  var acc=survivor;
+  abiertas.forEach(function(t){ if(t.id!==survivor.id) acc=_mergeOneToma(acc, t); });
+  survivor.lineas=acc.lineas;
+  if(!p.materiales.tomasEliminadas || typeof p.materiales.tomasEliminadas!=='object') p.materiales.tomasEliminadas={};
+  abiertas.forEach(function(t){ if(t.id!==survivor.id) p.materiales.tomasEliminadas[t.id]=Date.now(); });
+  p.materiales.tomas=(p.materiales.tomas||[]).filter(function(t){ return t.estado==='CERRADA' || t.id===survivor.id; });
+  saveState(); _invUpload();
+  try { if(typeof logActivity==='function') logActivity('update','Tomas de inventario unificadas', p.name+' · '+abiertas.length); } catch(e){}
+  invUI.view='root'; invUI.loc=null;
+  renderInventarios();
+  showToast('TOMAS UNIFICADAS','green');
+}
+function invAgregarLinea(){
+  var p=activeProj(); var toma=_invActiveToma();
+  if(!toma){ showToast('NO HAY TOMA ABIERTA','red'); return; }
+  if(!invUI.loc){ showToast('ELEGÍ UNA UBICACIÓN','red'); return; }
+  // v740-fix: blindaje contra estado obsoleto al cambiar de proyecto — la ubicación
+  // debe existir en el proyecto activo (BODEGA siempre vale).
+  if(!invUI.loc.bodega){
+    var _existe=false;
+    (p.towers||[]).forEach(function(t){ (t.levels||[]).forEach(function(l){ (l.aptos||[]).forEach(function(a){ if(a.id===invUI.loc.aptoId) _existe=true; }); }); });
+    if(!_existe){ showToast('ESA UBICACIÓN NO ES DE ESTE PROYECTO','red'); invNavRoot(); return; }
+  }
+  var matEl=document.getElementById('invMatInput'), uEl=document.getElementById('invUnidadInput'), cEl=document.getElementById('invCantInput');
+  var material=((matEl&&matEl.value)||'').trim();
+  if(!material){ showToast('ESCRIBÍ O ELEGÍ UN MATERIAL','red'); if(matEl) matEl.focus(); return; }
+  var unidad=(((uEl&&uEl.value)||'').trim()||'U').toUpperCase();
+  var cant=Number(String((cEl&&cEl.value)||'0').replace(/[^\d.\-]/g,''));
+  if(!(cant>=0)){ showToast('CANTIDAD INVÁLIDA','red'); return; }
+  var loc=invUI.loc;
+  var linea={ id:'inv-'+uid(), locKey:loc.locKey, locLabel:loc.locLabel, torreId:loc.torreId||'', nivelId:loc.nivelId||'', aptoId:loc.aptoId||'', bodega:!!loc.bodega,
+    material:material.toUpperCase(), unidad:unidad, cantidad:cant, ts:Date.now(), by:(window._getUserEmail&&window._getUserEmail())||'' };
+  toma.lineas=_invUpsertLinea(toma.lineas, linea);
+  saveState(); _invUpload();
+  renderInventarios();
+  showToast('AGREGADO','green');
+}
+function invSetCantidad(id,val){
+  var toma=_invActiveToma(); if(!toma) return;
+  var c=Number(String(val).replace(/[^\d.\-]/g,'')); if(!(c>=0)) return;
+  var l=(toma.lineas||[]).find(function(x){return x.id===id;}); if(!l) return;
+  l.cantidad=c; l.ts=Date.now();
+  saveState(); _invUpload();
+}
+function invEliminarLinea(id){
+  var toma=_invActiveToma(); if(!toma) return;
+  toma.lineas=_invDelLinea(toma.lineas, id);
+  saveState(); _invUpload();
+  renderInventarios();
+}
+async function cerrarTomaInventario(){
+  var p=activeProj(); var toma=_invActiveToma(); if(!toma) return;
+  var email=(window._getUserEmail&&window._getUserEmail())||'';
+  var esAdmin=(typeof can==='function')&&can('users.manage');
+  if(!esAdmin && toma.by && toma.by!==email){ showToast('SOLO QUIEN INICIÓ LA TOMA O UN ADMIN PUEDE CERRARLA','red'); return; }
+  var n=(toma.lineas||[]).length;
+  var okc=await window.prConfirm({ title:'CERRAR TOMA', bodyHTML:'<div style="font-size:13px">¿Cerrar esta toma de inventario? Quedará guardada en el HISTORIAL y ya no se podrá editar.<br><br><strong>'+n+'</strong> material(es) contado(s).</div>', okText:'CERRAR TOMA', cancelText:'CANCELAR' });
+  if(!okc) return;
+  var idx=(p.materiales.tomas||[]).findIndex(function(t){return t.id===toma.id;});
+  if(idx>=0) p.materiales.tomas[idx]=_invCerrarToma(p.materiales.tomas[idx], new Date().toISOString());
+  saveState(); _invUpload();
+  try { if(typeof logActivity==='function') logActivity('update','Toma de inventario cerrada', p.name+' · '+n+' materiales'); } catch(e){}
+  invUI.sub='historial'; invUI.view='root'; invUI.loc=null; invUI.histId=null;
+  renderInventarios();
+  showToast('TOMA CERRADA','green');
+}
+async function eliminarTomaInventario(id){
+  if(!((typeof can==='function')&&can('users.manage'))){ showToast('SOLO ADMIN PUEDE ELIMINAR TOMAS','red'); return; }
+  var p=activeProj(); if(!p||!p.materiales) return;
+  var okc=await window.prConfirm({ title:'ELIMINAR TOMA', bodyHTML:'<div style="font-size:13px">¿Eliminar esta toma? No se puede deshacer.</div>', okText:'ELIMINAR', cancelText:'CANCELAR', danger:true });
+  if(!okc) return;
+  if(!p.materiales.tomasEliminadas || typeof p.materiales.tomasEliminadas!=='object') p.materiales.tomasEliminadas={};
+  p.materiales.tomasEliminadas[id]=Date.now();
+  p.materiales.tomas=(p.materiales.tomas||[]).filter(function(t){return t.id!==id;});
+  saveState(); _invUpload();
+  invUI.view='root'; invUI.loc=null; invUI.histId=null;
+  renderInventarios();
+  showToast('TOMA ELIMINADA','green');
 }
 
 /* ─────────────── MATERIALES ─────────────── */
