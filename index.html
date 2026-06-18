@@ -595,6 +595,14 @@ h3{font-weight:700;font-size:11px;color:var(--ink);letter-spacing:1.2px;text-tra
   .card-hd .hd-toolbar{flex-direction:column;align-items:stretch;flex-wrap:nowrap;flex:0 0 auto!important}
   .card-hd .hd-toolbar > *{width:100%!important;min-width:0!important;flex:0 0 auto!important}
 }
+/* v750: en celular, la barra de ASISTENCIA con muchos botones no debe apilarlos full-width.
+   Inputs/selects full-width; botones chicos en 2 columnas para que ocupen menos espacio. */
+@media (max-width:720px){
+  #pers-asist-panel .hd-toolbar{flex-direction:row!important;flex-wrap:wrap!important;align-items:stretch!important;gap:6px!important}
+  #pers-asist-panel .hd-toolbar > input,
+  #pers-asist-panel .hd-toolbar > select{width:100%!important;flex:1 1 100%!important}
+  #pers-asist-panel .hd-toolbar > .btn{width:auto!important;flex:1 1 calc(50% - 3px)!important;min-width:0!important;font-size:9.5px!important;padding:8px 6px!important;letter-spacing:.2px!important;min-height:36px}
+}
 
 /* ═════════════════════════ BUTTONS ═════════════════════════ */
 /* v485: el rojo pasa a ACENTO. .btn base = neutro; .btn.primary = rojo (accion principal). */
@@ -2848,6 +2856,11 @@ table{max-width:100%}
         <!-- COLABORADORES se inyecta al FINAL por injectPlanillaTabs -->
       </div>
 
+      <!-- v750: herramienta admin para habilitar/anular el pago de una etapa puntual -->
+      <div data-perm="users.manage" style="display:flex;justify-content:flex-end;margin:-8px 0 12px">
+        <button class="btn ghost sm" onclick="abrirAnularEtapa()" style="font-size:10px;color:#92400E;border-color:#FDBA74;background:#FFFBEB">HABILITAR / ANULAR ETAPA</button>
+      </div>
+
       <div id="planilla-etapas"></div>
       <div id="planilla-receta" style="display:none"></div>
       <div id="planilla-retenciones" style="display:none"></div>
@@ -2915,7 +2928,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v749</span>
+    <span style="opacity:.5;font-size:9px">v750</span>
   </footer>
 
 </div>
@@ -43482,6 +43495,118 @@ function _antCobrosPDF(){
     margin:{ left:40, right:40 } });
   doc.save('ANTICIPOS COBRADOS '+_descGenHoyTxt().replace(/\//g,'-')+'.pdf');
   try { showToast('PDF GENERADO','green'); } catch(e){}
+}
+
+/* ── HABILITAR / ANULAR ETAPA (v750) — herramienta admin para destrabar el pago de una
+   etapa de un apto (quitar marcadores Q0 PRE-APP/importado) o anular un pago real. ── */
+function _anulEtapaClasificar(pagos, aptoId, stageIdx){
+  var et = (pagos||[]).filter(function(pg){ return pg && pg.tipo==='ETAPA' && pg.aptoId===aptoId && Number(pg.stageIdx)===Number(stageIdx); });
+  // real = bruto>0; marcador = todo lo demás (0, NaN, ausente) — así nada queda en limbo (v750-fix)
+  return { all: et, reales: et.filter(function(x){ return Number(x.bruto)>0; }), marcadores: et.filter(function(x){ return !(Number(x.bruto)>0); }) };
+}
+function _anulCerrar(){ var m=document.getElementById('_anulModal'); if(m) m.remove(); }
+function _anulSet(campo, val){
+  if(!window._anulSel) window._anulSel={torreId:'',nivelId:'',aptoId:'',stageIdx:''};
+  window._anulSel[campo]=val;
+  if(campo==='torreId'){ window._anulSel.nivelId=''; window._anulSel.aptoId=''; }
+  if(campo==='nivelId'){ window._anulSel.aptoId=''; }
+  _anulRenderModal();
+}
+function _anulReRenderPlanilla(){
+  try { if(typeof window.renderPlanillaEtapas==='function') window.renderPlanillaEtapas(); else if(typeof setPlanillaTab==='function') setPlanillaTab('etapas'); } catch(e){}
+}
+function abrirAnularEtapa(){
+  if(typeof can==='function' && !can('users.manage')) return showToast('SOLO ADMINISTRADOR','red');
+  window._anulSel={torreId:'',nivelId:'',aptoId:'',stageIdx:''};
+  var html=''+
+    '<div class="modal-bg show" id="_anulModal" style="z-index:100055">'+
+      '<div class="modal" style="max-width:480px">'+
+        '<div class="modal-hd"><h3>HABILITAR / ANULAR ETAPA</h3></div>'+
+        '<div class="modal-bd" id="_anulBody" style="display:flex;flex-direction:column;gap:10px"></div>'+
+        '<div class="modal-ft"><button onclick="_anulCerrar()">CERRAR</button></div>'+
+      '</div>'+
+    '</div>';
+  var w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);
+  _anulRenderModal();
+}
+function _anulRenderModal(){
+  var cont=document.getElementById('_anulBody'); if(!cont) return;
+  var p=(typeof activeProj==='function')?activeProj():null;
+  if(!p){ cont.innerHTML='<div style="color:var(--mute)">No hay proyecto activo.</div>'; return; }
+  var sel=window._anulSel||{torreId:'',nivelId:'',aptoId:'',stageIdx:''};
+  var esc=_descGenEsc, escA=(typeof _invEscAttr==='function')?_invEscAttr:_descGenEsc;
+  var towers=p.towers||[];
+  var torre=towers.find(function(t){return t.id===sel.torreId;});
+  var nivel=torre&&(torre.levels||[]).find(function(l){return l.id===sel.nivelId;});
+  var apto=nivel&&(nivel.aptos||[]).find(function(a){return a.id===sel.aptoId;});
+  var etapas=(typeof window.getEtapasPlanilla==='function')?window.getEtapasPlanilla(p):[{idx:0,name:'ETAPA 1'},{idx:1,name:'ETAPA 2'},{idx:2,name:'ETAPA 3'},{idx:3,name:'ETAPA 4'},{idx:4,name:'ETAPA 5'}];
+  var selStyle='width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:4px;font:inherit;font-size:13px';
+  var opt=function(v,label,selected){ return '<option value="'+escA(v)+'"'+(selected?' selected':'')+'>'+esc(label)+'</option>'; };
+  var html='';
+  html+='<label class="fld"><span>TORRE</span><select style="'+selStyle+'" onchange="_anulSet(\'torreId\',this.value)"><option value="">— Torre —</option>'+towers.map(function(t){return opt(t.id, t.name||t.id, t.id===sel.torreId);}).join('')+'</select></label>';
+  html+='<label class="fld"><span>NIVEL</span><select style="'+selStyle+'" '+(torre?'':'disabled')+' onchange="_anulSet(\'nivelId\',this.value)"><option value="">— Nivel —</option>'+(torre?(torre.levels||[]).map(function(l){return opt(l.id, l.name||l.id, l.id===sel.nivelId);}).join(''):'')+'</select></label>';
+  html+='<label class="fld"><span>APARTAMENTO</span><select style="'+selStyle+'" '+(nivel?'':'disabled')+' onchange="_anulSet(\'aptoId\',this.value)"><option value="">— Apto —</option>'+(nivel?(nivel.aptos||[]).map(function(a){return opt(a.id, a.name||a.id, a.id===sel.aptoId);}).join(''):'')+'</select></label>';
+  html+='<label class="fld"><span>ETAPA</span><select style="'+selStyle+'" onchange="_anulSet(\'stageIdx\',this.value)"><option value="">— Etapa —</option>'+etapas.map(function(e){return opt(String(e.idx), 'ETAPA '+(e.idx+1)+' · '+(e.name||''), String(e.idx)===String(sel.stageIdx));}).join('')+'</select></label>';
+  // resultado
+  var res='';
+  if(!apto || sel.stageIdx===''||sel.stageIdx==null){
+    res='<div style="color:var(--mute);font-size:12px;padding:6px 0">Elegí torre, nivel, apartamento y etapa para ver el estado.</div>';
+  } else {
+    var c=_anulEtapaClasificar((p.planilla&&p.planilla.pagos)||[], sel.aptoId, sel.stageIdx);
+    var box=function(bg,border,inner){ return '<div style="background:'+bg+';border:1px solid '+border+';border-radius:8px;padding:12px">'+inner+'</div>'; };
+    if(!c.all.length){
+      res=box('#F0FDF4','#86EFAC','<div style="font-size:12.5px;color:#166534;font-weight:700">Esta etapa NO tiene ningún registro de pago.</div><div style="font-size:11px;color:#166534;margin-top:4px">Ya está libre para pagarla.</div>');
+    } else {
+      var tot=c.reales.reduce(function(s,x){return s+(Number(x.bruto)||0);},0);
+      var parts='';
+      if(c.reales.length){
+        parts+=box('#FEF2F2','#FCA5A5','<div style="font-size:12.5px;color:#991B1B;font-weight:700">Pago REAL registrado: '+_descGenMoney(tot)+'</div><div style="font-size:11px;color:#7F1D1D;margin-top:4px">Se pagó dentro de la app. Anularlo lo borra de la planilla.</div><button class="btn sm" style="background:#991B1B;border-color:#991B1B;color:#fff;margin-top:8px" onclick="_anulAnularReal()">ANULAR PAGO REAL</button>');
+      }
+      if(c.marcadores.length){
+        if(parts) parts+='<div style="height:8px"></div>';
+        parts+=box('#FFFBEB','#FCD34D','<div style="font-size:12.5px;color:#92400E;font-weight:700">'+c.marcadores.length+' marcador(es) de Q0 (pagado histórico / importado)</div><div style="font-size:11px;color:#92400E;margin-top:4px">No es un pago real; solo bloquea el botón de pagar. Quitarlo deja la etapa lista para cobrar.</div><button class="btn sm" style="background:#166534;border-color:#166534;color:#fff;margin-top:8px" onclick="_anulHabilitar()">HABILITAR PARA PAGO</button>');
+      }
+      res=parts;
+    }
+  }
+  html+='<div style="border-top:1px solid var(--line);padding-top:10px">'+res+'</div>';
+  cont.innerHTML=html;
+}
+function _anulHabilitar(){
+  if(typeof can==='function' && !can('users.manage')) return showToast('SOLO ADMINISTRADOR','red');
+  var p=activeProj(); var sel=window._anulSel||{};
+  if(!sel.aptoId || sel.stageIdx===''||sel.stageIdx==null) return;
+  var c=_anulEtapaClasificar((p.planilla&&p.planilla.pagos)||[], sel.aptoId, sel.stageIdx);
+  if(!c.marcadores.length){ showToast('NO HAY MARCADORES PARA QUITAR','red'); return; }
+  var ids=c.marcadores.map(function(x){return x.id;});
+  p.planilla.pagos=(p.planilla.pagos||[]).filter(function(pg){ return ids.indexOf(pg.id)<0; });
+  try{ saveState(); }catch(e){}
+  try{ if(typeof CloudSync!=='undefined' && CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  try{ if(typeof logActivity==='function') logActivity('update','Etapa habilitada para pago (quitado marcador Q0)', p.name+' · etapa '+(Number(sel.stageIdx)+1)); }catch(e){}
+  _anulReRenderPlanilla(); _anulRenderModal();
+  showToast('ETAPA HABILITADA · YA PODÉS PAGARLA','green');
+}
+async function _anulAnularReal(){
+  if(typeof can==='function' && !can('users.manage')) return showToast('SOLO ADMINISTRADOR','red');
+  var p=activeProj(); var sel=window._anulSel||{};
+  if(!sel.aptoId || sel.stageIdx===''||sel.stageIdx==null) return;
+  var c=_anulEtapaClasificar((p.planilla&&p.planilla.pagos)||[], sel.aptoId, sel.stageIdx);
+  if(!c.reales.length){ showToast('NO HAY PAGO REAL','red'); return; }
+  var tot=c.reales.reduce(function(s,x){return s+(Number(x.bruto)||0);},0);
+  // v750-fix: bajar este modal (z 100055) por debajo del prConfirm (z 99999) mientras confirma,
+  // si no la confirmación queda DETRÁS y es inusable (misma trampa que prConfirm vs ficha).
+  var _m=document.getElementById('_anulModal'); if(_m) _m.style.zIndex='99990';
+  var okc;
+  try { okc=await window.prConfirm({ title:'ANULAR PAGO REAL', bodyHTML:'<div style="font-size:13px">Vas a ANULAR un pago YA REGISTRADO de <strong>'+_descGenMoney(tot)+'</strong> de esta etapa. Se borra de la planilla (no se puede deshacer). ¿Continuar?</div>', okText:'ANULAR PAGO', cancelText:'CANCELAR', danger:true }); }
+  finally { if(_m) _m.style.zIndex='100055'; }
+  if(!okc) return;
+  var ids=c.reales.map(function(x){return x.id;});
+  p.planilla.pagos=(p.planilla.pagos||[]).filter(function(pg){ return ids.indexOf(pg.id)<0; });
+  try{ saveState(); }catch(e){}
+  try{ if(typeof CloudSync!=='undefined' && CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  try{ if(typeof logActivity==='function') logActivity('delete','Pago de etapa ANULADO ('+_descGenMoney(tot)+')', p.name+' · etapa '+(Number(sel.stageIdx)+1)); }catch(e){}
+  _anulReRenderPlanilla(); _anulRenderModal();
+  showToast('PAGO ANULADO','red');
 }
 </script>
 
