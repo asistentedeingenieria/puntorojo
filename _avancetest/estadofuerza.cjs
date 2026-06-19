@@ -149,5 +149,12 @@ ok('sexoM/F correctos', rpt.sexoM===6 && rpt.sexoF===1);
 ok('torresOrden con SIN TORRE al final', rpt.torresOrden[rpt.torresOrden.length-1]==='SIN TORRE');
 ok('orden numérico de torres (TORRE 1 antes que TORRE 2)', rpt.torresOrden.indexOf('TORRE 1')<rpt.torresOrden.indexOf('TORRE 2'));
 
+// ── v759: _efProdTotales suma la producción entre torres (para obras de 1 sola torre = lista plana) ──
+const PRODTOT = new Function(ext('_efProdTotales')+'\nreturn _efProdTotales;')();
+const _rPT={ torresOrden:['TORRE 1','TORRE 2'], porTorre:{ 'TORRE 1':{INSTALADOR:2,MASILLERO:1,AYUDANTE_INSTALADOR:0,AYUDANTE_MASILLERO:0}, 'TORRE 2':{INSTALADOR:3,MASILLERO:0,AYUDANTE_INSTALADOR:1,AYUDANTE_MASILLERO:0} } };
+const _tot=PRODTOT(_rPT);
+ok('_efProdTotales suma producción entre torres', _tot.INSTALADOR===5 && _tot.MASILLERO===1 && _tot.AYUDANTE_INSTALADOR===1 && _tot.AYUDANTE_MASILLERO===0);
+ok('_efProdTotales sin torres -> ceros', (function(){ var t=PRODTOT({torresOrden:[],porTorre:{}}); return t.INSTALADOR===0&&t.MASILLERO===0&&t.AYUDANTE_INSTALADOR===0&&t.AYUDANTE_MASILLERO===0; })());
+
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
