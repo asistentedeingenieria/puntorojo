@@ -2929,7 +2929,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v751</span>
+    <span style="opacity:.5;font-size:9px">v752</span>
   </footer>
 
 </div>
@@ -8827,6 +8827,32 @@ const CloudSync = {
         });
       }
     } catch(e){ console.warn('blindaje de tomas de inventario en applyRemote:', e); }
+
+    // v752 BLINDAJE DE PLATA: pólizas, anticipos y solicitudes (pol/ant/col) NUNCA se
+    // pisan por last-write-wins. Antes state=merged reemplazaba el catálogo entero, así
+    // que un celular con datos viejos revertía el cambio recién hecho ("no se guarda" /
+    // "la solicitud autorizada vuelve a pendiente"). Unión por id (gana el _ts/ts más
+    // nuevo); borrados reales por tombstone. Mismo patrón que personal/colaboradores.
+    try {
+      if (typeof _mergeById === 'function') {
+        const _polTomb = Object.assign({}, (state && state.polizasEliminadas) || {}, merged.polizasEliminadas || {});
+        merged.polizasEliminadas = _polTomb;
+        const _mPol = _mergeById((state && state.polizasGlobales) || [], merged.polizasGlobales || [], _polTomb);
+        merged.polizasGlobales = _mPol.list; if (_mPol.changed) needsResync = true;
+
+        const _antTomb = Object.assign({}, (state && state.anticiposEliminados) || {}, merged.anticiposEliminados || {});
+        merged.anticiposEliminados = _antTomb;
+        const _mAnt = _mergeById((state && state.anticiposGlobales) || [], merged.anticiposGlobales || [], _antTomb);
+        merged.anticiposGlobales = _mAnt.list; if (_mAnt.changed) needsResync = true;
+
+        const _mSolP = _mergeById((state && state.solicitudesPolizas) || [], merged.solicitudesPolizas || [], null);
+        merged.solicitudesPolizas = _mSolP.list; if (_mSolP.changed) needsResync = true;
+        const _mSolA = _mergeById((state && state.solicitudesAnticipos) || [], merged.solicitudesAnticipos || [], null);
+        merged.solicitudesAnticipos = _mSolA.list; if (_mSolA.changed) needsResync = true;
+        const _mSolC = _mergeById((state && state.solicitudesColaboradores) || [], merged.solicitudesColaboradores || [], null);
+        merged.solicitudesColaboradores = _mSolC.list; if (_mSolC.changed) needsResync = true;
+      }
+    } catch(e){ console.warn('blindaje de plata en applyRemote:', e); }
 
     state = merged;
     // v495: recalcular _projHashes desde el remoteData REALMENTE aplicado en esta llamada.
@@ -24507,6 +24533,26 @@ function _mergePersonal(localList, remoteList, tombSet){
     var lt = (typeof p._ts === 'number') ? p._ts : 0;
     var rt = (typeof r._ts === 'number') ? r._ts : 0;
     if (lt > rt){ byId[p.id] = p; changed = true; }               // edición local más nueva gana (Bug 2)
+  });
+  if (tombSet) Object.keys(byId).forEach(function(id){ if (tombSet[id]) delete byId[id]; });
+  return { list: Object.keys(byId).map(function(id){ return byId[id]; }), changed: changed };
+}
+
+// v752 SYNC DE PLATA: unión por id genérica para pólizas / anticipos / solicitudes.
+// Antes applyRemote hacía state=merged (last-write-wins) y un celular con datos
+// viejos pisaba el cambio recién hecho ("no se guarda"). Ahora se UNEN local∪remoto:
+// gana el _ts (fallback ts) MÁS NUEVO; un id en tombSet se elimina (borrado real,
+// no resucita). Mismo patrón que _mergePersonal/_mergeColaboradores.
+function _mergeById(localList, remoteList, tombSet){
+  var _ver = function(o){ if(!o) return 0; if(typeof o._ts==='number') return o._ts; if(typeof o.ts==='number') return o.ts; return 0; };
+  var byId = {};
+  (Array.isArray(remoteList) ? remoteList : []).forEach(function(o){ if (o && o.id) byId[o.id] = o; });
+  var changed = false;
+  (Array.isArray(localList) ? localList : []).forEach(function(o){
+    if (!o || !o.id) return;
+    var r = byId[o.id];
+    if (!r){ byId[o.id] = o; changed = true; return; }   // local-only → preservar
+    if (_ver(o) > _ver(r)){ byId[o.id] = o; changed = true; }  // edición local más nueva gana
   });
   if (tombSet) Object.keys(byId).forEach(function(id){ if (tombSet[id]) delete byId[id]; });
   return { list: Object.keys(byId).map(function(id){ return byId[id]; }), changed: changed };
@@ -43698,7 +43744,7 @@ async function _anulAnularReal(){
   function _getSolicitudes(){ try { if (typeof state !== 'undefined' && state){ if (!Array.isArray(state.solicitudesAnticipos)) state.solicitudesAnticipos = []; return state.solicitudesAnticipos; } } catch(e){} return []; }
   function _solicitudesPendientes(){ return _getSolicitudes().filter(s => s.estado === 'PENDIENTE'); }
   function _crearSolicitud(tipo, anticipo, cambios){
-    const sol = { id: 'solant-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), tipo: tipo, anticipoId: anticipo.id, anticipoSnapshot: JSON.parse(JSON.stringify(anticipo)), cambios: cambios || null, solicitadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), solicitadoNombre: (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || '', ts: Date.now(), estado: 'PENDIENTE', procesadoPor: null, procesadoNombre: null, fechaProceso: null, motivoRechazo: null };
+    const sol = { id: 'solant-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), tipo: tipo, anticipoId: anticipo.id, anticipoSnapshot: JSON.parse(JSON.stringify(anticipo)), cambios: cambios || null, solicitadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), solicitadoNombre: (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || '', ts: Date.now(), _ts: Date.now(), estado: 'PENDIENTE', procesadoPor: null, procesadoNombre: null, fechaProceso: null, motivoRechazo: null };
     _getSolicitudes().push(sol);
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
@@ -44008,9 +44054,9 @@ async function _anulAnularReal(){
     const _cuotasInicialPrevia = existente ? (Number(existente.cuotasPagadasInicial) || 0) : 0;
     const cuotasInicial = Math.min(Math.max(0, (form.cuotasPagadasInicial != null ? Number(form.cuotasPagadasInicial) : _cuotasInicialPrevia) || 0), Number(form.cantidadCuotas) || 1);
     if (existente) {
-      Object.assign(existente, { colaboradorId:'', colaboradorNombre:form.colaboradorNombre, fecha:form.fecha, subtipo:form.subtipo, desc:form.desc, montoTotal:form.montoTotal, cantidadCuotas:form.cantidadCuotas, cuotasPagadasInicial: cuotasInicial });
+      Object.assign(existente, { colaboradorId:'', colaboradorNombre:form.colaboradorNombre, fecha:form.fecha, subtipo:form.subtipo, desc:form.desc, montoTotal:form.montoTotal, cantidadCuotas:form.cantidadCuotas, cuotasPagadasInicial: cuotasInicial }); existente._ts = Date.now();
     } else {
-      ants.push({ id:'ant-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), colaboradorId:'', colaboradorNombre:form.colaboradorNombre, fecha:form.fecha, subtipo:form.subtipo, desc:form.desc, montoTotal:form.montoTotal, cantidadCuotas:form.cantidadCuotas, cuotasPagadasInicial: cuotasInicial, creadoPor:(typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), creadoNombre:(typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : ''), ts:Date.now() });
+      ants.push({ id:'ant-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), colaboradorId:'', colaboradorNombre:form.colaboradorNombre, fecha:form.fecha, subtipo:form.subtipo, desc:form.desc, montoTotal:form.montoTotal, cantidadCuotas:form.cantidadCuotas, cuotasPagadasInicial: cuotasInicial, creadoPor:(typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), creadoNombre:(typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : ''), ts:Date.now(), _ts:Date.now() });
     }
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow){ CloudSync.forceUploadNow().catch(()=>{}); } } catch(e){}
@@ -44049,6 +44095,7 @@ async function _anulAnularReal(){
     const ok = await window.prConfirm({ title: isPending?'ELIMINAR ANTICIPO (ENVÍA SOLICITUD)':'Eliminar anticipo', bodyHTML: hint + '<div style="font-size:12.5px;color:#333;line-height:1.5"><div><strong>'+_h(a.colaboradorNombre)+'</strong></div><div style="color:var(--mute);margin-top:4px">'+_h(_subtipoLabel(a.subtipo))+' · '+_h(a.desc)+'</div><div style="margin-top:4px"><strong>'+_money(a.montoTotal)+'</strong> en '+a.cantidadCuotas+' cuotas</div></div>' + warning, okText: isPending?'ENVIAR SOLICITUD':'ELIMINAR', danger: !isPending });
     if (!ok) return;
     if (isPending){ _crearSolicitud('ELIMINAR', a, null); window.renderPlanillaAnticipos(); showT('SOLICITUD DE ELIMINACIÓN ENVIADA · ESPERANDO ADMIN','green'); return; }
+    try { if(!state.anticiposEliminados) state.anticiposEliminados={}; state.anticiposEliminados[id]=Date.now(); }catch(e){} // v752: tombstone — el borrado no resucita por sync
     ants.splice(idx, 1);
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow){ CloudSync.forceUploadNow().catch(()=>{}); } } catch(e){}
@@ -44065,8 +44112,8 @@ async function _anulAnularReal(){
     const ants = _getAnticipos();
     const idx = ants.findIndex(a => a.id === sol.anticipoId);
     if (idx < 0){ _marcarProcesada(sol, 'APROBADA', null); showT('ANTICIPO YA NO EXISTE','red'); return; }
-    if (sol.tipo === 'ELIMINAR') ants.splice(idx, 1);
-    else if (sol.tipo === 'EDITAR' && sol.cambios) Object.assign(ants[idx], { colaboradorId:'', ...sol.cambios });
+    if (sol.tipo === 'ELIMINAR'){ try { if(!state.anticiposEliminados) state.anticiposEliminados={}; state.anticiposEliminados[sol.anticipoId]=Date.now(); }catch(e){} ants.splice(idx, 1); } // v752: tombstone
+    else if (sol.tipo === 'EDITAR' && sol.cambios){ Object.assign(ants[idx], { colaboradorId:'', ...sol.cambios }); ants[idx]._ts = Date.now(); }
     _marcarProcesada(sol, 'APROBADA', null);
     showT('SOLICITUD APROBADA','green');
   };
@@ -44080,7 +44127,7 @@ async function _anulAnularReal(){
     showT('SOLICITUD RECHAZADA','green');
   };
   function _marcarProcesada(sol, estado, motivo){
-    sol.estado = estado;
+    sol.estado = estado; sol._ts = Date.now(); // v752: el procesamiento gana al merge (no vuelve a PENDIENTE)
     sol.procesadoPor = (typeof window._getUserEmail === 'function' ? window._getUserEmail() : '');
     sol.procesadoNombre = (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || '';
     sol.fechaProceso = new Date().toISOString();
@@ -44198,9 +44245,10 @@ async function _anulAnularReal(){
       const cuotasApp = _calcCuotasPagadas(null, existing.id, existing);
       const enPlanillas = cuotasApp - (Number(existing.cuotasPagadasInicial)||0);
       existing.cuotasPagadasInicial = Math.max(0, row.cuotasPagadasPDF - enPlanillas);
+      existing._ts = Date.now(); // v752: el ajuste gana al merge (no se revierte por sync)
       return true;
     } else {
-      ants.push({ id:'ant-pdf-sync-' + Date.now() + '-' + idx, colaboradorId:'', colaboradorNombre:row.nombre, fecha:row.fecha, subtipo:row.subtipo||'PRESTAMO_PERSONAL', desc:row.detalle, montoTotal:row.montoTotal, cantidadCuotas:row.cantidadCuotas, cuotasPagadasInicial:row.cuotasPagadasPDF, creadoPor:(typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), creadoNombre:(typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : ''), ts:Date.now() });
+      ants.push({ id:'ant-pdf-sync-' + Date.now() + '-' + idx, colaboradorId:'', colaboradorNombre:row.nombre, fecha:row.fecha, subtipo:row.subtipo||'PRESTAMO_PERSONAL', desc:row.detalle, montoTotal:row.montoTotal, cantidadCuotas:row.cantidadCuotas, cuotasPagadasInicial:row.cuotasPagadasPDF, creadoPor:(typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), creadoNombre:(typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : ''), ts:Date.now(), _ts:Date.now() });
       return true;
     }
   }
@@ -44270,13 +44318,13 @@ async function _anulAnularReal(){
   function _getSolicitudesPol(){ try { if (typeof state !== 'undefined' && state){ if (!Array.isArray(state.solicitudesPolizas)) state.solicitudesPolizas = []; return state.solicitudesPolizas; } } catch(e){} return []; }
   function _solicitudesPolPendientes(){ return _getSolicitudesPol().filter(s => s.estado === 'PENDIENTE'); }
   function _crearSolicitudPol(tipo, poliza, cambios){
-    const sol = { id: 'solpol-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), tipo: tipo, polizaId: poliza.id, polizaSnapshot: JSON.parse(JSON.stringify(poliza)), cambios: cambios || null, solicitadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), solicitadoNombre: (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || '', ts: Date.now(), estado: 'PENDIENTE', procesadoPor: null, procesadoNombre: null, fechaProceso: null, motivoRechazo: null };
+    const sol = { id: 'solpol-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), tipo: tipo, polizaId: poliza.id, polizaSnapshot: JSON.parse(JSON.stringify(poliza)), cambios: cambios || null, solicitadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), solicitadoNombre: (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || '', ts: Date.now(), _ts: Date.now(), estado: 'PENDIENTE', procesadoPor: null, procesadoNombre: null, fechaProceso: null, motivoRechazo: null };
     _getSolicitudesPol().push(sol);
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
     return sol;
   }
-  function _marcarProcesadaPol(sol, estado, motivo){ sol.estado = estado; sol.procesadoPor = (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''); sol.procesadoNombre = (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || ''; sol.fechaProceso = new Date().toISOString(); if (estado === 'RECHAZADA') sol.motivoRechazo = motivo || ''; try { if(typeof saveState === 'function') saveState(); } catch(e){} try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} try { window.renderPlanillaPolizas(); } catch(e){} }
+  function _marcarProcesadaPol(sol, estado, motivo){ sol.estado = estado; sol._ts = Date.now(); sol.procesadoPor = (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''); sol.procesadoNombre = (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || ''; sol.fechaProceso = new Date().toISOString(); if (estado === 'RECHAZADA') sol.motivoRechazo = motivo || ''; try { if(typeof saveState === 'function') saveState(); } catch(e){} try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} try { window.renderPlanillaPolizas(); } catch(e){} }
   function _diasHastaVencer(iso){ if(!iso) return null; const d = new Date(iso); if(isNaN(d.getTime())) return null; const hoy = new Date(); hoy.setHours(0,0,0,0); return Math.round((d.getTime() - hoy.getTime()) / 86400000); }
   // v357: normalización de nombres (sin acentos, espacios colapsados, uppercase)
   function _normName(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim().toUpperCase(); }
@@ -44505,6 +44553,7 @@ async function _anulAnularReal(){
       const po = polizas[idx];
       btn.disabled = true;
       btn.textContent = 'Eliminando...';
+      try { if(!state.polizasEliminadas) state.polizasEliminadas={}; state.polizasEliminadas[id]=Date.now(); }catch(e){} // v752: tombstone — el borrado no resucita por sync
       polizas.splice(idx, 1);
       try { if(typeof saveState === 'function') saveState(); } catch(e){}
       try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
@@ -44615,8 +44664,8 @@ async function _anulAnularReal(){
     const data = { aseguradoNombre: form.aseguradoNombre, aseguradoPuesto: form.aseguradoPuesto, aCargoDeColabId: '', aCargoDeNombre: aCargoNombre, noCertificado: form.noCertificado, noPoliza: form.noPoliza, aseguradora: form.aseguradora, fechaInicio: form.fechaInicio, fechaVencimiento: form.fechaVencimiento, monto: form.monto || _getConfig().montoDefault, estatus: form.estatus, observaciones: form.observaciones || '' };
     if (asSolicitud && existente){ _crearSolicitudPol('EDITAR', existente, data); window._polCapturedForm = null; window.renderPlanillaPolizas(); showT('SOLICITUD DE EDICIÓN ENVIADA · ESPERANDO ADMIN','green'); return; }
     let polFinal;
-    if (existente) { Object.assign(existente, data); polFinal = existente; }
-    else { polFinal = Object.assign({ id: 'pol-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), ts: Date.now() }, data); polizas.push(polFinal); }
+    if (existente) { Object.assign(existente, data); existente._ts = Date.now(); polFinal = existente; }
+    else { polFinal = Object.assign({ id: 'pol-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), creadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), ts: Date.now(), _ts: Date.now() }, data); polizas.push(polFinal); }
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
     try { if (window.resyncDescuentosAbiertas) window.resyncDescuentosAbiertas(); } catch(e){ console.warn('[v465] resync hook poliza:', e); }
@@ -44655,6 +44704,7 @@ async function _anulAnularReal(){
     const ok = await window.prConfirm({ title: isPendingPol ? 'ELIMINAR PÓLIZA (ENVÍA SOLICITUD AL ADMIN)' : 'Eliminar póliza', bodyHTML: hintHTML + '<div style="font-size:12.5px;color:#333;line-height:1.5"><div><strong>'+_h(po.aseguradoNombre)+'</strong> ('+_h(po.aseguradoPuesto||'—')+')</div><div style="color:var(--mute);margin-top:4px">A cargo de: '+_h(po.aCargoDeNombre)+'</div><div style="margin-top:4px">Certificado '+_h(po.noCertificado||'—')+' · '+_money(po.monto)+'</div></div>', okText: isPendingPol ? 'ENVIAR SOLICITUD' : 'ELIMINAR', danger: !isPendingPol });
     if (!ok) return;
     if (isPendingPol){ _crearSolicitudPol('ELIMINAR', po, null); window.renderPlanillaPolizas(); showT('SOLICITUD DE ELIMINACIÓN ENVIADA · ESPERANDO ADMIN','green'); return; }
+    try { if(!state.polizasEliminadas) state.polizasEliminadas={}; state.polizasEliminadas[id]=Date.now(); }catch(e){} // v752: tombstone — el borrado no resucita por sync
     polizas.splice(idx, 1);
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
@@ -44686,7 +44736,7 @@ async function _anulAnularReal(){
     if (!ok) return;
     const motivo = (document.getElementById('polBajaMotivo')?.value || '').trim();
     if (isPendingPol){ _crearSolicitudPol('DAR_DE_BAJA', po, { fechaBaja: hoy, observaciones: motivo || po.observaciones || '' }); window.renderPlanillaPolizas(); showT('SOLICITUD DE BAJA ENVIADA · ESPERANDO ADMIN','green'); return; }
-    po.estatus = 'CANCELADA'; po.fechaBaja = hoy;
+    po.estatus = 'CANCELADA'; po.fechaBaja = hoy; po._ts = Date.now();
     if (motivo) po.observaciones = motivo;
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
@@ -44705,7 +44755,7 @@ async function _anulAnularReal(){
       okText:'REACTIVAR'
     });
     if (!ok) return;
-    po.estatus = 'ACTIVA'; delete po.fechaBaja;
+    po.estatus = 'ACTIVA'; delete po.fechaBaja; po._ts = Date.now();
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     try { if(typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
     try { if (window.resyncDescuentosAbiertas) window.resyncDescuentosAbiertas(); } catch(e){ console.warn('[v465] resync hook react poliza:', e); }
@@ -44722,9 +44772,9 @@ async function _anulAnularReal(){
     const polizas = _getPolizas();
     const idx = polizas.findIndex(p => p.id === sol.polizaId);
     if (idx < 0){ showT('LA PÓLIZA YA NO EXISTE','red'); _marcarProcesadaPol(sol, 'APROBADA', null); return; }
-    if (sol.tipo === 'ELIMINAR'){ polizas.splice(idx, 1); }
-    else if (sol.tipo === 'EDITAR' && sol.cambios){ Object.assign(polizas[idx], sol.cambios); }
-    else if (sol.tipo === 'DAR_DE_BAJA'){ polizas[idx].estatus = 'CANCELADA'; if (sol.cambios && sol.cambios.fechaBaja) polizas[idx].fechaBaja = sol.cambios.fechaBaja; else polizas[idx].fechaBaja = new Date().toISOString().slice(0,10); if (sol.cambios && sol.cambios.observaciones) polizas[idx].observaciones = sol.cambios.observaciones; }
+    if (sol.tipo === 'ELIMINAR'){ try { if(!state.polizasEliminadas) state.polizasEliminadas={}; state.polizasEliminadas[sol.polizaId]=Date.now(); }catch(e){} polizas.splice(idx, 1); } // v752: tombstone
+    else if (sol.tipo === 'EDITAR' && sol.cambios){ Object.assign(polizas[idx], sol.cambios); polizas[idx]._ts = Date.now(); }
+    else if (sol.tipo === 'DAR_DE_BAJA'){ polizas[idx].estatus = 'CANCELADA'; if (sol.cambios && sol.cambios.fechaBaja) polizas[idx].fechaBaja = sol.cambios.fechaBaja; else polizas[idx].fechaBaja = new Date().toISOString().slice(0,10); if (sol.cambios && sol.cambios.observaciones) polizas[idx].observaciones = sol.cambios.observaciones; polizas[idx]._ts = Date.now(); }
     _marcarProcesadaPol(sol, 'APROBADA', null);
     showT('SOLICITUD APROBADA · CAMBIO APLICADO','green');
   };
@@ -45461,13 +45511,13 @@ async function _anulAnularReal(){
   function _getSolicitudesCol(){ if (typeof state !== 'undefined' && state){ if (!Array.isArray(state.solicitudesColaboradores)) state.solicitudesColaboradores = []; return state.solicitudesColaboradores; } return []; }
   function _solicitudesColPendientes(){ return _getSolicitudesCol().filter(s => s.estado === 'PENDIENTE'); }
   function _crearSolicitudCol(tipo, colab, cambios){
-    const sol = { id: 'solcol-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), tipo, colaboradorId: colab.id, colaboradorSnapshot: JSON.parse(JSON.stringify(colab)), cambios: cambios || null, solicitadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), solicitadoNombre: (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || '', ts: Date.now(), estado: 'PENDIENTE', procesadoPor: null, procesadoNombre: null, fechaProceso: null, motivoRechazo: null };
+    const sol = { id: 'solcol-' + Date.now() + '-' + Math.random().toString(36).slice(2,8), tipo, colaboradorId: colab.id, colaboradorSnapshot: JSON.parse(JSON.stringify(colab)), cambios: cambios || null, solicitadoPor: (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''), solicitadoNombre: (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || '', ts: Date.now(), _ts: Date.now(), estado: 'PENDIENTE', procesadoPor: null, procesadoNombre: null, fechaProceso: null, motivoRechazo: null };
     _getSolicitudesCol().push(sol);
     try { if (typeof saveState === 'function') saveState(); } catch(e){}
     try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
     return sol;
   }
-  function _marcarProcesadaCol(sol, estado, motivo){ sol.estado = estado; sol.procesadoPor = (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''); sol.procesadoNombre = (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || ''; sol.fechaProceso = new Date().toISOString(); if (estado === 'RECHAZADA') sol.motivoRechazo = motivo || ''; try { if (typeof saveState === 'function') saveState(); } catch(e){} try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} try { window.renderPlanillaColaboradores(); } catch(e){} }
+  function _marcarProcesadaCol(sol, estado, motivo){ sol.estado = estado; sol._ts = Date.now(); sol.procesadoPor = (typeof window._getUserEmail === 'function' ? window._getUserEmail() : ''); sol.procesadoNombre = (typeof window._getUserDisplayName === 'function' ? window._getUserDisplayName() : '') || ''; sol.fechaProceso = new Date().toISOString(); if (estado === 'RECHAZADA') sol.motivoRechazo = motivo || ''; try { if (typeof saveState === 'function') saveState(); } catch(e){} try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} try { window.renderPlanillaColaboradores(); } catch(e){} }
 
   function _notifyAdmin(accion, colab, extra){ try { if (typeof _notifyByPerm !== 'function') return; const u = (typeof currentUser !== 'undefined') ? currentUser : null; const actorName = ((u && (u.displayName || u.username || u.email)) || 'USUARIO').toUpperCase(); const body = (colab.nombre || '—') + (colab.telefono ? ' · Tel ' + colab.telefono : '') + (extra ? ' · ' + extra : ''); _notifyByPerm('users.manage', { type: 'colab-' + accion.toLowerCase().replace(/\s+/g,'-'), title: actorName + ' · COLABORADOR ' + accion, body: body.slice(0, 300), projectId: (typeof state !== 'undefined' && state) ? (state.activeProjectId || null) : null }).catch(()=>{}); } catch(e){ console.warn('[v390] notif colab:', e); } }
   function _pagosDe(c){ let n = 0; (window.state?.projects || []).forEach(pr => (pr.planilla?.pagos||[]).forEach(pg => { if (pg.colaboradorId === c.id || _normName(pg.colaborador) === _normName(c.nombre)) n++; })); return n; }
