@@ -2930,7 +2930,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v753</span>
+    <span style="opacity:.5;font-size:9px">v754</span>
   </footer>
 
 </div>
@@ -5418,6 +5418,11 @@ function applyPermissions(){
       el.classList.remove('locked');
     }
   });
+
+  // v754: el botón HABILITAR/ANULAR ETAPA es admin Y solo en la pestaña PAGOS POR ETAPA.
+  // applyPermissions corre en cada render y, por el data-perm, re-mostraba el bar en TODAS las
+  // pestañas (pisaba el toggle de setPlanillaTab). Acá se fija la verdad: admin + tab 'etapas'.
+  try { var _aeb=document.getElementById('_anulEtapaBar'); if(_aeb){ var _onEtapas=((window.currentPlanillaTab||'etapas')==='etapas'); _aeb.style.display=((typeof can==='function'&&can('users.manage'))&&_onEtapas)?'flex':'none'; } } catch(e){}
 
   // v493: visibilidad OR para Mover etapa (subgerente+gerente+admin) y Solicitudes de movimiento (gerente+admin)
   try {
@@ -18418,7 +18423,11 @@ function renderPersonal(){
           ${canEd?`<div class="colab-acts"><button class="btn-icon" style="margin-right:8px" onclick="event.stopPropagation();editarPersonaGlobal('${c.id}')">✎ EDITAR</button>${c.baja?`<button class="btn-icon" style="margin-right:8px;color:#166534;font-weight:700" onclick="event.stopPropagation();reactivarPersona('${c.id}')">REACTIVAR</button>`:`<button class="btn-icon" style="margin-right:8px;color:#92400E;font-weight:700" onclick="event.stopPropagation();darBajaPersona('${c.id}')">DAR DE BAJA</button>`}<button class="btn-icon danger" onclick="event.stopPropagation();eliminarPersonaGlobal('${c.id}')">✕ ELIMINAR</button></div>`:''}
         </div>
       </div>`; };
-      const _filtrando = (lista.length !== personal.length);
+      // v754 fix: _filtrando = ¿hay búsqueda/empresa activa? Debe comparar contra el conteo del MODO
+      // actual (activos, o de-baja), NO contra personal.length crudo — si no, tener 1 de baja lo dejaba
+      // siempre true y forzaba los grupos abiertos (no se podían colapsar). Regresión de v751.
+      const _baseModeCount = (window._persVerBaja ? personal.filter(p=>p&&p.baja).length : personal.filter(p=>p&&!p.baja).length);
+      const _filtrando = (lista.length !== _baseModeCount);
       const _obraG = lista.filter(c=>c.tipo!=='OFICINA');
       const _ofiG = lista.filter(c=>c.tipo==='OFICINA');
       const _grpOpen = k => _filtrando || ((typeof _persGruposAbiertos!=='undefined') && _persGruposAbiertos.has(k));
@@ -18654,6 +18663,37 @@ function _geoTxtMarca(reg, geoKey){
    Cuenta los PRESENTES del día (excluye OFICINA). INSTALADOR/MASILLERO se
    cuentan por obra; el resto de puestos ("apoyo") globalmente ("ambas obras").
    Sexo M/F, total y "sin clasificar" (sin puesto cargado todavía). */
+/* v754: obra efectiva de un presente (misma lógica que _estadoFuerzaCalc): marca > sesión > asignada. */
+function _efEffectiveObra(p, reg){
+  if(!reg) return '';
+  return String(reg.obraId || (reg.sessions && reg.sessions[0] && reg.sessions[0].obraId) || (p && p.obraAsignada) || '');
+}
+/* v754: subconjunto del día con SOLO los presentes (no OFICINA, no baja) cuya obra efectiva === obraId
+   (obraId='' = SIN OBRA). Alimenta el PDF de estado de fuerza SEPARADO por proyecto. */
+function _efDiaDeObra(dia, personal, obraId){
+  var byId={}; (personal||[]).forEach(function(p){ if(p && p.id) byId[p.id]=p; });
+  var out={};
+  Object.keys(dia||{}).forEach(function(pid){
+    var reg=(dia||{})[pid]; if(!reg || !reg.presente) return;
+    var p=byId[pid]; if(!p || p.tipo==='OFICINA' || p.baja) return;
+    if(_efEffectiveObra(p, reg)===obraId) out[pid]=reg;
+  });
+  return out;
+}
+/* v754: cubeta CATCH-ALL "SIN OBRA" — presentes (no OFICINA, no baja) cuya obra efectiva NO es un
+   proyecto conocido: vacío, "OTRA" (kiosko) o id de proyecto borrado. Sin esto, esa gente se caía de
+   TODOS los PDFs por obra (el modal sí los cuenta) → faltantes silenciosos en el conteo. */
+function _efDiaSinObra(dia, personal, projects){
+  var known={}; (projects||[]).forEach(function(p){ if(p && p.id) known[p.id]=true; });
+  var byId={}; (personal||[]).forEach(function(p){ if(p && p.id) byId[p.id]=p; });
+  var out={};
+  Object.keys(dia||{}).forEach(function(pid){
+    var reg=(dia||{})[pid]; if(!reg || !reg.presente) return;
+    var p=byId[pid]; if(!p || p.tipo==='OFICINA' || p.baja) return;
+    if(!known[_efEffectiveObra(p, reg)]) out[pid]=reg;
+  });
+  return out;
+}
 function _estadoFuerzaCalc(personal, dia, projects){
   dia = dia || {};
   var projById = {}; (projects||[]).forEach(function(p){ if(p&&p.id) projById[p.id]=p; });
@@ -18870,47 +18910,83 @@ function abrirEstadoFuerza(){
           '<div style="max-height:50vh;overflow:auto">'+prev+'</div>'+
           '<label class="fld"><span>HORARIOS (EDITABLE)</span><textarea id="_efHorarios" rows="3" style="padding:8px 10px;border:1px solid var(--line);border-radius:4px;font:inherit;font-size:12px;resize:vertical">'+esc(horarios)+'</textarea></label>'+
         '</div>'+
-        '<div class="modal-ft">'+
-          '<button onclick="_efCerrar()">CERRAR</button>'+
-          '<button class="btn primary" style="background:#C62828;border-color:#C62828" onclick="_efDescargarPDF()">DESCARGAR PDF</button>'+
+        '<div class="modal-ft" style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">'+
+          '<button class="btn ghost" onclick="_efCerrar()">CERRAR</button>'+
+          '<button class="btn primary" style="background:#C62828;border-color:#C62828" onclick="_efDescargarPDF()">DESCARGAR PDF · UNO POR OBRA</button>'+
         '</div>'+
       '</div>'+
     '</div>';
   var w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);
 }
 function _efCerrar(){ var m=document.getElementById('_efModal'); if(m) m.remove(); }
+/* v754: dibuja en `doc` (página actual, sin save) el estado de fuerza ESTRUCTURADO de UNA obra,
+   con el mismo look del modal: título + obra + fecha, tabla PUESTO/PRESENTES, sexo y banner TOTAL,
+   y los horarios al pie. `res` viene de _estadoFuerzaCalc ya scopeado a esa obra. */
+function _efDibujarObraEstructurado(doc, obraName, res, fechaTxt, horariosText){
+  var pageW=doc.internal.pageSize.width, pageH=doc.internal.pageSize.height;
+  _pdfLogo(doc);
+  doc.setFont(undefined,'bold'); doc.setTextColor(20); doc.setFontSize(15);
+  doc.text('ESTADO DE FUERZA', pageW/2, 44, {align:'center'});
+  doc.setFontSize(13); doc.setTextColor(198,40,40);
+  doc.text(String(obraName||'').toUpperCase(), pageW/2, 64, {align:'center'});
+  doc.setFont(undefined,'normal'); doc.setFontSize(10); doc.setTextColor(110);
+  doc.text('PRESENTES · '+fechaTxt, pageW/2, 80, {align:'center'});
+  doc.setTextColor(20);
+  var cap=function(s){ s=String(s||''); return s.charAt(0).toUpperCase()+s.slice(1); };
+  var rows=[];
+  (res.obrasOrden||[]).forEach(function(o){ var x=res.porObra[o]||{}; if(x.INSTALADOR) rows.push([cap(_efPuestoLabel('INSTALADOR',x.INSTALADOR)), String(x.INSTALADOR)]); if(x.MASILLERO) rows.push([cap(_efPuestoLabel('MASILLERO',x.MASILLERO)), String(x.MASILLERO)]); });
+  var ak=Object.keys(res.apoyo||{}); var ORD=_efApoyoOrden(); ak.sort(function(a,b){ var ia=ORD.indexOf(a),ib=ORD.indexOf(b); ia=ia<0?99:ia; ib=ib<0?99:ib; return ia-ib; });
+  ak.forEach(function(k){ rows.push([cap(_efPuestoLabel(k,res.apoyo[k])), String(res.apoyo[k])]); });
+  if(res.sinClasificar) rows.push(['Sin puesto asignado', String(res.sinClasificar)]);
+  if(!rows.length) rows.push(['Sin personal presente', '0']);
+  doc.autoTable({ startY:96, head:[['PUESTO','PRESENTES']], body:rows, theme:'grid',
+    styles:{ fontSize:11, cellPadding:6, valign:'middle', lineColor:[226,232,240] },
+    headStyles:{ fillColor:[15,23,42], textColor:255, fontStyle:'bold', fontSize:10 },
+    columnStyles:{ 0:{halign:'left'}, 1:{halign:'center', cellWidth:90, fontStyle:'bold'} },
+    margin:{left:48,right:48} });
+  var y=(doc.lastAutoTable?doc.lastAutoTable.finalY:120)+20;
+  doc.setFontSize(11); doc.setFont(undefined,'normal'); doc.setTextColor(20);
+  doc.text('Masculino: '+res.sexoM+'      Femenino: '+res.sexoF+(res.sexoSin?('      Sin sexo: '+res.sexoSin):''), 48, y);
+  y+=12;
+  doc.setFillColor(15,23,42); doc.rect(48, y, pageW-96, 26, 'F');
+  doc.setTextColor(255); doc.setFont(undefined,'bold'); doc.setFontSize(12);
+  doc.text('TOTAL DE PERSONAL', 62, y+17);
+  doc.text(String(res.total)+(res.total===1?' persona':' personas'), pageW-62, y+17, {align:'right'});
+  doc.setTextColor(20); doc.setFont(undefined,'normal'); y+=46;
+  if(horariosText){
+    doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.text('Horarios', 48, y); y+=15;
+    doc.setFont(undefined,'normal'); doc.setFontSize(10);
+    var parts=doc.splitTextToSize(String(horariosText), pageW-96);
+    parts.forEach(function(p){ if(y>pageH-40){ doc.addPage(); y=50; } doc.text(p, 48, y); y+=14; });
+  }
+}
+/* v754: descarga UN PDF SEPARADO por cada obra con presentes (+ uno "SIN OBRA" si aplica).
+   Cada quien cae en la obra donde marcó (obra efectiva = marca > sesión > asignada). */
 function _efDescargarPDF(){
   if(typeof window.jspdf==='undefined'||!window.jspdf.jsPDF){ showToast('JSPDF NO CARGÓ — RECARGAR LA APP','red'); return; }
   const fecha=_asistFechaActual();
   const A=_getAsistencia(); const dia=A[fecha]||{};
   const projs=(typeof state!=='undefined'&&state&&Array.isArray(state.projects))?state.projects:[];
-  const res=_estadoFuerzaCalc(_getPersonal()||[], dia, projs);
+  const personal=_getPersonal()||[];
   const ta=document.getElementById('_efHorarios');
   const horarios=ta?String(ta.value||''):'';
   try { if(state){ state.estadoFuerzaHorarios=horarios; if(typeof saveState==='function') saveState(); if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); } } catch(e){}
-  const lines=_estadoFuerzaLineas(res, _fmtDMY(fecha), horarios);
   const { jsPDF }=window.jspdf;
-  const doc=new jsPDF({ unit:'pt', format:'a4', orientation:'portrait' });
-  const pageW=doc.internal.pageSize.width, pageH=doc.internal.pageSize.height;
-  _pdfLogo(doc);
-  var y=92;
-  lines.forEach(function(l){
-    if(y>pageH-50){ doc.addPage(); y=50; }
-    if(l.t===''){ y+=8; return; }
-    var size=l.s?l.s:11;
-    doc.setFontSize(size); doc.setFont(undefined, l.b?'bold':'normal');
-    if(size>=14){ doc.setTextColor(20); doc.text(String(l.t), pageW/2, y, {align:'center'}); y += (size+6); }
-    else if(size===10 && !l.b){ doc.setTextColor(110); doc.text(String(l.t), pageW/2, y, {align:'center'}); doc.setTextColor(20); y += (size+6); }
-    else {
-      doc.setTextColor(20);
-      // v743-fix: las líneas izquierdas (incl. horarios libres) se cortan si son largas.
-      var _parts=doc.splitTextToSize(String(l.t), pageW-48-40);
-      _parts.forEach(function(p){ if(y>pageH-50){ doc.addPage(); y=50; } doc.text(p, 48, y); y += (size+6); });
-    }
+  const fday=_fmtDMY(fecha), stamp=fday.replace(/\//g,'-');
+  var buckets=[];
+  (projs||[]).forEach(function(pr){ if(!pr || !pr.id) return; var d=_efDiaDeObra(dia, personal, pr.id); if(Object.keys(d).length) buckets.push({ name:pr.name||'OBRA', dia:d }); });
+  var dSin=_efDiaSinObra(dia, personal, projs); if(Object.keys(dSin).length) buckets.push({ name:'SIN OBRA', dia:dSin }); // v754: catch-all (incluye OTRA / obra borrada)
+  if(!buckets.length){ showToast('NADIE PRESENTE EN ESTA FECHA','red'); return; }
+  var count=0;
+  buckets.forEach(function(b){
+    var res=_estadoFuerzaCalc(personal, b.dia, projs);
+    var doc=new jsPDF({ unit:'pt', format:'a4', orientation:'portrait' });
+    _efDibujarObraEstructurado(doc, b.name, res, fday, horarios);
+    doc.save('ESTADO DE FUERZA - '+String(b.name).toUpperCase()+' - '+stamp+'.pdf');
+    count++;
   });
-  doc.save('ESTADO DE FUERZA '+_fmtDMY(fecha).replace(/\//g,'-')+'.pdf');
   _efCerrar();
-  try { showToast('PDF GENERADO','green'); } catch(e){}
+  try { showToast(count+' PDF DESCARGADO'+(count!==1?'S':'')+' (UNO POR OBRA)','green'); } catch(e){}
 }
 
 /* v632: logo arriba a la izquierda en los PDF de asistencia. */
@@ -35286,7 +35362,7 @@ window.addEventListener('load', () => {
     document.querySelectorAll('[data-plantab]').forEach(b => b.classList.toggle('active', b.dataset.plantab === tab));
     // v384: agregado 'ocs' a la lista. Sin esto la pestaña ORDENES DE CAMBIO quedaba en display:none permanente.
     ['etapas','receta','colaboradores','retenciones','ajustes','reporte','excepciones','resumenpersona','anticipos','ocs'].forEach(k => { const el=document.getElementById('planilla-'+k); if(el) el.style.display = tab === k ? '' : 'none'; });
-    { var _aeb=document.getElementById('_anulEtapaBar'); if(_aeb) _aeb.style.display = (tab==='etapas')?'flex':'none'; } // v753: HABILITAR/ANULAR ETAPA solo en PAGOS POR ETAPA
+    { var _aeb=document.getElementById('_anulEtapaBar'); if(_aeb) _aeb.style.display = ((typeof can==='function'&&can('users.manage')) && tab==='etapas')?'flex':'none'; } // v753/v754: HABILITAR/ANULAR ETAPA solo admin + pestaña PAGOS POR ETAPA
     renderPlanilla();
     // v384: triggerea renders de los catalogos (si no se llaman, los containers quedan vacios al cambiar de tab)
     if (tab === 'anticipos' && typeof window.renderPlanillaAnticipos === 'function') { try { window.renderPlanillaAnticipos(); } catch(e){} }
@@ -43606,7 +43682,7 @@ function abrirAnularEtapa(){
       '<div class="modal" style="max-width:480px">'+
         '<div class="modal-hd"><h3>HABILITAR / ANULAR ETAPA</h3></div>'+
         '<div class="modal-bd" id="_anulBody" style="display:flex;flex-direction:column;gap:10px"></div>'+
-        '<div class="modal-ft"><button onclick="_anulCerrar()">CERRAR</button></div>'+
+        '<div class="modal-ft" style="display:flex;justify-content:flex-end"><button class="btn ghost" onclick="_anulCerrar()">CERRAR</button></div>'+
       '</div>'+
     '</div>';
   var w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);

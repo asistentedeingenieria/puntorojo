@@ -88,5 +88,41 @@ ok('ayudante de masillero cuenta como APOYO', resAyu.apoyo.AYUDANTE_MASILLERO===
 const linAyu=LINES(resAyu,'18/06/2026','');
 ok('líneas: aparece ayudante de instalador', linAyu.some(l=>/ayudante de instalador/.test(l.t)));
 
+// ── v754: scoping por obra (PDF separado por proyecto) ──
+const EFOBRA = new Function(ext('_efEffectiveObra')+'\nreturn _efEffectiveObra;')();
+const EFDIA  = new Function('_efEffectiveObra', ext('_efDiaDeObra')+'\nreturn _efDiaDeObra;')(EFOBRA);
+
+ok('_efEffectiveObra: reg.obraId manda', EFOBRA({obraAsignada:'x'}, {obraId:'t3'})==='t3');
+ok('_efEffectiveObra: cae a sessions[0]', EFOBRA({obraAsignada:'x'}, {sessions:[{obraId:'t4'}]})==='t4');
+ok('_efEffectiveObra: cae a obraAsignada', EFOBRA({obraAsignada:'t9'}, {presente:true})==='t9');
+ok('_efEffectiveObra: vacío si nada', EFOBRA({}, {presente:true})==='');
+
+const _persEf=[
+  {id:'a',tipo:'OBRA',puesto:'INSTALADOR',sexo:'M',obraAsignada:'t3'},
+  {id:'b',tipo:'OBRA',puesto:'AYUDANTE',sexo:'M',obraAsignada:'t3'},
+  {id:'c',tipo:'OBRA',puesto:'INSTALADOR',sexo:'F',obraAsignada:'t4'},
+  {id:'d',tipo:'OFICINA',puesto:'INSTALADOR',obraAsignada:'t3'},
+  {id:'e',tipo:'OBRA',puesto:'MASILLERO',baja:true,obraAsignada:'t3'},
+  {id:'f',tipo:'OBRA',puesto:'INSTALADOR',obraAsignada:''}
+];
+const _diaEf={ a:{presente:true,obraId:'t3'}, b:{presente:true,obraId:'t3'}, c:{presente:true,obraId:'t4'}, d:{presente:true,obraId:'t3'}, e:{presente:true,obraId:'t3'}, f:{presente:true} };
+ok('_efDiaDeObra t3: solo a,b (no OFICINA/baja/ausente)', Object.keys(EFDIA(_diaEf,_persEf,'t3')).sort().join(',')==='a,b');
+ok('_efDiaDeObra t4: solo c', Object.keys(EFDIA(_diaEf,_persEf,'t4')).join(',')==='c');
+ok('_efDiaDeObra SIN OBRA: solo f', Object.keys(EFDIA(_diaEf,_persEf,'')).join(',')==='f');
+const resT3=CALC(_persEf, EFDIA(_diaEf,_persEf,'t3'), projects);
+ok('calc por obra t3: total 2, 1 instalador + 1 apoyo', resT3.total===2 && resT3.porObra['TORRE 3'] && resT3.porObra['TORRE 3'].INSTALADOR===1 && resT3.apoyo.AYUDANTE===1);
+
+// v754 fix: catch-all SIN OBRA atrapa '' Y los ids desconocidos (kiosko "OTRA" / proyecto borrado),
+// si no esa gente se caía de TODOS los PDFs (modal la cuenta pero la suma de PDFs no).
+const EFSIN = new Function('_efEffectiveObra', ext('_efDiaSinObra')+'\nreturn _efDiaSinObra;')(EFOBRA);
+const _persEf2=_persEf.concat([{id:'g',tipo:'OBRA',puesto:'INSTALADOR',obraAsignada:'OTRA'}]);
+const _diaEf2=Object.assign({}, _diaEf, { g:{presente:true,obraId:'OTRA'} });
+const dSin2=EFSIN(_diaEf2, _persEf2, projects);
+ok('_efDiaSinObra atrapa SIN OBRA (f) y obra desconocida/OTRA (g)', Object.keys(dSin2).sort().join(',')==='f,g');
+ok('_efDiaSinObra NO incluye los de obra conocida', !dSin2.a && !dSin2.b && !dSin2.c);
+const _allPids=new Set();
+projects.map(pr=>EFDIA(_diaEf2,_persEf2,pr.id)).concat([dSin2]).forEach(d=>Object.keys(d).forEach(k=>_allPids.add(k)));
+ok('invariante: suma de cubetas == presentes válidos (a,b,c,f,g)', _allPids.size===5 && ['a','b','c','f','g'].every(k=>_allPids.has(k)));
+
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
