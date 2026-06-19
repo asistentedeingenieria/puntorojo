@@ -124,5 +124,30 @@ const _allPids=new Set();
 projects.map(pr=>EFDIA(_diaEf2,_persEf2,pr.id)).concat([dSin2]).forEach(d=>Object.keys(d).forEach(k=>_allPids.add(k)));
 ok('invariante: suma de cubetas == presentes válidos (a,b,c,f,g)', _allPids.size===5 && ['a','b','c','f','g'].every(k=>_allPids.has(k)));
 
+// ── v758: desglose POR TORRE (producción por torre; apoyo en AMBAS TORRES) ──
+const PORTORRE = new Function(ext('_estadoFuerzaPorTorre')+'\nreturn _estadoFuerzaPorTorre;')();
+const _pt=[
+  {id:'a',tipo:'OBRA',puesto:'INSTALADOR',sexo:'M',torre:'TORRE 1'},
+  {id:'b',tipo:'OBRA',puesto:'MASILLERO',sexo:'M',torre:'TORRE 1'},
+  {id:'c',tipo:'OBRA',puesto:'INSTALADOR',sexo:'F',torre:'TORRE 2'},
+  {id:'d',tipo:'OBRA',puesto:'AYUDANTE_INSTALADOR',sexo:'M',torre:'TORRE 2'},
+  {id:'e',tipo:'OBRA',puesto:'AYUDANTE',sexo:'M'},                 // apoyo (ambas torres)
+  {id:'f',tipo:'OBRA',puesto:'SUPERVISOR',sexo:'M'},               // apoyo
+  {id:'g',tipo:'OBRA',puesto:'INSTALADOR',sexo:'M'},               // sin torre
+  {id:'h',tipo:'OFICINA',puesto:'INSTALADOR',torre:'TORRE 1'},     // oficina excluido
+  {id:'i',tipo:'OBRA',puesto:'MASILLERO',baja:true,torre:'TORRE 1'}// baja excluido
+];
+const _ptDia={a:{presente:true},b:{presente:true},c:{presente:true},d:{presente:true},e:{presente:true},f:{presente:true},g:{presente:true},h:{presente:true},i:{presente:true}};
+const rpt=PORTORRE(_pt,_ptDia,projects);
+ok('porTorre TORRE 1: 1 inst + 1 mas', rpt.porTorre['TORRE 1'].INSTALADOR===1 && rpt.porTorre['TORRE 1'].MASILLERO===1);
+ok('porTorre TORRE 2: 1 inst + 1 ayud.inst', rpt.porTorre['TORRE 2'].INSTALADOR===1 && rpt.porTorre['TORRE 2'].AYUDANTE_INSTALADOR===1);
+ok('sin torre -> bucket SIN TORRE', rpt.porTorre['SIN TORRE'] && rpt.porTorre['SIN TORRE'].INSTALADOR===1);
+ok('apoyo (ambas torres): ayudante de obra + supervisor', rpt.apoyo.AYUDANTE===1 && rpt.apoyo.SUPERVISOR===1);
+ok('apoyo NO incluye producción', !rpt.apoyo.INSTALADOR && !rpt.apoyo.AYUDANTE_INSTALADOR);
+ok('total excluye oficina y baja', rpt.total===7);
+ok('sexoM/F correctos', rpt.sexoM===6 && rpt.sexoF===1);
+ok('torresOrden con SIN TORRE al final', rpt.torresOrden[rpt.torresOrden.length-1]==='SIN TORRE');
+ok('orden numérico de torres (TORRE 1 antes que TORRE 2)', rpt.torresOrden.indexOf('TORRE 1')<rpt.torresOrden.indexOf('TORRE 2'));
+
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
