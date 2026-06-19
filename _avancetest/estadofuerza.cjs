@@ -57,6 +57,13 @@ ok('sexo acepta MASCULINO/FEMENINO', res2.sexoM===1 && res2.sexoF===1);
 const res3=CALC(personal, {}, projects);
 ok('día sin marcas -> total 0', res3.total===0 && res3.obrasOrden.length===0);
 
+// v751: una persona DE BAJA presente NO cuenta en el estado de fuerza
+const resBaja=CALC([
+  {id:'b1',tipo:'OBRA',puesto:'INSTALADOR',sexo:'M',obraAsignada:'t3',baja:true},
+  {id:'b2',tipo:'OBRA',puesto:'MASILLERO',sexo:'M',obraAsignada:'t3'}
+], {b1:{presente:true,obraId:'t3'}, b2:{presente:true,obraId:'t3'}}, projects);
+ok('persona DE BAJA excluida del estado de fuerza', resBaja.total===1 && !resBaja.porObra['TORRE 3'].INSTALADOR);
+
 // ── _estadoFuerzaLineas ──
 const lines=LINES(res, '12/06/2026', 'Planilla: 7 AM a 4 PM (9 horas)\nSubcontratistas: 7 AM a 6 PM (11 horas)');
 ok('línea TORRE 3 en negrita', lines.some(l=>l.t==='TORRE 3' && l.b));

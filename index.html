@@ -2801,6 +2801,7 @@ table{max-width:100%}
             <input id="persBuscar" class="inline" placeholder="Buscar nombre / empresa / cargo / DPI…" oninput="setPersBuscar(this.value)" style="flex:1 1 200px;min-width:160px">
             <select id="persEmpresaFilter" class="inline" onchange="setPersEmpresaFilter(this.value)" style="flex:1 1 150px;min-width:130px"></select>
             <button class="btn olive sm" data-perm="personal.add" onclick="agregarPersonaGlobal()" style="flex:0 0 auto">+ AGREGAR</button>
+            <button id="_persBajaBtn" class="btn ghost sm" data-perm="personal.edit" onclick="_persToggleBaja()" style="flex:0 0 auto" title="Ver/ocultar el historial de dados de baja">VER DE BAJA</button>
           </div>
         </div>
         <div class="colab-headbar"><span>NOMBRE</span><span>OBRA</span></div>
@@ -2928,7 +2929,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v750</span>
+    <span style="opacity:.5;font-size:9px">v751</span>
   </footer>
 
 </div>
@@ -5426,7 +5427,7 @@ function applyPermissions(){
   } catch(e){}
   // v707: botón flotante MARCAR MI ASISTENCIA — solo para usuarios vinculados a una ficha de colaborador.
   // v724: además la ficha vinculada debe ser de OFICINA (el botón solo le sale a la gente de oficina ya vinculada).
-  try { const _fabMA=document.getElementById('btnMiAsistenciaTop'); if(_fabMA){ const _uMA=getCurrentUser(); const _pMA=(_uMA&&_uMA.colaboradorId)?_personaById(_uMA.colaboradorId):null; _fabMA.style.display=(_pMA && _pMA.tipo==='OFICINA')?'inline-flex':'none'; } } catch(e){}
+  try { const _fabMA=document.getElementById('btnMiAsistenciaTop'); if(_fabMA){ const _uMA=getCurrentUser(); const _pMA=(_uMA&&_uMA.colaboradorId)?_personaById(_uMA.colaboradorId):null; _fabMA.style.display=(_pMA && _pMA.tipo==='OFICINA' && !_pMA.baja)?'inline-flex':'none'; } } catch(e){} // v751: dado de baja NO ve el botón de auto-marcado
 
   // Ocultar separadores ".kebab-divider" huérfanos: si entre dos divisores
   // consecutivos no hay ningún kebab-item visible, escondemos el divisor
@@ -18174,8 +18175,12 @@ function _asistDiaCerrado(fecha){
 }
 function _persNorm(s){ return String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim(); }
 function _personaById(id){ return _getPersonal().find(p=>p.id===id); }
+// v751: personal ACTIVO (no dado de baja) para listas/rosters. _getPersonal() sigue RAW
+// (lo usan guardar/borrar/buscar-por-id, que necesitan a TODOS incl. los de baja).
+function _getPersonalActivo(){ return _getPersonal().filter(function(p){ return p && !p.baja; }); }
 function _persListaFiltrada(){
-  const all=_getPersonal();
+  // v751: toggle ACTIVOS / DE BAJA (window._persVerBaja)
+  const all = window._persVerBaja ? _getPersonal().filter(p=>p&&p.baja) : _getPersonal().filter(p=>p&&!p.baja);
   const emps=_persEmpresas();
   const f=_persEmpresaFilter&&emps.includes(_persEmpresaFilter)?_persEmpresaFilter:'';
   let res=f?all.filter(p=>p.empresa===f):all;
@@ -18196,7 +18201,7 @@ function _asistListaFiltrada(){
   const _asisHoy=(_getAsistencia()[_asistFechaActual()]||{});
   const _ofiMarcoHoy=(p)=>{ try{ const r=_asisHoy[p.id]; return !!(r && (r.entrada || r.presente || (Array.isArray(r.sessions) && r.sessions.length))); }catch(e){ return false; } };
   // v712: la gente de OFICINA aparece en el listado SOLO si marcó hoy (registró que está en una obra), para que SSO la vea.
-  const all=_getPersonal().filter(p=> _personaEnListaObra(p, _foAsis) && (p.tipo!=='OFICINA' || _ofiMarcoHoy(p)));
+  const all=_getPersonalActivo().filter(p=> _personaEnListaObra(p, _foAsis) && (p.tipo!=='OFICINA' || _ofiMarcoHoy(p)));
   const q=_persNorm(_asistBuscar);
   const res=q?all.filter(p=>_persNorm(p.nombre).includes(q)||_persNorm(p.cargo).includes(q)):all;
   return res.slice().sort((a,b)=>_persNorm(a.nombre).localeCompare(_persNorm(b.nombre),'es',{sensitivity:'base'}));
@@ -18282,7 +18287,7 @@ window._v651FaltanIngreso = function(){
     const projs=(typeof state!=='undefined'&&state&&Array.isArray(state.projects))?state.projects:[];
     const projName=id=>{ if(!id) return '—'; const pr=projs.find(x=>x.id===id); return pr?String(pr.name||id).toUpperCase():String(id).toUpperCase(); };
     const escH=s=>String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-    const pg=(typeof _getPersonal==='function')?_getPersonal():((typeof state!=='undefined'&&state&&state.personalGlobal)||[]);
+    const pg=(typeof _getPersonalActivo==='function')?_getPersonalActivo():(((typeof state!=='undefined'&&state&&state.personalGlobal)||[]).filter(p=>p&&!p.baja)); // v751: sin dados de baja
     const arr=_faltanIngreso(pg, dia, filtro).slice().sort((a,b)=> (String(a.obraAsignada||'').localeCompare(String(b.obraAsignada||'')) || String(a.nombre||'').localeCompare(String(b.nombre||''),'es',{sensitivity:'base'})));
     let body='';
     body+='<div style="font-size:12px;color:#92400E;font-weight:700;margin-bottom:12px;background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;padding:10px 12px">FALTAN INGRESO: <b>'+arr.length+'</b> '+(filtro?('· '+escH(projName(filtro))):'· TODAS LAS OBRAS')+'</div>';
@@ -18332,7 +18337,9 @@ function renderPersonal(){
   const kp=document.getElementById('persKpis');
   if(kp){
     const _sub = (typeof window!=='undefined' && window.currentPersonalSubTab) || 'lista';
-    const _kPersonal = `<div class="kpi olive"><div class="lbl">Personal</div><div class="val">${personal.length}</div><div class="sub">${_persEmpresaFilter?('Mostrando '+lista.length):'Total global'}</div></div>`;
+    const _nBaja = personal.filter(p=>p&&p.baja).length; // v751
+    const _nAct = personal.length - _nBaja;
+    const _kPersonal = `<div class="kpi olive"><div class="lbl">Personal</div><div class="val">${_nAct}</div><div class="sub">${_persEmpresaFilter?('Mostrando '+lista.length):(_nBaja?('Activos · '+_nBaja+' de baja'):'Total global')}</div></div>`;
     const _empListHtml = canAdd
       ? (empresas.length ? empresas.map(em=>`<span style="display:inline-flex;align-items:center;background:rgba(0,0,0,.06);border-radius:9px;padding:1px 2px 1px 8px;margin:2px 3px 0 0;font-size:10px;white-space:nowrap">${em}<button type="button" data-e="${String(em).replace(/"/g,'&quot;')}" onclick="_eliminarEmpresa(this.getAttribute('data-e'))" title="Eliminar empresa" style="background:none;border:none;color:#DC2626;cursor:pointer;font-size:14px;line-height:1;padding:0 4px;margin-left:1px">×</button></span>`).join('') : '—')
       : (empresas.join(' · ')||'—');
@@ -18348,7 +18355,7 @@ function renderPersonal(){
     const _kAsist = _genteObra + `<div class="kpi green"><div class="lbl">Hora prom. entrada</div><div class="val">${_avgEnt}</div><div class="sub">${fecha}</div></div>`
       + `<div class="kpi cafe"><div class="lbl">Hora prom. salida</div><div class="val">${_avgSal}</div><div class="sub">${fecha}</div></div>`
       + `<div class="kpi olive" onclick="window._v644ResumenPresentesPorObra&&window._v644ResumenPresentesPorObra()" style="cursor:pointer" title="Tocá para ver los presentes de cada obra"><div class="lbl">Presentes por obra (prom.)</div><div class="val">${Object.keys(_porObra).length?Math.round(presentes/Object.keys(_porObra).length):0}</div><div class="sub">TOCÁ PARA VER POR OBRA</div></div>`
-      + `<div class="kpi cafe" onclick="window._v651FaltanIngreso&&window._v651FaltanIngreso()" style="cursor:pointer" title="Tocá para ver quiénes faltan de ingresar"><div class="lbl">Faltan ingreso</div><div class="val">${(typeof _faltanIngreso==='function'?_faltanIngreso(_getPersonal(), dia, _obraFiltroK).length:0)}</div><div class="sub">TOCÁ PARA VER</div></div>`
+      + `<div class="kpi cafe" onclick="window._v651FaltanIngreso&&window._v651FaltanIngreso()" style="cursor:pointer" title="Tocá para ver quiénes faltan de ingresar"><div class="lbl">Faltan ingreso</div><div class="val">${(typeof _faltanIngreso==='function'?_faltanIngreso(_getPersonalActivo(), dia, _obraFiltroK).length:0)}</div><div class="sub">TOCÁ PARA VER</div></div>`
       + `<div class="kpi cafe" onclick="window._v651FaltanSalida&&window._v651FaltanSalida()" style="cursor:pointer" title="Tocá para ver quiénes faltan de dar salida"><div class="lbl">Faltan salida</div><div class="val">${(typeof _faltanSalida==='function'?_faltanSalida(dia, _obraFiltroK).length:0)}</div><div class="sub">TOCÁ PARA VER</div></div>`;
     kp.innerHTML = (_sub==='asistencia') ? _kAsist : (_kPersonal+_kEmpresas);
   }
@@ -18372,7 +18379,7 @@ function renderPersonal(){
       return `<div class="colab-item">
         <div class="colab-head" id="colabHead-${c.id}" onclick="_toggleColab('${c.id}')">
           <span class="colab-chev">${_abierto?'▾':'▸'}</span>
-          <span class="colab-name">${c.nombre||''}${_caraOk?' <span title="Cara registrada" style="color:var(--green-dark);font-size:11px;font-weight:700">&#10003;</span>':''}</span>
+          <span class="colab-name"${c.baja?' style="opacity:.6;text-decoration:line-through"':''}>${c.nombre||''}${_caraOk?' <span title="Cara registrada" style="color:var(--green-dark);font-size:11px;font-weight:700">&#10003;</span>':''}</span>${c.baja?' <span style="display:inline-block;font-size:8px;font-weight:700;padding:2px 7px;border-radius:10px;background:#FEE2E2;color:#B91C1C">DE BAJA</span>':''}
           <span class="colab-obra" onclick="event.stopPropagation()">${_obraCell}</span>
         </div>
         <div class="colab-det" id="colabDet-${c.id}" style="display:${_abierto?'block':'none'}">
@@ -18381,7 +18388,7 @@ function renderPersonal(){
           <div class="colab-row"><b>DPI</b> · ${c.dpi||'—'}${_verDpi}</div>
           <div class="colab-row"><b>TELÉFONO</b> · ${c.telefono||'—'}</div>
           ${(f&&f.nombre)?('<div class="colab-row"><b>FACTURADO POR</b> · '+fact+'</div>'):''}
-          ${canEd?`<div class="colab-acts"><button class="btn-icon" style="margin-right:8px" onclick="event.stopPropagation();editarPersonaGlobal('${c.id}')">✎ EDITAR</button><button class="btn-icon danger" onclick="event.stopPropagation();eliminarPersonaGlobal('${c.id}')">✕ ELIMINAR</button></div>`:''}
+          ${canEd?`<div class="colab-acts"><button class="btn-icon" style="margin-right:8px" onclick="event.stopPropagation();editarPersonaGlobal('${c.id}')">✎ EDITAR</button>${c.baja?`<button class="btn-icon" style="margin-right:8px;color:#166534;font-weight:700" onclick="event.stopPropagation();reactivarPersona('${c.id}')">REACTIVAR</button>`:`<button class="btn-icon" style="margin-right:8px;color:#92400E;font-weight:700" onclick="event.stopPropagation();darBajaPersona('${c.id}')">DAR DE BAJA</button>`}<button class="btn-icon danger" onclick="event.stopPropagation();eliminarPersonaGlobal('${c.id}')">✕ ELIMINAR</button></div>`:''}
         </div>
       </div>`; };
       const _filtrando = (lista.length !== personal.length);
@@ -18455,6 +18462,31 @@ async function uploadPersonaDPI(event, personaId, lado){
   finally{ event.target.value=''; }
 }
 function eliminarPersonaGlobal(id){ if(!(can('personal.edit')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; } const c=_personaById(id); if(!c) return; prConfirm({title:'ELIMINAR',body:`¿Eliminar a ${c.nombre}?`,okText:'ELIMINAR',danger:true}).then(ok=>{ if(!ok) return; if(typeof state!=='undefined'&&state){ if(!state.personalEliminados||typeof state.personalEliminados!=='object') state.personalEliminados={}; state.personalEliminados[id]=Date.now(); state.personalGlobal=_getPersonal().filter(p=>p.id!==id); } saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} try{ _notifyPersonalChange('ELIMINADO', c); }catch(e){} renderPersonal(); showToast('PERSONA ELIMINADA'); }); }
+// v751: DAR DE BAJA (soft) / REACTIVAR — la persona NO se borra; sale de las listas activas
+// (colaboradores, asistencia, kiosko, estado de fuerza, conteo) pero queda en el historial.
+function _persToggleBaja(){ window._persVerBaja=!window._persVerBaja; var b=document.getElementById('_persBajaBtn'); if(b) b.textContent=window._persVerBaja?'VER ACTIVOS':'VER DE BAJA'; try{ renderPersonal(); }catch(e){} }
+function darBajaPersona(id){
+  if(!(can('personal.edit')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
+  const c=_personaById(id); if(!c) return;
+  prConfirm({title:'DAR DE BAJA',body:`¿Dar de baja a ${c.nombre}? Sale de las listas, asistencia y conteo, pero queda en el historial para reactivarlo si vuelve.`,okText:'DAR DE BAJA',cancelText:'CANCELAR',danger:true}).then(ok=>{
+    if(!ok) return;
+    c.baja=true; c.bajaTs=Date.now(); try{ c.bajaPor=(window._getUserEmail&&window._getUserEmail())||''; }catch(e){} c._ts=Date.now();
+    saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+    try{ _notifyPersonalChange('BAJA', c); }catch(e){}
+    renderPersonal(); showToast('PERSONA DADA DE BAJA');
+  });
+}
+function reactivarPersona(id){
+  if(!(can('personal.edit')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; }
+  const c=_personaById(id); if(!c) return;
+  prConfirm({title:'REACTIVAR',body:`¿Reactivar a ${c.nombre}? Vuelve a las listas activas y a asistencia.`,okText:'REACTIVAR',cancelText:'CANCELAR'}).then(ok=>{
+    if(!ok) return;
+    c.baja=false; try{ delete c.bajaTs; delete c.bajaPor; }catch(e){} c._ts=Date.now();
+    saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+    try{ _notifyPersonalChange('REACTIVADO', c); }catch(e){}
+    renderPersonal(); showToast('PERSONA REACTIVADA');
+  });
+}
 function toggleAsistenciaGlobal(id){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const _pms=(_getPersonal()||[]).find(x=>x.id===id); if(_pms&&_pms.multiSesion){ showToast('ESTA PERSONA MARCA POR ESCANEO EN VARIAS OBRAS','red'); return; } const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; const cur=A[f][id]||{}; if(cur.presente===true){ showToast('YA ESTÁ PRESENTE · ESE CHEQUE NO SE PUEDE MODIFICAR','red'); return; } const _d=new Date(); const _h=String(_d.getHours()).padStart(2,'0')+':'+String(_d.getMinutes()).padStart(2,'0'); A[f][id]={presente:true,obraId:cur.obraId||'',obraDesc:cur.obraDesc||'',hora:_h,_ts:Date.now()}; try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){} saveAsistencia(); renderPersonal(); }
 function setAsistenciaObra(id,obraId){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; if(!A[f][id])A[f][id]={presente:true}; A[f][id].obraId=obraId; if(obraId!=='OTRA')A[f][id].obraDesc=''; A[f][id]._ts=Date.now(); try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){} saveAsistencia(); renderPersonal(); }
 function setAsistenciaObraDesc(id,desc){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return; const f=_asistFechaActual(); const A=_getAsistencia(); if(A[f]&&A[f][id]){ A[f][id].obraDesc=desc; A[f][id]._ts=Date.now(); try{ _asistPendingAdd(f, id); }catch(e){} saveAsistencia(); } }
@@ -18540,7 +18572,7 @@ function _quitarAusencia(){
 function _asisHoraHHMM(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return p(d.getHours())+':'+p(d.getMinutes()); }
 // Descriptores etiquetados para FaceMatcher, desde personalGlobal.
 function _facesEnroladas(){
-  return (_getPersonal()||[]).filter(p => p && p.face && Array.isArray(p.face.descriptors) && p.face.descriptors.length && _personaEnObraUsuario(p))
+  return (_getPersonalActivo()||[]).filter(p => p && p.face && Array.isArray(p.face.descriptors) && p.face.descriptors.length && _personaEnObraUsuario(p)) /* v751: sin dados de baja */
     .map(p => ({ id:p.id, nombre:p.nombre, thumbURL:(p.face&&p.face.thumbURL||''),
       descriptors: p.face.descriptors.map(d => new Float32Array(Array.isArray(d) ? d : ((d && d.d) || []))) }));
 }
@@ -18552,6 +18584,7 @@ function _marcarAsistenciaFacial(personaId, obraId, obraDesc, geo){
   const asis = _getAsistencia();
   if (!asis[fecha]) asis[fecha] = {};
   const _pMS=(_getPersonal()||[]).find(x=>x.id===personaId);
+  if(_pMS && _pMS.baja){ showToast('FICHA DADA DE BAJA','red'); return null; } // v751: dado de baja no se marca (cierra auto-marcado y kiosko)
   const _MIN_SALIDA = 15; // v673 Bug3: mínimo 15 min entre entrada y salida por escaneo (anti doble-escaneo)
   let out, reg;
   if (_pMS && _pMS.multiSesion){
@@ -18600,7 +18633,7 @@ function _estadoFuerzaCalc(personal, dia, projects){
   var PROD = { INSTALADOR:1, MASILLERO:1 };
   var res = { total:0, sexoM:0, sexoF:0, sexoSin:0, porObra:{}, obrasOrden:[], apoyo:{}, sinClasificar:0 };
   (personal||[]).forEach(function(p){
-    if(!p || p.tipo==='OFICINA') return;
+    if(!p || p.tipo==='OFICINA' || p.baja) return; // v751: excluye OFICINA y dados de baja
     var reg = dia[p.id];
     if(!reg || !reg.presente) return;
     res.total++;
@@ -18717,9 +18750,9 @@ function descargarAsistenciaPDF(){
   const _puedeVerUbic = (typeof can==='function') && (can('personal.verUbicacion') || can('users.manage')); // v686: la columna UBICACIÓN (EN OBRA/FUERA) solo con permiso de ver ubicación
   let roster;
   if(_obraCtx){
-    roster=_getPersonal().filter(pn=> pn.tipo!=='OFICINA' && (pn.obraAsignada===_obraCtx || (dia[pn.id] && String(dia[pn.id].obraId||'')===_obraCtx) || (dia[pn.id] && dia[pn.id].multiSesion && Array.isArray(dia[pn.id].sessions) && dia[pn.id].sessions.some(s=> s && String(s.obraId||'')===_obraCtx)))); // v654: multiSesion en el PDF diario por obra
+    roster=_getPersonalActivo().filter(pn=> pn.tipo!=='OFICINA' && (pn.obraAsignada===_obraCtx || (dia[pn.id] && String(dia[pn.id].obraId||'')===_obraCtx) || (dia[pn.id] && dia[pn.id].multiSesion && Array.isArray(dia[pn.id].sessions) && dia[pn.id].sessions.some(s=> s && String(s.obraId||'')===_obraCtx)))); // v654: multiSesion en el PDF diario por obra
   } else {
-    roster=_getPersonal().filter(pn=> pn.tipo!=='OFICINA' && _personaEnObraUsuario(pn));
+    roster=_getPersonalActivo().filter(pn=> pn.tipo!=='OFICINA' && _personaEnObraUsuario(pn));
   }
   let presentes=roster.filter(pn=> dia[pn.id] && dia[pn.id].presente)
     .sort((x,y)=>_persNorm(x.nombre).localeCompare(_persNorm(y.nombre),'es',{sensitivity:'base'}));
@@ -18770,9 +18803,9 @@ function descargarPdfDiaPresentes(){
   const _obraCtx = obraSel || ((typeof _getUserObraAsignada==='function')?_getUserObraAsignada():'');
   let roster;
   if(_obraCtx){
-    roster=_getPersonal().filter(pn=> pn.tipo!=='OFICINA' && (pn.obraAsignada===_obraCtx || (dia[pn.id] && String(dia[pn.id].obraId||'')===_obraCtx) || (dia[pn.id] && dia[pn.id].multiSesion && Array.isArray(dia[pn.id].sessions) && dia[pn.id].sessions.some(s=> s && String(s.obraId||'')===_obraCtx))));
+    roster=_getPersonalActivo().filter(pn=> pn.tipo!=='OFICINA' && (pn.obraAsignada===_obraCtx || (dia[pn.id] && String(dia[pn.id].obraId||'')===_obraCtx) || (dia[pn.id] && dia[pn.id].multiSesion && Array.isArray(dia[pn.id].sessions) && dia[pn.id].sessions.some(s=> s && String(s.obraId||'')===_obraCtx))));
   } else {
-    roster=_getPersonal().filter(pn=> pn.tipo!=='OFICINA' && _personaEnObraUsuario(pn));
+    roster=_getPersonalActivo().filter(pn=> pn.tipo!=='OFICINA' && _personaEnObraUsuario(pn));
   }
   const presentes=roster.filter(pn=> dia[pn.id] && dia[pn.id].presente)
     .sort((x,y)=>_persNorm(x.nombre).localeCompare(_persNorm(y.nombre),'es',{sensitivity:'base'}));
@@ -18870,7 +18903,7 @@ function _semanaRango(fechaStr){
 /* v642: arma la matriz semanal de UNA obra dentro de un doc dado (sin addPage ni save).
    Devuelve true si la obra tenía gente. */
 function _obraSemanalEnDoc(doc, obra, dias, A){
-  const _getP=(typeof _getPersonal==='function')?(_getPersonal()||[]):[];
+  const _getP=(typeof _getPersonalActivo==='function')?(_getPersonalActivo()||[]):[]; // v751: excluye dados de baja
   const personas=_getP.filter(pn=> pn.tipo!=='OFICINA' && (
     pn.obraAsignada===obra.id ||
     (pn.multiObra && dias.some(f=>{ const r=A[f]&&A[f][pn.id]; return r && String(r.obraId||'')===obra.id && (r.presente || (r.presente===false&&r.motivo)); })) ||
@@ -19143,6 +19176,7 @@ function _renderMiAsistencia(){
   const u=getCurrentUser(); if(!u) return;
   const pid=u.colaboradorId||'';
   const p=(_getPersonal()||[]).find(x=>x.id===pid)||null;
+  if(p && p.baja){ try{ showToast('FICHA DADA DE BAJA','red'); }catch(e){} return; } // v751: dado de baja no auto-marca
   const old=document.getElementById('_miAsisScreen'); if(old) old.remove();
   const nombre=(p&&p.nombre)||u.displayName||'';
   const tieneCara=!!(p && p.face && p.face.descriptors && p.face.descriptors.length);
@@ -19186,6 +19220,7 @@ let _miAsisStream=null, _miAsisLoop=0, _miAsisBusy=false, _miAsisStreak=0, _miAs
 async function _miAsisEscanear(){
   const u=getCurrentUser(); const pid=u&&u.colaboradorId;
   const p=(_getPersonal()||[]).find(x=>x.id===pid);
+  if(p && p.baja){ showToast('FICHA DADA DE BAJA','red'); return; } // v751: dado de baja no auto-marca
   if(!p || !(p.face && p.face.descriptors && p.face.descriptors.length)){ showToast('PRIMERO REGISTRÁ TU CARA','red'); return; }
   const sel=document.getElementById('_miAsisObra'); const obraId=sel?sel.value:'';
   if(!obraId){ showToast('ELEGÍ LA OBRA','red'); return; }
@@ -19614,7 +19649,7 @@ function _kioskAbrirRegistro(){
   if(document.getElementById('_kioskRegScreen')) return;
   if(!_puedeEnrolarCara()){ showToast('SIN PERMISO','red'); return; }
   var _o=(typeof _getUserObraAsignada==='function')?_getUserObraAsignada():'';
-  _kioskRegBase=(_getPersonal()||[]).filter(function(p){ return !_o || (p && p.obraAsignada===_o); }); // SOLO asignados a SU obra (admin _o='' → todos)
+  _kioskRegBase=(_getPersonalActivo()||[]).filter(function(p){ return !_o || (p && p.obraAsignada===_o); }); // SOLO asignados a SU obra (admin _o='' → todos) · v751: sin dados de baja
   _kioskRegMejorar=_enrolMejorarSet(_kioskRegBase); // calidad: quiénes conviene mejorar (una sola vez)
   var html='<div id="_kioskRegScreen" style="position:fixed;inset:0;z-index:100071;background:#0B0B0C;display:flex;flex-direction:column;color:#fff">'
     + '<div style="display:flex;align-items:center;gap:8px;padding:calc(env(safe-area-inset-top,22px) + 14px) 14px 8px">'
@@ -45749,7 +45784,7 @@ async function _anulAnularReal(){
   }
   function _personalPickList(){
     return _getPersonal()
-      .filter(p => p && p.nombre && p.activo !== false && p.tipo !== 'OFICINA' && String(p.nombre).toUpperCase().replace(/[\s\-_]/g,'') !== 'PREAPP')
+      .filter(p => p && p.nombre && p.activo !== false && !p.baja && p.tipo !== 'OFICINA' && String(p.nombre).toUpperCase().replace(/[\s\-_]/g,'') !== 'PREAPP') /* v751: sin dados de baja */
       .map(p => ({ id:p.id, nombre:p.nombre, rol:p.cargo||'' }))
       .sort((a,b)=>String(a.nombre||'').localeCompare(String(b.nombre||''),'es',{sensitivity:'base'}));
   }
