@@ -2928,7 +2928,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v774</span>
+    <span style="opacity:.5;font-size:9px">v775</span>
   </footer>
 
 </div>
@@ -8855,6 +8855,8 @@ const CloudSync = {
         merged.solicitudesAnticipos = _mSolA.list; if (_mSolA.changed) needsResync = true;
         const _mSolC = _mergeById((state && state.solicitudesColaboradores) || [], merged.solicitudesColaboradores || [], null);
         merged.solicitudesColaboradores = _mSolC.list; if (_mSolC.changed) needsResync = true;
+        const _mSolPE = _mergeById((state && state.solicitudesPagoEtapa) || [], merged.solicitudesPagoEtapa || [], null); // v775: solicitudes de pago a otra persona
+        merged.solicitudesPagoEtapa = _mSolPE.list; if (_mSolPE.changed) needsResync = true;
       }
     } catch(e){ console.warn('blindaje de plata en applyRemote:', e); }
 
@@ -24902,6 +24904,31 @@ function _mergePersonal(localList, remoteList, tombSet){
 // viejos pisaba el cambio recién hecho ("no se guarda"). Ahora se UNEN local∪remoto:
 // gana el _ts (fallback ts) MÁS NUEVO; un id en tombSet se elimina (borrado real,
 // no resucita). Mismo patrón que _mergePersonal/_mergeColaboradores.
+// v775: CANDADO DEL INSTALADOR. Quien cobró la ETAPA 1 (stageIdx 0) de un apto es el "dueño"
+// de las etapas 2,3,4 (idx 1,2,3). Etapa 1 y etapa 5 (idx 4) quedan libres.
+function _etapa1Owner(p, aptoId){
+  const pagos = (p && p.planilla && p.planilla.pagos) || [];
+  let owner = null, best = -1;
+  pagos.forEach(pg => {
+    if(pg && pg.aptoId===aptoId && Number(pg.stageIdx)===0 && pg.colaborador){
+      const t = Number(pg.ts)||0;
+      if(t >= best){ best = t; owner = pg.colaborador; }
+    }
+  });
+  return owner; // nombre del que cobró la etapa 1, o null
+}
+// Devuelve el NOMBRE del dueño de la etapa 1 si hay conflicto (se quiere pagar la etapa 2/3/4
+// a OTRA persona); null si no hay conflicto (misma persona, etapa 1/5, o etapa 1 aún sin pagar).
+function _etapaOwnerConflicto(p, aptoId, stageIdx, nuevoNombre){
+  const idx = Number(stageIdx);
+  if(idx < 1 || idx > 3) return null; // solo etapas 2,3,4 (idx 1,2,3)
+  const owner = _etapa1Owner(p, aptoId);
+  if(!owner) return null; // etapa 1 aún no pagada → libre
+  const _n = (s) => String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+  if(_n(owner) === _n(nuevoNombre)) return null; // misma persona → ok
+  return owner;
+}
+
 // v774: LIBERACIÓN DE ETAPAS (gerente) — helpers de merge + estado neto.
 // libEtapas vive en el apto: towers[].levels[].aptos[].libEtapas = { [idx]:{ts,by} }.
 // libEtapasTomb = { [idx]:ts } (des-liberar). Una etapa está LIBERADA si release.ts >= tomb.ts.
@@ -37185,6 +37212,15 @@ window.addEventListener('load', () => {
     html += `</div>`;  // cierra planilla-pagos-scroll
 
     html += `</div>` + renderPlanillaPagosList(canAuth);
+    // v775: banner de SOLICITUDES DE PAGO A OTRA PERSONA (solo gerente/admin, si hay pendientes).
+    try {
+      if((can('planilla.authorize')||can('users.manage'))){
+        const _pend = (typeof window._solPagoEtapaPendientes==='function') ? window._solPagoEtapaPendientes().length : 0;
+        if(_pend>0){
+          html = '<div style="margin:0 0 12px;padding:11px 14px;background:#FFF8E1;border:1px solid #F4D040;border-radius:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-size:12px;font-weight:700;color:#7C5800;letter-spacing:.3px">SOLICITUDES DE PAGO A OTRA PERSONA: '+_pend+' PENDIENTE'+(_pend!==1?'S':'')+'</span><button class="btn sm" onclick="window.verSolicitudesPagoEtapa()" style="background:#C62828;border-color:#C62828;color:#fff;padding:6px 14px;font-size:11px">VER / AUTORIZAR</button></div>' + html;
+        }
+      }
+    } catch(e){}
     const el=document.getElementById('planilla-etapas'); if(el) el.innerHTML=html;
   };
 
@@ -37302,6 +37338,28 @@ window.addEventListener('load', () => {
     // v224: BLOQUEO POR ACUSE DESACTIVADO. El admin pidio poder pagar sin necesidad
     // de tener el acuse firmado mientras el sistema de acuses no esté en funcionamiento.
     // Mantenemos el flag pagoSinAcuse en el registro para trazabilidad pero NO bloqueamos.
+    // v775: CANDADO DEL INSTALADOR. Etapas 2/3/4 deben ir a quien cobró la etapa 1 del apto.
+    // Si es OTRA persona → aviso; si confirma SÍ → SOLICITUD (no se crea el pago) que solo
+    // gerente/admin autoriza. Etapa 1 y etapa 5 quedan libres. Aplica a TODOS los proyectos.
+    {
+      const _ownerConf = (typeof _etapaOwnerConflicto==='function') ? _etapaOwnerConflicto(p, aid, stageIdx, colab.nombre) : null;
+      if(_ownerConf){
+        const _okOtro = await window.prConfirm({
+          title: 'ETAPA #1 PAGADA A OTRA PERSONA',
+          bodyHTML: '<div style="font-size:13px;line-height:1.6;color:#1F2937">'
+            + 'LA ETAPA #1 SE LE PAGÓ A <strong>'+esc(String(_ownerConf).toUpperCase())+'</strong>.'
+            + '<br><br>¿ESTÁS SEGURO QUE QUIERES PAGARLE ESTA ETAPA A <strong>'+esc(String(colab.nombre).toUpperCase())+'</strong>?'
+            + '<br><br><span style="display:block;font-size:11.5px;color:#7C5800;background:#FFF8E1;padding:8px 10px;border-radius:4px;border-left:3px solid #F4D040">Si confirmás, se enviará una SOLICITUD que solo la gerente de proyectos o el admin pueden autorizar. El pago se generará al autorizarla.</span>'
+            + '</div>',
+          okText: 'SÍ, ENVIAR SOLICITUD', cancelText: 'CANCELAR', danger: true
+        });
+        if(!_okOtro) return;
+        try { _crearSolicitudPagoEtapa(p, tid, lid, aid, stageIdx, colab, target, _ownerConf); }
+        catch(e){ console.error('[v775] solicitud pago etapa:', e); showToast('ERROR AL ENVIAR LA SOLICITUD','red'); }
+        return; // NO se crea el pago: queda como solicitud pendiente de autorización
+      }
+    }
+
     const fisicoIdx = _planillaIdxToFisicoIdx(stageIdx);
     const tieneAcuse = (typeof window.tieneAcuseFirmado === 'function') ? window.tieneAcuseFirmado(a, fisicoIdx) : false;
     const excAprobada = false;  // ya no se consultan excepciones en esta version
@@ -37351,6 +37409,114 @@ window.addEventListener('load', () => {
     logActivity('create',`Pago planilla generado${pagoSinAcuse ? ' (SIN ACUSE)' : ''}`,`${p.name} · ${a.name} · ETAPA ${stageIdx+1} · ${target}% · ${upper(colab.nombre)} · ${fQ(neto)}${pagoSinAcuse ? ' · FALTA ACUSE' : ''}`);
     saveState(); renderPlanilla();
     showToast(pagoSinAcuse ? 'PAGO GENERADO · ¡FALTA ACUSE!' : 'PAGO GENERADO · PENDIENTE AUTORIZACIÓN', pagoSinAcuse ? '' : 'green');
+  };
+
+  // ═══════════ v775: SOLICITUDES DE PAGO A OTRA PERSONA (candado del instalador) ═══════════
+  function _crearSolicitudPagoEtapa(p, tid, lid, aid, stageIdx, colab, target, etapa1Nombre){
+    if(!Array.isArray(state.solicitudesPagoEtapa)) state.solicitudesPagoEtapa = [];
+    const t=(p.towers||[]).find(x=>x.id===tid); const l=t&&(t.levels||[]).find(x=>x.id===lid); const a=l&&(l.aptos||[]).find(x=>x.id===aid);
+    const ETAPAS_PROJ = getEtapasP(p); const etapa = ETAPAS_PROJ[stageIdx];
+    const sol = {
+      id:'solpe-'+uid(), _ts:Date.now(),
+      projectId:p.id, projectName:p.name||'',
+      tid, lid, aid, aptoName:(a&&a.name)||'', towerName:(t&&t.name)||'',
+      stageIdx:Number(stageIdx), etapaNombre:(etapa&&etapa.name)||('ETAPA '+(Number(stageIdx)+1)), target:Number(target)||0,
+      colaboradorId:(colab&&colab.id)||'', colaboradorNombre:upper((colab&&colab.nombre)||''), colaboradorRol:(colab&&colab.rol)||'',
+      etapa1Nombre:upper(etapa1Nombre||''),
+      solicitadoPor:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''),
+      solicitadoPorNombre:(typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):''),
+      solicitadoEn:(typeof nowStr==='function'?nowStr():''), estado:'pendiente'
+    };
+    state.solicitudesPagoEtapa.push(sol);
+    try{ saveState(); }catch(e){}
+    try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); }catch(e){}
+    try{ if(typeof window.prAddNotif==='function') window.prAddNotif({ toPerms:['planilla.authorize','users.manage'], title:'SOLICITUD DE PAGO A OTRA PERSONA', body:sol.solicitadoPorNombre+' quiere pagar '+sol.aptoName+' · '+sol.etapaNombre+' ('+sol.target+'%) a '+sol.colaboradorNombre+'. La etapa 1 fue de '+sol.etapa1Nombre+'.', type:'pago.solicitud' }); }catch(e){}
+    try{ if(typeof renderPlanilla==='function') renderPlanilla(); }catch(e){}
+    showToast('SOLICITUD ENVIADA · PENDIENTE DE AUTORIZACIÓN','green');
+  }
+  // Crea el pago de una etapa para un colaborador (reusado al AUTORIZAR una solicitud).
+  function _crearPagoEtapaPlanilla(p, tid, lid, aid, stageIdx, colab, target){
+    const t=(p.towers||[]).find(x=>x.id===tid); const l=t&&(t.levels||[]).find(x=>x.id===lid); const a=l&&(l.aptos||[]).find(x=>x.id===aid);
+    if(!a) return null;
+    const ETAPAS_PROJ = getEtapasP(p); const etapa = ETAPAS_PROJ[stageIdx]; if(!etapa) return null;
+    const total = stageTotal5(p,a,stageIdx); if(total<=0) return null;
+    const current = paidPct5(p,aid,stageIdx); target = Number(target)||0;
+    if(!(target>current)) return null;
+    const pctDelta=target-current; const bruto=+(total*pctDelta/100).toFixed(2); const retencion=+(bruto*0.10).toFixed(2); const neto=+(bruto-retencion).toFixed(2);
+    const mo=modeloObj5(p,(p.planilla&&p.planilla.aptoModelMap&&p.planilla.aptoModelMap[aid])||'GENERAL');
+    const rol = (typeof normalizeRole==='function' ? normalizeRole(colab.rol) : (colab.rol||'')) || 'PERSONAL';
+    const pagoId='plp-'+uid();
+    if(!p.planilla) p.planilla = {}; if(!Array.isArray(p.planilla.pagos)) p.planilla.pagos = [];
+    p.planilla.pagos.push({
+      id:pagoId,tipo:'ETAPA',ts:Date.now(),towerId:tid,levelId:lid,aptoId:aid,
+      aptoName:a.name,towerName:t.name,levelName:l.name,
+      stageIdx:Number(stageIdx),stageName:etapa.name,
+      detalle:t.name+' · '+a.name+' · ETAPA '+(Number(stageIdx)+1)+' · '+etapa.name,
+      bruto,retencion,neto,
+      colaborador:upper(colab.nombre),colaboradorId:colab.id,colaboradorRol:rol,
+      autorizado:false,retencionPagada:false,
+      targetPct:target,pctDelta,stageTotal:total,
+      modelKey:(mo&&mo.key)||'GENERAL',modelName:(mo&&mo.nombre)||'GENERAL',
+      generadoPor:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''),
+      generadoPorNombre:(typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):''),
+      pagoSinAcuse:true, excepcionAplicadaPor:null, excepcionRazon:'', _viaSolicitud:true
+    });
+    return { pagoId, neto };
+  }
+  window._solPagoEtapaPendientes = function(){ return (state.solicitudesPagoEtapa||[]).filter(s=>s && s.estado==='pendiente'); };
+  window.autorizarSolicitudPagoEtapa = function(solId){
+    if(!(can('planilla.authorize') || can('users.manage'))){ showToast('SOLO GERENTE/ADMIN AUTORIZA','red'); return; }
+    const sol = (state.solicitudesPagoEtapa||[]).find(s=>s.id===solId);
+    if(!sol){ showToast('SOLICITUD NO ENCONTRADA','red'); return; }
+    if(sol.estado!=='pendiente'){ showToast('SOLICITUD YA RESUELTA','red'); return; }
+    const p = (state.projects||[]).find(x=>x.id===sol.projectId);
+    if(!p){ showToast('PROYECTO NO ENCONTRADO','red'); return; }
+    const colab = { id:sol.colaboradorId, nombre:sol.colaboradorNombre, rol:sol.colaboradorRol||'PERSONAL' };
+    const r = _crearPagoEtapaPlanilla(p, sol.tid, sol.lid, sol.aid, sol.stageIdx, colab, sol.target);
+    if(!r){ showToast('NO SE PUDO CREAR EL PAGO (¿etapa ya pagada o sin monto?)','red'); return; }
+    sol.estado='aprobada'; sol._ts=Date.now();
+    sol.decididoPor=(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''); sol.decididoEn=(typeof nowStr==='function'?nowStr():'');
+    try{ saveState(); }catch(e){}
+    try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); }catch(e){}
+    try{ if(typeof window.prAddNotif==='function' && sol.solicitadoPor) window.prAddNotif({ toEmails:[sol.solicitadoPor], title:'PAGO AUTORIZADO', body:'Se autorizó el pago de '+sol.aptoName+' · '+sol.etapaNombre+' a '+sol.colaboradorNombre+'.', type:'pago.solicitud' }); }catch(e){}
+    try{ if(typeof renderPlanilla==='function') renderPlanilla(); }catch(e){}
+    try{ if(document.getElementById('solPagoEtapaModal')) window.verSolicitudesPagoEtapa(); }catch(e){}
+    showToast('PAGO AUTORIZADO Y GENERADO','green');
+  };
+  window.rechazarSolicitudPagoEtapa = async function(solId){
+    if(!(can('planilla.authorize') || can('users.manage'))){ showToast('SOLO GERENTE/ADMIN','red'); return; }
+    const sol = (state.solicitudesPagoEtapa||[]).find(s=>s.id===solId);
+    if(!sol || sol.estado!=='pendiente'){ showToast('SOLICITUD NO DISPONIBLE','red'); return; }
+    const ok = await window.prConfirm({ title:'Rechazar solicitud', body:'¿Rechazar el pago de '+sol.aptoName+' · '+sol.etapaNombre+' a '+sol.colaboradorNombre+'?', okText:'RECHAZAR', cancelText:'CANCELAR', danger:true });
+    if(!ok) return;
+    sol.estado='rechazada'; sol._ts=Date.now(); sol.decididoPor=(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):'');
+    try{ saveState(); }catch(e){}
+    try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); }catch(e){}
+    try{ if(typeof window.prAddNotif==='function' && sol.solicitadoPor) window.prAddNotif({ toEmails:[sol.solicitadoPor], title:'SOLICITUD DE PAGO RECHAZADA', body:'Se rechazó el pago de '+sol.aptoName+' · '+sol.etapaNombre+' a '+sol.colaboradorNombre+'.', type:'pago.solicitud' }); }catch(e){}
+    try{ if(typeof renderPlanilla==='function') renderPlanilla(); }catch(e){}
+    try{ if(document.getElementById('solPagoEtapaModal')) window.verSolicitudesPagoEtapa(); }catch(e){}
+    showToast('SOLICITUD RECHAZADA','info');
+  };
+  window.verSolicitudesPagoEtapa = function(){
+    const prev = document.getElementById('solPagoEtapaModal'); if(prev) prev.remove();
+    const pend = window._solPagoEtapaPendientes();
+    const filas = pend.length ? pend.map(s =>
+      '<div style="border:1px solid #E5E7EB;border-radius:8px;padding:12px;margin-bottom:10px;background:#FAFAFA">'
+      + '<div style="font-size:12.5px;font-weight:800;color:#1a1a1a">'+esc(s.colaboradorNombre)+'</div>'
+      + '<div style="font-size:11.5px;color:#555;margin-top:2px">'+esc(s.projectName)+' · '+esc(s.towerName)+' · '+esc(s.aptoName)+' · '+esc(s.etapaNombre)+' · '+s.target+'%</div>'
+      + '<div style="font-size:11px;color:#C62828;margin-top:4px;font-weight:600">La ETAPA #1 se le pagó a '+esc(s.etapa1Nombre)+'</div>'
+      + '<div style="font-size:10.5px;color:#888;margin-top:2px">Solicitó: '+esc(s.solicitadoPorNombre||s.solicitadoPor||'—')+' · '+esc(s.solicitadoEn||'')+'</div>'
+      + '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'
+      +   '<button class="btn sm" onclick="window.autorizarSolicitudPagoEtapa(\''+esc(s.id)+'\')" style="background:#2E7D32;border-color:#2E7D32;color:#fff;padding:6px 14px;font-size:11px">AUTORIZAR Y GENERAR PAGO</button>'
+      +   '<button class="btn ghost sm" onclick="window.rechazarSolicitudPagoEtapa(\''+esc(s.id)+'\')" style="border-color:#C62828;color:#C62828;padding:6px 14px;font-size:11px">RECHAZAR</button>'
+      + '</div></div>'
+    ).join('') : '<div style="padding:24px;text-align:center;color:#888;font-size:12px">SIN SOLICITUDES PENDIENTES</div>';
+    const html = '<div id="solPagoEtapaModal" style="position:fixed;inset:0;background:rgba(20,20,20,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:14px;font-family:inherit">'
+      + '<div style="background:#fff;border-radius:10px;max-width:560px;width:100%;max-height:88vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 16px 50px rgba(0,0,0,.25)">'
+      +   '<div style="padding:16px 20px;background:#C62828;color:#fff;display:flex;justify-content:space-between;align-items:center"><div style="font-size:14px;font-weight:800;letter-spacing:.3px">SOLICITUDES DE PAGO A OTRA PERSONA</div><button onclick="var m=document.getElementById(\'solPagoEtapaModal\'); if(m) m.remove();" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer;line-height:1">×</button></div>'
+      +   '<div style="padding:16px 18px;overflow-y:auto;flex:1;background:#FFF">'+filas+'</div>'
+      + '</div></div>';
+    const wrap = document.createElement('div'); wrap.innerHTML = html; document.body.appendChild(wrap.firstElementChild);
   };
 
   window.renderPlanillaPagosList = function(canAuth){
