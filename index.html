@@ -2928,7 +2928,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v773</span>
+    <span style="opacity:.5;font-size:9px">v774</span>
   </footer>
 
 </div>
@@ -8857,6 +8857,13 @@ const CloudSync = {
         merged.solicitudesColaboradores = _mSolC.list; if (_mSolC.changed) needsResync = true;
       }
     } catch(e){ console.warn('blindaje de plata en applyRemote:', e); }
+
+    // v774: union-merge de libEtapas (liberación de etapas de la gerente). El doc de proyecto es
+    // last-write-wins; sin esto un upload viejo del supervisor pisaba la liberación de la gerente
+    // (= "liberó pero el supervisor no podía pagar"). Une por celda con la ts más nueva + tombstone.
+    try {
+      if (typeof _mergeLibEtapasIntoMerged === 'function' && _mergeLibEtapasIntoMerged(merged, state)) needsResync = true;
+    } catch(e){ console.warn('merge libEtapas en applyRemote:', e); }
 
     state = merged;
     // v495: recalcular _projHashes desde el remoteData REALMENTE aplicado en esta llamada.
@@ -23923,7 +23930,7 @@ function renderAll(){
 // v739: INTERRUPTOR TEMPORAL — true = TODAS las etapas/aptos/niveles liberados para pago
 // (se puede generar planilla de cualquier etapa) y se OCULTA el botón "LIBERAR PAGO".
 // Para REACTIVAR el control de liberación: poner en false.
-window._PAGO_LIBRE_TODO = true;
+window._PAGO_LIBRE_TODO = false; // v774: control de LIBERAR ETAPA re-activado (la gerente libera por apto+etapa)
 /* ETAPAS_INFO = etapas de AVANCE FÍSICO (lo que se ve en obra para fotos y avance %).
    NO confundir con RECETA_ETAPAS más abajo, que son las 5 etapas usadas
    exclusivamente para PEDIDOS / RECETA DE MATERIALES (E1..E5). */
@@ -24895,6 +24902,52 @@ function _mergePersonal(localList, remoteList, tombSet){
 // viejos pisaba el cambio recién hecho ("no se guarda"). Ahora se UNEN local∪remoto:
 // gana el _ts (fallback ts) MÁS NUEVO; un id en tombSet se elimina (borrado real,
 // no resucita). Mismo patrón que _mergePersonal/_mergeColaboradores.
+// v774: LIBERACIÓN DE ETAPAS (gerente) — helpers de merge + estado neto.
+// libEtapas vive en el apto: towers[].levels[].aptos[].libEtapas = { [idx]:{ts,by} }.
+// libEtapasTomb = { [idx]:ts } (des-liberar). Una etapa está LIBERADA si release.ts >= tomb.ts.
+function _etapaLiberada(apto, stageIdx){
+  if(!apto) return false;
+  const lib = apto.libEtapas && apto.libEtapas[stageIdx];
+  if(!lib) return false;
+  const tomb = (apto.libEtapasTomb && Number(apto.libEtapasTomb[stageIdx])) || 0;
+  return (Number(lib.ts)||0) >= tomb;
+}
+// Une dos mapas {idx:valor} quedándose con la ts MÁS NUEVA por celda. isTomb => valor es un
+// número (ts); si no, es {ts,by}. changed = se preservó algo LOCAL que el remoto no traía o más nuevo.
+function _mergeLibMap(localMap, remoteMap, isTomb){
+  const out = {};
+  const _ts = (v) => (v==null) ? -1 : (isTomb ? (Number(v)||0) : (Number(v.ts)||0));
+  let changed = false;
+  const keys = {};
+  Object.keys(localMap||{}).forEach(k=>{keys[k]=1;});
+  Object.keys(remoteMap||{}).forEach(k=>{keys[k]=1;});
+  Object.keys(keys).forEach(k => {
+    const lv = (localMap||{})[k], rv = (remoteMap||{})[k];
+    if(rv==null){ out[k]=lv; changed=true; return; }
+    if(lv==null){ out[k]=rv; return; }
+    if(_ts(lv) > _ts(rv)){ out[k]=lv; changed=true; } else { out[k]=rv; }
+  });
+  return { map: out, changed };
+}
+// Camina merged (base = remoto) y une la liberación LOCAL por apto (match por id), para que
+// la liberación de la gerente NO la pise un upload viejo del supervisor (doc de proyecto es LWW).
+function _mergeLibEtapasIntoMerged(merged, localState){
+  let changed = false;
+  const localById = {};
+  ((localState && localState.projects) || []).forEach(pr => (pr.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => { if(a && a.id) localById[a.id]=a; }))));
+  ((merged && merged.projects) || []).forEach(pr => (pr.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
+    if(!a || !a.id) return;
+    const la = localById[a.id];
+    if(!la) return;
+    const mLib  = _mergeLibMap(la.libEtapas,     a.libEtapas,     false);
+    const mTomb = _mergeLibMap(la.libEtapasTomb, a.libEtapasTomb, true);
+    if(Object.keys(mLib.map).length)  a.libEtapas     = mLib.map;
+    if(Object.keys(mTomb.map).length) a.libEtapasTomb = mTomb.map;
+    if(mLib.changed || mTomb.changed) changed = true;
+  }))));
+  return changed;
+}
+
 function _mergeById(localList, remoteList, tombSet){
   var _ver = function(o){ if(!o) return 0; if(typeof o._ts==='number') return o._ts; if(typeof o.ts==='number') return o.ts; return 0; };
   var byId = {};
@@ -37104,7 +37157,7 @@ window.addEventListener('load', () => {
                 const canPay = canGen || canAuth;
                 // v509: el bloqueo de liberacion NO es visual. El PAGAR se ve NORMAL para todos. El bloqueo se
                 // aplica SOLO al generar el pago (pagarEtapaPlanilla) y solo para el subgerente, sin revelarle el motivo.
-                const _lib = !!(a.libEtapas && a.libEtapas[i]);
+                const _lib = (typeof _etapaLiberada==='function') ? _etapaLiberada(a, i) : !!(a.libEtapas && a.libEtapas[i]);
                 const disabled=(!canPay || total<=0 || !opts.length);
                 const etapaName = (ETAPAS_PROJ[i] && ETAPAS_PROJ[i].name) || ('ETAPA '+(i+1));
                 // v241: titulo de la etapa visible SIEMPRE en cada celda
@@ -37191,11 +37244,15 @@ window.addEventListener('load', () => {
     (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => { if(a.id===aptoId) apto = a; })));
     if(!apto){ showToast('APARTAMENTO NO ENCONTRADO','red'); return; }
     if(!apto.libEtapas) apto.libEtapas = {};
-    const yaLib = !!apto.libEtapas[stageIdx];
-    if(yaLib){ delete apto.libEtapas[stageIdx]; }
-    else {
+    if(!apto.libEtapasTomb) apto.libEtapasTomb = {};
+    const yaLib = (typeof _etapaLiberada==='function') ? _etapaLiberada(apto, stageIdx) : !!apto.libEtapas[stageIdx];
+    if(yaLib){
+      // v774: des-liberar = tombstone con ts NUEVA (NO se borra, así el union-merge lo respeta entre dispositivos).
+      apto.libEtapasTomb[stageIdx] = Date.now();
+    } else {
       let _by = '';
       try { _by = (typeof currentUserEmail!=='undefined' && currentUserEmail) ? currentUserEmail : ((typeof _getUserEmail==='function') ? (_getUserEmail()||'') : ''); } catch(e){}
+      // v774: liberar = release con ts NUEVA (gana sobre cualquier tombstone viejo).
       apto.libEtapas[stageIdx] = { by:_by, ts:Date.now() };
     }
     try{ saveState(); }catch(e){}
@@ -37218,9 +37275,9 @@ window.addEventListener('load', () => {
     {
       const _esGer509 = can('planilla.authorize') || can('users.manage');
       const _paid493 = (typeof paidPct5==='function') ? paidPct5(p, a.id, stageIdx) : 0;
-      const _lib493 = !!(a.libEtapas && a.libEtapas[stageIdx]);
+      const _lib493 = _etapaLiberada(a, stageIdx);
       if (!_esGer509 && !_lib493 && _paid493 <= 0 && !window._PAGO_LIBRE_TODO){ // v739: si _PAGO_LIBRE_TODO, todo liberado
-        return showToast('ESTA ETAPA AÚN NO ESTÁ DISPONIBLE PARA PAGO','red');
+        return showToast('ETAPA NO DISPONIBLE DE PAGO','red'); // v774: mensaje neutro (no revela la liberación)
       }
     }
     // v508: regla secuencial eliminada — la liberacion controla que se puede pagar (sin orden forzado).
