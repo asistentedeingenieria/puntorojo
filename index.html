@@ -2928,7 +2928,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v771</span>
+    <span style="opacity:.5;font-size:9px">v772</span>
   </footer>
 
 </div>
@@ -11139,6 +11139,19 @@ function addEstimacion(){
   const num = p.cobro.rows.filter(r => !r.isAnticipo).length + 1;
   p.cobro.rows.push({id:uid(),f:'',d:'ESTIMACIÓN #'+num,vp_ci:0,sf:'PENDIENTE',sc:'PENDIENTE',fp:''});
   logActivity('create', 'Estimación #' + num + ' creada', p.name);
+  // v772: notificar por la CAMPANITA (prAddNotif = sistema B) a TODOS los que tienen acceso a
+  // COBRO. No depende de que el actor lea la coleccion users (lo cual fallaba para no-admins).
+  try {
+    if (typeof window.prAddNotif === 'function'){
+      const _whoEst = (typeof currentUser!=='undefined' && currentUser && (currentUser.displayName||currentUser.name||currentUser.username||currentUser.email)) || 'Alguien';
+      window.prAddNotif({
+        toPerms: ['view.cobro','cobro.edit','cobro.subirExcel'],
+        title: 'ESTIMACIÓN AGREGADA · ' + (p.name||''),
+        body: _whoEst + ' agregó la ESTIMACIÓN #' + num + '.',
+        type: 'cobro.estimacion'
+      });
+    }
+  } catch(e){ console.warn('prAddNotif addEstimacion:', e); }
   saveState();
   renderCobro();
   showToast('ESTIMACIÓN AGREGADA', 'green');
@@ -28182,6 +28195,18 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
           await _notifyByPerm('users.manage', _payEx);
           await _notifyByPerm('cobro.edit', _payEx);
           await _notifyByPerm('avance.edit', _payEx);
+          // v772: ADEMAS, notificar por la CAMPANITA (prAddNotif = sistema B) a TODOS los que
+          // tienen acceso a COBRO. No depende de que el actor lea la coleccion users (un
+          // usuario NO-admin no puede) ni alimenta otro canal: va por appState y cada
+          // destinatario filtra por SUS permisos. Misma logica que la otra ruta de import.
+          if (typeof window.prAddNotif === 'function'){
+            window.prAddNotif({
+              toPerms: ['view.cobro','cobro.edit','cobro.subirExcel'],
+              title: 'ESTIMACIONES ACTUALIZADAS · ' + (_pP.name||''),
+              body: _whoEx + ' subió el Excel de estimaciones · ' + (_resPR.rows.length) + ' filas.',
+              type: 'cobro.estimacion'
+            });
+          }
         } catch(e){ console.warn('Notif excel cobro:', e); }
         showToast('COBRO ACTUALIZADO ('+_resPR.rows.length+' FILAS'+(_avN?' · '+_avN+' APTOS AVANCE':'')+')','green');
         event.target.value=''; return;
@@ -28799,6 +28824,22 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         await _notifyByPerm('users.manage', _payEx);
         await _notifyByPerm('cobro.edit', _payEx);
         await _notifyByPerm('avance.edit', _payEx);
+        // v772: ADEMAS, notificar por la CAMPANITA (prAddNotif = sistema B) a TODOS los que
+        // tienen acceso a COBRO. El _notifyByPerm de arriba (sistema A) escribe en la
+        // subcoleccion Firestore del destinatario + push, pero NO alimenta la campanita
+        // (que lee prGetUserNotifs/state.notifications) y requiere que el ACTOR pueda leer
+        // la coleccion users — un usuario NO-admin no puede, asi que no se creaba nada.
+        // prAddNotif va por appState (se sincroniza a todos) y cada destinatario filtra por
+        // SUS permisos, igual que las notificaciones de planilla (que si funcionan).
+        if (typeof window.prAddNotif === 'function'){
+          const _nNewEst = (typeof estimacionesAgregadas === 'number') ? estimacionesAgregadas : 0;
+          window.prAddNotif({
+            toPerms: ['view.cobro','cobro.edit','cobro.subirExcel'],
+            title: 'ESTIMACIONES ACTUALIZADAS · ' + (p.name||''),
+            body: _whoEx + ' subió el Excel de estimaciones' + (_nNewEst>0 ? (' · '+_nNewEst+' nueva'+(_nNewEst>1?'s':'')) : '') + ' ('+updated+' registros).',
+            type: 'cobro.estimacion'
+          });
+        }
       } catch(e){ console.warn('Notif excel cobro:', e); }
 
       logActivity('update', 'Excel de estimación cargado',
