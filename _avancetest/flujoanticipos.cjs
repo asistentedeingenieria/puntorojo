@@ -43,6 +43,10 @@ ok('sub-pestaña SOLICITUDES (antsolic)', html.indexOf("'antsolic'")>=0);
 // v778: el campo "para quién" es un desplegable ordenado de colaboradores, no texto libre
 ok('_antColabOptions existe (lista de colaboradores)', html.indexOf('_antColabOptions')>=0);
 ok('antSolColab es un <select> (despliega la lista)', /<select id="antSolColab"/.test(html));
+// v780: el solicitante NUNCA pone monto estimado -> el campo fue removido por completo
+ok('sin input antSolMonto (monto estimado removido)', html.indexOf('antSolMonto')<0);
+ok('sin lectura de montoEst en crearSolicitudAnticipo', html.indexOf('montoEst')<0);
+ok('sin campo montoEstimado en la solicitud', html.indexOf('montoEstimado')<0);
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
