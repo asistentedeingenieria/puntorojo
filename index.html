@@ -2928,7 +2928,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v776</span>
+    <span style="opacity:.5;font-size:9px">v777</span>
   </footer>
 
 </div>
@@ -4473,6 +4473,8 @@ const PERMS_DISPONIBLES = [
   { key: 'self.asistencia', label: 'Auto-marcar SU PROPIA asistencia (oficina)', group: 'EDICIÓN PERSONAL' },
   { key: 'polizas.edit',     label: 'Ver y editar pólizas existentes', group: 'EDICIÓN PERSONAL' },
   { key: 'polizas.agregar',  label: 'Agregar pólizas NUEVAS', group: 'EDICIÓN PERSONAL' },
+  { key: 'anticipos.solicitar', label: 'Solicitar anticipos (supervisor)', group: 'EDICIÓN PERSONAL' }, // v777
+  { key: 'anticipos.cotizar',   label: 'Cotizar anticipos (Compras)',      group: 'EDICIÓN PERSONAL' }, // v777
   { key: 'projects.create',  label: 'Crear proyectos nuevos',  group: 'ADMINISTRACIÓN' },
   { key: 'data.import',      label: 'Importar/resetear datos', group: 'ADMINISTRACIÓN' },
   { key: 'users.manage',     label: 'Gestionar usuarios',      group: 'ADMINISTRACIÓN' },
@@ -8857,6 +8859,8 @@ const CloudSync = {
         merged.solicitudesColaboradores = _mSolC.list; if (_mSolC.changed) needsResync = true;
         const _mSolPE = _mergeById((state && state.solicitudesPagoEtapa) || [], merged.solicitudesPagoEtapa || [], null); // v775: solicitudes de pago a otra persona
         merged.solicitudesPagoEtapa = _mSolPE.list; if (_mSolPE.changed) needsResync = true;
+        const _mSolAn = _mergeById((state && state.solicitudesAnticipo) || [], merged.solicitudesAnticipo || [], null); // v777: solicitudes de anticipo
+        merged.solicitudesAnticipo = _mSolAn.list; if (_mSolAn.changed) needsResync = true;
       }
     } catch(e){ console.warn('blindaje de plata en applyRemote:', e); }
 
@@ -24904,6 +24908,38 @@ function _mergePersonal(localList, remoteList, tombSet){
 // viejos pisaba el cambio recién hecho ("no se guarda"). Ahora se UNEN local∪remoto:
 // gana el _ts (fallback ts) MÁS NUEVO; un id en tombSet se elimina (borrado real,
 // no resucita). Mismo patrón que _mergePersonal/_mergeColaboradores.
+// v777: FLUJO DE ANTICIPOS (solicitud -> cotización -> autorización -> alta automática).
+// Máquina de estados PURA: dada la etapa actual + la acción, devuelve la etapa siguiente o null.
+function _anticSolicNextEstado(estado, accion){
+  const E = String(estado||''); const A = String(accion||'');
+  if (A === 'cotizar'   && E === 'pendiente_cotizacion')   return 'pendiente_autorizacion';
+  if (A === 'autorizar' && E === 'pendiente_autorizacion') return 'autorizada';
+  if (A === 'rechazar'  && E === 'pendiente_autorizacion') return 'rechazada';
+  if (A === 'cancelar'  && (E === 'pendiente_cotizacion' || E === 'pendiente_autorizacion')) return 'cancelada';
+  return null;
+}
+// Arma el objeto anticipo del catálogo desde la solicitud + cotización + cuotas confirmadas.
+// PURO: id/ts/creadoPor/fecha vienen por opts (testeable). Match del shape de anticiposGlobales.
+function _anticBuildAnticipo(sol, cuotas, opts){
+  opts = opts || {};
+  const n = Math.min(6, Math.max(1, Number(cuotas)||1));
+  const prov = (sol && sol.cotProveedor) ? (' · ' + sol.cotProveedor) : '';
+  return {
+    id: opts.id, _ts: opts.ts, ts: opts.ts,
+    colaboradorId: (sol && sol.colaboradorId) || '',
+    colaboradorNombre: (sol && sol.colaboradorNombre) || '',
+    fecha: opts.fecha || '',
+    subtipo: (sol && sol.subtipo) || 'PRESTAMO_PERSONAL',
+    desc: String((sol && sol.descripcion) || '') + prov,
+    montoTotal: Number(sol && sol.cotMonto) || 0,
+    cantidadCuotas: n,
+    cuotasPagadasInicial: 0,
+    creadoPor: opts.creadoPor || '',
+    creadoNombre: opts.creadoNombre || '',
+    origenSolicitud: (sol && sol.id) || ''
+  };
+}
+
 // v775: CANDADO DEL INSTALADOR. Quien cobró la ETAPA 1 (stageIdx 0) de un apto es el "dueño"
 // de las etapas 2,3,4 (idx 1,2,3). Etapa 1 y etapa 5 (idx 4) quedan libres.
 function _etapa1Owner(p, aptoId){
@@ -44482,6 +44518,223 @@ async function _anulAnularReal(){
     return sol;
   }
 
+  // ═══════════ v777: FLUJO DE ANTICIPOS (solicitud → cotización → autorización → alta auto) ═══════════
+  function _antSolics(){ if(!Array.isArray(state.solicitudesAnticipo)) state.solicitudesAnticipo = []; return state.solicitudesAnticipo; }
+  function _antSolicPerm(k){ try { return typeof can==='function' && can(k); } catch(e){ return false; } }
+  function _antEsGerente(){ return _antSolicPerm('planilla.authorize') || _antSolicPerm('users.manage'); }
+  function _antMyEmail(){ return (typeof window._getUserEmail==='function' ? (window._getUserEmail()||'') : '').toLowerCase(); }
+  function _antSubtipoOpts(sel){ return ['PRESTAMO_HERRAMIENTA','PRESTAMO_SERVICIO_HERRAMIENTA','PRESTAMO_CALZADO','PRESTAMO_SAT','PRESTAMO_ADELANTO_QUINCENA','PRESTAMO_PERSONAL'].map(k=>'<option value="'+k+'"'+(k===sel?' selected':'')+'>'+esc(_subtipoLabelAnt(k))+'</option>').join(''); }
+  function _antSolicEstadoMeta(e){ return ({ pendiente_cotizacion:{t:'PENDIENTE DE COTIZACIÓN',c:'#B45309',bg:'#FEF3C7'}, pendiente_autorizacion:{t:'PENDIENTE DE AUTORIZACIÓN',c:'#1D4ED8',bg:'#DBEAFE'}, autorizada:{t:'AUTORIZADA',c:'#15803D',bg:'#DCFCE7'}, rechazada:{t:'RECHAZADA',c:'#B91C1C',bg:'#FEE2E2'}, cancelada:{t:'CANCELADA',c:'#6B7280',bg:'#F3F4F6'} }[e] || {t:String(e||'').toUpperCase(),c:'#6B7280',bg:'#F3F4F6'}); }
+  window._antSolicPendientesParaMi = function(){
+    return _antSolics().filter(s => {
+      if(!s) return false;
+      if(s.estado==='pendiente_cotizacion' && (_antSolicPerm('anticipos.cotizar')||_antEsGerente())) return true;
+      if(s.estado==='pendiente_autorizacion' && _antEsGerente()) return true;
+      return false;
+    });
+  };
+  function _antSolicNotif(perms, emails, title, body){
+    try { if(typeof window.prAddNotif==='function') window.prAddNotif({ toPerms:perms||[], toEmails:(emails||[]).filter(Boolean), title:title, body:String(body||'').slice(0,300), type:'anticipo.solicitud' }); } catch(e){}
+  }
+  function _antSolicSave(){
+    try{ saveState(); }catch(e){}
+    try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); }catch(e){}
+    try{ window.renderPlanillaAnticipos(); }catch(e){}
+  }
+  // CREAR (supervisor)
+  window.crearSolicitudAnticipo = function(){
+    if(!_antSolicPerm('anticipos.solicitar') && !_antEsGerente()){ showT('SIN PERMISO PARA SOLICITAR','red'); return; }
+    const colab = String((document.getElementById('antSolColab')||{}).value||'').trim().toUpperCase();
+    const subtipo = String((document.getElementById('antSolSubtipo')||{}).value||'PRESTAMO_PERSONAL');
+    const desc = String((document.getElementById('antSolDesc')||{}).value||'').trim();
+    const montoEst = Number((document.getElementById('antSolMonto')||{}).value)||0;
+    if(!colab){ showT('ESCRIBÍ PARA QUIÉN ES EL PRÉSTAMO','red'); return; }
+    if(!desc){ showT('DESCRIBÍ QUÉ NECESITA','red'); return; }
+    const p = (typeof activeProj==='function')?activeProj():null;
+    const sol = { id:'solant-'+uid(), _ts:Date.now(), estado:'pendiente_cotizacion',
+      projectId:(p&&p.id)||'', projectName:(p&&p.name)||'',
+      colaboradorId:'', colaboradorNombre:colab, subtipo:subtipo, descripcion:desc, montoEstimado:montoEst,
+      solicitadoPor:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''),
+      solicitadoPorNombre:(typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):''),
+      solicitadoEn:(typeof nowStr==='function'?nowStr():'') };
+    _antSolics().push(sol);
+    _antSolicNotif(['anticipos.solicitar','anticipos.cotizar','planilla.authorize','users.manage'], [], 'NUEVA SOLICITUD DE ANTICIPO', sol.solicitadoPorNombre+' pide '+_subtipoLabelAnt(subtipo)+' para '+colab+(montoEst?(' (~'+_money(montoEst)+')'):'')+'. Falta cotización.');
+    var m=document.getElementById('antSolicFormModal'); if(m) m.remove();
+    _antSolicSave();
+    showT('SOLICITUD ENVIADA · ESPERA COTIZACIÓN','green');
+  };
+  // SUBIR COTIZACIÓN (compras)
+  window.subirCotizacionAnticipo = async function(solId){
+    if(!_antSolicPerm('anticipos.cotizar') && !_antEsGerente()){ showT('SIN PERMISO PARA COTIZAR','red'); return; }
+    const sol = _antSolics().find(s=>s.id===solId);
+    if(!sol || sol.estado!=='pendiente_cotizacion'){ showT('SOLICITUD NO DISPONIBLE','red'); return; }
+    const prov = String((document.getElementById('antCotProv')||{}).value||'').trim();
+    const monto = Number((document.getElementById('antCotMonto')||{}).value)||0;
+    const nota = String((document.getElementById('antCotNota')||{}).value||'').trim();
+    const fileInp = document.getElementById('antCotFile');
+    const file = fileInp && fileInp.files && fileInp.files[0];
+    if(!prov){ showT('ESCRIBÍ EL PROVEEDOR','red'); return; }
+    if(!(monto>0)){ showT('ESCRIBÍ EL MONTO DE LA COTIZACIÓN','red'); return; }
+    let url='', nombreArch='';
+    if(file){
+      try {
+        if(typeof firebase!=='undefined' && firebase.storage){
+          try{ window._prUploadShow && window._prUploadShow('SUBIENDO COTIZACIÓN…'); }catch(e){}
+          const ref = firebase.storage().ref('anticipos-cotizaciones/'+sol.id+'-'+Date.now());
+          await ref.put(file, { contentType: file.type || 'application/octet-stream' });
+          url = await ref.getDownloadURL(); nombreArch = file.name||'';
+          try{ window._prUploadHide && window._prUploadHide(); }catch(e){}
+        }
+      } catch(e){ console.warn('[v777] cotizacion file', e); try{ window._prUploadHide && window._prUploadHide(); }catch(e2){} }
+    }
+    sol.cotProveedor=prov; sol.cotMonto=monto; sol.cotNota=nota; sol.cotArchivoUrl=url; sol.cotArchivoNombre=nombreArch;
+    sol.cotizadoPor=(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''); sol.cotizadoEn=(typeof nowStr==='function'?nowStr():'');
+    sol.estado = _anticSolicNextEstado(sol.estado,'cotizar'); sol._ts=Date.now();
+    _antSolicNotif(['planilla.authorize','users.manage'], [], 'COTIZACIÓN LISTA · ANTICIPO', sol.colaboradorNombre+' · '+_subtipoLabelAnt(sol.subtipo)+' · '+prov+' · '+_money(monto)+'. Esperando autorización.');
+    var m=document.getElementById('antCotModal'); if(m) m.remove();
+    _antSolicSave();
+    showT('COTIZACIÓN ENVIADA · ESPERA AUTORIZACIÓN','green');
+  };
+  // AUTORIZAR (gerente) → crea el anticipo automáticamente
+  window.autorizarSolicitudAnticipoFlujo = function(solId){
+    if(!_antEsGerente()){ showT('SOLO GERENTE/ADMIN AUTORIZA','red'); return; }
+    const sol = _antSolics().find(s=>s.id===solId);
+    if(!sol || sol.estado!=='pendiente_autorizacion'){ showT('SOLICITUD NO DISPONIBLE','red'); return; }
+    const cuotas = Number((document.getElementById('antAutCuotas')||{}).value)||1;
+    const ant = _anticBuildAnticipo(sol, cuotas, { id:'ant-'+Date.now()+'-'+Math.random().toString(36).slice(2,8), ts:Date.now(), fecha:new Date().toISOString().slice(0,10), creadoPor:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''), creadoNombre:(typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):'') });
+    _getAnticipos().push(ant);
+    sol.estado='autorizada'; sol._ts=Date.now(); sol.cuotas=ant.cantidadCuotas; sol.anticipoIdCreado=ant.id;
+    sol.decididoPor=(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''); sol.decididoEn=(typeof nowStr==='function'?nowStr():'');
+    _antSolicNotif(['anticipos.cotizar'], [sol.solicitadoPor], 'ANTICIPO AUTORIZADO', sol.colaboradorNombre+' · '+_subtipoLabelAnt(sol.subtipo)+' · '+_money(ant.montoTotal)+' en '+ant.cantidadCuotas+' cuotas. Anticipo creado.');
+    try{ if(window.resyncDescuentosAbiertas) window.resyncDescuentosAbiertas(); }catch(e){}
+    var m=document.getElementById('antAutModal'); if(m) m.remove();
+    _antSolicSave();
+    showT('ANTICIPO AUTORIZADO Y CREADO','green');
+  };
+  // RECHAZAR (gerente)
+  window.rechazarSolicitudAnticipoFlujo = function(solId){
+    if(!_antEsGerente()){ showT('SOLO GERENTE/ADMIN','red'); return; }
+    const sol = _antSolics().find(s=>s.id===solId);
+    if(!sol || sol.estado!=='pendiente_autorizacion'){ showT('SOLICITUD NO DISPONIBLE','red'); return; }
+    const motivo = String((document.getElementById('antAutMotivo')||{}).value||'').trim();
+    sol.estado='rechazada'; sol._ts=Date.now(); sol.motivoRechazo=motivo;
+    sol.decididoPor=(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''); sol.decididoEn=(typeof nowStr==='function'?nowStr():'');
+    _antSolicNotif(['anticipos.cotizar'], [sol.solicitadoPor], 'SOLICITUD DE ANTICIPO RECHAZADA', sol.colaboradorNombre+' · '+_subtipoLabelAnt(sol.subtipo)+(motivo?(' · '+motivo):''));
+    var m=document.getElementById('antAutModal'); if(m) m.remove();
+    _antSolicSave();
+    showT('SOLICITUD RECHAZADA','info');
+  };
+  // CANCELAR (el creador)
+  window.cancelarSolicitudAnticipo = async function(solId){
+    const sol = _antSolics().find(s=>s.id===solId);
+    if(!sol || (sol.estado!=='pendiente_cotizacion' && sol.estado!=='pendiente_autorizacion')){ showT('NO SE PUEDE CANCELAR','red'); return; }
+    const esCreador = (String(sol.solicitadoPor||'').toLowerCase() === _antMyEmail());
+    if(!esCreador && !_antEsGerente()){ showT('SOLO EL QUE LA PIDIÓ PUEDE CANCELARLA','red'); return; }
+    const ok = await window.prConfirm({ title:'Cancelar solicitud', body:'¿Cancelar tu solicitud de anticipo de '+sol.colaboradorNombre+'?', okText:'CANCELAR SOLICITUD', cancelText:'NO', danger:true });
+    if(!ok) return;
+    // v777: re-leer y re-validar tras el modal (otro equipo pudo autorizarla durante el await — patrón v769/v770).
+    const sol2 = _antSolics().find(s=>s.id===solId);
+    if(!sol2 || (sol2.estado!=='pendiente_cotizacion' && sol2.estado!=='pendiente_autorizacion')){ showT('LA SOLICITUD YA CAMBIÓ DE ESTADO','red'); try{ window.renderPlanillaAnticipos(); }catch(e){} return; }
+    sol2.estado='cancelada'; sol2._ts=Date.now();
+    _antSolicSave();
+    showT('SOLICITUD CANCELADA','info');
+  };
+  // ── Modales (standalone, leen los inputs en el onclick) ──
+  function _antModalWrap(id, titulo, bodyHTML){
+    var prev=document.getElementById(id); if(prev) prev.remove();
+    var html='<div id="'+id+'" style="position:fixed;inset:0;background:rgba(20,20,20,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:14px;font-family:inherit">'
+      +'<div style="background:#fff;border-radius:10px;max-width:520px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 16px 50px rgba(0,0,0,.25)">'
+      +'<div style="padding:15px 20px;background:#C62828;color:#fff;display:flex;justify-content:space-between;align-items:center"><div style="font-size:13.5px;font-weight:800;letter-spacing:.3px">'+esc(titulo)+'</div><button onclick="var m=document.getElementById(\''+id+'\'); if(m) m.remove();" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer;line-height:1">×</button></div>'
+      +'<div style="padding:16px 18px;overflow-y:auto;flex:1;background:#FFF">'+bodyHTML+'</div></div></div>';
+    var wrap=document.createElement('div'); wrap.innerHTML=html; document.body.appendChild(wrap.firstElementChild);
+  }
+  var _antLbl='font-size:10px;letter-spacing:1px;color:#666;font-weight:700;text-transform:uppercase';
+  var _antInp='width:100%;padding:9px 11px;border:1px solid #DDD;border-radius:5px;font:inherit;font-size:12.5px;margin-top:4px;box-sizing:border-box';
+  window._antAbrirSolicitar = function(){
+    if(!_antSolicPerm('anticipos.solicitar') && !_antEsGerente()){ showT('SIN PERMISO PARA SOLICITAR','red'); return; }
+    _antModalWrap('antSolicFormModal','SOLICITAR ANTICIPO',
+      '<label style="display:block;margin-bottom:12px"><span style="'+_antLbl+'">¿Para quién es el préstamo?</span><input id="antSolColab" placeholder="NOMBRE DEL COLABORADOR" style="'+_antInp+';text-transform:uppercase"></label>'
+      +'<label style="display:block;margin-bottom:12px"><span style="'+_antLbl+'">Tipo</span><select id="antSolSubtipo" style="'+_antInp+'">'+_antSubtipoOpts('PRESTAMO_PERSONAL')+'</select></label>'
+      +'<label style="display:block;margin-bottom:12px"><span style="'+_antLbl+'">¿Qué necesita? (descripción)</span><textarea id="antSolDesc" rows="3" placeholder="Ej: TALADRO DEWALT 20V…" style="'+_antInp+'"></textarea></label>'
+      +'<label style="display:block;margin-bottom:16px"><span style="'+_antLbl+'">Monto estimado (opcional)</span><input id="antSolMonto" type="number" inputmode="decimal" placeholder="0.00" style="'+_antInp+'"></label>'
+      +'<button class="btn" onclick="window.crearSolicitudAnticipo()" style="width:100%;background:#2E7D32;border-color:#2E7D32;color:#fff;padding:11px;font-size:12.5px;font-weight:700">ENVIAR SOLICITUD</button>');
+  };
+  window._antAbrirCotizar = function(solId){
+    const sol = _antSolics().find(s=>s.id===solId); if(!sol){ return; }
+    _antModalWrap('antCotModal','SUBIR COTIZACIÓN',
+      '<div style="font-size:12px;color:#555;margin-bottom:12px;line-height:1.5">'+esc(sol.colaboradorNombre)+' · '+esc(_subtipoLabelAnt(sol.subtipo))+'<br><span style="color:#888">'+esc(sol.descripcion||'')+'</span></div>'
+      +'<label style="display:block;margin-bottom:12px"><span style="'+_antLbl+'">Proveedor</span><input id="antCotProv" placeholder="NOMBRE DEL PROVEEDOR" style="'+_antInp+'"></label>'
+      +'<label style="display:block;margin-bottom:12px"><span style="'+_antLbl+'">Monto cotizado</span><input id="antCotMonto" type="number" inputmode="decimal" placeholder="0.00" style="'+_antInp+'"></label>'
+      +'<label style="display:block;margin-bottom:12px"><span style="'+_antLbl+'">Cotización (foto o PDF)</span><input id="antCotFile" type="file" accept="image/*,application/pdf,.xlsx,.xls" style="'+_antInp+'"></label>'
+      +'<label style="display:block;margin-bottom:16px"><span style="'+_antLbl+'">Nota (opcional)</span><input id="antCotNota" placeholder="" style="'+_antInp+'"></label>'
+      +'<button class="btn" onclick="window.subirCotizacionAnticipo(\''+esc(sol.id)+'\')" style="width:100%;background:#1565C0;border-color:#1565C0;color:#fff;padding:11px;font-size:12.5px;font-weight:700">ENVIAR COTIZACIÓN</button>');
+  };
+  window._antAbrirAutorizar = function(solId){
+    if(!_antEsGerente()){ showT('SOLO GERENTE/ADMIN','red'); return; }
+    const sol = _antSolics().find(s=>s.id===solId); if(!sol){ return; }
+    var cuotasSug = 1; try { var mm = Number(sol.cotMonto)||0; cuotasSug = Math.min(6, Math.max(1, Math.ceil(mm/500))); } catch(e){}
+    var arch = sol.cotArchivoUrl ? ('<a href="'+esc(sol.cotArchivoUrl)+'" target="_blank" style="color:#1565C0;font-weight:700;text-decoration:underline">VER COTIZACIÓN ('+esc(sol.cotArchivoNombre||'archivo')+')</a>') : '<span style="color:#888">sin archivo</span>';
+    _antModalWrap('antAutModal','REVISAR Y AUTORIZAR',
+      '<div style="background:#FAFAFA;border:1px solid #EEE;border-radius:8px;padding:12px;margin-bottom:14px;font-size:12.5px;line-height:1.6">'
+      +'<div style="font-weight:800">'+esc(sol.colaboradorNombre)+'</div>'
+      +'<div style="color:#555">'+esc(_subtipoLabelAnt(sol.subtipo))+' · '+esc(sol.descripcion||'')+'</div>'
+      +'<div style="margin-top:6px">Proveedor: <strong>'+esc(sol.cotProveedor||'—')+'</strong></div>'
+      +'<div>Monto cotizado: <strong>'+_money(Number(sol.cotMonto)||0)+'</strong></div>'
+      +'<div style="margin-top:6px">'+arch+'</div>'
+      +'<div style="color:#888;font-size:11px;margin-top:6px">Solicitó: '+esc(sol.solicitadoPorNombre||sol.solicitadoPor||'—')+' · Cotizó: '+esc(sol.cotizadoPor||'—')+'</div>'
+      +'</div>'
+      +'<label style="display:block;margin-bottom:14px"><span style="'+_antLbl+'">Cuotas (1–6)</span><input id="antAutCuotas" type="number" min="1" max="6" value="'+cuotasSug+'" style="'+_antInp+'"></label>'
+      +'<button class="btn" onclick="window.autorizarSolicitudAnticipoFlujo(\''+esc(sol.id)+'\')" style="width:100%;background:#2E7D32;border-color:#2E7D32;color:#fff;padding:11px;font-size:12.5px;font-weight:700;margin-bottom:14px">AUTORIZAR Y CREAR ANTICIPO</button>'
+      +'<div style="border-top:1px solid #EEE;padding-top:12px"><span style="'+_antLbl+'">¿Rechazar? Motivo (opcional)</span>'
+      +'<input id="antAutMotivo" placeholder="MOTIVO DEL RECHAZO" style="'+_antInp+';text-transform:uppercase">'
+      +'<button class="btn ghost" onclick="window.rechazarSolicitudAnticipoFlujo(\''+esc(sol.id)+'\')" style="width:100%;border-color:#C62828;color:#C62828;padding:9px;font-size:12px;font-weight:700;margin-top:8px">RECHAZAR SOLICITUD</button></div>');
+  };
+  // Render de la vista SOLICITUDES
+  function _antSolicRender(cont){
+    const all = _antSolics().slice().sort((a,b)=>(Number(b._ts)||0)-(Number(a._ts)||0));
+    const my = _antMyEmail();
+    const puedeSolicitar = _antSolicPerm('anticipos.solicitar') || _antEsGerente();
+    const puedeCotizar = _antSolicPerm('anticipos.cotizar') || _antEsGerente();
+    const esGer = _antEsGerente();
+    const _tabBtnIdle='background:#fff;border-color:#E5E7EB;color:#475569';
+    const _tabBtnAct='background:#0F172A;border-color:#0F172A;color:#fff';
+    const tabBtn='padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;';
+    let html='<div class="card"><div class="card-hd"><h3>SOLICITUDES DE ANTICIPO</h3><span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Solicitud → cotización → autorización → alta automática</span>'
+      + (puedeSolicitar ? '<button class="btn primary sm" style="margin-left:auto" onclick="window._antAbrirSolicitar()">+ SOLICITAR ANTICIPO</button>' : '') + '</div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 16px">';
+    html += '<button onclick="window._antView=\'resumen\'; window._antFiltroPersona=\'\'; window._antFiltroEstado=\'todos\'; window.renderPlanillaAnticipos()" style="'+tabBtn+_tabBtnIdle+'">RESUMEN</button>';
+    html += '<button onclick="window._antView=\'listado\'; window.renderPlanillaAnticipos()" style="'+tabBtn+_tabBtnIdle+'">LISTADO COMPLETO</button>';
+    html += '<button onclick="window._antView=\'descuentos\'; window.renderPlanillaAnticipos()" style="'+tabBtn+_tabBtnIdle+'">DESCUENTOS GENERADOS</button>';
+    html += '<button onclick="window._antView=\'anticontrol\'; window.renderPlanillaAnticipos()" style="'+tabBtn+_tabBtnIdle+'">CONTROL DE ANTICIPOS</button>';
+    html += '<button style="'+tabBtn+_tabBtnAct+'">SOLICITUDES</button>';
+    html += '</div>';
+    if(!all.length){ html += '<div class="empty" style="padding:30px">SIN SOLICITUDES TODAVÍA</div></div>'; cont.innerHTML=html; return; }
+    html += '<div style="display:grid;gap:10px">';
+    all.forEach(s => {
+      const meta = _antSolicEstadoMeta(s.estado);
+      const esCreador = (String(s.solicitadoPor||'').toLowerCase()===my);
+      let acciones='';
+      if(s.estado==='pendiente_cotizacion' && puedeCotizar) acciones += '<button class="btn sm" onclick="window._antAbrirCotizar(\''+esc(s.id)+'\')" style="background:#1565C0;border-color:#1565C0;color:#fff;padding:6px 14px;font-size:11px">SUBIR COTIZACIÓN</button>';
+      if(s.estado==='pendiente_autorizacion' && esGer) acciones += '<button class="btn sm" onclick="window._antAbrirAutorizar(\''+esc(s.id)+'\')" style="background:#2E7D32;border-color:#2E7D32;color:#fff;padding:6px 14px;font-size:11px">REVISAR / AUTORIZAR</button>';
+      if((s.estado==='pendiente_cotizacion'||s.estado==='pendiente_autorizacion') && (esCreador||esGer)) acciones += '<button class="btn ghost sm" onclick="window.cancelarSolicitudAnticipo(\''+esc(s.id)+'\')" style="border-color:#C62828;color:#C62828;padding:6px 14px;font-size:11px">CANCELAR</button>';
+      const cot = (s.cotProveedor||s.cotMonto) ? ('<div style="font-size:11px;color:#1565C0;margin-top:3px">Cotización: '+esc(s.cotProveedor||'—')+' · '+_money(Number(s.cotMonto)||0)+(s.cotArchivoUrl?(' · <a href="'+esc(s.cotArchivoUrl)+'" target="_blank" style="color:#1565C0;text-decoration:underline">ver</a>'):'')+'</div>') : '';
+      const mot = s.motivoRechazo ? ('<div style="font-size:11px;color:#B91C1C;margin-top:3px">Motivo: '+esc(s.motivoRechazo)+'</div>') : '';
+      html += '<div style="border:1px solid #E5E7EB;border-radius:8px;padding:12px;background:#FAFAFA">'
+        + '<div style="display:flex;justify-content:space-between;align-items:start;gap:8px;flex-wrap:wrap">'
+        +   '<div><div style="font-size:13px;font-weight:800;color:#1a1a1a">'+esc(s.colaboradorNombre||'—')+'</div>'
+        +     '<div style="font-size:11.5px;color:#555;margin-top:2px">'+esc(_subtipoLabelAnt(s.subtipo))+' · '+esc(s.descripcion||'')+(s.montoEstimado?(' · est. '+_money(s.montoEstimado)):'')+'</div>'
+        +     cot + mot
+        +     '<div style="font-size:10.5px;color:#888;margin-top:3px">'+esc(s.projectName||'')+' · pidió '+esc(s.solicitadoPorNombre||s.solicitadoPor||'—')+' · '+esc(s.solicitadoEn||'')+'</div>'
+        +   '</div>'
+        +   '<span style="font-size:9.5px;font-weight:800;letter-spacing:.5px;padding:4px 9px;border-radius:20px;white-space:nowrap;color:'+meta.c+';background:'+meta.bg+'">'+meta.t+'</span>'
+        + '</div>'
+        + (acciones ? ('<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'+acciones+'</div>') : '')
+        + '</div>';
+    });
+    html += '</div></div>';
+    cont.innerHTML = html;
+  }
+
   window.renderPlanillaAnticipos = function(){
     const cont = document.getElementById('planilla-anticipos');
     if (!cont) return;
@@ -44493,6 +44746,11 @@ async function _anulAnularReal(){
     // v742: vista CONTROL DE ANTICIPOS (por préstamo, avance de pago + PDF).
     if (window._antView === 'anticontrol' && typeof _antCtrlRender === 'function'){
       try { _antCtrlRender(cont); } catch(e){ console.warn('antCtrlRender:', e); }
+      return;
+    }
+    // v777: vista SOLICITUDES (flujo de anticipos). Render aparte y autocontenido.
+    if (window._antView === 'antsolic' && typeof _antSolicRender === 'function'){
+      try { _antSolicRender(cont); } catch(e){ console.warn('antSolicRender:', e); }
       return;
     }
     // v355: anticipos globales — sin proyecto activo requerido.
@@ -44548,6 +44806,8 @@ async function _anulAnularReal(){
     html += '<button onclick="window._antView=\'listado\'; window.renderPlanillaAnticipos()" style="padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;'+(_antView==='listado'?_tabBtnActive:_tabBtnIdle)+'">LISTADO COMPLETO · '+_antTotalCount+'</button>';
     html += '<button onclick="window._antView=\'descuentos\'; window.renderPlanillaAnticipos()" style="padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;'+_tabBtnIdle+'">DESCUENTOS GENERADOS</button>'; // v741
     html += '<button onclick="window._antView=\'anticontrol\'; window.renderPlanillaAnticipos()" style="padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;'+_tabBtnIdle+'">CONTROL DE ANTICIPOS</button>'; // v742
+    { const _spA = (typeof window._antSolicPendientesParaMi==='function') ? window._antSolicPendientesParaMi().length : 0; // v777
+      html += '<button onclick="window._antView=\'antsolic\'; window.renderPlanillaAnticipos()" style="padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;'+_tabBtnIdle+'">SOLICITUDES'+(_spA>0?(' · '+_spA):'')+'</button>'; }
     html += '</div>';
 
     // === VISTA RESUMEN === KPIs no toggleables, click lleva al listado
