@@ -47,6 +47,11 @@ ok('antSolColab es un <select> (despliega la lista)', /<select id="antSolColab"/
 ok('sin input antSolMonto (monto estimado removido)', html.indexOf('antSolMonto')<0);
 ok('sin lectura de montoEst en crearSolicitudAnticipo', html.indexOf('montoEst')<0);
 ok('sin campo montoEstimado en la solicitud', html.indexOf('montoEstimado')<0);
+// v781: el flujo (solicitud->cotizacion->autorizacion) es la UNICA via -> sin alta manual
+ok('sin boton + AGREGAR ANTICIPO', html.indexOf('+ AGREGAR ANTICIPO')<0);
+ok('sin handler window.agregarAnticipo', html.indexOf('window.agregarAnticipo')<0);
+// editar anticipos existentes SI se conserva (comparte _formHTML)
+ok('editarAnticipo se conserva', html.indexOf('window.editarAnticipo')>=0);
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
