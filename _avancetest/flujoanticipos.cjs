@@ -40,6 +40,9 @@ ok('permiso anticipos.solicitar', html.indexOf("'anticipos.solicitar'")>=0);
 ok('permiso anticipos.cotizar', html.indexOf("'anticipos.cotizar'")>=0);
 ok('applyRemote une solicitudesAnticipo', /_mergeById\([\s\S]{0,80}solicitudesAnticipo/.test(html));
 ok('sub-pestaña SOLICITUDES (antsolic)', html.indexOf("'antsolic'")>=0);
+// v778: el campo "para quién" es un desplegable ordenado de colaboradores, no texto libre
+ok('_antColabOptions existe (lista de colaboradores)', html.indexOf('_antColabOptions')>=0);
+ok('antSolColab es un <select> (despliega la lista)', /<select id="antSolColab"/.test(html));
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
