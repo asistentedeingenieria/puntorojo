@@ -2941,7 +2941,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v783</span>
+    <span style="opacity:.5;font-size:9px">v784</span>
   </footer>
 
 </div>
@@ -19307,8 +19307,29 @@ function _cargarPdfJs(){
   });
   return window.__pdfjsCargando;
 }
+/* v784: ¿este dispositivo puede compartir un ARCHIVO por la hoja nativa? (Web Share API
+   nivel 2). Puro/testeable: necesita navigator.share + navigator.canShare({files}) === true. */
+function _pdfPuedeCompartir(nav, file){
+  try{
+    if(!file || !nav || typeof nav.share!=='function' || typeof nav.canShare!=='function') return false;
+    return !!nav.canShare({files:[file]});
+  }catch(e){ return false; }
+}
+/* v784: COMPARTIR el PDF directo desde el visor (WhatsApp, correo, etc.) usando la hoja
+   nativa de compartir. Si el WebView no lo soporta, avisa para tomar captura. El boton
+   es gesto de usuario (requisito de la API). El share real garantizado = plugin nativo. */
+async function _pdfCompartir(doc, filename){
+  var file;
+  try{ file=new File([doc.output('blob')], filename, {type:'application/pdf'}); }catch(e){}
+  if(_pdfPuedeCompartir(navigator, file)){
+    try{ await navigator.share({files:[file], title:filename}); }
+    catch(e){ if(!(e && e.name==='AbortError')){ try{ showToast('NO SE PUDO COMPARTIR · TOMÁ UNA CAPTURA','red'); }catch(_e){} } }
+    return;
+  }
+  try{ showToast('TU TELÉFONO NO PERMITE COMPARTIR ESTE ARCHIVO · TOMÁ UNA CAPTURA','red'); }catch(e){}
+}
 /* v782: visor de PDF DENTRO de la app (para Android/WebView que no descarga). Renderiza
-   cada página a un canvas con pdf.js. El usuario lo ve y puede tomar captura para compartir. */
+   cada página a un canvas con pdf.js. v784: con botón COMPARTIR (hoja nativa) + captura. */
 function _pdfAbrirVisor(doc, filename){
   var prev=document.getElementById('_pdfVisorModal'); if(prev) prev.remove();
   var ov=document.createElement('div'); ov.id='_pdfVisorModal';
@@ -19323,10 +19344,16 @@ function _pdfAbrirVisor(doc, filename){
   var body=document.createElement('div');
   body.setAttribute('style','flex:1;overflow:auto;-webkit-overflow-scrolling:touch;padding:10px;display:flex;flex-direction:column;align-items:center;gap:10px;background:#334155');
   body.innerHTML='<div style="color:#E2E8F0;font-size:12px;padding:24px">Cargando PDF…</div>';
-  var tip=document.createElement('div');
-  tip.setAttribute('style','flex:0 0 auto;padding:8px 12px;background:#1E293B;color:#94A3B8;font-size:10.5px;text-align:center');
-  tip.textContent='Tomá una captura de pantalla para compartir este reporte.';
-  ov.appendChild(hd); ov.appendChild(body); ov.appendChild(tip);
+  var ft=document.createElement('div');
+  ft.setAttribute('style','flex:0 0 auto;padding:10px 12px;background:#1E293B;display:flex;flex-direction:column;align-items:center;gap:6px');
+  var btnShare=document.createElement('button'); btnShare.textContent='COMPARTIR';
+  btnShare.setAttribute('style','background:#2E7D32;color:#fff;border:none;border-radius:8px;padding:12px 28px;font-weight:800;font-size:13px;cursor:pointer;width:100%;max-width:360px');
+  btnShare.onclick=function(){ _pdfCompartir(doc, filename); };
+  var hint=document.createElement('div');
+  hint.setAttribute('style','color:#94A3B8;font-size:10px;text-align:center');
+  hint.textContent='Si tu teléfono no permite compartir, tomá una captura.';
+  ft.appendChild(btnShare); ft.appendChild(hint);
+  ov.appendChild(hd); ov.appendChild(body); ov.appendChild(ft);
   document.body.appendChild(ov);
   var bytes; try{ bytes=doc.output('arraybuffer'); }catch(e){ body.innerHTML='<div style="color:#FCA5A5;padding:24px">No se pudo generar el PDF.</div>'; return; }
   _cargarPdfJs().then(function(L){

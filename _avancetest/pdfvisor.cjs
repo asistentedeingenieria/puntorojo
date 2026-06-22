@@ -32,5 +32,21 @@ const sw=fs.readFileSync(path.join(__dirname,'..','sw.js'),'utf8');
 ok('sw.js precachea pdf.min.js', /pdf\.js\/[\d.]+\/pdf\.min\.js/.test(sw));
 ok('sw.js precachea pdf.worker.min.js', /pdf\.js\/[\d.]+\/pdf\.worker\.min\.js/.test(sw));
 
+// v784: boton COMPARTIR (Web Share API con feature-detection)
+const srcShare=ext('_pdfPuedeCompartir');
+ok('_pdfPuedeCompartir existe', !!srcShare);
+if(srcShare){
+  const f=new Function(srcShare+'\nreturn _pdfPuedeCompartir;')();
+  const file={};
+  ok('comparte si hay share+canShare(true)', f({share(){},canShare(){return true;}}, file)===true);
+  ok('NO comparte sin canShare', f({share(){}}, file)===false);
+  ok('NO comparte sin share', f({canShare(){return true;}}, file)===false);
+  ok('NO comparte sin archivo', f({share(){},canShare(){return true;}}, null)===false);
+  ok('NO comparte si canShare=false', f({share(){},canShare(){return false;}}, file)===false);
+}
+ok('_pdfCompartir existe', html.indexOf('function _pdfCompartir')>=0);
+ok('usa navigator.share con files', /navigator\.share\(\{[^}]*files/.test(html));
+ok('boton COMPARTIR llama a _pdfCompartir', /COMPARTIR/.test(html) && /_pdfCompartir\(doc/.test(html));
+
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
