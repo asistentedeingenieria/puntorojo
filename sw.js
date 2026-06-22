@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v782-materiales-receta-orden';
+const CACHE_VERSION = 'v783-pdf-visor-android';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
@@ -31,7 +31,12 @@ const CORE_ASSETS = [
   './assets/bg-8.jpg',
   // v629: precachear la librería de reconocimiento facial para que el kiosko
   // funcione sin internet (los pesos del modelo se cachean al enrolar/abrir online).
-  'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js'
+  'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js',
+  // v782: precachear pdf.js + su worker para que el VISOR de PDF in-app (PDF PRESENTES /
+  // ESTADO DE FUERZA en la app de Android) funcione SIN señal. El worker normalmente no
+  // se cachea solo (solo se baja al parsear un PDF), por eso va explícito acá.
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
 ];
 
 // ── INSTALL: pre-cachear los archivos básicos ──

@@ -2941,7 +2941,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v782</span>
+    <span style="opacity:.5;font-size:9px">v783</span>
   </footer>
 
 </div>
@@ -19261,12 +19261,25 @@ function _efDescargarPDF(){
 
 /* v632: logo arriba a la izquierda en los PDF de asistencia. */
 function _pdfLogo(doc, x){ try{ if(typeof LOGO_DATA_URI==='string' && LOGO_DATA_URI) doc.addImage(LOGO_DATA_URI,'PNG',(x!=null?x:40),22,42,42); }catch(e){} } // v761b: x opcional para alinear con la tabla
-/* v767: descarga de PDF que SÍ funciona en celular. En el WebView de Capacitor y en Safari móvil,
-   doc.save() (descarga por <a download>) NO dispara nada. En móvil abrimos el PDF en una pestaña/visor:
-   Android Chrome lo descarga por el atributo download; iOS lo muestra y deja compartir/guardar. */
+/* v782: entrega del PDF según el entorno. El WebView de Capacitor (la app de Play)
+   NO puede descargar un blob (no tiene download listener), así que ahí el doc.save()
+   y el <a download> no hacen NADA. Router:
+     - escritorio          -> doc.save() (descarga normal).
+     - navegador móvil      -> blob + <a download> (en Chrome/Safari SÍ descarga).
+     - app nativa (WebView) -> visor in-app (pdf.js): se muestra el PDF dentro de la
+       app para verlo/capturar. (Descarga/compartir real = plugin nativo, pendiente.) */
+function _pdfModoEntrega(isNative, isMovil){
+  if(isNative) return 'viewer';
+  if(isMovil) return 'anchor';
+  return 'save';
+}
 function _pdfDescargar(doc, filename){
-  var _movil=false; try{ _movil=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent||''); }catch(e){}
-  if(!_movil){ try{ doc.save(filename); return; }catch(e){} }
+  var isNative=false; try{ isNative=(typeof isNativeApp==='function') && isNativeApp(); }catch(e){}
+  var isMovil=false; try{ isMovil=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent||''); }catch(e){}
+  var modo=_pdfModoEntrega(isNative, isMovil);
+  if(modo==='save'){ try{ doc.save(filename); return; }catch(e){} }
+  if(modo==='viewer'){ try{ _pdfAbrirVisor(doc, filename); return; }catch(e){} }
+  // 'anchor' (navegador móvil) o fallback si algo falló arriba:
   try{
     var blob=doc.output('blob');
     var URLc=(window.URL||window.webkitURL);
@@ -19275,6 +19288,72 @@ function _pdfDescargar(doc, filename){
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(function(){ try{ URLc.revokeObjectURL(url); }catch(e){} }, 90000);
   }catch(e){ try{ doc.save(filename); }catch(e2){ try{ showToast('NO SE PUDO ABRIR EL PDF EN ESTE DISPOSITIVO','red'); }catch(e3){} } }
+}
+/* v782: carga perezosa de pdf.js (solo cuando se necesita el visor). UMD -> window.pdfjsLib. */
+function _cargarPdfJs(){
+  if(window.pdfjsLib && window.pdfjsLib.getDocument) return Promise.resolve(window.pdfjsLib);
+  if(window.__pdfjsCargando) return window.__pdfjsCargando;
+  window.__pdfjsCargando = new Promise(function(resolve, reject){
+    var s=document.createElement('script');
+    // v782: misma versión/CDN que el <head> (cdnjs 3.11.174) para reusar la copia ya cargada.
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    s.onload=function(){
+      var L=window.pdfjsLib || window['pdfjs-dist/build/pdf'];
+      if(L && L.getDocument){ window.pdfjsLib=L; try{ if(!L.GlobalWorkerOptions.workerSrc) L.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }catch(e){} resolve(L); }
+      else reject(new Error('pdfjsLib no disponible'));
+    };
+    s.onerror=function(){ reject(new Error('no se pudo cargar pdf.js')); };
+    document.head.appendChild(s);
+  });
+  return window.__pdfjsCargando;
+}
+/* v782: visor de PDF DENTRO de la app (para Android/WebView que no descarga). Renderiza
+   cada página a un canvas con pdf.js. El usuario lo ve y puede tomar captura para compartir. */
+function _pdfAbrirVisor(doc, filename){
+  var prev=document.getElementById('_pdfVisorModal'); if(prev) prev.remove();
+  var ov=document.createElement('div'); ov.id='_pdfVisorModal';
+  ov.setAttribute('style','position:fixed;inset:0;z-index:2147483600;background:#0F172A;display:flex;flex-direction:column');
+  var hd=document.createElement('div');
+  hd.setAttribute('style','flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:10px 14px;background:#C62828;color:#fff');
+  hd.innerHTML='<div style="flex:1;font-size:12px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(typeof esc==='function'?esc(filename):filename)+'</div>';
+  var btn=document.createElement('button'); btn.textContent='CERRAR';
+  btn.setAttribute('style','background:#fff;color:#C62828;border:none;border-radius:6px;padding:7px 14px;font-weight:800;font-size:12px;cursor:pointer');
+  btn.onclick=function(){ ov.remove(); };
+  hd.appendChild(btn);
+  var body=document.createElement('div');
+  body.setAttribute('style','flex:1;overflow:auto;-webkit-overflow-scrolling:touch;padding:10px;display:flex;flex-direction:column;align-items:center;gap:10px;background:#334155');
+  body.innerHTML='<div style="color:#E2E8F0;font-size:12px;padding:24px">Cargando PDF…</div>';
+  var tip=document.createElement('div');
+  tip.setAttribute('style','flex:0 0 auto;padding:8px 12px;background:#1E293B;color:#94A3B8;font-size:10.5px;text-align:center');
+  tip.textContent='Tomá una captura de pantalla para compartir este reporte.';
+  ov.appendChild(hd); ov.appendChild(body); ov.appendChild(tip);
+  document.body.appendChild(ov);
+  var bytes; try{ bytes=doc.output('arraybuffer'); }catch(e){ body.innerHTML='<div style="color:#FCA5A5;padding:24px">No se pudo generar el PDF.</div>'; return; }
+  _cargarPdfJs().then(function(L){
+    return L.getDocument({data:new Uint8Array(bytes)}).promise;
+  }).then(function(pdf){
+    body.innerHTML='';
+    var n=pdf.numPages;
+    var renderPage=function(num){
+      pdf.getPage(num).then(function(page){
+        var dpr=Math.min(window.devicePixelRatio||1, 3);
+        var cssW=Math.min((body.clientWidth||320)-20, 760); if(cssW<260) cssW=260;
+        var vp1=page.getViewport({scale:1});
+        var vp=page.getViewport({scale:(cssW/vp1.width)*dpr});
+        var canvas=document.createElement('canvas');
+        canvas.width=Math.floor(vp.width); canvas.height=Math.floor(vp.height);
+        canvas.style.width=cssW+'px'; canvas.style.height=Math.floor(vp.height/dpr)+'px';
+        canvas.style.background='#fff'; canvas.style.boxShadow='0 2px 8px rgba(0,0,0,.4)';
+        body.appendChild(canvas);
+        page.render({canvasContext:canvas.getContext('2d'), viewport:vp}).promise.then(function(){
+          if(num<n) renderPage(num+1);
+        }).catch(function(){ if(num<n) renderPage(num+1); });
+      }).catch(function(){ if(num<n) renderPage(num+1); });
+    };
+    renderPage(1);
+  }).catch(function(e){
+    body.innerHTML='<div style="color:#FCA5A5;padding:24px;font-size:12px;text-align:center;line-height:1.6">No se pudo mostrar el PDF aquí.<br>Probá abrir <b>puntorojo.app</b> en Chrome del celular para descargarlo.</div>';
+  });
 }
 /* v637: fecha YYYY-MM-DD → DD/MM/YYYY (siempre día/mes/año). */
 function _fmtDMY(f){ const m=String(f||'').match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? (m[3]+'/'+m[2]+'/'+m[1]) : String(f||''); }
