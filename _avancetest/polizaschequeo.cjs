@@ -9,11 +9,11 @@ function extract(name){ const m=html.indexOf('function '+name+'('); if(m<0) retu
 ok('_polizasPendientesDePlanilla existe', html.indexOf('function _polizasPendientesDePlanilla(')>=0);
 ok('expuesta en window', html.indexOf('window._polizasPendientesDePlanilla')>=0);
 // sub-pestaña comparativa + chip
-ok('sub-pestaña CHEQUEO QUINCENAL', /CHEQUEO QUINCENAL/.test(html));
+ok('sub-pestaña CHEQUEO GLOBAL', /CHEQUEO GLOBAL/.test(html));
 ok('vista _polView chequeo', /_polView\s*=\s*'chequeo'|_polView==='chequeo'/.test(html));
-// v809 FIX: en renderPlanillaPolizas NO existe `p` (pólizas globales). La rama chequeo debe tomar _activeProj().
-ok('v809 FIX: la rama chequeo toma el proyecto con _activeProj', /_polView === 'chequeo'\)\{[\s\S]{0,500}_chkP\s*=\s*\(typeof _activeProj/.test(html));
-ok('v809 FIX: _plsChk usa _chkP, no la variable inexistente p', /_plsChk\s*=\s*\(\(_chkP/.test(html));
+// v811: la rama chequeo es UNA lista GLOBAL de todos los proyectos (no por proyecto) y muestra el CONTEO.
+ok('v811: la rama chequeo usa _polizasChequeoGlobal', /_polView === 'chequeo'\)\{[\s\S]{0,700}_polizasChequeoGlobal\(/.test(html));
+ok('v811: la columna PÓLIZAS muestra el CONTEO (x.polizasCount), no los nombres', /_polView === 'chequeo'\)\{[\s\S]{0,4200}x\.polizasCount/.test(html));
 
 const body=extract('_polizasPendientesDePlanilla');
 ok('_polizasPendientesDePlanilla extraída', !!body);
@@ -46,10 +46,11 @@ ok('chip PÓLIZAS PENDIENTES POR DESCONTAR en la planilla', /PÓLIZAS PENDIENTES
 ok('chip solo si hay pendientes', /if \(_polPend\.length\)/.test(html));
 ok('_polChipModal existe', html.indexOf('window._polChipModal')>=0);
 
-// v805: PDF del chequeo comparativo
+// v805/v811: PDF del chequeo GLOBAL (lista única de todos los proyectos)
 ok('_generarPdfChequeoPolizas existe', html.indexOf('window._generarPdfChequeoPolizas')>=0);
-ok('botón DESCARGAR PDF en CHEQUEO QUINCENAL', /_generarPdfChequeoPolizas\(\)/.test(html));
+ok('botón DESCARGAR PDF en el chequeo', /_generarPdfChequeoPolizas\(\)/.test(html));
 ok('PDF reusa _pdfDescargar', /_generarPdfChequeoPolizas[\s\S]{0,3500}_pdfDescargar\(doc/.test(html));
+ok('v811: el PDF del chequeo usa _polizasChequeoGlobal (todos los proyectos)', /_generarPdfChequeoPolizas[\s\S]{0,1600}_polizasChequeoGlobal\(/.test(html));
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);

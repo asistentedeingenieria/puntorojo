@@ -63,5 +63,33 @@ if(bP){
   ok('v809 nombre en una sola fila: columna NOMBRE ancha (_wName)', /cellWidth:_wName/.test(bP));
 }
 
+// v811: # en una sola línea (columna más ancha), modal de SOLO LUNES, orden de botones.
+ok('v811 # más ancho (no se parten los números): _wNum=34', /_wNum=34/.test(bP||''));
+
+ok('_lunesRecientes existe', html.indexOf('function _lunesRecientes(')>=0);
+const bLun=extract('_lunesRecientes');
+ok('_lunesRecientes extraída', !!bLun);
+if(bLun){
+  const lun=new Function(bLun+'\n return _lunesRecientes;')();
+  const L=lun('2026-06-24', 16); // miércoles
+  ok('devuelve 16 lunes', Array.isArray(L) && L.length===16);
+  ok('todos son lunes', L.every(x=>new Date(x.key+'T12:00:00').getDay()===1));
+  ok('el primero es el lunes de la semana actual (2026-06-22, lunes del miércoles 24)', L[0].key==='2026-06-22');
+  ok('orden más reciente primero', new Date(L[0].key)>new Date(L[1].key));
+  ok('cada opción tiene label', L.every(x=>typeof x.label==='string' && x.label.length>0));
+  // domingo cuenta como la semana que termina (lunes anterior)
+  const Ld=lun('2026-06-21',2); // 21/06 es domingo
+  ok('domingo → lunes 2026-06-15 (semana que cierra)', Ld[0].key==='2026-06-15');
+}
+ok('v811 modal usa _lunesRecientes + select de lunes (no date libre)', /abrirPdfSemanal[\s\S]{0,700}_lunesRecientes/.test(html) && /pdfSemMondaySel/.test(html));
+
+// orden de botones: TOMAR ASISTENCIA < ESTADO DE FUERZA < PDF PRESENTES DEL DÍA < PDF SEMANAL
+const iTomar=html.indexOf('>TOMAR ASISTENCIA<');
+const iEstado=html.indexOf('>ESTADO DE FUERZA<');
+const iPres=html.indexOf('>PDF PRESENTES DEL DÍA<');
+const iSem=html.indexOf('>PDF SEMANAL<');
+ok('botón renombrado PDF PRESENTES DEL DÍA', iPres>=0);
+ok('orden TOMAR < ESTADO < PRESENTES DEL DÍA < SEMANAL', iTomar>=0 && iEstado>iTomar && iPres>iEstado && iSem>iPres);
+
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
