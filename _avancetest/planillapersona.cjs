@@ -22,6 +22,9 @@ ok('la rama usa _pdfDescargar (móvil-aware)', /opts\.porPersona[\s\S]{0,2200}_p
 ok('soloIdx para una sola persona', html.indexOf('opts.soloIdx')>=0);
 // no se rompió la firma del generador
 ok('_generarYDescargarExcel acepta opts', html.indexOf('async function _generarYDescargarExcel(data, opts)')>=0);
+// v793: autorización única para ver la pestaña
+ok('permiso planilla.porPersona registrado (EDICIÓN PLANILLAS)', /pushPerm\(\{\s*key:'planilla\.porPersona'[\s\S]{0,120}group:'EDICIÓN PLANILLAS'/.test(html));
+ok('el botón de la sub-pestaña está gateado por data-perm', /data-plantab="planillapersona"[^>]*data-perm="planilla\.porPersona"|data-perm="planilla\.porPersona"[^>]*data-plantab="planillapersona"/.test(html));
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
