@@ -43,5 +43,10 @@ ok('chip PÓLIZAS PENDIENTES POR DESCONTAR en la planilla', /PÓLIZAS PENDIENTES
 ok('chip solo si hay pendientes', /if \(_polPend\.length\)/.test(html));
 ok('_polChipModal existe', html.indexOf('window._polChipModal')>=0);
 
+// v805: PDF del chequeo comparativo
+ok('_generarPdfChequeoPolizas existe', html.indexOf('window._generarPdfChequeoPolizas')>=0);
+ok('botón DESCARGAR PDF en CHEQUEO QUINCENAL', /_generarPdfChequeoPolizas\(\)/.test(html));
+ok('PDF reusa _pdfDescargar', /_generarPdfChequeoPolizas[\s\S]{0,3500}_pdfDescargar\(doc/.test(html));
+
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
