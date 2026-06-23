@@ -38,5 +38,10 @@ if(body){
   ok('total 2 pendientes', r.length===2);
 }
 
+// v804: chip en cada planilla + su modal
+ok('chip PÓLIZAS PENDIENTES POR DESCONTAR en la planilla', /PÓLIZAS PENDIENTES POR DESCONTAR: '\+_polPend\.length/.test(html));
+ok('chip solo si hay pendientes', /if \(_polPend\.length\)/.test(html));
+ok('_polChipModal existe', html.indexOf('window._polChipModal')>=0);
+
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
