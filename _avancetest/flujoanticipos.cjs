@@ -51,7 +51,7 @@ ok('antSolColab es combobox escribible (input oculto + buscador)', /<input type=
 ok('v790: cotización tiene input antCotItem', html.indexOf('id="antCotItem"')>=0);
 ok('v790: subir cotización guarda sol.cotItem', html.indexOf('sol.cotItem=item')>=0);
 // v790: supervisor (solo anticipos.solicitar) ve SOLO la pestaña SOLICITUDES
-ok('v790: fuerza vista SOLICITUDES sin gestión', html.indexOf("if(!_gestAnt) window._antView='antsolic'")>=0);
+ok('v791: supervisor ve RESUMEN + SOLICITUDES (no solo antsolic)', html.indexOf("if(!_gestAnt && window._antView!=='resumen' && window._antView!=='antsolic') window._antView='resumen'")>=0);
 ok('v790: sub-pestañas de gestión gateadas', html.indexOf('if(_gestAnt){')>=0);
 // v780: el solicitante NUNCA pone monto estimado -> el campo fue removido por completo
 ok('sin input antSolMonto (monto estimado removido)', html.indexOf('antSolMonto')<0);
