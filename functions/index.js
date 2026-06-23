@@ -615,7 +615,7 @@ exports.onAiQuestion = onDocumentCreated(
     try {
       const client = new Anthropic({ apiKey: key });
       const msg = await client.messages.create({
-        model: 'claude-haiku-4-5',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 700,
         system: sys,
         messages: [{
@@ -628,8 +628,9 @@ exports.onAiQuestion = onDocumentCreated(
       if (!respuesta) respuesta = 'No pude armar una respuesta. Probá reformular la pregunta.';
       await responder({ respuesta });
     } catch (e) {
-      console.error('onAiQuestion error:', e && e.message);
-      await responder({ error: 'No pude responder ahora, probá de nuevo.' });
+      console.error('onAiQuestion error:', e && (e.status || ''), e && e.message);
+      var _diag = e ? (e.status ? (' [' + e.status + ']') : (e.message ? (' [' + String(e.message).slice(0, 90) + ']') : '')) : '';
+      await responder({ error: 'No pude responder ahora, probá de nuevo.' + _diag });
     }
   }
 );
