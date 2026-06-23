@@ -11,6 +11,9 @@ ok('expuesta en window', html.indexOf('window._polizasPendientesDePlanilla')>=0)
 // sub-pestaña comparativa + chip
 ok('sub-pestaña CHEQUEO QUINCENAL', /CHEQUEO QUINCENAL/.test(html));
 ok('vista _polView chequeo', /_polView\s*=\s*'chequeo'|_polView==='chequeo'/.test(html));
+// v809 FIX: en renderPlanillaPolizas NO existe `p` (pólizas globales). La rama chequeo debe tomar _activeProj().
+ok('v809 FIX: la rama chequeo toma el proyecto con _activeProj', /_polView === 'chequeo'\)\{[\s\S]{0,500}_chkP\s*=\s*\(typeof _activeProj/.test(html));
+ok('v809 FIX: _plsChk usa _chkP, no la variable inexistente p', /_plsChk\s*=\s*\(\(_chkP/.test(html));
 
 const body=extract('_polizasPendientesDePlanilla');
 ok('_polizasPendientesDePlanilla extraída', !!body);

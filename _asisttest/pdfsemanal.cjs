@@ -52,5 +52,16 @@ if(bF){
   ok('excluye dados de baja', !r.find(x=>x.id==='c'));
 }
 
+// v809: estilo del PDF semanal (días completos, sin leyenda, mayúscula, menos cuadrícula, nombre 1 fila)
+const bP=extract('_generarPdfSemanal');
+ok('_generarPdfSemanal extraída', !!bP);
+if(bP){
+  ok('v809 días completos (LUNES/MARTES/MIÉRCOLES...)', /LUNES','MARTES','MIÉRCOLES','JUEVES','VIERNES','SÁBADO'/.test(bP));
+  ok('v809 sin la leyenda "(cheque = llegó · X = no llegó)"', bP.indexOf('cheque = llegó')<0);
+  ok('v809 título de semana en MAYÚSCULA (SEMANA DEL ... AL ...)', /'SEMANA DEL '/.test(bP) && /' AL '/.test(bP));
+  ok('v809 tabla menos cuadrícula (theme striped)', /theme:'striped'/.test(bP));
+  ok('v809 nombre en una sola fila: columna NOMBRE ancha (_wName)', /cellWidth:_wName/.test(bP));
+}
+
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
