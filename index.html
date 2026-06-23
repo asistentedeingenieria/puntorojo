@@ -2967,7 +2967,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v802</span>
+    <span style="opacity:.5;font-size:9px">v803</span>
   </footer>
 
 </div>
@@ -40479,6 +40479,38 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   function _v464NormKey(s){
     return String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
   }
+  /* v803: pólizas ACTIVAS que NO se aplicaron en una planilla (doble chequeo).
+     razon 'SIN PAGO' = la persona no tuvo pago esa quincena; 'NO EMPATO' = tuvo pago pero
+     ningún descuento POLIZA quedó a su nombre (atrapa errores de tipeo en el catálogo).
+     Mismo match que _v411 (normalización NFD + substring) para ser consistente. */
+  function _polizasPendientesDePlanilla(pl, p, st){
+    st = st || (typeof state!=='undefined' ? state : {});
+    var norm = (typeof _v464NormKey==='function') ? _v464NormKey : function(s){ return String(s||'').toUpperCase().replace(/\s+/g,' ').trim(); };
+    function match(a,b){ var ka=norm(a), kb=norm(b); if(!ka||!kb) return false; if(ka===kb) return true; if(ka.length>=8 && kb.length>=8 && (ka.indexOf(kb)>=0 || kb.indexOf(ka)>=0)) return true; return false; }
+    var polizas = ((st && st.polizasGlobales)||[]).filter(function(po){ return po && (po.estatus==='ACTIVA' || po.estatus==='EN PROCESO'); });
+    var byHolder = {};
+    polizas.forEach(function(po){ var n=po.aCargoDeNombre||''; var k=norm(n); if(!k) return; if(!byHolder[k]) byHolder[k]={ nombre:n, polizas:[] }; byHolder[k].polizas.push(po); });
+    var pagoNombres = [];
+    ((p && p.planilla && p.planilla.pagos)||[]).forEach(function(pg){ if(!pl || !Array.isArray(pl.pagosIds) || pl.pagosIds.indexOf(pg.id)<0) return; var n=String(pg.colaborador||'').trim(); if(n) pagoNombres.push(n); });
+    var aplicados = ((pl && pl.descuentosPlanilla)||[]).filter(function(d){ return d && d.subtipo==='POLIZA'; });
+    function yaAplicada(h){
+      return aplicados.some(function(d){
+        if(match(d.colaboradorNombre, h.nombre)) return true;
+        var ids = d.polizaIds||[];
+        return h.polizas.some(function(po){ return ids.indexOf(po.id)>=0; });
+      });
+    }
+    var out=[];
+    Object.keys(byHolder).forEach(function(k){
+      var h=byHolder[k];
+      if(yaAplicada(h)) return;
+      var tienePago = pagoNombres.some(function(nm){ return match(nm, h.nombre); });
+      out.push({ persona:h.nombre, polizas:h.polizas.map(function(po){ return po.aseguradoNombre||po.aCargoDeNombre||''; }), polizasCount:h.polizas.length, razon: tienePago ? 'NO EMPATO' : 'SIN PAGO' });
+    });
+    out.sort(function(a,b){ return String(a.persona).localeCompare(String(b.persona),'es',{sensitivity:'base'}); });
+    return out;
+  }
+  window._polizasPendientesDePlanilla = _polizasPendientesDePlanilla;
   // v465: estados de planilla ABIERTOS (editables, no pagadas/archivadas)
   const _V465_OPEN = { pendiente_pm:1, aprobada_inicial:1, pendiente_pm_final:1 };
   // v465: mapa persona(normalizada) -> planillaId DUEÑA de la póliza.
@@ -46051,7 +46083,7 @@ async function _anulAnularReal(){
       html += '<div style="margin:10px 16px;padding:12px 14px;background:#FFFBEB;border:1px solid #FCD34D;border-radius:8px;color:#92400E;font-size:11.5px;line-height:1.4;display:flex;justify-content:space-between;align-items:center;gap:10px"><div>Hay <strong>'+solPendPol.length+' solicitud(es)</strong> pendiente(s) de aprobación sobre pólizas.</div><button class="btn sm" style="background:#92400E;border-color:#92400E;color:#fff;font-size:10.5px" onclick="window.verSolicitudesPolizas()">REVISAR AHORA</button></div>';
     }
     // v479: SUB-PESTAÑAS RESUMEN / LISTADO (mismo patrón que Anticipos)
-    const _polView = (window._polView === 'listado') ? 'listado' : 'resumen';
+    const _polView = (window._polView === 'listado' || window._polView === 'chequeo') ? window._polView : 'resumen';
     const _polTotalCount = polizas.length;
     const _polTabActive = 'background:#0F172A;color:#fff;border-color:#0F172A;font-weight:700';
     const _polTabIdle = 'background:#fff;color:#475569;border-color:#E5E7EB;font-weight:600';
@@ -46069,6 +46101,7 @@ async function _anulAnularReal(){
     html += '<div style="display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);background:#FAFBFC">'; // v779: wrap en móvil
     html += '<button onclick="window._polView=\'resumen\'; window._polFiltroEstatus=\'todas\'; window._polFiltroAseg=\'\'; window._polFiltroACargo=\'\'; window._polTextoBusqueda=\'\'; window.renderPlanillaPolizas()" style="padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;'+(_polView==='resumen'?_polTabActive:_polTabIdle)+'">RESUMEN</button>';
     html += '<button onclick="window._polView=\'listado\'; window.renderPlanillaPolizas()" style="padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;'+(_polView==='listado'?_polTabActive:_polTabIdle)+'">LISTADO COMPLETO · '+_polTotalCount+'</button>';
+    html += '<button onclick="window._polView=\'chequeo\'; window.renderPlanillaPolizas()" style="padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;'+(_polView==='chequeo'?_polTabActive:_polTabIdle)+'">CHEQUEO QUINCENAL</button>'; // v803: doble chequeo de pólizas
     html += '</div>';
 
     if (_polView === 'resumen'){
@@ -46087,6 +46120,33 @@ async function _anulAnularReal(){
       html += '</div><div id="polPersonasNoResults" style="display:none;padding:14px;text-align:center;font-size:11px;color:#94A3B8;letter-spacing:.4px">SIN COINCIDENCIAS</div></div>';
     }
     } // fin RESUMEN
+    if (_polView === 'chequeo'){
+      // v803: doble chequeo — por quincena, a quién SÍ se le aplicó la póliza y a quién FALTÓ.
+      const _plsChk = ((p.planilla && p.planilla.planillasArmadas) || []).filter(pl => pl && pl.estado !== 'rechazada').slice().sort((a,b)=> (Number(b.numero)||0)-(Number(a.numero)||0));
+      html += '<div style="padding:12px 16px;border-bottom:1px solid var(--line);background:#FAFBFC"><div style="font-size:10px;letter-spacing:1.4px;color:#475569;font-weight:700;text-transform:uppercase">CHEQUEO QUINCENAL DE PÓLIZAS</div><div style="font-size:10.5px;color:var(--mute);margin-top:3px">Por quincena: cuántas pólizas se aplicaron y a quién le FALTÓ (póliza activa sin descuento). Razón — <b>SIN PAGO</b>: no tuvo pago esa quincena · <b>NO EMPATÓ</b>: tuvo pago pero el nombre no coincidió con el catálogo.</div></div>';
+      if (!_plsChk.length){
+        html += '<div class="empty" style="padding:24px;text-align:center;color:var(--mute)">NO HAY PLANILLAS GENERADAS EN ESTE PROYECTO.</div>';
+      } else {
+        _plsChk.forEach(pl => {
+          const pend = (typeof window._polizasPendientesDePlanilla==='function') ? window._polizasPendientesDePlanilla(pl, p, state) : [];
+          const aplicadas = (pl.descuentosPlanilla||[]).filter(d => d && d.subtipo==='POLIZA').length;
+          const tit = (typeof _planillaTitulo==='function') ? _planillaTitulo(pl) : ('PLANILLA #'+(pl.numero||'?'));
+          html += '<div style="margin:10px 16px;border:1px solid '+(pend.length?'#FCD34D':'#C8E6C9')+';border-radius:8px;overflow:hidden">';
+          html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;background:'+(pend.length?'#FFFBEB':'#F1F8E9')+'"><div style="font-weight:700;font-size:12px;color:#1a1a1a">'+_h(tit)+'</div><div style="display:flex;gap:8px;align-items:center"><span style="font-size:10px;background:#E8F5E9;color:#2E7D32;border:1px solid #A5D6A7;border-radius:10px;padding:2px 9px;font-weight:700">'+aplicadas+' aplicada'+(aplicadas!==1?'s':'')+'</span>'+(pend.length?('<span style="font-size:10px;background:#FEE2E2;color:#C62828;border:1px solid #EF9A9A;border-radius:10px;padding:2px 9px;font-weight:800">'+pend.length+' pendiente'+(pend.length!==1?'s':'')+'</span>'):'<span style="font-size:10px;color:#2E7D32;font-weight:700">SIN PENDIENTES</span>')+'</div></div>';
+          if (pend.length){
+            html += '<table class="tbl" style="margin:0"><thead><tr><th style="font-size:9px">PERSONA</th><th style="font-size:9px">PÓLIZA(S)</th><th style="font-size:9px">RAZÓN</th></tr></thead><tbody>';
+            pend.forEach(x => {
+              const badge = (x.razon==='SIN PAGO')
+                ? '<span style="font-size:9px;background:#FEF3C7;color:#92400E;border:1px solid #FCD34D;border-radius:8px;padding:1px 7px;font-weight:700">SIN PAGO</span>'
+                : '<span style="font-size:9px;background:#FEE2E2;color:#C62828;border:1px solid #EF9A9A;border-radius:8px;padding:1px 7px;font-weight:700">NO EMPATÓ</span>';
+              html += '<tr><td style="font-size:10.5px;font-weight:700">'+_h(x.persona)+'</td><td style="font-size:9.5px;color:var(--mute)">'+_h((x.polizas||[]).join(', '))+'</td><td>'+badge+'</td></tr>';
+            });
+            html += '</tbody></table>';
+          }
+          html += '</div>';
+        });
+      }
+    } // fin CHEQUEO
     if (_polView === 'listado'){
     // v479: barra de filtros activos + VOLVER AL RESUMEN (igual que Anticipos)
     const _polHayFiltros = (filtroEstatus && filtroEstatus !== 'todas') || (filtroAseg && filtroAseg.length) || (filtroACargo && filtroACargo.length);
