@@ -33,6 +33,9 @@ if(srcBuild){
   ok('subtipo de la solicitud', a.subtipo==='PRESTAMO_HERRAMIENTA');
   ok('desc incluye proveedor', a.desc.indexOf('Taladro')>=0 && a.desc.indexOf('FERRETERIA X')>=0);
   ok('trazabilidad origenSolicitud', a.origenSolicitud==='solant-1');
+  // v790: el catálogo usa el nombre que puso COMPRAS (cotItem) si existe; fallback a la descripción del supervisor.
+  const a2 = _build(Object.assign({}, sol, { cotItem:'TALADRO DEWALT DCD771' }), 4, {});
+  ok('v790: desc usa cotItem (nombre de compras) si existe', a2.desc.indexOf('TALADRO DEWALT DCD771')>=0 && a2.desc.indexOf('Taladro · ')<0);
 }
 
 // estructural
@@ -44,6 +47,12 @@ ok('sub-pestaña SOLICITUDES (antsolic)', html.indexOf("'antsolic'")>=0);
 ok('_antColabOptions existe (lista de colaboradores)', html.indexOf('_antColabOptions')>=0);
 // v789: el campo "para quién" es un combobox escribible (buscar), no un <select> ni texto libre
 ok('antSolColab es combobox escribible (input oculto + buscador)', /<input type="hidden" id="antSolColab"/.test(html) && html.indexOf('id="antColabInput"')>=0);
+// v790: compras escribe el nombre correcto del ítem y eso es lo que va al catálogo
+ok('v790: cotización tiene input antCotItem', html.indexOf('id="antCotItem"')>=0);
+ok('v790: subir cotización guarda sol.cotItem', html.indexOf('sol.cotItem=item')>=0);
+// v790: supervisor (solo anticipos.solicitar) ve SOLO la pestaña SOLICITUDES
+ok('v790: fuerza vista SOLICITUDES sin gestión', html.indexOf("if(!_gestAnt) window._antView='antsolic'")>=0);
+ok('v790: sub-pestañas de gestión gateadas', html.indexOf('if(_gestAnt){')>=0);
 // v780: el solicitante NUNCA pone monto estimado -> el campo fue removido por completo
 ok('sin input antSolMonto (monto estimado removido)', html.indexOf('antSolMonto')<0);
 ok('sin lectura de montoEst en crearSolicitudAnticipo', html.indexOf('montoEst')<0);
