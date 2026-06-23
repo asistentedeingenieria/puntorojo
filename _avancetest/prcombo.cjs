@@ -56,14 +56,20 @@ ok('filtro polFiltroACargo usa combo', /prComboSet\('polFiltroACargo'/.test(html
 ok('ya NO queda <select crudo de persona en anticipos', !/<select onchange="window\._(descGenPersona|antCtrlPersona|antFiltroPersona)=this\.value/.test(html));
 ok('ya NO queda <select crudo de polFiltroACargo', !/<select onchange="window\._polFiltroACargo=this\.value/.test(html));
 
-// ── v796: helper inline + conversión de 3 selects "elegir persona a pagar" ──
+// ── v796/v797: helper inline + conversión de selects de persona ──
+// POLÍTICA: combo SOLO en contextos INLINE. Los selects dentro de un .modal
+// (overflow-y:auto, línea 1431) se quedan como <select> NATIVO porque el dropdown
+// position:absolute del combo se recorta dentro del modal; el popup nativo del
+// navegador NO se recorta. Modales: ocCatalogColab, expColab, v328Persona, _vinForm.
 ok('prComboInline existe', html.indexOf('prComboInline')>=0);
 ok('_prColabItems helper', html.indexOf('function _prColabItems(')>=0);
-ok('ocColab (NUEVA OC) usa combo', /prComboInline\('ocColab'/.test(html) && !/<select id="ocColab"/.test(html));
-ok('descObrero (NUEVO DESCUENTO) usa combo', /prComboInline\('descObrero'/.test(html));
-ok('ocCatalogColab (CATÁLOGO OC) usa combo', /prComboInline\('ocCatalogColab'/.test(html) && !/<select id="ocCatalogColab"/.test(html));
+ok('ocColab (NUEVA OC, inline) usa combo', /prComboInline\('ocColab'/.test(html) && !/<select id="ocColab"/.test(html));
+ok('descObrero (NUEVO DESCUENTO, inline) usa combo', /prComboInline\('descObrero'/.test(html));
 ok('onPick de ocColab escribe a _ocDraft', /prComboInline\('ocColab'[\s\S]{0,260}_ocDraft[\s\S]{0,40}colaboradorId/.test(html));
-ok('onPick de ocCatalogColab escribe a _ocCapturedForm', /prComboInline\('ocCatalogColab'[\s\S]{0,320}_ocCapturedForm[\s\S]{0,60}colaboradorId/.test(html));
+// los de modal se quedan NATIVOS (intencional, anti-recorte)
+ok('ocCatalogColab queda <select> nativo (modal)', /<select id="ocCatalogColab"/.test(html) && !/prComboInline\('ocCatalogColab'/.test(html));
+ok('expColab queda <select> nativo (modal)', /<select id="expColab">/.test(html) && !/prComboInline\('expColabCombo'/.test(html));
+ok('v328Persona queda <select> nativo (modal)', /<select id="v328Persona" onchange="window\._v328OnPersonaChange/.test(html));
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
