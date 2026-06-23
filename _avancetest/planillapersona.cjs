@@ -25,6 +25,12 @@ ok('_generarYDescargarExcel acepta opts', html.indexOf('async function _generarY
 // v793: autorización única para ver la pestaña
 ok('permiso planilla.porPersona registrado (EDICIÓN PLANILLAS)', /pushPerm\(\{\s*key:'planilla\.porPersona'[\s\S]{0,120}group:'EDICIÓN PLANILLAS'/.test(html));
 ok('el botón de la sub-pestaña está gateado por data-perm', /data-plantab="planillapersona"[^>]*data-perm="planilla\.porPersona"|data-perm="planilla\.porPersona"[^>]*data-plantab="planillapersona"/.test(html));
+// v794: los nombres se ven COMPLETOS (no truncados con ...)
+const _nameLine = (html.match(/font-weight:700;font-size:12\.5px[^"]*"/)||[''])[0];
+ok('línea del nombre del colab localizada', _nameLine.length>0);
+ok('el nombre NO se trunca (sin white-space:nowrap)', _nameLine.indexOf('white-space:nowrap')<0);
+ok('el nombre NO usa text-overflow:ellipsis', _nameLine.indexOf('text-overflow:ellipsis')<0);
+ok('el nombre permite varias líneas (word-break)', _nameLine.indexOf('word-break')>=0);
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
