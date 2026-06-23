@@ -2976,7 +2976,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v813</span>
+    <span style="opacity:.5;font-size:9px">v814</span>
   </footer>
 
 </div>
@@ -40667,6 +40667,109 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     return out;
   }
   window._polizasChequeoTodos = _polizasChequeoTodos;
+  // v814: VINCULAR NOMBRES — sugerir el colaborador del roster que corresponde a un nombre
+  // (exacto normalizado primero; si no, mayor solape de tokens + substring). Puro/testeable.
+  function _colMatchSuggest(nombre, colaboradores){
+    var norm = (typeof _v464NormKey==='function') ? _v464NormKey : function(s){ return String(s||'').toUpperCase().replace(/\s+/g,' ').trim(); };
+    var k = norm(nombre); if(!k) return null;
+    var list = colaboradores||[];
+    // v814 (revisión): si hay >1 colaborador con el MISMO nombre normalizado, es ambiguo → no
+    // adivinar (el auto lo salta y la fila exige elección manual).
+    var exactos = list.filter(function(c){ return c && norm(c.nombre)===k; });
+    if(exactos.length===1) return { colab:exactos[0], exact:true };
+    if(exactos.length>1) return { colab:exactos[0], exact:true, ambiguo:true };
+    var kt = k.split(' ').filter(function(t){ return t.length>=3; });
+    var best=null, bestScore=0;
+    list.forEach(function(c){
+      if(!c) return; var ck=norm(c.nombre); if(!ck) return;
+      var ct = ck.split(' ');
+      var shared = kt.filter(function(t){ return ct.indexOf(t)>=0; }).length;
+      var sub = (k.length>=6 && ck.length>=6 && (k.indexOf(ck)>=0 || ck.indexOf(k)>=0)) ? 1 : 0;
+      var score = shared*2 + sub;
+      if(score>bestScore){ bestScore=score; best=c; }
+    });
+    // v814 (revisión): umbral fuzzy alto — al menos 2 tokens compartidos (score>=4), para NO
+    // sugerir por un solo apellido común (LOPEZ, GARCIA...).
+    if(best && bestScore>=4) return { colab:best, exact:false };
+    return null;
+  }
+  // v814: lista de pólizas/anticipos NO vinculados a un colaborador EXACTO (id válido + nombre
+  // que coincide). Cada uno con su sugerencia para acelerar el vínculo. Puro/testeable.
+  function _nombresPorVincular(polizas, anticipos, colaboradores){
+    var norm = (typeof _v464NormKey==='function') ? _v464NormKey : function(s){ return String(s||'').toUpperCase().replace(/\s+/g,' ').trim(); };
+    var byId = {}; (colaboradores||[]).forEach(function(c){ if(c&&c.id) byId[c.id]=c; });
+    function linkedExact(nombre, colabId){ var c = colabId && byId[colabId]; return !!(c && norm(c.nombre)===norm(nombre)); }
+    var out=[];
+    (polizas||[]).forEach(function(po){
+      if(!po || po.estatus==='DE BAJA') return;
+      var nombre = po.aCargoDeNombre||''; if(!norm(nombre)) return;
+      if(linkedExact(nombre, po.aCargoDeColabId)) return;
+      out.push({ tipo:'poliza', id:po.id, nombreActual:nombre, colabIdActual:po.aCargoDeColabId||'', sugerencia:_colMatchSuggest(nombre, colaboradores) });
+    });
+    (anticipos||[]).forEach(function(an){
+      if(!an) return;
+      var nombre = an.colaboradorNombre||''; if(!norm(nombre)) return;
+      if(linkedExact(nombre, an.colaboradorId)) return;
+      out.push({ tipo:'anticipo', id:an.id, nombreActual:nombre, colabIdActual:an.colaboradorId||'', sugerencia:_colMatchSuggest(nombre, colaboradores) });
+    });
+    return out;
+  }
+  window._colMatchSuggest = _colMatchSuggest;
+  window._nombresPorVincular = _nombresPorVincular;
+  // v814: id del colaborador por nombre EXACTO (para que el form de póliza guarde el id).
+  function _colabIdPorNombre(nombre){
+    var norm = (typeof _v464NormKey==='function') ? _v464NormKey : function(s){ return String(s||'').toUpperCase().replace(/\s+/g,' ').trim(); };
+    var k = norm(nombre); if(!k) return '';
+    var list = (typeof window.getColaboradoresActivos==='function') ? window.getColaboradoresActivos() : [];
+    var hits = list.filter(function(c){ return c && norm(c.nombre)===k; });
+    return (hits.length===1) ? hits[0].id : ''; // v814 (revisión): si hay duplicados, no adivinar el id
+  }
+  window._colabIdPorNombre = _colabIdPorNombre;
+  // v814: aplica el vínculo (setea id + corrige el nombre al exacto del roster). No guarda (lo hace el caller).
+  // v814 (revisión CRÍTICA): leer state.polizasGlobales directo — `_getPolizas` vive en OTRO IIFE
+  // (renderPlanillaPolizas) y acá NO está en scope; usarlo tiraba ReferenceError y el vínculo de póliza no persistía.
+  function _aplicarVinculo(tipo, id, colabId){
+    var list = (typeof window.getColaboradoresActivos==='function') ? window.getColaboradoresActivos() : [];
+    var c = list.find(function(x){ return x && x.id===colabId; });
+    if(!c) return false;
+    var nombre = String(c.nombre||'').toUpperCase();
+    var st = (typeof state!=='undefined') ? state : window.state; if(!st) return false;
+    if(tipo==='poliza'){
+      var po = ((st.polizasGlobales)||[]).find(function(x){ return x.id===id; }); if(!po) return false;
+      po.aCargoDeColabId = colabId; po.aCargoDeNombre = nombre; po._ts = Date.now();
+    } else {
+      var an = ((st.anticiposGlobales)||[]).find(function(x){ return x.id===id; }); if(!an) return false;
+      an.colaboradorId = colabId; an.colaboradorNombre = nombre; an._ts = Date.now();
+    }
+    return true;
+  }
+  window._vincPick = window._vincPick || {};
+  // v814 (revisión): permiso REAL vía can() (el `_puedeEditar` del módulo no está en este scope) + showToast global.
+  function _puedeVincular(){ return (typeof can==='function') && (can('polizas.edit') || can('users.manage')); }
+  function _vincToast(m,c){ if(typeof showToast==='function') showToast(m,c); }
+  window._vincularUno = function(tipo, id, fallbackColabId){
+    if(!_puedeVincular()){ _vincToast('SIN PERMISO','red'); return; }
+    var colabId = (window._vincPick && window._vincPick[tipo+'|'+id]) || fallbackColabId;
+    if(!colabId){ _vincToast('ELEGÍ UN COLABORADOR DEL LISTADO','red'); return; }
+    if(_aplicarVinculo(tipo, id, colabId)){
+      try{ if(typeof saveState==='function') saveState(); }catch(e){}
+      try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); }catch(e){}
+      _vincToast('VINCULADO','green'); window.renderPlanillaPolizas();
+    } else { _vincToast('EL COLABORADOR YA NO ESTÁ ACTIVO — RE-ELEGÍ','red'); }
+  };
+  window._vincularAuto = function(){
+    if(!_puedeVincular()){ _vincToast('SIN PERMISO','red'); return; }
+    var colabs = (typeof window.getColaboradoresActivos==='function') ? window.getColaboradoresActivos() : [];
+    var st = (typeof state!=='undefined') ? state : window.state;
+    var pols = (st && st.polizasGlobales) || [];
+    var ants = (st && st.anticiposGlobales) || [];
+    var pend = (typeof window._nombresPorVincular==='function') ? window._nombresPorVincular(pols, ants, colabs) : [];
+    var n=0; pend.forEach(function(x){ if(x.sugerencia && x.sugerencia.exact && !x.sugerencia.ambiguo){ if(_aplicarVinculo(x.tipo, x.id, x.sugerencia.colab.id)) n++; } });
+    if(!n){ _vincToast('NO HAY MATCHES EXACTOS POR VINCULAR','red'); return; }
+    try{ if(typeof saveState==='function') saveState(); }catch(e){}
+    try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); }catch(e){}
+    _vincToast(n+' VINCULADO'+(n!==1?'S':'')+' AUTOMÁTICAMENTE','green'); window.renderPlanillaPolizas();
+  };
   // v804: modal del chip "PÓLIZAS PENDIENTES POR DESCONTAR" en cada planilla.
   window._polChipModal = function(planillaId){
     try{
@@ -46429,7 +46532,7 @@ async function _anulAnularReal(){
       html += '<div style="margin:10px 16px;padding:12px 14px;background:#FFFBEB;border:1px solid #FCD34D;border-radius:8px;color:#92400E;font-size:11.5px;line-height:1.4;display:flex;justify-content:space-between;align-items:center;gap:10px"><div>Hay <strong>'+solPendPol.length+' solicitud(es)</strong> pendiente(s) de aprobación sobre pólizas.</div><button class="btn sm" style="background:#92400E;border-color:#92400E;color:#fff;font-size:10.5px" onclick="window.verSolicitudesPolizas()">REVISAR AHORA</button></div>';
     }
     // v479: SUB-PESTAÑAS RESUMEN / LISTADO (mismo patrón que Anticipos)
-    const _polView = (window._polView === 'listado' || window._polView === 'chequeo') ? window._polView : 'resumen';
+    const _polView = (window._polView === 'listado' || window._polView === 'chequeo' || window._polView === 'vincular') ? window._polView : 'resumen';
     const _polTotalCount = polizas.length;
     const _polTabActive = 'background:#0F172A;color:#fff;border-color:#0F172A;font-weight:700';
     const _polTabIdle = 'background:#fff;color:#475569;border-color:#E5E7EB;font-weight:600';
@@ -46448,6 +46551,10 @@ async function _anulAnularReal(){
     html += '<button onclick="window._polView=\'resumen\'; window._polFiltroEstatus=\'todas\'; window._polFiltroAseg=\'\'; window._polFiltroACargo=\'\'; window._polTextoBusqueda=\'\'; window.renderPlanillaPolizas()" style="padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;'+(_polView==='resumen'?_polTabActive:_polTabIdle)+'">RESUMEN</button>';
     html += '<button onclick="window._polView=\'listado\'; window.renderPlanillaPolizas()" style="padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;'+(_polView==='listado'?_polTabActive:_polTabIdle)+'">LISTADO COMPLETO · '+_polTotalCount+'</button>';
     html += '<button onclick="window._polView=\'chequeo\'; window.renderPlanillaPolizas()" style="padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;'+(_polView==='chequeo'?_polTabActive:_polTabIdle)+'">CHEQUEO GLOBAL</button>'; // v803/v811: chequeo global de pólizas (todos los proyectos)
+    if (puedeEditar){
+      const _vincN = (typeof window._nombresPorVincular==='function') ? window._nombresPorVincular(polizas, ((typeof state!=='undefined'&&state&&state.anticiposGlobales)||[]), (typeof window.getColaboradoresActivos==='function'?window.getColaboradoresActivos():[])).length : 0;
+      html += '<button onclick="window._polView=\'vincular\'; window.renderPlanillaPolizas()" style="padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;'+(_polView==='vincular'?_polTabActive:_polTabIdle)+'">VINCULAR NOMBRES'+(_vincN?(' · '+_vincN):'')+'</button>'; // v814
+    }
     html += '</div>';
 
     if (_polView === 'resumen'){
@@ -46529,6 +46636,37 @@ async function _anulAnularReal(){
       }
       } catch(_eChk){ html += '<div class="empty" style="padding:24px;text-align:center;color:#C62828">NO SE PUDO ARMAR EL CHEQUEO. Recargá la app.</div>'; }
     } // fin CHEQUEO
+    if (_polView === 'vincular'){ try {
+      // v814: VINCULAR NOMBRES — alinear pólizas/anticipos al colaborador correcto (id + nombre exacto).
+      const _vColabs = (typeof window.getColaboradoresActivos==='function') ? window.getColaboradoresActivos() : [];
+      const _vAnt = (typeof state!=='undefined' && state && Array.isArray(state.anticiposGlobales)) ? state.anticiposGlobales : [];
+      const _vPend = (typeof window._nombresPorVincular==='function') ? window._nombresPorVincular(polizas, _vAnt, _vColabs) : [];
+      const _vExactos = _vPend.filter(x => x.sugerencia && x.sugerencia.exact && !x.sugerencia.ambiguo).length;
+      const _vTotal = polizas.filter(po=>po.estatus!=='DE BAJA').length + _vAnt.length;
+      const _vVinc = Math.max(0, _vTotal - _vPend.length);
+      html += '<div style="padding:12px 16px;border-bottom:1px solid var(--line);background:#FAFBFC"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><div style="font-size:10px;letter-spacing:1.4px;color:#475569;font-weight:700;text-transform:uppercase">VINCULAR NOMBRES A COLABORADORES</div><div style="font-size:10.5px;color:var(--mute);margin-top:3px">Alineá cada póliza/anticipo al colaborador correcto del roster: al vincular se guarda el ID y se corrige el nombre al EXACTO. <b style="color:#2E7D32">'+_vVinc+'</b> ya OK · <b style="color:#C62828">'+_vPend.length+'</b> por revisar.</div></div>'+(_vExactos?('<button class="btn sm" onclick="window._vincularAuto()" style="background:#2E7D32;border-color:#2E7D32;color:#fff;font-size:10px;flex:0 0 auto">VINCULAR AUTOMÁTICO ('+_vExactos+')</button>'):'')+'</div></div>';
+      if(!_vPend.length){
+        html += '<div class="empty" style="padding:24px;text-align:center;color:#2E7D32;font-weight:700">TODO VINCULADO ✓ — los nombres ya coinciden con el roster.</div>';
+      } else {
+        html += '<table class="tbl" style="margin:0"><thead><tr><th style="font-size:9px;text-align:left">NOMBRE ACTUAL</th><th style="font-size:9px;text-align:center">TIPO</th><th style="font-size:9px;text-align:left">VINCULAR CON (COLABORADOR)</th><th style="font-size:9px"></th></tr></thead><tbody>';
+        _vPend.forEach((x) => {
+          const suggId = x.sugerencia ? x.sugerencia.colab.id : '';
+          const _ok = !!(x.sugerencia && x.sugerencia.exact && !x.sugerencia.ambiguo);
+          const _apply = _ok ? suggId : ''; // v814 (revisión): solo el match EXACTO no-ambiguo se pre-aplica
+          const comboId = 'vinc_'+x.tipo+'_'+String(x.id).replace(/[^a-zA-Z0-9]/g,'');
+          const key = x.tipo+'|'+x.id;
+          const combo = (typeof window.prComboInline==='function') ? window.prComboInline(comboId, { items:_vColabs.map(c=>({value:c.id,label:c.nombre})), value:_apply, placeholder:'ELEGIR COLABORADOR...', onPick:(function(kk){ return function(v){ window._vincPick=window._vincPick||{}; window._vincPick[kk]=v; }; })(key) }) : '';
+          let sugTag;
+          if(_ok) sugTag = '<span style="font-size:8.5px;color:#2E7D32;font-weight:700">✓ COINCIDE: '+_h(x.sugerencia.colab.nombre)+'</span>';
+          else if(x.sugerencia && x.sugerencia.ambiguo) sugTag = '<span style="font-size:8.5px;color:#92400E;font-weight:700">⚠ VARIOS CON ESE NOMBRE — ELEGÍ EL CORRECTO</span>';
+          else if(x.sugerencia) sugTag = '<span style="font-size:8.5px;color:#92400E;font-weight:700">~ PARECIDO: '+_h(x.sugerencia.colab.nombre)+' · CONFIRMÁ EN EL COMBO</span>';
+          else sugTag = '<span style="font-size:8.5px;color:#C62828;font-weight:700">SIN SUGERENCIA — ELEGÍ MANUAL</span>';
+          html += '<tr><td style="font-size:10.5px;font-weight:700">'+_h(x.nombreActual)+'</td><td style="text-align:center"><span style="font-size:8.5px;background:#EEF2FF;color:#3730A3;border-radius:6px;padding:1px 6px;font-weight:700">'+(x.tipo==='poliza'?'PÓLIZA':'ANTICIPO')+'</span></td><td style="min-width:200px">'+combo+'<div style="margin-top:2px">'+sugTag+'</div></td><td style="text-align:right;white-space:nowrap"><button class="btn sm" onclick="window._vincularUno(\''+x.tipo+'\',\''+x.id+'\',\''+_apply+'\')" style="background:#0F172A;color:#fff;border-color:#0F172A;font-size:10px">VINCULAR</button></td></tr>';
+        });
+        html += '</tbody></table>';
+      }
+    } catch(_eVin){ html += '<div class="empty" style="padding:24px;text-align:center;color:#C62828">NO SE PUDO ARMAR VINCULAR NOMBRES. Recargá la app.</div>'; }
+    } // fin VINCULAR
     if (_polView === 'listado'){
     // v479: barra de filtros activos + VOLVER AL RESUMEN (igual que Anticipos)
     const _polHayFiltros = (filtroEstatus && filtroEstatus !== 'todas') || (filtroAseg && filtroAseg.length) || (filtroACargo && filtroACargo.length);
@@ -46770,7 +46908,7 @@ async function _anulAnularReal(){
       form.aCargoDeNombre = aCargoNombre;
     }
     const polizas = _getPolizas();
-    const data = { aseguradoNombre: form.aseguradoNombre, aseguradoPuesto: form.aseguradoPuesto, aCargoDeColabId: '', aCargoDeNombre: aCargoNombre, noCertificado: form.noCertificado, noPoliza: form.noPoliza, aseguradora: form.aseguradora, fechaInicio: form.fechaInicio, fechaVencimiento: form.fechaVencimiento, monto: form.monto || _getConfig().montoDefault, estatus: form.estatus, observaciones: form.observaciones || '' };
+    const data = { aseguradoNombre: form.aseguradoNombre, aseguradoPuesto: form.aseguradoPuesto, aCargoDeColabId: ((typeof _colabIdPorNombre==='function' ? _colabIdPorNombre(aCargoNombre) : '') || (existente && existente.aCargoDeColabId) || ''), aCargoDeNombre: aCargoNombre, noCertificado: form.noCertificado, noPoliza: form.noPoliza, aseguradora: form.aseguradora, fechaInicio: form.fechaInicio, fechaVencimiento: form.fechaVencimiento, monto: form.monto || _getConfig().montoDefault, estatus: form.estatus, observaciones: form.observaciones || '' };
     if (asSolicitud && existente){ _crearSolicitudPol('EDITAR', existente, data); window._polCapturedForm = null; window.renderPlanillaPolizas(); showT('SOLICITUD DE EDICIÓN ENVIADA · ESPERANDO ADMIN','green'); return; }
     let polFinal;
     if (existente) { Object.assign(existente, data); existente._ts = Date.now(); polFinal = existente; }
