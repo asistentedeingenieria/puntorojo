@@ -586,6 +586,7 @@ exports.onExcepcionPagoDecidida = onDocumentUpdated(
        allow update, delete: if false;
      }
    ════════════════════════════════════════════════════════════════ */
+// v807b: bump para forzar redeploy y re-amarrar el secreto a su versión más nueva (rotación de la API key).
 exports.onAiQuestion = onDocumentCreated(
   { document: 'aiQuestions/{id}', secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 60, memory: '512MiB' },
   async (event) => {
