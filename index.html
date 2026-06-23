@@ -2976,7 +2976,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v811</span>
+    <span style="opacity:.5;font-size:9px">v812</span>
   </footer>
 
 </div>
@@ -19121,7 +19121,7 @@ function _generarPdfSemanal(fechaBase, obraCtx){
   var jsPDF=window.jspdf.jsPDF;
   var doc=new jsPDF({ unit:'pt', format:'a4', orientation:'landscape' });
   var pageW=doc.internal.pageSize.width;
-  try{ _pdfLogo(doc); }catch(e){}
+  try{ _pdfLogo(doc, 30); }catch(e){} // v812: logo alineado con el margen izq de la tabla (left:30)
   doc.setFontSize(14); doc.setFont(undefined,'bold');
   doc.text('ASISTENCIA SEMANAL  ·  '+obraName, pageW/2, 50, {align:'center'});
   doc.setFontSize(9); doc.setFont(undefined,'normal');
@@ -19153,7 +19153,7 @@ function _generarPdfSemanal(fechaBase, obraCtx){
       else { doc.setDrawColor(200,20,28); doc.line(x-4,y-4,x+4,y+4); doc.line(x+4,y-4,x-4,y+4); }
     }
   });
-  try{ _pdfDescargar(doc, 'ASISTENCIA SEMANAL'+(obraName?(' - '+((typeof _obraNombreArchivo==='function')?_obraNombreArchivo(obraName):obraName)):'')+' - '+_fmtDMY(weekKeys[0]).replace(/\//g,'-')+'.pdf'); }
+  try{ _pdfDescargar(doc, 'ASISTENCIA SEMANAL'+(obraName?(' - '+((typeof _obraNombreArchivo==='function')?_obraNombreArchivo(obraName):obraName)):'')+' - '+_fmtDMY(weekKeys[0]).replace(/\//g,'-')+' AL '+_fmtDMY(weekKeys[5]).replace(/\//g,'-')+'.pdf'); }
   catch(e){ try{ doc.save('ASISTENCIA-SEMANAL.pdf'); }catch(_){} }
 }
 /* v811: lista de LUNES recientes (más reciente primero) para el modal del PDF semanal — el
@@ -40619,6 +40619,48 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     return out;
   }
   window._polizasChequeoGlobal = _polizasChequeoGlobal;
+  // v812: CHEQUEO POR QUINCENA — por cada planilla (quincena) no rechazada de TODOS los
+  // proyectos, las personas PAGADAS esa quincena que tienen póliza vigente, con ✓ cobrada /
+  // ✗ no cobrada. Responde "¿cada quincena se le cobraron TODAS sus pólizas a cada persona
+  // pagada?". Mismo match estricto que el global (polizaIds; nombre exacto si no hay ids).
+  function _polizasChequeoTodos(projects, st){
+    st = st || (typeof state!=='undefined' ? state : {});
+    var norm = (typeof _v464NormKey==='function') ? _v464NormKey : function(s){ return String(s||'').toUpperCase().replace(/\s+/g,' ').trim(); };
+    function match(a,b){ var ka=norm(a), kb=norm(b); if(!ka||!kb) return false; if(ka===kb) return true; if(ka.length>=8 && kb.length>=8 && (ka.indexOf(kb)>=0 || kb.indexOf(ka)>=0)) return true; return false; }
+    var polizas = ((st && st.polizasGlobales)||[]).filter(function(po){ return po && (po.estatus==='ACTIVA' || po.estatus==='EN PROCESO'); });
+    var byHolder = {};
+    polizas.forEach(function(po){ var n=po.aCargoDeNombre||''; var k=norm(n); if(!k || k.replace(/[\s\-_]/g,'')==='PREAPP') return; if(!byHolder[k]) byHolder[k]={ nombre:n, polizas:[] }; byHolder[k].polizas.push(po); });
+    var holders = Object.keys(byHolder).map(function(k){ return byHolder[k]; });
+    var out=[];
+    (projects||[]).forEach(function(pr){
+      var pagos = (pr && pr.planilla && pr.planilla.pagos) || [];
+      var arr = (pr && pr.planilla && pr.planilla.planillasArmadas) || [];
+      arr.forEach(function(pl){
+        if(!pl || pl.estado==='rechazada') return;
+        var pagoNombres = [];
+        pagos.forEach(function(pg){ if(!Array.isArray(pl.pagosIds) || pl.pagosIds.indexOf(pg.id)<0) return; var n=String(pg.colaborador||'').trim(); if(n) pagoNombres.push(n); });
+        var aplicados = (pl.descuentosPlanilla||[]).filter(function(d){ return d && d.subtipo==='POLIZA'; });
+        function cobrada(h){
+          return aplicados.some(function(d){
+            var ids=d.polizaIds||[];
+            if(ids.length) return h.polizas.some(function(po){ return ids.indexOf(po.id)>=0; });
+            return norm(d.colaboradorNombre)===norm(h.nombre);
+          });
+        }
+        var filas=[];
+        holders.forEach(function(h){
+          if(!pagoNombres.some(function(nm){ return norm(nm)===norm(h.nombre); })) return; // v812 (revisión): inclusión ESTRICTA (exacta) para no meter fantasmas por substring
+          filas.push({ persona:h.nombre, polizasCount:h.polizas.length, cobrada:cobrada(h) });
+        });
+        filas.sort(function(a,b){ if(a.cobrada!==b.cobrada) return a.cobrada?1:-1; return String(a.persona).localeCompare(String(b.persona),'es',{sensitivity:'base'}); });
+        var cobr=filas.filter(function(f){ return f.cobrada; }).length;
+        out.push({ projectId:(pr&&pr.id)||'', projectName:String((pr&&pr.name)||'').toUpperCase(), planilla:pl, filas:filas, cobradas:cobr, faltaron:filas.length-cobr });
+      });
+    });
+    out.sort(function(a,b){ var pn=String(a.projectName).localeCompare(String(b.projectName),'es',{sensitivity:'base'}); if(pn!==0) return pn; return (Number(b.planilla.numero)||0)-(Number(a.planilla.numero)||0); });
+    return out;
+  }
+  window._polizasChequeoTodos = _polizasChequeoTodos;
   // v804: modal del chip "PÓLIZAS PENDIENTES POR DESCONTAR" en cada planilla.
   window._polChipModal = function(planillaId){
     try{
@@ -40642,11 +40684,53 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   window._generarPdfChequeoPolizas = function(){
     try{
       if(typeof window.jspdf==='undefined'||!window.jspdf.jsPDF){ if(typeof showToast==='function') showToast('JSPDF NO CARGÓ — RECARGAR','red'); return; }
-      // v811: PDF del CHEQUEO GLOBAL — una sola lista de TODOS los proyectos (no por proyecto).
       var _st = (typeof state!=='undefined') ? state : (window.state||{});
+      var jsPDF=window.jspdf.jsPDF;
+      // v812: en modo POR QUINCENA el PDF es por planilla (no la lista global).
+      if(window._chkMode === 'quincena'){
+        var qrows = (typeof window._polizasChequeoTodos==='function') ? (window._polizasChequeoTodos((_st.projects||[]), _st)||[]) : [];
+        var qd=new jsPDF({ unit:'pt', format:'a4', orientation:'portrait' });
+        var qW=qd.internal.pageSize.width, qH=qd.internal.pageSize.height;
+        try{ _pdfLogo(qd); }catch(e){}
+        qd.setFontSize(14); qd.setFont(undefined,'bold');
+        qd.text('CHEQUEO POR QUINCENA DE POLIZAS', qW/2, 50, {align:'center'});
+        qd.setFontSize(10); qd.setFont(undefined,'normal');
+        qd.text('TODOS LOS PROYECTOS', qW/2, 66, {align:'center'});
+        qd.setFontSize(7.5);
+        qd.text('Por planilla: personas pagadas esa quincena con poliza -> COBRADA / NO COBRADA', qW/2, 80, {align:'center'});
+        var qy=98;
+        if(!qrows.length){ qd.setFontSize(11); qd.text('No hay planillas generadas.', 40, qy); }
+        qrows.forEach(function(e){
+          var _fsab=(typeof _fechaSabadoDDMMYYYY==='function')?String(_fechaSabadoDDMMYYYY(e.planilla.fechaEnvio||e.planilla.fechaCreacion||'')||''):'';
+          var _fsabFmt=/^\d{8}$/.test(_fsab)?_fsab.replace(/(\d{2})(\d{2})(\d{4})/,'$1/$2/$3'):_fsab;
+          var tit=String(e.projectName)+(_fsabFmt?(' - QUINCENA AL '+_fsabFmt):(' - PLANILLA #'+(e.planilla.numero||'?')));
+          if(qy>qH-90){ qd.addPage(); qy=50; }
+          qd.setFontSize(11); qd.setFont(undefined,'bold'); qd.text(tit, 40, qy);
+          qd.setFontSize(9); qd.setFont(undefined,'normal'); qd.text(e.cobradas+' cobrada(s)  ·  '+e.faltaron+' por cobrar', qW-40, qy, {align:'right'});
+          qy+=6;
+          if(e.filas.length){
+            qd.autoTable({
+              startY:qy+4,
+              head:[['PERSONA','POLIZAS','ESTADO']],
+              body:e.filas.map(function(f){ return [String(f.persona||''), String(f.polizasCount||0), (f.cobrada?'COBRADA':'NO COBRADA')]; }),
+              theme:'striped', styles:{fontSize:9,valign:'middle'}, margin:{left:40,right:40},
+              alternateRowStyles:{fillColor:[250,248,243]},
+              headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',fontSize:8.5},
+              columnStyles:{0:{cellWidth:300},1:{halign:'center',cellWidth:60},2:{halign:'left'}},
+              didParseCell:function(d){ if(d.section==='body' && d.column.index===2){ var t=String(d.cell.raw||''); if(t.indexOf('NO COBRADA')>=0){ d.cell.styles.textColor=[198,40,40]; d.cell.styles.fontStyle='bold'; } else { d.cell.styles.textColor=[46,125,50]; } } }
+            });
+            qy=qd.lastAutoTable.finalY+16;
+          } else {
+            qd.setFontSize(9); qd.setTextColor(120,120,120); qd.text('Nadie con poliza fue pagado en esta planilla.', 48, qy+12); qd.setTextColor(0,0,0); qy+=26;
+          }
+        });
+        try{ _pdfDescargar(qd, 'CHEQUEO POR QUINCENA POLIZAS - TODOS LOS PROYECTOS.pdf'); }
+        catch(e){ try{ qd.save('CHEQUEO-POR-QUINCENA-POLIZAS.pdf'); }catch(_){} }
+        return;
+      }
+      // v811: PDF del CHEQUEO GLOBAL — una sola lista de TODOS los proyectos (no por proyecto).
       var rows = (typeof window._polizasChequeoGlobal==='function') ? (window._polizasChequeoGlobal((_st.projects||[]), _st)||[]) : [];
       var falt = rows.filter(function(x){return !x.aplicada;}).length, apl = rows.length - falt;
-      var jsPDF=window.jspdf.jsPDF;
       var doc=new jsPDF({ unit:'pt', format:'a4', orientation:'portrait' });
       var pageW=doc.internal.pageSize.width;
       try{ _pdfLogo(doc); }catch(e){}
@@ -46377,28 +46461,67 @@ async function _anulAnularReal(){
     }
     } // fin RESUMEN
     if (_polView === 'chequeo'){ try {
-      // v811: CHEQUEO GLOBAL — UNA lista de las personas a cargo (pólizas vigentes, la "foto")
-      // contra TODAS las planillas no rechazadas de TODOS los proyectos. ✓ aplicada / ✗ FALTÓ.
+      // v811/v812: CHEQUEO de pólizas con 2 modos — GLOBAL (una lista de todos los proyectos,
+      // quién nunca recibió su póliza) y POR QUINCENA (por planilla, a las personas pagadas esa
+      // quincena ¿se les cobró TODAS sus pólizas?). Todo sobre TODOS los proyectos.
       const _chkState = (typeof state!=='undefined') ? state : (window.state||{});
-      const _chkRows = (typeof window._polizasChequeoGlobal==='function')
-        ? window._polizasChequeoGlobal((_chkState.projects||[]), _chkState) : [];
-      const _chkFalt = _chkRows.filter(x => !x.aplicada).length;
-      const _chkApl = _chkRows.length - _chkFalt;
-      html += '<div style="padding:12px 16px;border-bottom:1px solid var(--line);background:#FAFBFC"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><div style="font-size:10px;letter-spacing:1.4px;color:#475569;font-weight:700;text-transform:uppercase">CHEQUEO GLOBAL DE PÓLIZAS · TODOS LOS PROYECTOS</div><div style="font-size:10.5px;color:var(--mute);margin-top:3px"><b>'+_chkRows.length+'</b> persona(s) a cargo de pólizas vigentes · <b style="color:#2E7D32">'+_chkApl+'</b> con póliza aplicada · <b style="color:#C62828">'+_chkFalt+'</b> faltaron. Razón — <b>SIN PAGO</b>: no tuvo pago en ninguna planilla · <b>NO EMPATÓ</b>: tuvo pago pero el nombre no coincidió con el catálogo.</div></div><button class="btn sm" onclick="window._generarPdfChequeoPolizas()" style="background:#2E7D32;border-color:#2E7D32;color:#fff;font-size:10px;flex:0 0 auto">DESCARGAR PDF</button></div></div>';
-      if (!_chkRows.length){
-        html += '<div class="empty" style="padding:24px;text-align:center;color:var(--mute)">NO HAY PÓLIZAS VIGENTES EN EL CATÁLOGO.</div>';
+      const _chkMode = (window._chkMode === 'quincena') ? 'quincena' : 'global';
+      const _tgl = (id, lbl) => '<button onclick="window._chkMode=\''+id+'\'; window.renderPlanillaPolizas()" style="padding:6px 14px;border-radius:8px;border:1px solid '+(_chkMode===id?'#0F172A':'#CBD5E1')+';background:'+(_chkMode===id?'#0F172A':'#fff')+';color:'+(_chkMode===id?'#fff':'#334155')+';font-size:10.5px;font-weight:700;letter-spacing:.4px;cursor:pointer">'+lbl+'</button>';
+      html += '<div style="padding:12px 16px 0 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+_tgl('global','GLOBAL')+_tgl('quincena','POR QUINCENA')+'<button class="btn sm" onclick="window._generarPdfChequeoPolizas()" style="background:#2E7D32;border-color:#2E7D32;color:#fff;font-size:10px;margin-left:auto">DESCARGAR PDF</button></div>';
+      if (_chkMode === 'global'){
+        const _chkRows = (typeof window._polizasChequeoGlobal==='function')
+          ? window._polizasChequeoGlobal((_chkState.projects||[]), _chkState) : [];
+        const _chkFalt = _chkRows.filter(x => !x.aplicada).length;
+        const _chkApl = _chkRows.length - _chkFalt;
+        html += '<div style="padding:10px 16px 12px 16px;border-bottom:1px solid var(--line)"><div style="font-size:10px;letter-spacing:1.4px;color:#475569;font-weight:700;text-transform:uppercase">CHEQUEO GLOBAL · TODOS LOS PROYECTOS</div><div style="font-size:10.5px;color:var(--mute);margin-top:3px"><b>'+_chkRows.length+'</b> persona(s) a cargo · <b style="color:#2E7D32">'+_chkApl+'</b> con póliza aplicada · <b style="color:#C62828">'+_chkFalt+'</b> faltaron. <b>SIN PAGO</b>: nunca tuvo pago · <b>NO EMPATÓ</b>: tuvo pago pero el nombre no coincidió.</div></div>';
+        if (!_chkRows.length){
+          html += '<div class="empty" style="padding:24px;text-align:center;color:var(--mute)">NO HAY PÓLIZAS VIGENTES EN EL CATÁLOGO.</div>';
+        } else {
+          html += '<table class="tbl" style="margin:0"><thead><tr><th style="font-size:9px;text-align:left">PERSONA</th><th style="font-size:9px;text-align:center">PÓLIZAS</th><th style="font-size:9px;text-align:left">ESTADO</th></tr></thead><tbody>';
+          _chkRows.forEach(x => {
+            const falt = !x.aplicada;
+            const estado = falt
+              ? ('<span style="font-size:9px;background:'+(x.razon==='SIN PAGO'?'#FEF3C7':'#FEE2E2')+';color:'+(x.razon==='SIN PAGO'?'#92400E':'#C62828')+';border:1px solid '+(x.razon==='SIN PAGO'?'#FCD34D':'#EF9A9A')+';border-radius:8px;padding:1px 7px;font-weight:800">✗ FALTÓ · '+(x.razon==='SIN PAGO'?'SIN PAGO':'NO EMPATÓ')+'</span>')
+              : '<span style="font-size:9px;background:#E8F5E9;color:#2E7D32;border:1px solid #A5D6A7;border-radius:8px;padding:1px 7px;font-weight:700">✓ APLICADA</span>';
+            html += '<tr style="background:'+(falt?'#FFF7F7':'transparent')+'"><td style="font-size:10.5px;font-weight:700">'+_h(x.persona)+'</td><td style="font-size:11px;text-align:center;font-weight:700;color:#475569">'+(x.polizasCount||0)+'</td><td>'+estado+'</td></tr>';
+          });
+          html += '</tbody></table>';
+        }
       } else {
-        html += '<table class="tbl" style="margin:0"><thead><tr><th style="font-size:9px;text-align:left">PERSONA</th><th style="font-size:9px;text-align:center">PÓLIZAS</th><th style="font-size:9px;text-align:left">ESTADO</th></tr></thead><tbody>';
-        _chkRows.forEach(x => {
-          const falt = !x.aplicada;
-          const estado = falt
-            ? ('<span style="font-size:9px;background:'+(x.razon==='SIN PAGO'?'#FEF3C7':'#FEE2E2')+';color:'+(x.razon==='SIN PAGO'?'#92400E':'#C62828')+';border:1px solid '+(x.razon==='SIN PAGO'?'#FCD34D':'#EF9A9A')+';border-radius:8px;padding:1px 7px;font-weight:800">✗ FALTÓ · '+(x.razon==='SIN PAGO'?'SIN PAGO':'NO EMPATÓ')+'</span>')
-            : '<span style="font-size:9px;background:#E8F5E9;color:#2E7D32;border:1px solid #A5D6A7;border-radius:8px;padding:1px 7px;font-weight:700">✓ APLICADA</span>';
-          html += '<tr style="background:'+(falt?'#FFF7F7':'transparent')+'"><td style="font-size:10.5px;font-weight:700">'+_h(x.persona)+'</td><td style="font-size:11px;text-align:center;font-weight:700;color:#475569">'+(x.polizasCount||0)+'</td><td>'+estado+'</td></tr>';
-        });
-        html += '</tbody></table>';
+        // POR QUINCENA: una tarjeta por planilla (todos los proyectos) con las personas pagadas
+        // esa quincena que tienen póliza → ✓ COBRADA / ✗ NO COBRADA.
+        const _qRows = (typeof window._polizasChequeoTodos==='function')
+          ? window._polizasChequeoTodos((_chkState.projects||[]), _chkState) : [];
+        html += '<div style="padding:10px 16px 12px 16px;border-bottom:1px solid var(--line)"><div style="font-size:10px;letter-spacing:1.4px;color:#475569;font-weight:700;text-transform:uppercase">CHEQUEO POR QUINCENA · TODOS LOS PROYECTOS</div><div style="font-size:10.5px;color:var(--mute);margin-top:3px">Por cada planilla: de las personas PAGADAS esa quincena que tienen póliza, a quién se le COBRÓ y a quién le FALTÓ cobrar. ✓ COBRADA / ✗ NO COBRADA.</div></div>';
+        if (!_qRows.length){
+          html += '<div class="empty" style="padding:24px;text-align:center;color:var(--mute)">NO HAY PLANILLAS GENERADAS.</div>';
+        } else {
+          _qRows.forEach(e => {
+            // v812 (revisión): el título usa e.projectName (correcto por planilla) + la fecha de
+            // ESA planilla, NO _planillaTitulo (que toma el proyecto ACTIVO y mete el nombre equivocado).
+            const _fsab = (typeof _fechaSabadoDDMMYYYY==='function') ? String(_fechaSabadoDDMMYYYY(e.planilla.fechaEnvio||e.planilla.fechaCreacion||'')||'') : '';
+            const _fsabFmt = /^\d{8}$/.test(_fsab) ? _fsab.replace(/(\d{2})(\d{2})(\d{4})/,'$1/$2/$3') : _fsab;
+            const tit = e.projectName + (_fsabFmt ? (' · QUINCENA AL '+_fsabFmt) : (' · PLANILLA #'+(e.planilla.numero||'?')));
+            const hayFalt = e.faltaron>0;
+            html += '<div style="margin:10px 16px;border:1px solid '+(hayFalt?'#FCD34D':'#C8E6C9')+';border-radius:8px;overflow:hidden">';
+            html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;background:'+(hayFalt?'#FFFBEB':'#F1F8E9')+'"><div style="font-weight:700;font-size:12px;color:#1a1a1a">'+_h(tit)+'</div><div style="display:flex;gap:8px;align-items:center"><span style="font-size:10px;background:#E8F5E9;color:#2E7D32;border:1px solid #A5D6A7;border-radius:10px;padding:2px 9px;font-weight:700">'+e.cobradas+' cobrada'+(e.cobradas!==1?'s':'')+'</span>'+(hayFalt?('<span style="font-size:10px;background:#FEE2E2;color:#C62828;border:1px solid #EF9A9A;border-radius:10px;padding:2px 9px;font-weight:800">'+e.faltaron+' por cobrar</span>'):'<span style="font-size:10px;color:#2E7D32;font-weight:700">TODAS COBRADAS</span>')+'</div></div>';
+            if (e.filas.length){
+              html += '<table class="tbl" style="margin:0"><thead><tr><th style="font-size:9px;text-align:left">PERSONA</th><th style="font-size:9px;text-align:center">PÓLIZAS</th><th style="font-size:9px;text-align:left">ESTADO</th></tr></thead><tbody>';
+              e.filas.forEach(f => {
+                const estado = f.cobrada
+                  ? '<span style="font-size:9px;background:#E8F5E9;color:#2E7D32;border:1px solid #A5D6A7;border-radius:8px;padding:1px 7px;font-weight:700">✓ COBRADA</span>'
+                  : '<span style="font-size:9px;background:#FEE2E2;color:#C62828;border:1px solid #EF9A9A;border-radius:8px;padding:1px 7px;font-weight:800">✗ NO COBRADA</span>';
+                html += '<tr style="background:'+(f.cobrada?'transparent':'#FFF7F7')+'"><td style="font-size:10.5px;font-weight:700">'+_h(f.persona)+'</td><td style="font-size:11px;text-align:center;font-weight:700;color:#475569">'+(f.polizasCount||0)+'</td><td>'+estado+'</td></tr>';
+              });
+              html += '</tbody></table>';
+            } else {
+              html += '<div style="padding:12px 14px;font-size:10.5px;color:var(--mute)">Nadie con póliza fue pagado en esta planilla.</div>';
+            }
+            html += '</div>';
+          });
+        }
       }
-      } catch(_eChk){ html += '<div class="empty" style="padding:24px;text-align:center;color:#C62828">NO SE PUDO ARMAR EL CHEQUEO GLOBAL. Recargá la app.</div>'; }
+      } catch(_eChk){ html += '<div class="empty" style="padding:24px;text-align:center;color:#C62828">NO SE PUDO ARMAR EL CHEQUEO. Recargá la app.</div>'; }
     } // fin CHEQUEO
     if (_polView === 'listado'){
     // v479: barra de filtros activos + VOLVER AL RESUMEN (igual que Anticipos)

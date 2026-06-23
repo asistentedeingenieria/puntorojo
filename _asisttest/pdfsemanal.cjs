@@ -82,6 +82,9 @@ if(bLun){
   ok('domingo → lunes 2026-06-15 (semana que cierra)', Ld[0].key==='2026-06-15');
 }
 ok('v811 modal usa _lunesRecientes + select de lunes (no date libre)', /abrirPdfSemanal[\s\S]{0,700}_lunesRecientes/.test(html) && /pdfSemMondaySel/.test(html));
+// v812: logo alineado con la tabla + nombre de archivo con rango de fechas
+ok('v812 logo alineado con la tabla: _pdfLogo(doc, 30)', /_pdfLogo\(doc, ?30\)/.test(bP||''));
+ok('v812 nombre de archivo con rango (... AL <fin>)', /' AL '\+_fmtDMY\(weekKeys\[5\]\)/.test(bP||''));
 
 // orden de botones: TOMAR ASISTENCIA < ESTADO DE FUERZA < PDF PRESENTES DEL DÍA < PDF SEMANAL
 const iTomar=html.indexOf('>TOMAR ASISTENCIA<');
