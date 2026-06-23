@@ -10,7 +10,7 @@ function extract(name){ const m=html.indexOf('function '+name+'('); if(m<0) retu
 // ── estructura cliente ──
 ok('_aiBuildContext existe', html.indexOf('function _aiBuildContext(')>=0);
 ok('_aiAsk existe', html.indexOf('window._aiAsk')>=0);
-ok('UI: botón flotante Preguntá (aiFab)', html.indexOf("id='aiFab'")>=0);
+ok('UI: botón Preguntá en el header (aiTopBtn)', html.indexOf('id="aiTopBtn"')>=0);
 ok('UI: panel + _aiSend', html.indexOf('window._aiSend')>=0 && html.indexOf("id='aiPanel'")>=0);
 ok('_aiAsk escribe en aiQuestions con contexto (Firestore, no endpoint público)', /_aiAsk[\s\S]{0,1600}collection\('aiQuestions'\)\.add[\s\S]{0,400}contexto/.test(html));
 ok('_aiAsk escucha la respuesta por onSnapshot', /_aiAsk[\s\S]{0,2000}onSnapshot/.test(html));
@@ -52,7 +52,7 @@ if(body){
 
 // v807: botón IA por permiso
 ok('permiso ia.usar registrado', /pushPerm\(\{\s*key:'ia\.usar'/.test(html));
-ok('botón "Preguntá" gateado por data-perm ia.usar', /setAttribute\('data-perm','ia\.usar'\)/.test(html));
+ok('botón "Preguntá" (header) gateado por data-perm ia.usar', /id="aiTopBtn"[\s\S]{0,140}data-perm="ia\.usar"|data-perm="ia\.usar"[\s\S]{0,140}id="aiTopBtn"/.test(html));
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
