@@ -18,6 +18,8 @@ ok('updateTabBadges', html.indexOf('window.updateTabBadges')>=0);
 ok('span badge PLANILLAS (top)', html.indexOf('id="tabBadge-planilla"')>=0);
 ok('span badge ANTICIPOS (sub)', html.indexOf('id="tabBadge-anticipos"')>=0);
 ok('span badge PAGOS POR ETAPA (sub)', html.indexOf('id="tabBadge-etapas"')>=0);
+ok('span badge ÓRDENES DE COMPRA (sub)', html.indexOf('id="tabBadge-ordenes"')>=0);
+ok('_cntOCsPend gateado por compras.autorizar + status', /_cntOCsPend[\s\S]{0,260}compras\.autorizar[\s\S]{0,400}AUTORIZADA/.test(html));
 // contadores suman las fuentes correctas
 ok('planilla suma anticipo+pagoetapa+admin358', /_cntPlanillaPend\s*=\s*function\(\)\{[\s\S]{0,200}_cntAnticipoPend\(\)[\s\S]{0,80}_cntPagoEtapaPend\(\)[\s\S]{0,80}_cntAdmin358Pend\(\)/.test(html));
 ok('anticipo usa _antSolicPendientesParaMi', /_cntAnticipoPend[\s\S]{0,200}_antSolicPendientesParaMi/.test(html));
