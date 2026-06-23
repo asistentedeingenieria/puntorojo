@@ -409,6 +409,8 @@ html.ios-standalone .topbar{
 .pr-combo-opt .pr-combo-check{margin-left:auto;font-size:13px;color:var(--red);opacity:0}
 .pr-combo-opt.active .pr-combo-check{opacity:1}
 .pr-combo-empty{padding:18px 12px;text-align:center;color:var(--mute);font-size:11px;letter-spacing:.5px;font-style:italic}
+/* v798: badge de pendientes inline para pestañas/sub-pestañas (no se recorta como uno absoluto en .tabs{overflow-y:hidden}) */
+.tab-badge{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 5px;margin-left:6px;border-radius:9px;background:#C62828;color:#fff;font-size:9px;font-weight:800;line-height:1;vertical-align:middle;letter-spacing:.2px;box-shadow:0 1px 2px rgba(198,40,40,.4)}
 /* v436: combobox PERSONA A PAGAR responsive en celular — touch targets de
    44px (Apple HIG), texto mas grande, panel mas alto para ver mas opciones. */
 @media (max-width:720px){
@@ -2475,7 +2477,7 @@ table{max-width:100%}
     <button class="tab" data-view="avance" onclick="setView('avance')">AVANCE FÍSICO<span class="badge" id="badgeAvance" style="display:none">—</span></button>
     <button class="tab" data-view="materiales" onclick="setView('materiales')">MATERIALES<span class="badge" id="badgeMat" style="display:none">—</span></button>
     <button class="tab" data-view="personal" onclick="setView('personal')">PERSONAL</button>
-    <button class="tab" data-view="planilla" onclick="setView('planilla')" data-perm="view.planilla">PLANILLAS</button>
+    <button class="tab" data-view="planilla" onclick="setView('planilla')" data-perm="view.planilla">PLANILLAS<span id="tabBadge-planilla"></span></button>
     <button class="tab" data-view="actividad" onclick="setView('actividad')">ACTIVIDAD<span class="badge" id="badgeAct" style="display:none">—</span></button>
   </nav>
 
@@ -2879,13 +2881,13 @@ table{max-width:100%}
       <!-- v345: orden reordenado por pedido del usuario. Eliminadas:
            EXTRAS/DESCUENTOS/OC y EXCEPCIONES. -->
       <div class="mat-tabs" style="margin-bottom:18px">
-        <button class="mat-tab active" data-plantab="etapas" onclick="setPlanillaTab('etapas')">PAGOS POR ETAPA</button>
+        <button class="mat-tab active" data-plantab="etapas" onclick="setPlanillaTab('etapas')">PAGOS POR ETAPA<span id="tabBadge-etapas"></span></button>
         <button class="mat-tab" data-plantab="ocs" onclick="setPlanillaTab('ocs')">PLANILLAS OC</button>
         <button class="mat-tab" data-plantab="retenciones" onclick="setPlanillaTab('retenciones')">RETENCIONES</button>
         <button class="mat-tab" data-plantab="reporte" onclick="setPlanillaTab('reporte')">AVANCE POR APARTAMENTO</button>
         <button class="mat-tab" data-plantab="resumenpersona" onclick="setPlanillaTab('resumenpersona')">RESUMEN POR PERSONA</button>
         <button class="mat-tab" data-plantab="planillapersona" onclick="setPlanillaTab('planillapersona')" data-perm="planilla.porPersona">PLANILLA POR PERSONA</button>
-        <button class="mat-tab" data-plantab="anticipos" onclick="setPlanillaTab('anticipos')">ANTICIPOS</button>
+        <button class="mat-tab" data-plantab="anticipos" onclick="setPlanillaTab('anticipos')">ANTICIPOS<span id="tabBadge-anticipos"></span></button>
         <button class="mat-tab" data-plantab="receta" onclick="setPlanillaTab('receta')" data-perm="users.manage">MODELOS Y COSTOS</button>
         <!-- COLABORADORES se inyecta al FINAL por injectPlanillaTabs -->
       </div>
@@ -2964,7 +2966,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v797</span>
+    <span style="opacity:.5;font-size:9px">v798</span>
   </footer>
 
 </div>
@@ -5454,6 +5456,9 @@ function applyPermissions(){
       el.classList.remove('locked');
     }
   });
+
+  // v798: refrescar los badges de pendientes en cada pase de permisos (= cada render).
+  try{ if(typeof window.updateTabBadges==='function') window.updateTabBadges(); }catch(e){}
 
   // v754: el botón HABILITAR/ANULAR ETAPA es admin Y solo en la pestaña PAGOS POR ETAPA.
   // applyPermissions corre en cada render y, por el data-perm, re-mostraba el bar en TODAS las
@@ -44924,6 +44929,36 @@ async function _anulAnularReal(){
       try{ var op=document.querySelectorAll('.pr-combo.open'); for(var i=0;i<op.length;i++){ if(!op[i].contains(ev.target)) op[i].classList.remove('open'); } }catch(e){}
     }, true);
   }catch(e){}
+
+  /* ═══════════ v798: BADGES DE PENDIENTES en pestañas (#3) ═══════════
+     Número = solicitudes/aprobaciones que ESTE usuario debe atender. Estado DERIVADO
+     (estado del dato + permiso del usuario); se recalcula en cada render (hook en el
+     pase de permisos) y se LIMPIA solo al llegar a 0. Sin flag de "visto". Mismo
+     espíritu que el badge de SOLICITUDES (v777). */
+  window.tabBadgeHTML = function(n){ n=Number(n)||0; if(n<=0) return ''; var t=n>99?'99+':String(n); return '<span class="tab-badge">'+t+'</span>'; };
+  function _prGerAuth(){ try{ return (typeof can==='function') && (can('planilla.authorize')||can('users.manage')); }catch(e){ return false; } }
+  // contadores (solo lo que espera MI acción según mi permiso)
+  window._cntAnticipoPend = function(){ try{ return (typeof window._antSolicPendientesParaMi==='function') ? window._antSolicPendientesParaMi().length : 0; }catch(e){ return 0; } };
+  window._cntPagoEtapaPend = function(){
+    var n=0;
+    try{ if(_prGerAuth()){
+      if(typeof window._solPagoEtapaPendientes==='function') n+=window._solPagoEtapaPendientes().length;
+      var p=(typeof activeProj==='function')?activeProj():null;
+      if(p && Array.isArray(p.desmarcarSolicitudes)) n+=p.desmarcarSolicitudes.filter(function(s){ return s && s.estado==='pendiente'; }).length;
+    } }catch(e){}
+    return n;
+  };
+  window._cntAdmin358Pend = function(){ try{ if(typeof can==='function' && can('users.manage')) return ((typeof state!=='undefined' && state && state.solicitudesAnticipos)||[]).filter(function(s){ return s && s.estado==='PENDIENTE'; }).length; }catch(e){} return 0; };
+  window._cntPlanillaPend = function(){ return window._cntAnticipoPend() + window._cntPagoEtapaPend() + window._cntAdmin358Pend(); };
+  // pinta los badges sobre los botones (los <span> viven en el markup estático; si no existen, no pasa nada).
+  window.updateTabBadges = function(){
+    try{
+      var set=function(id,n){ var el=document.getElementById(id); if(el) el.innerHTML=window.tabBadgeHTML(n); };
+      set('tabBadge-planilla', window._cntPlanillaPend());
+      set('tabBadge-anticipos', window._cntAnticipoPend());
+      set('tabBadge-etapas', window._cntPagoEtapaPend());
+    }catch(e){}
+  };
 
   // v789: COMBOBOX escribible para "¿para quién?" (buscar persona). Reusa el CSS .pr-combo.
   window._antColabRender = function(q){
