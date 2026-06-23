@@ -85,6 +85,7 @@ ok('v811 modal usa _lunesRecientes + select de lunes (no date libre)', /abrirPdf
 // v812: logo alineado con la tabla + nombre de archivo con rango de fechas
 ok('v812 logo alineado con la tabla: _pdfLogo(doc, 30)', /_pdfLogo\(doc, ?30\)/.test(bP||''));
 ok('v812 nombre de archivo con rango (... AL <fin>)', /' AL '\+_fmtDMY\(weekKeys\[5\]\)/.test(bP||''));
+ok('v813 dropdown de lunes más corto (8 semanas)', /_lunesRecientes\(hoy,\s*8\)/.test(html));
 
 // orden de botones: TOMAR ASISTENCIA < ESTADO DE FUERZA < PDF PRESENTES DEL DÍA < PDF SEMANAL
 const iTomar=html.indexOf('>TOMAR ASISTENCIA<');

@@ -49,6 +49,12 @@ if(body){
   ok('BETO pagado pero NO cobrada, 1 póliza', by['BETO RUIZ'] && by['BETO RUIZ'].cobrada===false && by['BETO RUIZ'].polizasCount===1);
   ok('resumen: 1 cobrada, 1 faltó', e.cobradas===1 && e.faltaron===1);
   ok('faltaron primero (BETO antes que ANA)', e.filas[0].persona==='BETO RUIZ' && e.filas[1].persona==='ANA LOPEZ');
+  // v813: orden por QUINCENA (fecha del sábado) DESC — la más reciente primero, agrupando proyectos
+  const r2=fn([
+    {id:'a', name:'TORELO', planilla:{ pagos:[{id:'x',colaborador:'ANA LOPEZ'}], planillasArmadas:[{id:'old', estado:'aprobada_inicial', fechaEnvio:'2026-06-06T12:00:00', pagosIds:['x'], descuentosPlanilla:[]}] }},
+    {id:'b', name:'ESSENZA', planilla:{ pagos:[{id:'y',colaborador:'ANA LOPEZ'}], planillasArmadas:[{id:'new', estado:'aprobada_inicial', fechaEnvio:'2026-06-20T12:00:00', pagosIds:['y'], descuentosPlanilla:[]}] }}
+  ], st);
+  ok('v813 orden por fecha DESC (quincena 20/06 antes que 06/06)', r2.length===2 && r2[0].planilla.id==='new' && r2[1].planilla.id==='old');
 }
 
 console.log('PASS='+pass+' FAIL='+fail);
