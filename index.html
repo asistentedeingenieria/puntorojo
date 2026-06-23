@@ -2966,7 +2966,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v800</span>
+    <span style="opacity:.5;font-size:9px">v801</span>
   </footer>
 
 </div>
@@ -44968,6 +44968,100 @@ async function _anulAnularReal(){
       set('tabBadge-ordenes', window._cntOCsPend());
     }catch(e){}
   };
+
+  /* ═══════════ v801: ASISTENTE IA "Preguntá a Punto Rojo" (#4) ═══════════
+     Arma una foto RESUMIDA del proyecto activo, FILTRADA por can() (solo lo que el
+     usuario puede ver), la manda con la pregunta a la Cloud Function askAI (que tiene
+     la API key de Anthropic, NUNCA en el cliente), y muestra la respuesta. Solo LEE.
+     Spec: docs/superpowers/specs/2026-06-22-asistente-ia-design.md */
+  function _aiFecha(ts){ try{ return ts ? new Date(ts).toLocaleDateString('es-GT') : ''; }catch(e){ return ''; } }
+  // PURA y testeable: (proyecto activo, can inyectable, extras ya calculados por el app) → contexto JSON compacto.
+  function _aiBuildContext(p, can, extras){
+    can = (typeof can==='function') ? can : function(){ return false; };
+    extras = extras || {};
+    var ctx = { proyecto:(p&&p.name)||'(sin proyecto activo)', dominios:{}, diccionario:{} };
+    if(!p) return ctx;
+    try{ ctx.dominios.estructura = (p.towers||[]).map(function(t){ return { torre:t.name, niveles:(t.levels||[]).map(function(l){ return { nivel:l.name, aptos:(l.aptos||[]).map(function(a){ return a.name; }) }; }) }; }); }catch(e){}
+    if(can('view.planilla')){
+      try{
+        var pagos=(p.planilla&&p.planilla.pagos)||[];
+        ctx.dominios.pagos = pagos.map(function(pg){ return { persona:pg.colaborador||'', torre:pg.towerName||'', nivel:pg.levelName||'', apto:pg.aptoName||'', etapa:pg.detalle||('ETAPA '+((Number(pg.stageIdx)||0)+1)), monto:Number(pg.neto||pg.bruto||0), fecha:_aiFecha(pg.ts), autorizado:!!pg.autorizado }; });
+        ctx.diccionario.pagos='cada pago de etapa: persona que cobró, ubicación (torre/nivel/apto), etapa, monto neto en quetzales (Q), fecha, y si está autorizado';
+      }catch(e){}
+    }
+    if(can('view.personal') && extras.asistenciaHoy){ ctx.dominios.asistenciaHoy=extras.asistenciaHoy; ctx.diccionario.asistenciaHoy='presentes y ausentes de HOY por obra'; }
+    if((can('view.planilla')||can('anticipos.solicitar')||can('anticipos.cotizar')) && extras.anticipos){ ctx.dominios.anticipos=extras.anticipos; ctx.diccionario.anticipos='saldo pendiente de préstamos/anticipos por persona (aproximado)'; }
+    // tope de tamaño (~30k tokens ≈ 120k chars): recorta los pagos más viejos primero.
+    try{ if(JSON.stringify(ctx).length>120000 && ctx.dominios.pagos){ ctx.dominios.pagos=ctx.dominios.pagos.slice(-200); ctx._truncado=true; } }catch(e){}
+    return ctx;
+  }
+  // arma los "extras" (anticipos por saldo; asistencia hoy queda para v1.1) con datos existentes, defensivo.
+  function _aiBuildExtras(p){
+    var ex={};
+    try{
+      var ants=(typeof state!=='undefined' && state && Array.isArray(state.anticiposGlobales)) ? state.anticiposGlobales : [];
+      var byP={};
+      ants.forEach(function(a){ var n=String(a.colaboradorNombre||'').trim().toUpperCase(); if(!n) return; var tot=Number(a.montoTotal)||0; var cuotas=Number(a.cantidadCuotas)||1; var pag=Number(a.cuotasPagadasInicial)||0; var saldo=Math.max(0, tot*(1-Math.min(1,pag/cuotas))); if(!byP[n]) byP[n]=0; byP[n]+=saldo; });
+      var arr=Object.keys(byP).map(function(n){ return { persona:n, saldoAprox:Math.round(byP[n]) }; }).filter(function(x){ return x.saldoAprox>0; });
+      if(arr.length) ex.anticipos=arr;
+    }catch(e){}
+    return ex;
+  }
+  window._aiEndpoint = 'https://us-central1-punto-rojo-3fcf1.cloudfunctions.net/askAI';
+  window._aiAsk = async function(pregunta){
+    pregunta=String(pregunta||'').trim();
+    if(!pregunta) return { error:'Escribí una pregunta.' };
+    if(typeof navigator!=='undefined' && navigator && navigator.onLine===false) return { error:'Necesitás internet para preguntarle al asistente.' };
+    var p=(typeof activeProj==='function')?activeProj():null;
+    var ctx=_aiBuildContext(p, (typeof can==='function'?can:null), _aiBuildExtras(p));
+    var idToken='';
+    try{ if(typeof firebase!=='undefined' && firebase.auth && firebase.auth().currentUser) idToken=await firebase.auth().currentUser.getIdToken(); }catch(e){}
+    if(!idToken) return { error:'Iniciá sesión para usar el asistente.' };
+    try{
+      var r=await fetch(window._aiEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ idToken:idToken, pregunta:pregunta, contexto:ctx }) });
+      var j=await r.json().catch(function(){ return {}; });
+      if(!r.ok) return { error:(j&&j.error)||'No pude responder ahora, probá de nuevo.' };
+      return { respuesta:(j&&j.respuesta)||'Sin respuesta.' };
+    }catch(e){ return { error:'No pude responder ahora, probá de nuevo.' }; }
+  };
+  // UI flotante: botón "Preguntá" + panel de chat. Se inyecta una vez (defensivo si body aún no está).
+  function _aiInjectUI(){
+    try{
+      if(!document.body || document.getElementById('aiFab')) return;
+      var fab=document.createElement('button'); fab.id='aiFab'; fab.type='button'; fab.title='Preguntá a Punto Rojo';
+      fab.innerHTML='Preguntá';
+      fab.style.cssText='position:fixed;left:16px;bottom:16px;z-index:99990;background:#C8141C;color:#fff;border:none;border-radius:24px;padding:11px 18px;font:700 13px Inter,Arial,sans-serif;letter-spacing:.5px;box-shadow:0 6px 20px rgba(200,20,28,.4);cursor:pointer';
+      fab.onclick=function(){ window._aiToggle(true); };
+      document.body.appendChild(fab);
+      var panel=document.createElement('div'); panel.id='aiPanel';
+      panel.style.cssText='position:fixed;left:16px;bottom:72px;z-index:99991;width:min(380px,92vw);max-height:70vh;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 18px 50px rgba(15,23,42,.25);display:none;flex-direction:column;overflow:hidden;font-family:Inter,Arial,sans-serif';
+      panel.innerHTML=''
+        +'<div style="background:#C8141C;color:#fff;padding:12px 14px;display:flex;align-items:center;justify-content:space-between"><div style="font-weight:700;font-size:13px;letter-spacing:.5px">PREGUNTÁ A PUNTO ROJO</div><button type="button" onclick="window._aiToggle(false)" style="background:none;border:none;color:#fff;font-size:18px;cursor:pointer;line-height:1">&times;</button></div>'
+        +'<div style="padding:12px 14px;overflow-y:auto;flex:1;font-size:13px;color:#333">'
+        +'<div style="color:#6b7280;font-size:12px;margin-bottom:10px">Preguntame sobre el proyecto activo. Solo veo lo que tu permiso te deja ver.</div>'
+        +'<div id="aiExamples" style="display:flex;flex-direction:column;gap:6px"></div>'
+        +'<div id="aiAnswer" style="margin-top:12px;white-space:pre-wrap;line-height:1.5"></div>'
+        +'</div>'
+        +'<div style="padding:10px 12px;border-top:1px solid #eee;display:flex;gap:8px">'
+        +'<input id="aiInput" type="text" placeholder="Escribí tu pregunta..." autocomplete="off" onkeydown="if(event.key===\'Enter\')window._aiSend()" style="flex:1;border:1px solid #ddd;border-radius:8px;padding:9px 11px;font:inherit;font-size:13px">'
+        +'<button type="button" onclick="window._aiSend()" style="background:#C8141C;color:#fff;border:none;border-radius:8px;padding:0 14px;font-weight:700;cursor:pointer">&rarr;</button>'
+        +'</div>';
+      document.body.appendChild(panel);
+      var ej=['¿A quién le pagué el apto 5 de la torre B en la etapa 3 y cuándo?','¿Quiénes tienen saldo de anticipo pendiente?','¿Cuánto se ha pagado en la torre A?'];
+      var exBox=panel.querySelector('#aiExamples');
+      ej.forEach(function(q){ var b=document.createElement('button'); b.type='button'; b.textContent=q; b.style.cssText='text-align:left;background:#f8f4ec;border:1px solid #e7ddc8;border-radius:8px;padding:8px 10px;font:inherit;font-size:12px;color:#444;cursor:pointer'; b.onclick=function(){ var i=document.getElementById('aiInput'); if(i) i.value=q; window._aiSend(); }; exBox.appendChild(b); });
+    }catch(e){ try{ console.warn('aiUI', e&&e.message); }catch(_){} }
+  }
+  window._aiToggle=function(show){ var pl=document.getElementById('aiPanel'); if(pl){ pl.style.display=show?'flex':'none'; if(show){ var i=document.getElementById('aiInput'); if(i) setTimeout(function(){ try{ i.focus(); }catch(e){} },50); } } };
+  window._aiSend=async function(){
+    var inp=document.getElementById('aiInput'); var ans=document.getElementById('aiAnswer'); if(!inp||!ans) return;
+    var q=String(inp.value||'').trim(); if(!q) return;
+    ans.innerHTML='<span style="color:#999">Pensando&hellip;</span>';
+    var r=await window._aiAsk(q);
+    if(r && r.error){ ans.innerHTML='<span style="color:#C8141C">'+String(r.error).replace(/[&<>]/g,function(m){return ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]);})+'</span>'; }
+    else { ans.textContent=(r&&r.respuesta)||'Sin respuesta.'; }
+  };
+  try{ if(document.body){ _aiInjectUI(); } else { document.addEventListener('DOMContentLoaded', _aiInjectUI); } }catch(e){}
 
   // v789: COMBOBOX escribible para "¿para quién?" (buscar persona). Reusa el CSS .pr-combo.
   window._antColabRender = function(q){

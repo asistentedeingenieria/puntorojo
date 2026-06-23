@@ -20,7 +20,9 @@ const { defineSecret } = require('firebase-functions/params');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const { getMessaging } = require('firebase-admin/messaging');
+const { getAuth } = require('firebase-admin/auth');
 const nodemailer = require('nodemailer');
+const Anthropic = require('@anthropic-ai/sdk');
 
 // ─── SECRETOS PARA EMAIL VÍA GMAIL SMTP ───
 // Configurar con:
@@ -28,6 +30,9 @@ const nodemailer = require('nodemailer');
 //   firebase functions:secrets:set GMAIL_APP_PASSWORD
 const GMAIL_USER = defineSecret('GMAIL_USER');
 const GMAIL_APP_PASSWORD = defineSecret('GMAIL_APP_PASSWORD');
+// ─── SECRETO PARA EL ASISTENTE IA (#4) ───
+//   firebase functions:secrets:set ANTHROPIC_API_KEY
+const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY');
 
 // Default para todas las funciones
 setGlobalOptions({
@@ -559,6 +564,78 @@ exports.onExcepcionPagoDecidida = onDocumentUpdated(
       }, { merge: true });
     } catch (err) {
       console.error(`Email decisión excepción → ${supervisorEmail} FALLÓ:`, err.message);
+    }
+  }
+);
+
+/* ════════════════════════════════════════════════════════════════
+   askAI — asistente IA "Preguntá a Punto Rojo" (#4, v801).
+   ────────────────────────────────────────────────────────────────
+   POST { idToken, pregunta, contexto } → { respuesta }.
+   - Verifica el idToken de Firebase (solo usuarios logueados).
+   - Llama a la API de Anthropic (Claude Haiku) con un system prompt estricto:
+     responder SOLO con los datos del contexto; si no está, decir que no lo tiene.
+   - El contexto ya viene FILTRADO por permiso desde el cliente (_aiBuildContext).
+   La API key NUNCA está en el cliente: va como secreto ANTHROPIC_API_KEY.
+
+   Configurar (lo hace el user, ver docs/asistente-ia-deploy.md):
+     cd functions && npm install @anthropic-ai/sdk
+     firebase functions:secrets:set ANTHROPIC_API_KEY
+     firebase deploy --only functions
+   El acceso público se setea en Cloud Run (igual que getReceptorAcuses):
+   agregar principal "allUsers" con rol "Cloud Run Invoker" a la función askAI.
+   ════════════════════════════════════════════════════════════════ */
+exports.askAI = onRequest(
+  {
+    cors: ['https://puntorojo.app', 'https://www.puntorojo.app', 'https://asistentedeingenieria.github.io', 'http://localhost', 'http://localhost:8080'],
+    secrets: [ANTHROPIC_API_KEY],
+    timeoutSeconds: 60,
+    memory: '512MiB'
+  },
+  async (req, res) => {
+    if (req.method !== 'POST') { res.status(405).json({ error: 'Solo POST' }); return; }
+    const body = req.body || {};
+    const idToken  = String(body.idToken  || '');
+    const pregunta = String(body.pregunta || '').slice(0, 2000).trim();
+    const contexto = body.contexto || {};
+    if (!idToken)  { res.status(401).json({ error: 'Iniciá sesión para usar el asistente.' }); return; }
+    if (!pregunta) { res.status(400).json({ error: 'Escribí una pregunta.' }); return; }
+
+    // Autenticación: el idToken de Firebase debe ser válido.
+    try { await getAuth().verifyIdToken(idToken); }
+    catch (e) { res.status(401).json({ error: 'Sesión inválida, volvé a entrar.' }); return; }
+
+    const key = ANTHROPIC_API_KEY.value();
+    if (!key) { res.status(503).json({ error: 'El asistente todavía no está configurado.' }); return; }
+
+    const sys = [
+      'Sos el asistente de la app Punto Rojo (gestión de obra de drywall en Guatemala).',
+      'Respondé SOLO con los datos que están en el CONTEXTO (JSON del proyecto activo, ya filtrado por el permiso del usuario).',
+      'Si el dato no está en el contexto, decí claramente que no lo tenés — puede ser por permiso o porque no es del proyecto activo. NO inventes.',
+      'Los montos están en quetzales (Q). Respondé en español, breve y directo, sin markdown pesado.'
+    ].join(' ');
+
+    let ctxStr = '{}';
+    try { ctxStr = JSON.stringify(contexto).slice(0, 200000); } catch (e) {}
+
+    try {
+      const client = new Anthropic({ apiKey: key });
+      const msg = await client.messages.create({
+        model: 'claude-haiku-4-5',
+        max_tokens: 700,
+        system: sys,
+        messages: [{
+          role: 'user',
+          content: 'CONTEXTO (datos del proyecto activo, filtrados por permiso):\n' + ctxStr + '\n\nPREGUNTA DEL USUARIO: ' + pregunta
+        }]
+      });
+      let respuesta = '';
+      try { respuesta = (msg && Array.isArray(msg.content)) ? msg.content.map(b => (b && b.type === 'text') ? b.text : '').join('').trim() : ''; } catch (e) {}
+      if (!respuesta) respuesta = 'No pude armar una respuesta. Probá reformular la pregunta.';
+      res.json({ respuesta });
+    } catch (e) {
+      console.error('askAI error:', e && e.message);
+      res.status(500).json({ error: 'No pude responder ahora, probá de nuevo.' });
     }
   }
 );
