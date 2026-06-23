@@ -10,5 +10,9 @@ ok('tira de gestion de empresas aparte (persEmpManage)', html.indexOf('persEmpMa
 ok('EMPRESAS es KPI compacto (solo el numero)', html.indexOf('<div class="kpi cafe"><div class="lbl">Empresas</div><div class="val">${empresas.length}</div>')>=0);
 ok('se conserva agregar empresa (input + fn)', html.indexOf('_kpiEmpInput')>=0 && html.indexOf('_kpiAgregarEmpresa()')>=0);
 
+// v788: EMPRESAS (y el bloque PERSONAL) solo en COLABORADORES, NO en PÓLIZAS
+ok('EMPRESAS/PERSONAL solo en COLABORADORES (lista), vacio en otras subs', html.indexOf("(_sub==='lista' ? (_persPair+_empManage) : '')")>=0);
+ok('persKpis se limpia al entrar a POLIZAS', html.indexOf("if (tab === 'polizas') kpis.innerHTML='';")>=0);
+
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
