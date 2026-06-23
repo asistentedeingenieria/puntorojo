@@ -2976,7 +2976,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v809</span>
+    <span style="opacity:.5;font-size:9px">v810</span>
   </footer>
 
 </div>
@@ -19467,13 +19467,34 @@ function _pdfPuedeCompartir(nav, file){
     return !!nav.canShare({files:[file]});
   }catch(e){ return false; }
 }
-/* v784: COMPARTIR el PDF directo desde el visor (WhatsApp, correo, etc.) usando la hoja
-   nativa de compartir. Si el WebView no lo soporta, avisa para tomar captura. El boton
-   es gesto de usuario (requisito de la API). El share real garantizado = plugin nativo. */
+/* v810: ¿qué vía de compartir usar?  'native' = plugin Capacitor (Share+Filesystem),
+   garantizado en la app de Play una vez recompilada · 'web' = Web Share API del WebView ·
+   'none' = ninguna. El nativo gana siempre que estén ambos plugins. Puro/testeable. */
+function _pdfShareModo(caps, nav, file){
+  try{ if(caps && caps.Share && caps.Filesystem) return 'native'; }catch(e){}
+  if(_pdfPuedeCompartir(nav, file)) return 'web';
+  return 'none';
+}
+/* v784/v810: COMPARTIR el PDF directo desde el visor (WhatsApp, correo, etc.). En la app de
+   Android usa el plugin NATIVO (escribe el PDF a un archivo de caché y abre la hoja de compartir
+   de Android pase lo que pase). Si no está el plugin, cae al Web Share API del WebView; si tampoco,
+   avisa para tomar captura. El botón es gesto de usuario (requisito de ambas APIs). */
 async function _pdfCompartir(doc, filename){
-  var file;
-  try{ file=new File([doc.output('blob')], filename, {type:'application/pdf'}); }catch(e){}
-  if(_pdfPuedeCompartir(navigator, file)){
+  var caps=null; try{ caps=(window.Capacitor && window.Capacitor.Plugins) || null; }catch(e){}
+  var file; try{ file=new File([doc.output('blob')], filename, {type:'application/pdf'}); }catch(e){}
+  var modo=_pdfShareModo(caps, navigator, file);
+  if(modo==='native'){
+    try{
+      var b64=String(doc.output('datauristring')||'').split(',').pop();
+      var w=await caps.Filesystem.writeFile({ path: filename, data: b64, directory: 'CACHE' });
+      await caps.Share.share({ title: filename, files: [ (w && w.uri) ? w.uri : filename ], dialogTitle: 'Compartir PDF' });
+    }catch(e){
+      var msg=String((e && (e.message||e))||'').toLowerCase();
+      if(msg.indexOf('cancel')<0 && msg.indexOf('abort')<0){ try{ showToast('NO SE PUDO COMPARTIR · TOMÁ UNA CAPTURA','red'); }catch(_e){} }
+    }
+    return;
+  }
+  if(modo==='web'){
     try{ await navigator.share({files:[file], title:filename}); }
     catch(e){ if(!(e && e.name==='AbortError')){ try{ showToast('NO SE PUDO COMPARTIR · TOMÁ UNA CAPTURA','red'); }catch(_e){} } }
     return;
