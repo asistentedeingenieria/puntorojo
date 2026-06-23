@@ -149,6 +149,83 @@ exports.onNotificationCreated = onDocumentCreated(
 );
 
 /* ════════════════════════════════════════════════════════════════
+   onNotifyByPerm — FAN-OUT de notificaciones por PERMISO (push en tiempo real).
+   ────────────────────────────────────────────────────────────────
+   El cliente (incluso un usuario NO admin, que por reglas no puede leer la
+   colección `users`) escribe en notifyByPerm/{id}:
+     { toPerms:[...], toEmails:[...], title, body, projectId, type, excludeUid, createdAt }
+   Esta función corre con admin SDK (sí puede leer `users`), encuentra a quienes
+   tienen alguno de esos permisos (o '*') o cuyo email está en toEmails, y le
+   escribe a cada uno un doc en users/{uid}/notifications/{autoId}. Eso dispara
+   onNotificationCreated → push FCM (reusa todo el pipeline existente).
+   Al terminar borra el doc de notifyByPerm (es efímero).
+
+   Resuelve el problema histórico: el flujo de anticipos lo dispara un supervisor
+   no-admin, que no puede leer `users` desde el cliente para saber a quién avisar.
+
+   REGLAS firestore necesarias (las pone el user):
+     match /notifyByPerm/{id} {
+       allow create: if request.auth != null;   // cualquiera logueado puede pedir aviso
+       allow read, update, delete: if false;     // solo el backend lo procesa/borra
+     }
+   ════════════════════════════════════════════════════════════════ */
+exports.onNotifyByPerm = onDocumentCreated(
+  { document: 'notifyByPerm/{id}', timeoutSeconds: 60, memory: '256MiB' },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const req = snap.data() || {};
+    const toPerms  = Array.isArray(req.toPerms)  ? req.toPerms.filter(x => typeof x === 'string') : [];
+    const toEmails = Array.isArray(req.toEmails) ? req.toEmails.map(e => String(e || '').toLowerCase()).filter(Boolean) : [];
+    const title = String(req.title || 'PUNTO ROJO').slice(0, 120);
+    const body  = String(req.body  || '').slice(0, 300);
+    const projectId = String(req.projectId || '');
+    const type = String(req.type || 'info');
+    const excludeUid = String(req.excludeUid || '');
+
+    const db = getFirestore();
+
+    if (!toPerms.length && !toEmails.length) {
+      console.log('notifyByPerm sin destinatarios — borro.');
+      try { await snap.ref.delete(); } catch (e) {}
+      return;
+    }
+
+    const usersSnap = await db.collection('users').get();
+    const targets = [];
+    usersSnap.forEach(doc => {
+      const u = doc.data() || {};
+      const uid = doc.id;
+      if (uid === excludeUid) return;
+      const perms = Array.isArray(u.perms) ? u.perms : [];
+      const email = String(u.email || '').toLowerCase();
+      const permMatch  = perms.includes('*') || toPerms.some(p => perms.includes(p));
+      const emailMatch = email && toEmails.includes(email);
+      if (permMatch || emailMatch) targets.push(uid);
+    });
+
+    if (!targets.length) {
+      console.log('notifyByPerm: ningún usuario coincide con', JSON.stringify(toPerms), JSON.stringify(toEmails));
+      try { await snap.ref.delete(); } catch (e) {}
+      return;
+    }
+
+    // Un doc de notificación por destinatario → dispara onNotificationCreated → push.
+    const writes = targets.map(uid =>
+      db.collection('users').doc(uid).collection('notifications').add({
+        type, title, body, projectId,
+        createdAt: FieldValue.serverTimestamp(),
+        fanout: true
+      }).catch(e => console.warn('notif write fail', uid, e && e.message))
+    );
+    await Promise.all(writes);
+    console.log(`notifyByPerm → ${targets.length} usuario(s) notificados: "${title}"`);
+
+    try { await snap.ref.delete(); } catch (e) {}
+  }
+);
+
+/* ════════════════════════════════════════════════════════════════
    getReceptorAcuses — endpoint HTTP que devuelve los acuses firmados
    por un receptor identificado por (token, secret).
 

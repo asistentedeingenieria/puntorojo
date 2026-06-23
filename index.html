@@ -2966,7 +2966,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v799</span>
+    <span style="opacity:.5;font-size:9px">v800</span>
   </footer>
 
 </div>
@@ -44992,8 +44992,34 @@ async function _anulAnularReal(){
       return false;
     });
   };
+  /* v800: PUSH EN TIEMPO REAL por permiso. El cliente NO puede leer `users` (un
+     supervisor no-admin no ve quién tiene el permiso); por eso escribe un doc en
+     la colección `notifyByPerm` y la Cloud Function onNotifyByPerm (admin SDK)
+     reparte el push a todos los usuarios con ese permiso. Reusa el push existente
+     (onNotificationCreated). Es genérico: sirve para cualquier "avisá a los que
+     tengan X permiso" en tiempo real. */
+  window._pushByPerm = function(opts){
+    opts = opts || {};
+    try{
+      if(typeof firebase==='undefined' || !firebase.firestore) return;
+      var u = (typeof currentUser!=='undefined' && currentUser) ? currentUser : null;
+      firebase.firestore().collection('notifyByPerm').add({
+        toPerms: Array.isArray(opts.toPerms) ? opts.toPerms : [],
+        toEmails: (Array.isArray(opts.toEmails) ? opts.toEmails : []).filter(Boolean),
+        title: String(opts.title||'').slice(0,120),
+        body: String(opts.body||'').slice(0,300),
+        projectId: String(opts.projectId||''),
+        type: String(opts.type||'info'),
+        excludeUid: (u && u.uid) || '',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      }).catch(function(e){ try{ console.warn('[push] notifyByPerm fail', e && e.message); }catch(_){} });
+    }catch(e){ try{ console.warn('[push] _pushByPerm err', e && e.message); }catch(_){} }
+  };
   function _antSolicNotif(perms, emails, title, body){
+    // campanita (Sistema B, recipient-side, sincroniza por appState)
     try { if(typeof window.prAddNotif==='function') window.prAddNotif({ toPerms:perms||[], toEmails:(emails||[]).filter(Boolean), title:title, body:String(body||'').slice(0,300), type:'anticipo.solicitud' }); } catch(e){}
+    // v800: ADEMÁS, push en tiempo real (Sistema A vía fan-out en el backend)
+    try { window._pushByPerm({ toPerms:perms||[], toEmails:emails||[], title:title, body:body, projectId:((typeof activeProj==='function' && activeProj()) ? activeProj().id : ''), type:'anticipo.solicitud' }); } catch(e){}
   }
   function _antSolicSave(){
     try{ saveState(); }catch(e){}
