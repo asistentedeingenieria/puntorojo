@@ -2884,6 +2884,7 @@ table{max-width:100%}
         <button class="mat-tab" data-plantab="retenciones" onclick="setPlanillaTab('retenciones')">RETENCIONES</button>
         <button class="mat-tab" data-plantab="reporte" onclick="setPlanillaTab('reporte')">AVANCE POR APARTAMENTO</button>
         <button class="mat-tab" data-plantab="resumenpersona" onclick="setPlanillaTab('resumenpersona')">RESUMEN POR PERSONA</button>
+        <button class="mat-tab" data-plantab="planillapersona" onclick="setPlanillaTab('planillapersona')">PLANILLA POR PERSONA</button>
         <button class="mat-tab" data-plantab="anticipos" onclick="setPlanillaTab('anticipos')">ANTICIPOS</button>
         <button class="mat-tab" data-plantab="receta" onclick="setPlanillaTab('receta')" data-perm="users.manage">MODELOS Y COSTOS</button>
         <!-- COLABORADORES se inyecta al FINAL por injectPlanillaTabs -->
@@ -2903,6 +2904,7 @@ table{max-width:100%}
       <div id="planilla-reporte" style="display:none"></div>
       <div id="planilla-resumenpersona" style="display:none"></div>
       <div id="planilla-anticipos" style="display:none"></div>
+      <div id="planilla-planillapersona" style="display:none"></div>
       <div id="planilla-ocs" style="display:none"></div>
     </section>
 
@@ -2962,7 +2964,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v791</span>
+    <span style="opacity:.5;font-size:9px">v792</span>
   </footer>
 
 </div>
@@ -35953,7 +35955,7 @@ window.addEventListener('load', () => {
     injectPlanillaTabs();
     document.querySelectorAll('[data-plantab]').forEach(b => b.classList.toggle('active', b.dataset.plantab === tab));
     // v384: agregado 'ocs' a la lista. Sin esto la pestaña ORDENES DE CAMBIO quedaba en display:none permanente.
-    ['etapas','receta','colaboradores','retenciones','ajustes','reporte','excepciones','resumenpersona','anticipos','ocs'].forEach(k => { const el=document.getElementById('planilla-'+k); if(el) el.style.display = tab === k ? '' : 'none'; });
+    ['etapas','receta','colaboradores','retenciones','ajustes','reporte','excepciones','resumenpersona','planillapersona','anticipos','ocs'].forEach(k => { const el=document.getElementById('planilla-'+k); if(el) el.style.display = tab === k ? '' : 'none'; });
     { var _aeb=document.getElementById('_anulEtapaBar'); if(_aeb) _aeb.style.display = ((typeof can==='function'&&can('users.manage')) && tab==='etapas')?'flex':'none'; } // v753/v754: HABILITAR/ANULAR ETAPA solo admin + pestaña PAGOS POR ETAPA
     renderPlanilla();
     // v384: triggerea renders de los catalogos (si no se llaman, los containers quedan vacios al cambiar de tab)
@@ -36002,6 +36004,7 @@ window.addEventListener('load', () => {
     if (currentPlanillaTab === 'resumenpersona' && typeof renderPlanillaResumenPersona === 'function') renderPlanillaResumenPersona();
     // v346: catálogo de anticipos
     if (currentPlanillaTab === 'anticipos' && typeof window.renderPlanillaAnticipos === 'function') window.renderPlanillaAnticipos();
+    if (currentPlanillaTab === 'planillapersona' && typeof window.renderPlanillaPorPersona === 'function') window.renderPlanillaPorPersona();
     // v347: catálogo de pólizas
     if (currentPlanillaTab === 'polizas' && typeof window.renderPlanillaPolizas === 'function') window.renderPlanillaPolizas();
     // v382: catálogo de OCs
@@ -43139,7 +43142,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const v = Number(n) || 0;
     return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
-  async function _generarYDescargarExcel(data){
+  async function _generarYDescargarExcel(data, opts){
     try {
       if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) {
         return showT('LIBRERÍA PDF NO CARGADA — RECARGAR LA APP','red');
@@ -43265,6 +43268,33 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           { content: 'Q '+_fmtN(c.totalNeto||0), styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0] } }
         ]);
         return body;
+      }
+
+      // v792: opts.porPersona => UN PDF por persona (reusa header + _v336BuildWorkerBody). opts.soloIdx = una sola.
+      if(opts && opts.porPersona){
+        var _lista = (data.colabs||[]).slice();
+        if(opts.soloIdx!=null){ var _one=_lista[opts.soloIdx]; _lista = _one?[_one]:[]; }
+        if(!_lista.length){ showT('SIN PERSONAS EN ESTA PLANILLA','red'); return; }
+        var _projCl = (data.proyecto||'Proyecto').replace(/[\\\/\?\*\[\]:"|<>]/g,'').trim();
+        var _sab = _fechaSabadoDDMM(data.fecha);
+        var _titHd = ('PLANILLA TABLAYESO - ' + (data.proyecto||'') + (_compactarTorres(data.torres)?(' - '+_compactarTorres(data.torres)):'')).toUpperCase();
+        var _supHd = String(data.supervisorNombre || '').toUpperCase() || '—';
+        var _fSabHd = _fmtFechaSabado(data.fecha);
+        var _n=0;
+        _lista.forEach(function(c){
+          var d2 = new jsPDF({ unit:'pt', format:'letter' });
+          var yy = 32;
+          d2.setFont('helvetica','bold'); d2.setFontSize(10); d2.text(_titHd, 306, yy, {align:'center'}); yy+=11;
+          d2.setFont('helvetica','normal'); d2.setFontSize(8.5); d2.text(_supHd, 306, yy, {align:'center'}); yy+=10;
+          d2.text(_fSabHd, 306, yy, {align:'center'}); yy+=16;
+          d2.autoTable(Object.assign({}, tableOpts, { startY: yy, body: _v336BuildWorkerBody(c) }));
+          var _nomCl = String(c.nombre||'PERSONA').replace(/[\\\/\?\*\[\]:"|<>]/g,'').trim();
+          var _fn = 'Planilla ' + _nomCl + ' ' + _projCl + '_' + _sab + '.pdf';
+          if(typeof _pdfDescargar==='function') _pdfDescargar(d2, _fn); else d2.save(_fn);
+          _n++;
+        });
+        showT(_n+' PLANILLA'+(_n!==1?'S':'')+' POR PERSONA','green');
+        return;
       }
 
       const ROW_AVG_H = 17;
@@ -43891,6 +43921,67 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     });
     if(!data.colabs.length) return showT('NO HAY DATOS PARA MOSTRAR','red');
     await _generarYDescargarExcel(data);
+  };
+
+  // ───────── v792: PLANILLA POR PERSONA (un PDF por persona de la quincena) ─────────
+  function _planillaArmadasOrdenadas(){
+    const p = _activeProj();
+    const arr = ((p && p.planilla && p.planilla.planillasArmadas) || [])
+      .filter(function(pl){ return pl && pl.estado!=='rechazada'; })
+      .slice().sort(function(a,b){ return (b.numero||0)-(a.numero||0); }); // la más reciente primero
+    return { p: p, arr: arr };
+  }
+  function _planillaDataDe(planillaId){
+    const p = _activeProj(); if(!p) return null;
+    const pl = ((p.planilla && p.planilla.planillasArmadas) || []).find(function(x){ return x.id===planillaId; });
+    if(!pl || !pl.pagosIds || !pl.pagosIds.length) return null;
+    const data = _construirDatos(p, pl.pagosIds, {
+      numero: pl.numero, fecha: pl.fechaEnvio || pl.fechaCreacion, planillaId: pl.id, estado: pl.estado,
+      supervisorNombre: pl.supervisorNombre || '', pmNombre: pl.pmNombre || '', planilla: pl
+    });
+    return { p: p, pl: pl, data: data };
+  }
+  window._planillaPdfPorPersona = async function(planillaId, idx){
+    try { if(typeof CloudSync!=='undefined' && CloudSync.enabled && CloudSync.refreshFromCloud){ await CloudSync.refreshFromCloud(); } } catch(e){}
+    const r = _planillaDataDe(planillaId);
+    if(!r || !r.data.colabs.length) return showT('SIN DATOS DE PLANILLA','red');
+    await _generarYDescargarExcel(r.data, { porPersona:true, soloIdx: Number(idx) });
+  };
+  window._planillaPdfTodasPorPersona = async function(planillaId){
+    try { if(typeof CloudSync!=='undefined' && CloudSync.enabled && CloudSync.refreshFromCloud){ await CloudSync.refreshFromCloud(); } } catch(e){}
+    const r = _planillaDataDe(planillaId);
+    if(!r || !r.data.colabs.length) return showT('SIN DATOS DE PLANILLA','red');
+    await _generarYDescargarExcel(r.data, { porPersona:true });
+  };
+  window.renderPlanillaPorPersona = function(){
+    const el = document.getElementById('planilla-planillapersona'); if(!el) return;
+    const h = function(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]); }); };
+    const ctx = _planillaArmadasOrdenadas();
+    if(!ctx.p){ el.innerHTML=''; return; }
+    if(!ctx.arr.length){ el.innerHTML = '<div class="card"><div class="card-hd"><h3>PLANILLA POR PERSONA (PDF)</h3></div><div class="empty" style="padding:30px">NO HAY PLANILLAS GENERADAS TODAVÍA</div></div>'; return; }
+    let sel = window._planillaPersonaSel || '';
+    if(!ctx.arr.some(function(pl){ return pl.id===sel; })) sel = ctx.arr[0].id; // default: la más reciente
+    window._planillaPersonaSel = sel;
+    const r = _planillaDataDe(sel);
+    const colabs = (r && r.data && r.data.colabs) || [];
+    let html = '<div class="card"><div class="card-hd"><h3>PLANILLA POR PERSONA (PDF)</h3><span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Un PDF por persona de la quincena</span></div>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px">';
+    html += '<span style="font-size:10px;letter-spacing:1px;color:var(--mute);font-weight:700;text-transform:uppercase">Quincena</span>';
+    html += '<select onchange="window._planillaPersonaSel=this.value; window.renderPlanillaPorPersona()" style="flex:1;min-width:200px;max-width:380px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font:inherit;font-size:12px">';
+    ctx.arr.forEach(function(pl){ const t = (typeof _planillaTitulo==='function') ? _planillaTitulo(pl) : ('Planilla #'+(pl.numero||'')); html += '<option value="'+h(pl.id)+'"'+(pl.id===sel?' selected':'')+'>'+h(t)+'</option>'; });
+    html += '</select>';
+    if(colabs.length) html += '<button class="btn primary sm" style="margin-left:auto" onclick="window._planillaPdfTodasPorPersona(\''+h(sel)+'\')">DESCARGAR TODAS ('+colabs.length+')</button>';
+    html += '</div>';
+    if(!colabs.length){ html += '<div class="empty" style="padding:24px">ESTA PLANILLA NO TIENE PERSONAS CON PAGO.</div></div>'; el.innerHTML=html; return; }
+    html += '<div style="display:grid;gap:8px">';
+    colabs.forEach(function(c, i){
+      html += '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:#fff">';
+      html += '<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12.5px;color:var(--ink);text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+h(c.nombre)+'</div><div style="font-size:10.5px;color:var(--mute)">Neto: Q '+((typeof _fmtN==='function')?_fmtN(c.totalNeto||0):(c.totalNeto||0))+'</div></div>';
+      html += '<button class="btn sm" onclick="window._planillaPdfPorPersona(\''+h(sel)+'\','+i+')" style="flex:0 0 auto;background:#1565C0;border-color:#1565C0;color:#fff">VER / DESCARGAR PDF</button>';
+      html += '</div>';
+    });
+    html += '</div></div>';
+    el.innerHTML = html;
   };
   window.previewPlanillaSeleccion = function(){
     const p = _activeProj();
