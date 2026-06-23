@@ -42,7 +42,8 @@ ok('applyRemote une solicitudesAnticipo', /_mergeById\([\s\S]{0,80}solicitudesAn
 ok('sub-pestaña SOLICITUDES (antsolic)', html.indexOf("'antsolic'")>=0);
 // v778: el campo "para quién" es un desplegable ordenado de colaboradores, no texto libre
 ok('_antColabOptions existe (lista de colaboradores)', html.indexOf('_antColabOptions')>=0);
-ok('antSolColab es un <select> (despliega la lista)', /<select id="antSolColab"/.test(html));
+// v789: el campo "para quién" es un combobox escribible (buscar), no un <select> ni texto libre
+ok('antSolColab es combobox escribible (input oculto + buscador)', /<input type="hidden" id="antSolColab"/.test(html) && html.indexOf('id="antColabInput"')>=0);
 // v780: el solicitante NUNCA pone monto estimado -> el campo fue removido por completo
 ok('sin input antSolMonto (monto estimado removido)', html.indexOf('antSolMonto')<0);
 ok('sin lectura de montoEst en crearSolicitudAnticipo', html.indexOf('montoEst')<0);
