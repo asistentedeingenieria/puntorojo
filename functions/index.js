@@ -569,44 +569,37 @@ exports.onExcepcionPagoDecidida = onDocumentUpdated(
 );
 
 /* ════════════════════════════════════════════════════════════════
-   askAI — asistente IA "Preguntá a Punto Rojo" (#4, v801).
+   onAiQuestion — asistente IA "Preguntá a Punto Rojo" (#4, v806).
    ────────────────────────────────────────────────────────────────
-   POST { idToken, pregunta, contexto } → { respuesta }.
-   - Verifica el idToken de Firebase (solo usuarios logueados).
-   - Llama a la API de Anthropic (Claude Haiku) con un system prompt estricto:
-     responder SOLO con los datos del contexto; si no está, decir que no lo tiene.
-   - El contexto ya viene FILTRADO por permiso desde el cliente (_aiBuildContext).
-   La API key NUNCA está en el cliente: va como secreto ANTHROPIC_API_KEY.
+   Disparada por FIRESTORE (NO es un endpoint público) — así esquiva la política de
+   organización "Domain restricted sharing" que prohíbe funciones públicas (allUsers).
+   El cliente escribe en aiQuestions/{id}: { pregunta, contexto, uid, createdAt }.
+   Esta función (admin SDK) llama a Anthropic (Claude Haiku) con un system prompt
+   estricto y ESCRIBE la respuesta de vuelta en el MISMO doc (campo respuesta o error);
+   el cliente la escucha por onSnapshot. El contexto ya viene FILTRADO por permiso desde
+   el cliente (_aiBuildContext). API key = secreto ANTHROPIC_API_KEY (nunca en el cliente).
 
-   Configurar (lo hace el user, ver docs/asistente-ia-deploy.md):
-     cd functions && npm install @anthropic-ai/sdk
-     firebase functions:secrets:set ANTHROPIC_API_KEY
-     firebase deploy --only functions
-   El acceso público se setea en Cloud Run (igual que getReceptorAcuses):
-   agregar principal "allUsers" con rol "Cloud Run Invoker" a la función askAI.
+   REGLAS firestore necesarias (las pone el user):
+     match /aiQuestions/{id} {
+       allow create: if request.auth != null;
+       allow read:   if request.auth != null && resource.data.uid == request.auth.uid;
+       allow update, delete: if false;
+     }
    ════════════════════════════════════════════════════════════════ */
-exports.askAI = onRequest(
-  {
-    cors: ['https://puntorojo.app', 'https://www.puntorojo.app', 'https://asistentedeingenieria.github.io', 'http://localhost', 'http://localhost:8080'],
-    secrets: [ANTHROPIC_API_KEY],
-    timeoutSeconds: 60,
-    memory: '512MiB'
-  },
-  async (req, res) => {
-    if (req.method !== 'POST') { res.status(405).json({ error: 'Solo POST' }); return; }
-    const body = req.body || {};
-    const idToken  = String(body.idToken  || '');
-    const pregunta = String(body.pregunta || '').slice(0, 2000).trim();
-    const contexto = body.contexto || {};
-    if (!idToken)  { res.status(401).json({ error: 'Iniciá sesión para usar el asistente.' }); return; }
-    if (!pregunta) { res.status(400).json({ error: 'Escribí una pregunta.' }); return; }
+exports.onAiQuestion = onDocumentCreated(
+  { document: 'aiQuestions/{id}', secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 60, memory: '512MiB' },
+  async (event) => {
+    const snap = event.data; if (!snap) return;
+    const q = snap.data() || {};
+    if (q.respuesta || q.error) return; // ya respondida (evita reproceso)
+    const pregunta = String(q.pregunta || '').slice(0, 2000).trim();
+    const contexto = q.contexto || {};
+    const responder = (obj) => snap.ref.set(Object.assign({ answeredAt: FieldValue.serverTimestamp() }, obj), { merge: true }).catch(e => console.warn('ai write fail', e && e.message));
 
-    // Autenticación: el idToken de Firebase debe ser válido.
-    try { await getAuth().verifyIdToken(idToken); }
-    catch (e) { res.status(401).json({ error: 'Sesión inválida, volvé a entrar.' }); return; }
+    if (!pregunta) { await responder({ error: 'Escribí una pregunta.' }); return; }
 
     const key = ANTHROPIC_API_KEY.value();
-    if (!key) { res.status(503).json({ error: 'El asistente todavía no está configurado.' }); return; }
+    if (!key) { await responder({ error: 'El asistente todavía no está configurado.' }); return; }
 
     const sys = [
       'Sos el asistente de la app Punto Rojo (gestión de obra de drywall en Guatemala).',
@@ -632,10 +625,10 @@ exports.askAI = onRequest(
       let respuesta = '';
       try { respuesta = (msg && Array.isArray(msg.content)) ? msg.content.map(b => (b && b.type === 'text') ? b.text : '').join('').trim() : ''; } catch (e) {}
       if (!respuesta) respuesta = 'No pude armar una respuesta. Probá reformular la pregunta.';
-      res.json({ respuesta });
+      await responder({ respuesta });
     } catch (e) {
-      console.error('askAI error:', e && e.message);
-      res.status(500).json({ error: 'No pude responder ahora, probá de nuevo.' });
+      console.error('onAiQuestion error:', e && e.message);
+      await responder({ error: 'No pude responder ahora, probá de nuevo.' });
     }
   }
 );

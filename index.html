@@ -2967,7 +2967,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v805</span>
+    <span style="opacity:.5;font-size:9px">v806</span>
   </footer>
 
 </div>
@@ -45198,22 +45198,34 @@ async function _anulAnularReal(){
     }catch(e){}
     return ex;
   }
-  window._aiEndpoint = 'https://us-central1-punto-rojo-3fcf1.cloudfunctions.net/askAI';
+  // v806: la IA va por FIRESTORE (no por un endpoint público): el cliente escribe la
+  // pregunta en aiQuestions y la Cloud Function onAiQuestion responde en el mismo doc.
+  // Esto esquiva la política de organización que prohíbe funciones públicas.
   window._aiAsk = async function(pregunta){
     pregunta=String(pregunta||'').trim();
     if(!pregunta) return { error:'Escribí una pregunta.' };
     if(typeof navigator!=='undefined' && navigator && navigator.onLine===false) return { error:'Necesitás internet para preguntarle al asistente.' };
+    if(typeof firebase==='undefined' || !firebase.firestore) return { error:'No pude conectar. Recargá la app.' };
+    var u=(firebase.auth && firebase.auth().currentUser) ? firebase.auth().currentUser : null;
+    if(!u) return { error:'Iniciá sesión para usar el asistente.' };
     var p=(typeof activeProj==='function')?activeProj():null;
     var ctx=_aiBuildContext(p, (typeof can==='function'?can:null), _aiBuildExtras(p));
-    var idToken='';
-    try{ if(typeof firebase!=='undefined' && firebase.auth && firebase.auth().currentUser) idToken=await firebase.auth().currentUser.getIdToken(); }catch(e){}
-    if(!idToken) return { error:'Iniciá sesión para usar el asistente.' };
     try{
-      var r=await fetch(window._aiEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ idToken:idToken, pregunta:pregunta, contexto:ctx }) });
-      var j=await r.json().catch(function(){ return {}; });
-      if(!r.ok) return { error:(j&&j.error)||'No pude responder ahora, probá de nuevo.' };
-      return { respuesta:(j&&j.respuesta)||'Sin respuesta.' };
-    }catch(e){ return { error:'No pude responder ahora, probá de nuevo.' }; }
+      var ref=await firebase.firestore().collection('aiQuestions').add({
+        pregunta:pregunta, contexto:ctx, uid:u.uid,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      return await new Promise(function(resolve){
+        var done=false;
+        var finish=function(res){ if(done) return; done=true; try{ unsub(); }catch(e){} resolve(res); };
+        var unsub=ref.onSnapshot(function(doc){
+          var d=(doc && doc.data())||{};
+          if(d.respuesta) finish({ respuesta:d.respuesta });
+          else if(d.error) finish({ error:d.error });
+        }, function(){ finish({ error:'No pude responder ahora, probá de nuevo.' }); });
+        setTimeout(function(){ finish({ error:'La IA está tardando demasiado. Probá de nuevo en un momento.' }); }, 45000);
+      });
+    }catch(e){ return { error:'No pude enviar la pregunta. Probá de nuevo.' }; }
   };
   // UI flotante: botón "Preguntá" + panel de chat. Se inyecta una vez (defensivo si body aún no está).
   function _aiInjectUI(){

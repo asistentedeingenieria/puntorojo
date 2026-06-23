@@ -1,59 +1,64 @@
-# Asistente IA "Preguntá a Punto Rojo" — despliegue (v801)
+# Asistente IA "Preguntá a Punto Rojo" — despliegue (v806)
 
 Un botón flotante **"Preguntá"** (abajo a la izquierda) abre un chat donde cualquier
 usuario pregunta en palabras sobre el **proyecto activo**. La app arma una **foto
-resumida y filtrada por permiso** (cada quien solo ve lo que su permiso le permite) y
-la manda a una Cloud Function que le pregunta a **Claude (Haiku)**. **Solo lee — no
-ejecuta acciones.**
+resumida y filtrada por permiso** y la guarda en Firestore; la Cloud Function
+**`onAiQuestion`** le pregunta a **Claude (Haiku)** y escribe la respuesta de vuelta.
+**Solo lee — no ejecuta acciones.**
 
-> El front (botón + panel) ya funciona desde el deploy de Netlify. Mientras NO
-> despliegues la función + la API key, el panel muestra "El asistente todavía no está
-> configurado." No rompe nada.
+> **Por qué por Firestore y no por un endpoint web:** la organización tiene activada la
+> política "Domain restricted sharing" que **prohíbe funciones públicas** (`allUsers`).
+> Por eso la IA NO usa un endpoint público: el cliente escribe la pregunta en la
+> colección `aiQuestions` y la función (disparada por Firestore, sin necesidad de ser
+> pública) responde en el mismo documento. Mismo mecanismo que el push.
 
 ## Lo que tenés que hacer vos (una sola vez)
 
 ### 1. API key de Anthropic
-Entrá a **console.anthropic.com → API Keys → Create Key**. Copiá la key (empieza con
-`sk-ant-...`). Necesitás saldo/billing en esa cuenta.
+**console.anthropic.com → API Keys → Create Key**. Necesitás saldo/billing en esa cuenta.
 
-### 2. Instalar el SDK + guardar la key + desplegar
-Desde la carpeta del repo:
-
+### 2. Guardar la key + desplegar
 ```
 cd functions
 npm install @anthropic-ai/sdk
 cd ..
-firebase functions:secrets:set ANTHROPIC_API_KEY
-# (pega la key cuando lo pida)
+firebase functions:secrets:set ANTHROPIC_API_KEY   (pegá tu key sk-ant-...)
 firebase deploy --only functions
 ```
+Si el deploy pregunta **"Would you like to proceed with deletion?"** respondé **N (No)**
+para no borrar funciones que se mantienen (`deleteAuthOnUserDoc`, y la vieja `askAI` si
+quedó). El deploy crea/actualiza `onAiQuestion` y `onNotifyByPerm`.
 
-### 3. Hacer pública la función `askAI` (igual que getReceptorAcuses)
-La función es un endpoint HTTP. Después del deploy, en **Google Cloud Console → Cloud
-Run → askAI → Security**, agregá el principal **`allUsers`** con el rol **`Cloud Run
-Invoker`**. (Esto es lo mismo que ya hiciste con `getReceptorAcuses`; la cuenta
-corporativa no deja setearlo desde `firebase deploy`.)
+### 3. Reglas de Firestore (Firebase Console → Firestore → Rules)
+Agregá estos dos bloques dentro de `match /databases/{database}/documents { ... }` y **Publish**:
+```
+match /aiQuestions/{id} {
+  allow create: if request.auth != null;
+  allow read:   if request.auth != null && resource.data.uid == request.auth.uid;
+  allow update, delete: if false;
+}
+match /notifyByPerm/{id} {
+  allow create: if request.auth != null;
+  allow read, update, delete: if false;
+}
+```
+(El segundo bloque es para el push en tiempo real.)
+
+> **YA NO hace falta** el paso de Cloud Run / `allUsers` — al no ser pública, la política
+> de organización deja de bloquearla.
 
 ## Probar
-1. Recargá la app (tomá v801). Vas a ver el botón **"Preguntá"** abajo a la izquierda.
-2. Abrilo y preguntá algo del proyecto activo, p. ej.:
-   - "¿A quién le pagué el apto 5 de la torre B en la etapa 3 y cuándo?"
-   - "¿Quiénes tienen saldo de anticipo pendiente?"
-3. Si dice "todavía no está configurado" → faltó el deploy o la key.
-   Si dice "No pude responder" → revisá **Cloud Functions → Logs → askAI**.
-
-## Qué ve el modelo (privacidad)
-- Solo la **foto del proyecto activo filtrada por TU permiso** (pagos solo si tenés
-  `view.planilla`, etc.). Nada fuera de tu permiso viaja a la API.
-- La foto incluye: estructura (torres/niveles/aptos), **pagos** (persona, ubicación,
-  etapa, monto, fecha) y **anticipos** (saldo por persona). La **asistencia de hoy**
-  queda para una próxima versión (v1.1).
-- Costo: modelo **Haiku** (barato), foto con tope de tamaño, respuesta acotada.
+1. Recargá la app (v806). Vas a ver el botón **"Preguntá"** abajo a la izquierda.
+2. Preguntá algo del proyecto activo, p. ej.: *"¿a quién le pagué el apto 5 de la torre B
+   en la etapa 3 y cuándo?"*.
+3. Si dice **"todavía no está configurado"** → faltó la key o el deploy.
+   Si dice **"tardando demasiado"** o **"no pude responder"** → revisá **Cloud Functions →
+   Logs → `onAiQuestion`** (y que la cuenta de Anthropic tenga saldo).
 
 ## Notas técnicas
 - Cliente: `_aiBuildContext(p, can, extras)` (pura, filtra por permiso) + `_aiAsk()`
-  (manda idToken + contexto al endpoint) + UI inyectada (`_aiInjectUI`).
-- Backend: `exports.askAI` en `functions/index.js` (verifica el idToken de Firebase,
-  llama a Anthropic con system prompt estricto: "respondé solo con el contexto").
-- Si `npm install @anthropic-ai/sdk` trae una versión que rompe, fijá una reciente:
-  `npm install @anthropic-ai/sdk@latest`.
+  (escribe en `aiQuestions` y escucha la respuesta por `onSnapshot`, timeout 45s) + UI
+  inyectada (`_aiInjectUI`).
+- Backend: `exports.onAiQuestion` (trigger `onDocumentCreated` en `aiQuestions/{id}`),
+  modelo `claude-haiku-4-5`, secreto `ANTHROPIC_API_KEY`.
+- La foto incluye estructura, **pagos** y **anticipos** (la asistencia de hoy queda para v1.1).

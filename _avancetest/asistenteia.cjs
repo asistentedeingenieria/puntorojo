@@ -12,10 +12,11 @@ ok('_aiBuildContext existe', html.indexOf('function _aiBuildContext(')>=0);
 ok('_aiAsk existe', html.indexOf('window._aiAsk')>=0);
 ok('UI: botón flotante Preguntá (aiFab)', html.indexOf("id='aiFab'")>=0);
 ok('UI: panel + _aiSend', html.indexOf('window._aiSend')>=0 && html.indexOf("id='aiPanel'")>=0);
-ok('_aiAsk manda idToken + contexto', /_aiAsk[\s\S]{0,1400}idToken[\s\S]{0,300}contexto/.test(html));
+ok('_aiAsk escribe en aiQuestions con contexto (Firestore, no endpoint público)', /_aiAsk[\s\S]{0,1600}collection\('aiQuestions'\)\.add[\s\S]{0,400}contexto/.test(html));
+ok('_aiAsk escucha la respuesta por onSnapshot', /_aiAsk[\s\S]{0,2000}onSnapshot/.test(html));
 // ── backend ──
-ok('Cloud Function askAI', fn.indexOf('exports.askAI')>=0);
-ok('verifica idToken', fn.indexOf('verifyIdToken')>=0);
+ok('Cloud Function onAiQuestion (trigger Firestore, esquiva la política de público)', fn.indexOf('exports.onAiQuestion')>=0);
+ok("trigger en aiQuestions/{id}", fn.indexOf("document: 'aiQuestions/{id}'")>=0);
 ok('modelo claude-haiku-4-5', fn.indexOf('claude-haiku-4-5')>=0);
 ok('secreto ANTHROPIC_API_KEY', fn.indexOf("defineSecret('ANTHROPIC_API_KEY')")>=0);
 ok('dep @anthropic-ai/sdk en package.json', pkg.indexOf('@anthropic-ai/sdk')>=0);
