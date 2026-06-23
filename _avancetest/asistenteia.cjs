@@ -38,7 +38,21 @@ if(body){
   ok('extras anticipos gateado + incluido', Array.isArray(cEx.dominios.anticipos) && cEx.dominios.anticipos[0].persona==='JUAN');
   ok('extras asistencia gateado + incluido (view.personal)', cEx.dominios.asistenciaHoy && cEx.dominios.asistenciaHoy.presentes===3);
   ok('asistencia NO se incluye sin view.personal', !make(p,(k)=>k!=='view.personal',{asistenciaHoy:{presentes:3}}).dominios.asistenciaHoy);
+  // v807: dominios nuevos (todas las pestañas), cada uno gateado por su permiso
+  const cAll=make(p, ()=>true, { avance:{totalAptos:5}, pedidos:{total:3}, ocs:{total:2}, cobro:{saldo:100}, polizas:{totalVigentes:4} });
+  ok('avance gateado por view.avance', cAll.dominios.avance && cAll.dominios.avance.totalAptos===5);
+  ok('pedidos+ocs gateados por view.materiales', !!cAll.dominios.pedidos && !!cAll.dominios.ocs);
+  ok('cobro gateado por view.cobro', cAll.dominios.cobro && cAll.dominios.cobro.saldo===100);
+  ok('polizas gateado por polizas.edit', cAll.dominios.polizas && cAll.dominios.polizas.totalVigentes===4);
+  ok('avance NO sin view.avance', !make(p,(k)=>k!=='view.avance',{avance:{totalAptos:5}}).dominios.avance);
+  ok('materiales NO sin view.materiales', !make(p,(k)=>k!=='view.materiales',{pedidos:{total:3}}).dominios.pedidos);
+  ok('cobro NO sin view.cobro', !make(p,(k)=>k!=='view.cobro',{cobro:{saldo:1}}).dominios.cobro);
+  ok('polizas NO sin polizas.edit', !make(p,(k)=>k!=='polizas.edit',{polizas:{totalVigentes:4}}).dominios.polizas);
 }
+
+// v807: botón IA por permiso
+ok('permiso ia.usar registrado', /pushPerm\(\{\s*key:'ia\.usar'/.test(html));
+ok('botón "Preguntá" gateado por data-perm ia.usar', /setAttribute\('data-perm','ia\.usar'\)/.test(html));
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);

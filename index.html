@@ -2967,7 +2967,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v806</span>
+    <span style="opacity:.5;font-size:9px">v807</span>
   </footer>
 
 </div>
@@ -26736,6 +26736,8 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     pushPerm({ key:'planilla.descuentos', label:'Editar descuentos', group:'EDICIÓN PLANILLAS' });
     // v793: autorización única para ver la sub-pestaña PLANILLA POR PERSONA (PDF por persona).
     pushPerm({ key:'planilla.porPersona', label:'Ver PLANILLA POR PERSONA (PDF por persona)', group:'EDICIÓN PLANILLAS' });
+    // v807: quién ve el botón flotante "Preguntá" (asistente IA). Control por costo de uso.
+    pushPerm({ key:'ia.usar', label:'Usar asistente IA (Preguntá)', group:'VISTAS' });
   } catch(e) { console.warn(e); }
 
   window.nextPedidoCode = function(p){
@@ -45180,21 +45182,90 @@ async function _anulAnularReal(){
         ctx.diccionario.pagos='cada pago de etapa: persona que cobró, ubicación (torre/nivel/apto), etapa, monto neto en quetzales (Q), fecha, y si está autorizado';
       }catch(e){}
     }
-    if(can('view.personal') && extras.asistenciaHoy){ ctx.dominios.asistenciaHoy=extras.asistenciaHoy; ctx.diccionario.asistenciaHoy='presentes y ausentes de HOY por obra'; }
+    if(can('view.personal') && extras.asistenciaHoy){ ctx.dominios.asistenciaHoy=extras.asistenciaHoy; ctx.diccionario.asistenciaHoy='asistencia de HOY: total de personal, presentes, ausentes y presentes por obra'; }
     if((can('view.planilla')||can('anticipos.solicitar')||can('anticipos.cotizar')) && extras.anticipos){ ctx.dominios.anticipos=extras.anticipos; ctx.diccionario.anticipos='saldo pendiente de préstamos/anticipos por persona (aproximado)'; }
-    // tope de tamaño (~30k tokens ≈ 120k chars): recorta los pagos más viejos primero.
-    try{ if(JSON.stringify(ctx).length>120000 && ctx.dominios.pagos){ ctx.dominios.pagos=ctx.dominios.pagos.slice(-200); ctx._truncado=true; } }catch(e){}
+    if(can('view.avance') && extras.avance){ ctx.dominios.avance=extras.avance; ctx.diccionario.avance='avance FÍSICO de obra: etapas hechas (0-6) y % por apto/torre. Las 6 etapas en orden: ESTRUCTURA, PRIMERA CARA, REFUERZOS DE MADERA, FORRO 2DA CARA, CIELO Y FORRO, MASILLA COMPLETA. firmadas = etapas con acuse firmado por el cliente'; }
+    if(can('view.materiales')){
+      if(extras.pedidos){ ctx.dominios.pedidos=extras.pedidos; ctx.diccionario.pedidos='pedidos de material y su estado (SOLICITADO / APROBADO / RECIBIDO), quién lo pidió y para qué nivel/apto'; }
+      if(extras.ocs){ ctx.dominios.ocs=extras.ocs; ctx.diccionario.ocs='órdenes de compra (OC): proveedor, total en Q, si está AUTORIZADA o PENDIENTE de autorizar, y a qué pedido pertenece'; }
+    }
+    if(can('view.cobro') && extras.cobro){ ctx.dominios.cobro=extras.cobro; ctx.diccionario.cobro='cobro al cliente: monto contratado, cobrado, saldo por cobrar, % pagado y las estimaciones'; }
+    if(can('polizas.edit') && extras.polizas){ ctx.dominios.polizas=extras.polizas; ctx.diccionario.polizas='pólizas de seguro vigentes agrupadas por persona a cargo (descuento quincenal en Q)'; }
+    // tope de tamaño (~30k tokens ≈ 120k chars): recorta primero pagos y aptos en proceso.
+    try{
+      if(JSON.stringify(ctx).length>120000){
+        if(ctx.dominios.pagos) ctx.dominios.pagos=ctx.dominios.pagos.slice(-150);
+        if(ctx.dominios.avance && Array.isArray(ctx.dominios.avance.aptosEnProceso)) ctx.dominios.avance.aptosEnProceso=ctx.dominios.avance.aptosEnProceso.slice(0,30);
+        ctx._truncado=true;
+      }
+    }catch(e){}
     return ctx;
   }
-  // arma los "extras" (anticipos por saldo; asistencia hoy queda para v1.1) con datos existentes, defensivo.
+  // v807: arma los "extras" de TODAS las pestañas con los helpers existentes de la app (defensivo).
   function _aiBuildExtras(p){
     var ex={};
+    var _S=(typeof state!=='undefined' && state)?state:null;
+    // ANTICIPOS — saldo por persona
     try{
-      var ants=(typeof state!=='undefined' && state && Array.isArray(state.anticiposGlobales)) ? state.anticiposGlobales : [];
-      var byP={};
-      ants.forEach(function(a){ var n=String(a.colaboradorNombre||'').trim().toUpperCase(); if(!n) return; var tot=Number(a.montoTotal)||0; var cuotas=Number(a.cantidadCuotas)||1; var pag=Number(a.cuotasPagadasInicial)||0; var saldo=Math.max(0, tot*(1-Math.min(1,pag/cuotas))); if(!byP[n]) byP[n]=0; byP[n]+=saldo; });
-      var arr=Object.keys(byP).map(function(n){ return { persona:n, saldoAprox:Math.round(byP[n]) }; }).filter(function(x){ return x.saldoAprox>0; });
-      if(arr.length) ex.anticipos=arr;
+      var ants=(_S && Array.isArray(_S.anticiposGlobales))?_S.anticiposGlobales:[];
+      var aP={};
+      ants.forEach(function(a){ var n=String(a.colaboradorNombre||'').trim().toUpperCase(); if(!n) return; var tot=Number(a.montoTotal)||0; var cuotas=Number(a.cantidadCuotas)||1; var pag=Number(a.cuotasPagadasInicial)||0; var saldo=Math.max(0, tot*(1-Math.min(1,pag/cuotas))); aP[n]=(aP[n]||0)+saldo; });
+      var aArr=Object.keys(aP).map(function(n){ return { persona:n, saldoAprox:Math.round(aP[n]) }; }).filter(function(x){ return x.saldoAprox>0; });
+      if(aArr.length) ex.anticipos=aArr;
+    }catch(e){}
+    // ASISTENCIA HOY — presentes/ausentes por obra
+    try{
+      var A=(typeof _getAsistencia==='function')?_getAsistencia():{};
+      var fk=(typeof todayKey==='function')?todayKey():'';
+      var dia=A[fk]||{};
+      var personal=(typeof _getPersonalActivo==='function')?_getPersonalActivo():[];
+      var projs=(_S && Array.isArray(_S.projects))?_S.projects:[];
+      var pjName=function(id){ var pj=projs.filter(function(x){return x.id===id;})[0]; return pj?String(pj.name).toUpperCase():(id?String(id):'SIN OBRA'); };
+      var pres=0, porObra={}, totA=0;
+      personal.forEach(function(pn){ if(!pn||pn.baja||pn.tipo==='OFICINA') return; totA++; var reg=dia[pn.id]; if(reg&&reg.presente){ pres++; var ob=pjName(String(reg.obraId||(reg.sessions&&reg.sessions[0]&&reg.sessions[0].obraId)||pn.obraAsignada||'')); porObra[ob]=(porObra[ob]||0)+1; } });
+      ex.asistenciaHoy={ fecha:fk, totalPersonal:totA, presentes:pres, ausentes:Math.max(0,totA-pres), porObra:porObra };
+    }catch(e){}
+    // AVANCE FÍSICO — etapas hechas por apto/torre
+    try{
+      if(p && Array.isArray(p.towers)){
+        var ETA=(typeof ETAPAS!=='undefined' && Array.isArray(ETAPAS))?ETAPAS:null;
+        var compl=function(a){ return (a&&Array.isArray(a.stages))?a.stages.filter(Boolean).length:0; };
+        var pctA=function(a){ var c=compl(a); if(!c) return 0; if(ETA&&ETA[c-1]&&typeof ETA[c-1].threshold==='number') return ETA[c-1].threshold; return Math.round(c/6*100); };
+        var firmA=function(a){ if(!a||!Array.isArray(a.stages)) return 0; var n=0; for(var i=0;i<a.stages.length;i++){ if(a.stages[i] && typeof tieneAcuseFirmado==='function'){ try{ if(tieneAcuseFirmado(a,i)) n++; }catch(_e){} } } return n; };
+        var torres=[], totAp=0, sumE=0, sinI=0, comp=0, inc=[];
+        p.towers.forEach(function(t){ var ta=0, ts=0; (t.levels||[]).forEach(function(l){ (l.aptos||[]).forEach(function(a){ var c=compl(a); ta++; totAp++; ts+=c; sumE+=c; if(c===0) sinI++; else if(c===6) comp++; else inc.push({ torre:t.name, nivel:l.name, apto:a.name, etapasHechas:c, pct:pctA(a), ultima:(ETA&&ETA[c-1]&&ETA[c-1].name)||'', firmadas:firmA(a) }); }); }); torres.push({ torre:t.name, aptos:ta, pct: ta?Math.round(ts/(ta*6)*100):0 }); });
+        ex.avance={ totalAptos:totAp, sinIniciar:sinI, completos:comp, enProceso:Math.max(0,totAp-sinI-comp), pctGlobal: totAp?Math.round(sumE/(totAp*6)*100):0, porTorre:torres, aptosEnProceso:inc.slice(0,80) };
+      }
+    }catch(e){}
+    // MATERIALES — pedidos + OCs
+    try{
+      if(p && p.materiales){
+        var peds=(Array.isArray(p.materiales.pedidos)?p.materiales.pedidos:[]).slice().sort(function(a,b){return (b.ts||0)-(a.ts||0);});
+        var bsp={}; peds.forEach(function(pd){ var s=pd.status||'SOLICITADO'; bsp[s]=(bsp[s]||0)+1; });
+        ex.pedidos={ total:peds.length, porEstado:bsp, ultimos: peds.slice(0,25).map(function(pd){ return { numero:pd.numero, status:pd.status, solicitante:pd.solicitante, nivel:pd.nivel, apto:pd.apto, fechaEntrega:pd.fechaEntrega, items:(pd.items?Object.keys(pd.items).length:0) }; }) };
+        var ocs=(Array.isArray(p.materiales.ordenes)?p.materiales.ordenes:[]).slice().sort(function(a,b){return (b.ts||0)-(a.ts||0);});
+        var bso={}, tp=0; ocs.forEach(function(o){ var s=(o.status||'AUTORIZADA'); bso[s]=(bso[s]||0)+1; if(s!=='AUTORIZADA') tp+=Number(o.total)||0; });
+        ex.ocs={ total:ocs.length, porEstado:bso, montoPendiente:Math.round(tp), ultimas: ocs.slice(0,25).map(function(o){ return { numero:o.numero, status:o.status||'AUTORIZADA', proveedor:o.proveedorNombre, total:Number(o.total)||0, pedido:o.pedidoNumero }; }) };
+      }
+    }catch(e){}
+    // COBRO — contratado/cobrado/saldo + estimaciones
+    try{
+      if(p && p.cobro && Array.isArray(p.cobro.rows) && typeof rowValues==='function' && typeof cobroConfig==='function'){
+        var cfg=cobroConfig(p); var tPag=0;
+        var filas=p.cobro.rows.map(function(r){ var v={}; try{ v=rowValues(r,cfg)||{}; }catch(_e){} var net=Number(v.netCI||0); if(r.sc==='PAGADO') tPag+=net; return { desc:r.d, fecha:r.f, neto:Math.round(net), estado:r.sc||'PENDIENTE', fechaPago:r.fp||'' }; });
+        var contr=(typeof totalProyectoNeto==='function')?(Number(totalProyectoNeto(p))||0):0;
+        ex.cobro={ contratado:Math.round(contr), cobrado:Math.round(tPag), saldo:Math.round(Math.max(0,contr-tPag)), pctPagado: contr?Math.round(tPag/contr*100):0, nEstimaciones:p.cobro.rows.length, pendientes: filas.filter(function(f){return f.estado!=='PAGADO';}).slice(0,25) };
+      }
+    }catch(e){}
+    // PÓLIZAS (global) — vigentes por persona a cargo
+    try{
+      var pols=(_S && Array.isArray(_S.polizasGlobales))?_S.polizasGlobales:[];
+      var cfgP=(_S && _S.polizasConfig && typeof _S.polizasConfig.montoDefault==='number')?_S.polizasConfig.montoDefault:44.95;
+      var vig=pols.filter(function(po){ return po && (po.estatus==='ACTIVA'||po.estatus==='EN PROCESO'); });
+      var bpe={};
+      vig.forEach(function(po){ var n=String(po.aCargoDeNombre||'').trim().toUpperCase(); if(!n) return; if(!bpe[n]) bpe[n]={persona:po.aCargoDeNombre, count:0, monto:0}; bpe[n].count++; bpe[n].monto+=Number(po.monto)||cfgP; });
+      var pArr=Object.keys(bpe).map(function(k){ var x=bpe[k]; return {persona:x.persona, polizas:x.count, montoQuincenal:Math.round(x.monto)}; }).sort(function(a,b){return b.montoQuincenal-a.montoQuincenal;});
+      if(pArr.length) ex.polizas={ totalVigentes:vig.length, montoQuincenalTotal:Math.round(vig.reduce(function(s,po){return s+(Number(po.monto)||cfgP);},0)), porPersona:pArr.slice(0,60) };
     }catch(e){}
     return ex;
   }
@@ -45235,6 +45306,9 @@ async function _anulAnularReal(){
       fab.innerHTML='Preguntá';
       fab.style.cssText='position:fixed;left:16px;bottom:16px;z-index:99990;background:#C8141C;color:#fff;border:none;border-radius:24px;padding:11px 18px;font:700 13px Inter,Arial,sans-serif;letter-spacing:.5px;box-shadow:0 6px 20px rgba(200,20,28,.4);cursor:pointer';
       fab.onclick=function(){ window._aiToggle(true); };
+      // v807: el botón solo lo ven quienes tengan el permiso 'ia.usar' (el admin con '*' lo ve siempre).
+      // Arranca oculto; el pase de permisos (applyPermissions, data-perm) lo muestra a los autorizados.
+      fab.setAttribute('data-perm','ia.usar'); fab.style.display='none';
       document.body.appendChild(fab);
       var panel=document.createElement('div'); panel.id='aiPanel';
       panel.style.cssText='position:fixed;left:16px;bottom:72px;z-index:99991;width:min(380px,92vw);max-height:70vh;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 18px 50px rgba(15,23,42,.25);display:none;flex-direction:column;overflow:hidden;font-family:Inter,Arial,sans-serif';
