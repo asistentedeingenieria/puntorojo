@@ -41,14 +41,14 @@ if(body){
   ok('1 entrada (la rechazada se ignora)', r.length===1);
   const e=r[0];
   ok('entrada de ESSENZA', e && e.projectName==='ESSENZA');
-  ok('solo personas PAGADAS esa quincena (CARLA no pagada → excluida; PREAPP fuera)', e.filas.length===2);
+  ok('personas PAGADAS esa quincena con póliza (CARLA no pagada → excluida; PREAPP fuera)', e.filas.length===3);
   const by=Object.fromEntries(e.filas.map(x=>[x.persona,x]));
-  // GUARD revisión: inclusión ESTRICTA — JOSE LOPEZ no debe entrar por el pago de JOSE LOPEZ SOYOS
-  ok('JOSE LOPEZ NO incluido (inclusión exacta, no substring del pagador)', !by['JOSE LOPEZ']);
+  // v815: token-subset — JOSE LOPEZ (titular) ES JOSE LOPEZ SOYOS (pagado) → incluido y NO COBRADA
+  ok('JOSE LOPEZ SÍ incluido por variante de nombre (token-subset) y NO COBRADA', by['JOSE LOPEZ'] && by['JOSE LOPEZ'].cobrada===false);
   ok('ANA cobrada (por polizaIds), 2 pólizas', by['ANA LOPEZ'] && by['ANA LOPEZ'].cobrada===true && by['ANA LOPEZ'].polizasCount===2);
   ok('BETO pagado pero NO cobrada, 1 póliza', by['BETO RUIZ'] && by['BETO RUIZ'].cobrada===false && by['BETO RUIZ'].polizasCount===1);
-  ok('resumen: 1 cobrada, 1 faltó', e.cobradas===1 && e.faltaron===1);
-  ok('faltaron primero (BETO antes que ANA)', e.filas[0].persona==='BETO RUIZ' && e.filas[1].persona==='ANA LOPEZ');
+  ok('resumen: 1 cobrada, 2 faltaron', e.cobradas===1 && e.faltaron===2);
+  ok('faltaron primero, alfabético (BETO, JOSE, luego ANA cobrada)', e.filas[0].persona==='BETO RUIZ' && e.filas[1].persona==='JOSE LOPEZ' && e.filas[2].persona==='ANA LOPEZ');
   // v813: orden por QUINCENA (fecha del sábado) DESC — la más reciente primero, agrupando proyectos
   const r2=fn([
     {id:'a', name:'TORELO', planilla:{ pagos:[{id:'x',colaborador:'ANA LOPEZ'}], planillasArmadas:[{id:'old', estado:'aprobada_inicial', fechaEnvio:'2026-06-06T12:00:00', pagosIds:['x'], descuentosPlanilla:[]}] }},
