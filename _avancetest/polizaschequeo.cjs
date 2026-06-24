@@ -49,14 +49,20 @@ ok('_polChipModal existe', html.indexOf('window._polChipModal')>=0);
 // v805/v811: PDF del chequeo GLOBAL (lista única de todos los proyectos)
 ok('_generarPdfChequeoPolizas existe', html.indexOf('window._generarPdfChequeoPolizas')>=0);
 ok('botón DESCARGAR PDF en el chequeo', /_generarPdfChequeoPolizas\(\)/.test(html));
-ok('PDF reusa _pdfDescargar', /_generarPdfChequeoPolizas[\s\S]{0,6500}_pdfDescargar\(doc/.test(html));
+ok('PDF reusa _pdfDescargar', /_generarPdfChequeoPolizas[\s\S]{0,9500}_pdfDescargar\(doc/.test(html));
 ok('v811: el PDF del chequeo usa _polizasChequeoGlobal (todos los proyectos)', /_generarPdfChequeoPolizas[\s\S]{0,1600}_polizasChequeoGlobal\(/.test(html));
 
 // v812: toggle GLOBAL / POR QUINCENA + vista y PDF por quincena
 ok('v812 toggle GLOBAL/POR QUINCENA (window._chkMode)', /window\._chkMode/.test(html) && /_tgl\('global','GLOBAL'\)/.test(html) && /_tgl\('quincena','POR QUINCENA'\)/.test(html));
 ok('v812 la vista POR QUINCENA usa _polizasChequeoTodos', /_chkMode === 'quincena'|_chkMode==='quincena'/.test(html) && /window\._polizasChequeoTodos\(/.test(html));
 ok('v812 estados COBRADA / NO COBRADA en la vista por quincena', /✓ COBRADA/.test(html) && /✗ NO COBRADA/.test(html));
-ok('v812 el PDF ramifica por quincena', /_generarPdfChequeoPolizas[\s\S]{0,700}window\._chkMode === 'quincena'/.test(html));
+ok('v812 el PDF ramifica por quincena', /_generarPdfChequeoPolizas[\s\S]{0,4500}window\._chkMode === 'quincena'/.test(html));
+
+// v816: tercer modo POR PERSONA (cada persona del RESUMEN a través de TODAS las planillas)
+ok('v816 toggle POR PERSONA', /_tgl\('persona','POR PERSONA'\)/.test(html));
+ok('v816 la vista POR PERSONA usa _polizasChequeoPorPersona', /window\._polizasChequeoPorPersona\(/.test(html));
+ok('v816 columnas COBRADO + DÓNDE FALTÓ', /DÓNDE FALTÓ/.test(html) && /TODO COBRADO/.test(html));
+ok('v816 el PDF ramifica por persona', /_generarPdfChequeoPolizas[\s\S]{0,900}window\._chkMode === 'persona'/.test(html));
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
