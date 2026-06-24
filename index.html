@@ -2976,7 +2976,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v821</span>
+    <span style="opacity:.5;font-size:9px">v822</span>
   </footer>
 
 </div>
@@ -4523,6 +4523,7 @@ const PERMS_DISPONIBLES = [
   { key: 'polizas.agregar',  label: 'Agregar pólizas NUEVAS', group: 'EDICIÓN PERSONAL' },
   { key: 'anticipos.solicitar', label: 'Solicitar anticipos (supervisor)', group: 'EDICIÓN PERSONAL' }, // v777
   { key: 'anticipos.cotizar',   label: 'Cotizar anticipos (Compras)',      group: 'EDICIÓN PERSONAL' }, // v777
+  { key: 'anticipos.verEstado', label: 'Ver estado de anticipos (solo lectura)', group: 'EDICIÓN PERSONAL' }, // v822: solo VER el status de los pedidos (sin pedir/cotizar/autorizar/entregar)
   { key: 'projects.create',  label: 'Crear proyectos nuevos',  group: 'ADMINISTRACIÓN' },
   { key: 'data.import',      label: 'Importar/resetear datos', group: 'ADMINISTRACIÓN' },
   { key: 'users.manage',     label: 'Gestionar usuarios',      group: 'ADMINISTRACIÓN' },
@@ -5466,6 +5467,10 @@ function applyPermissions(){
       el.classList.remove('locked');
     }
   });
+
+  // v822: la pestaña PLANILLAS también se muestra para el rol "solo ver estado de anticipos"
+  // (no tiene view.planilla pero sí anticipos.verEstado). El filtro interno lo acota a ANTICIPOS.
+  try { var _plTab=document.querySelector('.tab[data-view="planilla"]'); if(_plTab && (typeof window._antSoloVer==='function' && window._antSoloVer())) _plTab.style.display=''; } catch(e){}
 
   // v798: refrescar los badges de pendientes en cada pase de permisos (= cada render).
   try{ if(typeof window.updateTabBadges==='function') window.updateTabBadges(); }catch(e){}
@@ -13043,9 +13048,8 @@ function renderPhotosModal(){
   if (!a.photos) a.photos = {};
 
   document.getElementById('photosTitle').textContent = `${t.name} · ${l.name} · ${a.name}`;
-  document.getElementById('photosSubtitle').textContent = _aptoTerminado
-    ? `100% EJECUTADO · TRABAJO TERMINADO · SOLO LECTURA`
-    : `${aptoPct(a)}% ejecutado · Cada etapa requiere 2 fotos de áreas diferentes · Las etapas se desbloquean en orden`;
+  // v822b: el user pidió quitar el subtítulo bajo el título (no le gusta).
+  { var _sub=document.getElementById('photosSubtitle'); if(_sub){ _sub.textContent=''; _sub.style.display='none'; } }
 
   // v291: una etapa está "completa" cuando tiene AL MENOS 2 fotos.
   // Las fotos son ahora ilimitadas; el minimo de 2 mantiene el control de calidad.
@@ -13087,14 +13091,11 @@ function renderPhotosModal(){
     if(prevDone && !_ro){
       const needsMore = fotosValidas.length < minToComplete;
       const labelTop = needsMore ? `FOTO ${fotosValidas.length + 1}` : '+ AGREGAR OTRA FOTO';
-      const labelSub = needsMore
-        ? `MÍNIMO ${minToComplete} PARA COMPLETAR ETAPA`
-        : `OPCIONAL · SIN LÍMITE`;
+      // v822b: el user pidió quitar el texto de mínimo de fotos que iba abajo del cuadro.
       addTile = `<div class="photo-slot photo-slot-add" onclick="window.tomarFotoAvance(${idx})" style="cursor:pointer">
         <div class="photo-slot-empty">
           <div class="ic">+</div>
           <div>${labelTop}</div>
-          <div style="font-size:9px;font-weight:500;color:var(--mute)">${labelSub}</div>
         </div>
       </div>`;
     } else if(!prevDone && !_ro){
@@ -13117,7 +13118,7 @@ function renderPhotosModal(){
           <span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:${prevDone?'var(--red)':'var(--line)'};color:#fff;font-size:11px;font-weight:800;margin:0">${idx+1}</span>
           <span style="color:var(--ink);margin:0">${e.name}</span>${prevDone ? completaBadge : ' <span style="background:var(--red-soft);color:var(--red-dark);font-size:9px;padding:2px 7px;border-radius:10px;letter-spacing:1px;font-weight:700">🔒 BLOQUEADA</span>'}
         </div>
-        <div class="photo-etapa-sub">Umbral ≥${e.threshold}% · ${etapaActive ? 'ALCANZADA' : 'PENDIENTE'}${prevDone ? '' : ' · TERMINAR LA ETAPA ANTERIOR PRIMERO'}</div>
+        ${prevDone ? '' : '<div class="photo-etapa-sub">TERMINAR LA ETAPA ANTERIOR PRIMERO</div>'}
       </div>
       <div class="photo-etapa-slots" style="justify-content:center${prevDone ? '' : ';opacity:.45;pointer-events:none'}">
         ${photoTiles}
@@ -31947,7 +31948,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   const _setViewBase = setView;
   window.setView = setView = function(v){
     if (v === 'planilla') {
-      if (!can('view.planilla')) { showToast('SIN PERMISO PARA PLANILLAS','red'); return; }
+      if (!can('view.planilla') && !can('anticipos.verEstado')) { showToast('SIN PERMISO PARA PLANILLAS','red'); return; } // v822: el rol solo-ver-anticipos entra sin view.planilla
       document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.view === v));
       document.querySelectorAll('.view').forEach(el=>el.classList.toggle('active', el.id === 'view-'+v));
       renderPlanilla(); applyPermissions(); return;
@@ -36117,14 +36118,22 @@ window.addEventListener('load', () => {
   }
   // v404b: si el user solo tiene planilla.descuentos (no admin/PM/gerente), solo muestra ANTICIPOS/POLIZAS/COLABORADORES
   function _v404bEsDescuentosOnly(){ try { if (typeof can !== 'function') return false; return can('planilla.descuentos') && !can('users.manage') && !can('planilla.generate') && !can('planilla.authorize'); } catch(e){ return false; } }
+  // v822: rol "SOLO VER el estado de anticipos" — tiene anticipos.verEstado y NINGÚN permiso
+  // de acción/gestión. Reusa la misma vista acotada que descuentos-only (solo ANTICIPOS).
+  window._antSoloVer = function(){ try { if (typeof can !== 'function') return false; if (!can('anticipos.verEstado')) return false; return !can('anticipos.solicitar') && !can('anticipos.cotizar') && !can('planilla.authorize') && !can('users.manage') && !can('planilla.generate') && !can('planilla.descuentos'); } catch(e){ return false; } };
   window._v404bAplicarFiltroDescuentosTabs = function(){
-    if (!_v404bEsDescuentosOnly()) return;
+    if (!_v404bEsDescuentosOnly() && !(typeof window._antSoloVer==='function' && window._antSoloVer())) return; // v822: el rol solo-ver-anticipos también queda acotado a ANTICIPOS
     const tabs = document.querySelector('#view-planilla .mat-tabs');
     if (!tabs) return;
     const VISIBLES = new Set(['anticipos']);
     tabs.querySelectorAll('[data-plantab]').forEach(btn => { if (!VISIBLES.has(btn.dataset.plantab)) btn.style.display = 'none'; });
+    // v822 FIX: decidir con window.currentPlanillaTab (que setPlanillaTab ya fijó ANTES de llamar
+    // a injectPlanillaTabs), NO con el .active del DOM (que se actualiza DESPUÉS). Con el .active
+    // la pestaña forzada nunca "se veía" como anticipos durante el switch → setPlanillaTab se
+    // re-llamaba sin fin (recursión / stack overflow). Bug latente que también afectaba a
+    // descuentos-only; este fix lo cura para ambos roles.
     const activeBtn = tabs.querySelector('[data-plantab].active');
-    const activeTab = activeBtn ? activeBtn.dataset.plantab : null;
+    const activeTab = window.currentPlanillaTab || (activeBtn ? activeBtn.dataset.plantab : null);
     if (!activeTab || !VISIBLES.has(activeTab)){ if (typeof window.setPlanillaTab === 'function'){ try { window.setPlanillaTab('anticipos'); } catch(e){} } }
   };
 
@@ -45999,6 +46008,7 @@ async function _anulAnularReal(){
     const puedeSolicitar = _antSolicPerm('anticipos.solicitar') || _antEsGerente();
     const puedeCotizar = _antSolicPerm('anticipos.cotizar') || _antEsGerente();
     const esGer = _antEsGerente();
+    const _soloVer = (typeof window._antSoloVer==='function' && window._antSoloVer()); // v822: rol solo-lectura del estado de pedidos
     const _tabBtnIdle='background:#fff;border-color:#E5E7EB;color:#475569';
     const _tabBtnAct='background:#0F172A;border-color:#0F172A;color:#fff';
     const tabBtn='padding:8px 18px;border-radius:9px;border:1px solid;font-size:11px;letter-spacing:.6px;cursor:pointer;transition:all .15s ease;';
@@ -46006,7 +46016,7 @@ async function _anulAnularReal(){
       + (puedeSolicitar ? '<button class="btn primary sm" style="margin-left:auto" onclick="window._antAbrirSolicitar()">+ SOLICITAR ANTICIPO</button>' : '') + '</div>';
     const _gestAnt = (typeof _puedeEditar==='function' && _puedeEditar()) || _antEsGerente(); // v791: gestión ve todas; supervisor ve RESUMEN + SOLICITUDES
     html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 16px">';
-    html += '<button onclick="window._antView=\'resumen\'; window._antFiltroPersona=\'\'; window._antFiltroEstado=\'todos\'; window.renderPlanillaAnticipos()" style="'+tabBtn+_tabBtnIdle+'">RESUMEN</button>';
+    if(!_soloVer) html += '<button onclick="window._antView=\'resumen\'; window._antFiltroPersona=\'\'; window._antFiltroEstado=\'todos\'; window.renderPlanillaAnticipos()" style="'+tabBtn+_tabBtnIdle+'">RESUMEN</button>'; // v822: el rol solo-ver solo ve SOLICITUDES
     if(_gestAnt){
       html += '<button onclick="window._antView=\'listado\'; window.renderPlanillaAnticipos()" style="'+tabBtn+_tabBtnIdle+'">LISTADO COMPLETO</button>';
       html += '<button onclick="window._antView=\'descuentos\'; window.renderPlanillaAnticipos()" style="'+tabBtn+_tabBtnIdle+'">DESCUENTOS GENERADOS</button>';
@@ -46024,7 +46034,8 @@ async function _anulAnularReal(){
       if(s.estado==='pendiente_autorizacion' && esGer) acciones += '<button class="btn sm" onclick="window._antAbrirAutorizar(\''+esc(s.id)+'\')" style="background:#2E7D32;border-color:#2E7D32;color:#fff;padding:6px 14px;font-size:11px">REVISAR / AUTORIZAR</button>';
       if(s.estado==='autorizada' && (puedeCotizar||esGer)) acciones += '<button class="btn sm" onclick="window.entregarSolicitudAnticipo(\''+esc(s.id)+'\')" style="background:#15803D;border-color:#15803D;color:#fff;padding:6px 14px;font-size:11px">MARCAR ENTREGADO</button>'; // v820: compras entrega -> recién acá nace el anticipo
       if((s.estado==='pendiente_cotizacion'||s.estado==='pendiente_autorizacion') && (esCreador||esGer)) acciones += '<button class="btn ghost sm" onclick="window.cancelarSolicitudAnticipo(\''+esc(s.id)+'\')" style="border-color:#C62828;color:#C62828;padding:6px 14px;font-size:11px">CANCELAR</button>';
-      const cot = (s.cotProveedor||s.cotMonto) ? ('<div style="font-size:11px;color:#1565C0;margin-top:3px">Cotización: '+esc(s.cotProveedor||'—')+' · '+_money(Number(s.cotMonto)||0)+(s.cotArchivoUrl?(' · <a href="'+esc(s.cotArchivoUrl)+'" target="_blank" style="color:#1565C0;text-decoration:underline">ver</a>'):'')+'</div>') : '';
+      const _cu = (Number(s.cuotas)>0) ? Number(s.cuotas) : ((s.cotMonto && typeof window._v416CuotasPorMonto==='function') ? window._v416CuotasPorMonto(Number(s.cotMonto)||0) : 0); // v822: cuántas cuotas (sol.cuotas o regla v416 por monto)
+      const cot = (s.cotProveedor||s.cotMonto) ? ('<div style="font-size:11px;color:#1565C0;margin-top:3px">Cotización: '+esc(s.cotProveedor||'—')+' · '+_money(Number(s.cotMonto)||0)+(s.cotArchivoUrl?(' · <a href="'+esc(s.cotArchivoUrl)+'" target="_blank" style="color:#1565C0;text-decoration:underline">ver</a>'):'')+(_cu>0?(' · '+_cu+' cuota'+(_cu===1?'':'s')):'')+'</div>') : '';
       const mot = s.motivoRechazo ? ('<div style="font-size:11px;color:#B91C1C;margin-top:3px">Motivo: '+esc(s.motivoRechazo)+'</div>') : '';
       html += '<div style="border:1px solid #E5E7EB;border-radius:8px;padding:12px;background:#FAFAFA;text-transform:uppercase">' // v820: tarjeta de solicitud TODO en mayúsculas
         + '<div style="display:flex;justify-content:space-between;align-items:start;gap:8px;flex-wrap:wrap">'
@@ -46048,6 +46059,7 @@ async function _anulAnularReal(){
     // v791: gestión ve TODAS las sub-pestañas; el supervisor (solo anticipos.solicitar) ve RESUMEN + SOLICITUDES.
     const _gestAnt = (typeof _puedeEditar==='function' && _puedeEditar()) || (typeof _antEsGerente==='function' && _antEsGerente());
     if(!_gestAnt && window._antView!=='resumen' && window._antView!=='antsolic') window._antView='resumen';
+    if (typeof window._antSoloVer==='function' && window._antSoloVer()) window._antView='antsolic'; // v822: solo-ver -> directo a SOLICITUDES
     // v741: vista DESCUENTOS GENERADOS (reporte + PDF). Render aparte y autocontenido.
     if (window._antView === 'descuentos' && typeof _descGenRender === 'function'){
       try { _descGenRender(cont); } catch(e){ console.warn('descGenRender:', e); }

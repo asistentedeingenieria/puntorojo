@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v821-pagoobra-optin-avance-lock-fotos-solo-ver-prgunta-icono';
+const CACHE_VERSION = 'v822-anticipos-cuotas-tarjeta-permiso-verestado';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
