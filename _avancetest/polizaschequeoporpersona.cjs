@@ -1,8 +1,7 @@
-/* v816: CHEQUEO POR PERSONA — agarra el RESUMEN (personas a cargo de pólizas vigentes) y, para
-   cada una, recorre TODAS las planillas no rechazadas de TODOS los proyectos: en cuántas se le
-   PAGÓ y en cuántas se le COBRÓ la póliza, con la lista de las que FALTARON.
-   Pura: _polizasChequeoPorPersona(projects, state) ->
-     [{persona, polizasCount, pagadoEn, cobradoEn, faltoEn, faltas:[{projectName, planilla}]}]. */
+/* v817: CHEQUEO POR PERSONA — de cada persona a cargo (el RESUMEN), contra TODAS las quincenas
+   (no solo donde se le pagó: en principio se cobra a todos en cada quincena). Dice en cuáles
+   quincenas NO se le cobró. Pura: _polizasChequeoPorPersona(projects, state) ->
+     [{persona, polizasCount, totalQuincenas, cobradoEn, faltoEn, faltas:[{qkey, ref}]}]. */
 const fs=require('fs'),path=require('path');
 const html=fs.readFileSync(path.join(__dirname,'..','index.html'),'utf8');
 let pass=0,fail=0;const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
@@ -26,28 +25,31 @@ if(body){
     { id:'pr1', name:'ESSENZA', planilla:{
       pagos:[{id:'pg1', colaborador:'ANA LOPEZ'},{id:'pgB', colaborador:'BETO RUIZ'}],
       planillasArmadas:[
-        { id:'pl1', estado:'aprobada_inicial', pagosIds:['pg1','pgB'], descuentosPlanilla:[{subtipo:'POLIZA', colaboradorNombre:'ANA LOPEZ', polizaIds:['po1','po2']}] },
-        { id:'pl2', estado:'aprobada_inicial', pagosIds:['pg1'], descuentosPlanilla:[{subtipo:'POLIZA', colaboradorNombre:'ANA LOPEZ', polizaIds:['po1','po2']}] }
+        { id:'pl1', estado:'aprobada_inicial', fechaEnvio:'2026-05-23T12:00:00', pagosIds:['pg1','pgB'], descuentosPlanilla:[{subtipo:'POLIZA', colaboradorNombre:'ANA LOPEZ', polizaIds:['po1','po2']}] },
+        { id:'pl2', estado:'aprobada_inicial', fechaEnvio:'2026-06-06T12:00:00', pagosIds:['pg1'], descuentosPlanilla:[
+          {subtipo:'POLIZA', colaboradorNombre:'ANA LOPEZ', polizaIds:['po1','po2']},
+          {subtipo:'POLIZA', colaboradorNombre:'BETO RUIZ', polizaIds:['po3']}
+        ] }
       ]
     }},
     { id:'pr2', name:'TORELO', planilla:{
-      pagos:[{id:'pg3', colaborador:'ANA LOPEZ'}],
+      pagos:[],
       planillasArmadas:[
-        { id:'plR', estado:'rechazada', pagosIds:['pg3'], descuentosPlanilla:[] },               // rechazada → ignorada
-        { id:'pl3', estado:'aprobada_inicial', pagosIds:['pg3'], descuentosPlanilla:[] }          // ANA pagada, NO cobrada
+        { id:'pl3', estado:'aprobada_inicial', fechaEnvio:'2026-05-23T12:00:00', pagosIds:[], descuentosPlanilla:[] }, // misma quincena Q1, sin descuentos
+        { id:'plR', estado:'rechazada', fechaEnvio:'2026-05-09T12:00:00', pagosIds:[], descuentosPlanilla:[] }         // rechazada → ignorada
       ]
     }}
   ];
   const r=fn(projects, st);
   const by=Object.fromEntries(r.map(x=>[x.persona,x]));
-  ok('ANA: pagada en 3 planillas (pl1,pl2,pl3; rechazada no cuenta)', by['ANA LOPEZ'] && by['ANA LOPEZ'].pagadoEn===3);
-  ok('ANA: cobrada en 2, faltó 1 (la de TORELO)', by['ANA LOPEZ'] && by['ANA LOPEZ'].cobradoEn===2 && by['ANA LOPEZ'].faltoEn===1);
-  ok('ANA: el detalle de la falta es de TORELO', by['ANA LOPEZ'] && by['ANA LOPEZ'].faltas.length===1 && by['ANA LOPEZ'].faltas[0].projectName==='TORELO');
-  ok('BETO: pagado en 1, cobrado 0, faltó 1', by['BETO RUIZ'] && by['BETO RUIZ'].pagadoEn===1 && by['BETO RUIZ'].cobradoEn===0 && by['BETO RUIZ'].faltoEn===1);
-  ok('CARLA: sin pagos (pagadoEn 0), faltó 0', by['CARLA SOL'] && by['CARLA SOL'].pagadoEn===0 && by['CARLA SOL'].faltoEn===0);
+  ok('hay 2 quincenas distintas (23/05 y 06/06; la rechazada no cuenta)', r.every(x=>x.totalQuincenas===2));
+  ok('ANA: cobrada en las 2 quincenas, faltó 0', by['ANA LOPEZ'] && by['ANA LOPEZ'].cobradoEn===2 && by['ANA LOPEZ'].faltoEn===0);
+  ok('BETO: cobrado 1 (Q2), faltó 1 (Q1) — aunque NO se le pagó en Q1 igual cuenta', by['BETO RUIZ'] && by['BETO RUIZ'].cobradoEn===1 && by['BETO RUIZ'].faltoEn===1);
+  ok('BETO: la falta es la quincena del 23/05', by['BETO RUIZ'] && by['BETO RUIZ'].faltas.length===1 && /2026-05-23/.test(by['BETO RUIZ'].faltas[0].ref));
+  ok('CARLA: nunca cobrada → faltó en las 2 quincenas', by['CARLA SOL'] && by['CARLA SOL'].cobradoEn===0 && by['CARLA SOL'].faltoEn===2);
   ok('PRE-APP excluido', !by['PRE-APP']);
   ok('total 3 personas a cargo vigentes', r.length===3);
-  ok('orden: más faltas primero (ANA y BETO con 1 antes que CARLA con 0)', r[r.length-1].persona==='CARLA SOL');
+  ok('orden: más faltas primero (CARLA, luego BETO, luego ANA)', r[0].persona==='CARLA SOL' && r[r.length-1].persona==='ANA LOPEZ');
 }
 
 console.log('PASS='+pass+' FAIL='+fail);

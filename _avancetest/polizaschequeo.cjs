@@ -61,7 +61,7 @@ ok('v812 el PDF ramifica por quincena', /_generarPdfChequeoPolizas[\s\S]{0,4500}
 // v816: tercer modo POR PERSONA (cada persona del RESUMEN a través de TODAS las planillas)
 ok('v816 toggle POR PERSONA', /_tgl\('persona','POR PERSONA'\)/.test(html));
 ok('v816 la vista POR PERSONA usa _polizasChequeoPorPersona', /window\._polizasChequeoPorPersona\(/.test(html));
-ok('v816 columnas COBRADO + DÓNDE FALTÓ', /DÓNDE FALTÓ/.test(html) && /TODO COBRADO/.test(html));
+ok('v817 columnas COBRADO + QUINCENAS donde no se cobró', /QUINCENAS DONDE NO SE LE COBRÓ/.test(html) && /TODO COBRADO/.test(html));
 ok('v816 el PDF ramifica por persona', /_generarPdfChequeoPolizas[\s\S]{0,900}window\._chkMode === 'persona'/.test(html));
 
 console.log('PASS='+pass+' FAIL='+fail);

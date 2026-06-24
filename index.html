@@ -2976,7 +2976,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v816</span>
+    <span style="opacity:.5;font-size:9px">v817</span>
   </footer>
 
 </div>
@@ -40686,38 +40686,36 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   function _polizasChequeoPorPersona(projects, st){
     st = st || (typeof state!=='undefined' ? state : {});
     var norm = (typeof _v464NormKey==='function') ? _v464NormKey : function(s){ return String(s||'').toUpperCase().replace(/\s+/g,' ').trim(); };
-    function _mismaPersona(a,b){
-      var ka=norm(a), kb=norm(b); if(!ka||!kb) return false; if(ka===kb) return true;
-      var ta=ka.split(' ').filter(function(t){return t.length>=2;}), tb=kb.split(' ').filter(function(t){return t.length>=2;});
-      if(ta.length<2||tb.length<2) return false;
-      var sh=ta.length<=tb.length?ta:tb, lo=ta.length<=tb.length?tb:ta;
-      var shared=sh.filter(function(t){return lo.indexOf(t)>=0;}).length;
-      return shared===sh.length && shared>=2;
-    }
+    // v817: clave de quincena = el SÁBADO de la planilla (normaliza fechas de envío distintas del
+    // mismo período entre proyectos). Usa _fechaSabadoDDMMYYYY si está; si no, lo calcula.
+    var sab = (typeof _fechaSabadoDDMMYYYY==='function') ? _fechaSabadoDDMMYYYY : function(ref){ var d=new Date(ref); if(isNaN(d.getTime())) return String(ref||''); var s=new Date(d.getTime()); s.setDate(d.getDate()+(6-d.getDay())); return String(s.getDate()).padStart(2,'0')+String(s.getMonth()+1).padStart(2,'0')+s.getFullYear(); };
     var polizas = ((st && st.polizasGlobales)||[]).filter(function(po){ return po && (po.estatus==='ACTIVA' || po.estatus==='EN PROCESO'); });
     var byHolder = {};
     polizas.forEach(function(po){ var n=po.aCargoDeNombre||''; var k=norm(n); if(!k || k.replace(/[\s\-_]/g,'')==='PREAPP') return; if(!byHolder[k]) byHolder[k]={ nombre:n, polizas:[] }; byHolder[k].polizas.push(po); });
-    var planillas=[];
+    // v817: TODAS las quincenas (planillas no rechazadas de todos los proyectos) agrupadas por su
+    // sábado. En cada quincena junto TODOS los descuentos POLIZA (de cualquier proyecto de esa fecha).
+    var quincenas = {};
     (projects||[]).forEach(function(pr){
-      var pagos = (pr && pr.planilla && pr.planilla.pagos) || [];
       var arr = (pr && pr.planilla && pr.planilla.planillasArmadas) || [];
       arr.forEach(function(pl){
         if(!pl || pl.estado==='rechazada') return;
-        var pagoNombres=[]; pagos.forEach(function(pg){ if(!Array.isArray(pl.pagosIds) || pl.pagosIds.indexOf(pg.id)<0) return; var n=String(pg.colaborador||'').trim(); if(n) pagoNombres.push(n); });
-        var aplicados=(pl.descuentosPlanilla||[]).filter(function(d){ return d && d.subtipo==='POLIZA'; });
-        planillas.push({ projectName:String((pr&&pr.name)||'').toUpperCase(), planilla:pl, pagoNombres:pagoNombres, aplicados:aplicados });
+        var ref = pl.fechaEnvio||pl.fechaCreacion||'';
+        var qk = String(sab(ref)||ref||pl.id);
+        if(!quincenas[qk]) quincenas[qk]={ qkey:qk, ref:ref, aplicados:[] };
+        if(!quincenas[qk].ref) quincenas[qk].ref=ref;
+        (pl.descuentosPlanilla||[]).forEach(function(d){ if(d && d.subtipo==='POLIZA') quincenas[qk].aplicados.push(d); });
       });
     });
+    var qlist = Object.keys(quincenas).map(function(k){ return quincenas[k]; });
+    qlist.sort(function(a,b){ return (Date.parse(b.ref)||0)-(Date.parse(a.ref)||0); }); // más reciente primero
     var out=[];
     Object.keys(byHolder).forEach(function(k){
-      var h=byHolder[k]; var pagadoEn=0, cobradoEn=0, faltas=[];
-      planillas.forEach(function(P){
-        if(!P.pagoNombres.some(function(nm){ return _mismaPersona(nm, h.nombre); })) return;
-        pagadoEn++;
-        var cobrado = P.aplicados.some(function(d){ var ids=d.polizaIds||[]; if(ids.length) return h.polizas.some(function(po){ return ids.indexOf(po.id)>=0; }); return norm(d.colaboradorNombre)===norm(h.nombre); });
-        if(cobrado) cobradoEn++; else faltas.push({ projectName:P.projectName, planilla:P.planilla });
+      var h=byHolder[k]; var cobradoEn=0, faltas=[];
+      qlist.forEach(function(Q){
+        var cobrado = Q.aplicados.some(function(d){ var ids=d.polizaIds||[]; if(ids.length) return h.polizas.some(function(po){ return ids.indexOf(po.id)>=0; }); return norm(d.colaboradorNombre)===norm(h.nombre); });
+        if(cobrado) cobradoEn++; else faltas.push({ qkey:Q.qkey, ref:Q.ref });
       });
-      out.push({ persona:h.nombre, polizasCount:h.polizas.length, pagadoEn:pagadoEn, cobradoEn:cobradoEn, faltoEn:faltas.length, faltas:faltas });
+      out.push({ persona:h.nombre, polizasCount:h.polizas.length, totalQuincenas:qlist.length, cobradoEn:cobradoEn, faltoEn:faltas.length, faltas:faltas });
     });
     out.sort(function(a,b){ if(b.faltoEn!==a.faltoEn) return b.faltoEn-a.faltoEn; return String(a.persona).localeCompare(String(b.persona),'es',{sensitivity:'base'}); });
     return out;
@@ -40854,7 +40852,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       // v816: en modo POR PERSONA el PDF es una tabla por persona (el RESUMEN) a través de todas las planillas.
       if(window._chkMode === 'persona'){
         var prows = (typeof window._polizasChequeoPorPersona==='function') ? (window._polizasChequeoPorPersona((_st.projects||[]), _st)||[]) : [];
-        var pconf = prows.filter(function(x){return x.faltoEn>0;}).length, pdia = prows.filter(function(x){return x.pagadoEn>0 && x.faltoEn===0;}).length;
+        var pconf = prows.filter(function(x){return x.faltoEn>0;}).length, pdia = prows.filter(function(x){return x.totalQuincenas>0 && x.faltoEn===0;}).length;
+        var ptotQ = prows.length ? (prows[0].totalQuincenas||0) : 0;
         var pd=new jsPDF({ unit:'pt', format:'a4', orientation:'portrait' });
         var pW=pd.internal.pageSize.width;
         try{ _pdfLogo(pd); }catch(e){}
@@ -40865,21 +40864,22 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         pd.setFontSize(9);
         pd.text(prows.length+' persona(s)   ·   '+pdia+' al dia   ·   '+pconf+' con faltas', pW/2, 80, {align:'center'});
         pd.setFontSize(7.5);
-        pd.text('COBRADO = en cuantas planillas pagadas se le cobro la poliza / total pagadas', pW/2, 92, {align:'center'});
+        pd.text('Sobre '+ptotQ+' quincena(s). COBRADO = en cuantas se le cobro / total. Ultima col = quincenas donde NO se cobro.', pW/2, 92, {align:'center'});
         if(!prows.length){ pd.setFontSize(11); pd.text('No hay polizas vigentes en el catalogo.', 40, 112); }
         else {
           pd.autoTable({
             startY:104,
-            head:[['PERSONA','POLIZAS','COBRADO','FALTAS (DONDE)']],
+            head:[['PERSONA','POLIZAS','COBRADO','QUINCENAS SIN COBRAR']],
             body:prows.map(function(x){
-              var faltas = (x.pagadoEn===0) ? 'SIN PAGOS' : (x.faltoEn===0 ? 'TODO COBRADO' : ((x.faltas||[]).map(function(f){ var s=(typeof _fechaSabadoDDMMYYYY==='function')?String(_fechaSabadoDDMMYYYY(f.planilla.fechaEnvio||f.planilla.fechaCreacion||'')||''):''; var sf=/^\d{8}$/.test(s)?s.replace(/(\d{2})(\d{2})(\d{4})/,'$1/$2/$3'):s; return String(f.projectName)+(sf?(' '+sf):''); }).join('  |  ')));
-              return [String(x.persona||''), String(x.polizasCount||0), (x.pagadoEn===0?'-':(x.cobradoEn+' / '+x.pagadoEn)), faltas];
+              var qf=function(f){ var s=String(f.qkey||''); if(/^\d{8}$/.test(s)) return s.replace(/(\d{2})(\d{2})(\d{4})/,'$1/$2/$3'); return String(f.ref||'').slice(0,10)||s; };
+              var faltas = (x.totalQuincenas===0) ? 'SIN QUINCENAS' : (x.faltoEn===0 ? 'TODO COBRADO' : ((x.faltas||[]).map(qf).join('  |  ')));
+              return [String(x.persona||''), String(x.polizasCount||0), (x.totalQuincenas===0?'-':(x.cobradoEn+' / '+x.totalQuincenas)), faltas];
             }),
             theme:'striped', styles:{fontSize:8.5,valign:'middle'}, margin:{left:40,right:40},
             alternateRowStyles:{fillColor:[250,248,243]},
             headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',fontSize:8},
             columnStyles:{0:{cellWidth:160},1:{halign:'center',cellWidth:45},2:{halign:'center',cellWidth:50},3:{halign:'left'}},
-            didParseCell:function(d){ if(d.section==='body' && d.column.index===3){ var t=String(d.cell.raw||''); if(t==='TODO COBRADO'){ d.cell.styles.textColor=[46,125,50]; } else if(t==='SIN PAGOS'){ d.cell.styles.textColor=[120,120,120]; } else { d.cell.styles.textColor=[198,40,40]; d.cell.styles.fontStyle='bold'; } } }
+            didParseCell:function(d){ if(d.section==='body' && d.column.index===3){ var t=String(d.cell.raw||''); if(t==='TODO COBRADO'){ d.cell.styles.textColor=[46,125,50]; } else if(t==='SIN QUINCENAS'){ d.cell.styles.textColor=[120,120,120]; } else { d.cell.styles.textColor=[198,40,40]; d.cell.styles.fontStyle='bold'; } } }
           });
         }
         try{ _pdfDescargar(pd, 'CHEQUEO POR PERSONA POLIZAS - TODOS LOS PROYECTOS.pdf'); }
@@ -46725,29 +46725,31 @@ async function _anulAnularReal(){
           });
         }
       } else {
-        // v816 POR PERSONA: cada persona a cargo (el RESUMEN) a través de TODAS las planillas →
-        // en cuántas pagadas se le COBRÓ y en cuáles FALTÓ.
+        // v817 POR PERSONA: cada persona a cargo (el RESUMEN) contra TODAS las quincenas (no solo
+        // las pagadas: se debe cobrar a todos en cada quincena) → en cuáles NO se le cobró.
         const _pRows = (typeof window._polizasChequeoPorPersona==='function')
           ? window._polizasChequeoPorPersona((_chkState.projects||[]), _chkState) : [];
         const _conFaltas = _pRows.filter(x => x.faltoEn>0).length;
-        const _alDia = _pRows.filter(x => x.pagadoEn>0 && x.faltoEn===0).length;
-        html += '<div style="padding:10px 16px 12px 16px;border-bottom:1px solid var(--line)"><div style="font-size:10px;letter-spacing:1.4px;color:#475569;font-weight:700;text-transform:uppercase">CHEQUEO POR PERSONA · TODOS LOS PROYECTOS</div><div style="font-size:10.5px;color:var(--mute);margin-top:3px">De cada persona a cargo (el RESUMEN): en cuántas planillas PAGADAS se le COBRÓ la póliza y en cuáles FALTÓ. <b>'+_pRows.length+'</b> persona(s) · <b style="color:#2E7D32">'+_alDia+'</b> al día · <b style="color:#C62828">'+_conFaltas+'</b> con faltas.</div></div>';
+        const _alDia = _pRows.filter(x => x.totalQuincenas>0 && x.faltoEn===0).length;
+        const _totQ = _pRows.length ? (_pRows[0].totalQuincenas||0) : 0;
+        html += '<div style="padding:10px 16px 12px 16px;border-bottom:1px solid var(--line)"><div style="font-size:10px;letter-spacing:1.4px;color:#475569;font-weight:700;text-transform:uppercase">CHEQUEO POR PERSONA · TODAS LAS QUINCENAS</div><div style="font-size:10.5px;color:var(--mute);margin-top:3px">De cada persona a cargo (el RESUMEN), sobre las <b>'+_totQ+'</b> quincena(s) (en principio se cobra a todos en cada una): en cuáles NO se le cobró la póliza. <b>'+_pRows.length+'</b> persona(s) · <b style="color:#2E7D32">'+_alDia+'</b> al día · <b style="color:#C62828">'+_conFaltas+'</b> con faltas.</div></div>';
         if (!_pRows.length){
           html += '<div class="empty" style="padding:24px;text-align:center;color:var(--mute)">NO HAY PÓLIZAS VIGENTES EN EL CATÁLOGO.</div>';
         } else {
-          html += '<table class="tbl" style="margin:0"><thead><tr><th style="font-size:9px;text-align:left">PERSONA</th><th style="font-size:9px;text-align:center">PÓLIZAS</th><th style="font-size:9px;text-align:center">COBRADO</th><th style="font-size:9px;text-align:left">DÓNDE FALTÓ</th></tr></thead><tbody>';
+          html += '<table class="tbl" style="margin:0"><thead><tr><th style="font-size:9px;text-align:left">PERSONA</th><th style="font-size:9px;text-align:center">PÓLIZAS</th><th style="font-size:9px;text-align:center">COBRADO</th><th style="font-size:9px;text-align:left">QUINCENAS DONDE NO SE LE COBRÓ</th></tr></thead><tbody>';
+          const _qfmt = (f) => { const s=String(f.qkey||''); if(/^\d{8}$/.test(s)) return s.replace(/(\d{2})(\d{2})(\d{4})/,'$1/$2/$3'); const rr=String(f.ref||''); return rr.slice(0,10)||s; };
           _pRows.forEach(x => {
-            const sinPagos = x.pagadoEn===0;
+            const sinQ = x.totalQuincenas===0;
             const hayFalt = x.faltoEn>0;
-            const cobradoCell = sinPagos
-              ? '<span style="font-size:9px;color:#94A3B8;font-weight:700">SIN PAGOS</span>'
-              : ('<span style="font-size:10px;font-weight:800;color:'+(hayFalt?'#C62828':'#2E7D32')+'">'+x.cobradoEn+' / '+x.pagadoEn+'</span>');
+            const cobradoCell = sinQ
+              ? '<span style="font-size:9px;color:#94A3B8;font-weight:700">—</span>'
+              : ('<span style="font-size:10px;font-weight:800;color:'+(hayFalt?'#C62828':'#2E7D32')+'">'+x.cobradoEn+' / '+x.totalQuincenas+'</span>');
             let faltasCell;
-            if(sinPagos) faltasCell = '<span style="font-size:9px;color:#94A3B8">—</span>';
+            if(sinQ) faltasCell = '<span style="font-size:9px;color:#94A3B8">—</span>';
             else if(!hayFalt) faltasCell = '<span style="font-size:9px;background:#E8F5E9;color:#2E7D32;border:1px solid #A5D6A7;border-radius:8px;padding:1px 7px;font-weight:700">✓ TODO COBRADO</span>';
             else {
-              const lst = (x.faltas||[]).map(f => { const s=(typeof _fechaSabadoDDMMYYYY==='function')?String(_fechaSabadoDDMMYYYY(f.planilla.fechaEnvio||f.planilla.fechaCreacion||'')||''):''; const sf=/^\d{8}$/.test(s)?s.replace(/(\d{2})(\d{2})(\d{4})/,'$1/$2/$3'):s; return _h(f.projectName)+(sf?(' '+sf):''); }).join(' · ');
-              faltasCell = '<span style="font-size:9px;color:#C62828;font-weight:800">✗ FALTÓ EN '+x.faltoEn+': </span><span style="font-size:9px;color:#92400E">'+lst+'</span>';
+              const lst = (x.faltas||[]).map(_qfmt).join(' · ');
+              faltasCell = '<span style="font-size:9px;color:#C62828;font-weight:800">✗ FALTÓ EN '+x.faltoEn+': </span><span style="font-size:9px;color:#92400E">'+_h(lst)+'</span>';
             }
             html += '<tr style="background:'+(hayFalt?'#FFF7F7':'transparent')+'"><td style="font-size:10.5px;font-weight:700">'+_h(x.persona)+'</td><td style="font-size:11px;text-align:center;font-weight:700;color:#475569">'+(x.polizasCount||0)+'</td><td style="text-align:center">'+cobradoCell+'</td><td>'+faltasCell+'</td></tr>';
           });
