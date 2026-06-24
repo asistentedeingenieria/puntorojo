@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v818-fix-import-avance-aptos-1-letra';
+const CACHE_VERSION = 'v819-chequeo-cobro-solo-por-persona-pdf-limpio';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

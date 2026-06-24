@@ -9,7 +9,7 @@ function extract(name){ const m=html.indexOf('function '+name+'('); if(m<0) retu
 ok('_polizasPendientesDePlanilla existe', html.indexOf('function _polizasPendientesDePlanilla(')>=0);
 ok('expuesta en window', html.indexOf('window._polizasPendientesDePlanilla')>=0);
 // sub-pestaña comparativa + chip
-ok('sub-pestaña CHEQUEO GLOBAL', /CHEQUEO GLOBAL/.test(html));
+ok('sub-pestaña CHEQUEO DE COBRO', />CHEQUEO DE COBRO<\/button>/.test(html));
 ok('vista _polView chequeo', /_polView\s*=\s*'chequeo'|_polView==='chequeo'/.test(html));
 // v811: la rama chequeo es UNA lista GLOBAL de todos los proyectos (no por proyecto) y muestra el CONTEO.
 ok('v811: la rama chequeo usa _polizasChequeoGlobal', /_polView === 'chequeo'\)\{[\s\S]{0,2000}_polizasChequeoGlobal\(/.test(html));
@@ -52,14 +52,15 @@ ok('botón DESCARGAR PDF en el chequeo', /_generarPdfChequeoPolizas\(\)/.test(ht
 ok('PDF reusa _pdfDescargar', /_generarPdfChequeoPolizas[\s\S]{0,9500}_pdfDescargar\(doc/.test(html));
 ok('v811: el PDF del chequeo usa _polizasChequeoGlobal (todos los proyectos)', /_generarPdfChequeoPolizas[\s\S]{0,1600}_polizasChequeoGlobal\(/.test(html));
 
-// v812: toggle GLOBAL / POR QUINCENA + vista y PDF por quincena
-ok('v812 toggle GLOBAL/POR QUINCENA (window._chkMode)', /window\._chkMode/.test(html) && /_tgl\('global','GLOBAL'\)/.test(html) && /_tgl\('quincena','POR QUINCENA'\)/.test(html));
+// v819: el chequeo es SOLO por persona — se quitó el toggle global/quincena, título sin subtítulo
+ok('v819 forzado a POR PERSONA (sin toggle _tgl)', /_chkMode = 'persona'/.test(html) && html.indexOf("_tgl('global','GLOBAL')")<0);
+ok('v819 título CHEQUEO DE COBRO POLIZAS (sin subtítulo)', /CHEQUEO DE COBRO POLIZAS/.test(html));
 ok('v812 la vista POR QUINCENA usa _polizasChequeoTodos', /_chkMode === 'quincena'|_chkMode==='quincena'/.test(html) && /window\._polizasChequeoTodos\(/.test(html));
 ok('v812 estados COBRADA / NO COBRADA en la vista por quincena', /✓ COBRADA/.test(html) && /✗ NO COBRADA/.test(html));
 ok('v812 el PDF ramifica por quincena', /_generarPdfChequeoPolizas[\s\S]{0,4500}window\._chkMode === 'quincena'/.test(html));
 
 // v816: tercer modo POR PERSONA (cada persona del RESUMEN a través de TODAS las planillas)
-ok('v816 toggle POR PERSONA', /_tgl\('persona','POR PERSONA'\)/.test(html));
+ok('v819 PDF: plural/singular PERSONA(S) automático en mayúscula', /' PERSONA'\+\(_np===1\?'':'S'\)/.test(html));
 ok('v816 la vista POR PERSONA usa _polizasChequeoPorPersona', /window\._polizasChequeoPorPersona\(/.test(html));
 ok('v817 columnas COBRADO + QUINCENAS donde no se cobró', /QUINCENAS DONDE NO SE LE COBRÓ/.test(html) && /TODO COBRADO/.test(html));
 ok('v816 el PDF ramifica por persona', /_generarPdfChequeoPolizas[\s\S]{0,900}window\._chkMode === 'persona'/.test(html));
