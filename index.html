@@ -2976,7 +2976,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v819</span>
+    <span style="opacity:.5;font-size:9px">v820</span>
   </footer>
 
 </div>
@@ -25233,6 +25233,7 @@ function _anticSolicNextEstado(estado, accion){
   const E = String(estado||''); const A = String(accion||'');
   if (A === 'cotizar'   && E === 'pendiente_cotizacion')   return 'pendiente_autorizacion';
   if (A === 'autorizar' && E === 'pendiente_autorizacion') return 'autorizada';
+  if (A === 'entregar'  && E === 'autorizada')             return 'entregada'; // v820: compras marca entregado -> recién acá se crea el anticipo
   if (A === 'rechazar'  && E === 'pendiente_autorizacion') return 'rechazada';
   if (A === 'cancelar'  && (E === 'pendiente_cotizacion' || E === 'pendiente_autorizacion')) return 'cancelada';
   return null;
@@ -45739,12 +45740,13 @@ async function _anulAnularReal(){
   window._antColabLimpiar = function(){ var inp=document.getElementById('antColabInput'), hid=document.getElementById('antSolColab'), c=document.getElementById('antColabCombo'); if(inp){ inp.value=''; inp.focus(); } if(hid) hid.value=''; if(c) c.classList.remove('has-value'); window._antColabRender(''); };
   window._antColabKey = function(e){ try{ if(e.key==='Enter'){ e.preventDefault(); var arr=_antColabFilter(_antColabNombres(), (document.getElementById('antColabInput')||{}).value); if(arr.length) window._antColabPick(arr[0]); } else if(e.key==='Escape'){ var c=document.getElementById('antColabCombo'); if(c) c.classList.remove('open'); } }catch(_e){} };
   window._antColabCerrar = function(){ var c=document.getElementById('antColabCombo'); if(c) c.classList.remove('open'); var inp=document.getElementById('antColabInput'), hid=document.getElementById('antSolColab'); if(inp && hid && !hid.value){ var t=String(inp.value||'').trim().toUpperCase(); var m=_antColabNombres().filter(function(n){ return n.toUpperCase()===t; })[0]; if(m){ hid.value=m; inp.value=m; if(c) c.classList.add('has-value'); } } };
-  function _antSolicEstadoMeta(e){ return ({ pendiente_cotizacion:{t:'PENDIENTE DE COTIZACIÓN',c:'#B45309',bg:'#FEF3C7'}, pendiente_autorizacion:{t:'PENDIENTE DE AUTORIZACIÓN',c:'#1D4ED8',bg:'#DBEAFE'}, autorizada:{t:'AUTORIZADA',c:'#15803D',bg:'#DCFCE7'}, rechazada:{t:'RECHAZADA',c:'#B91C1C',bg:'#FEE2E2'}, cancelada:{t:'CANCELADA',c:'#6B7280',bg:'#F3F4F6'} }[e] || {t:String(e||'').toUpperCase(),c:'#6B7280',bg:'#F3F4F6'}); }
+  function _antSolicEstadoMeta(e){ return ({ pendiente_cotizacion:{t:'PENDIENTE DE COTIZACIÓN',c:'#B45309',bg:'#FEF3C7'}, pendiente_autorizacion:{t:'PENDIENTE DE AUTORIZACIÓN',c:'#1D4ED8',bg:'#DBEAFE'}, autorizada:{t:'AUTORIZADA · POR ENTREGAR',c:'#9A3412',bg:'#FFEDD5'}, entregada:{t:'ENTREGADA',c:'#15803D',bg:'#DCFCE7'}, rechazada:{t:'RECHAZADA',c:'#B91C1C',bg:'#FEE2E2'}, cancelada:{t:'CANCELADA',c:'#6B7280',bg:'#F3F4F6'} }[e] || {t:String(e||'').toUpperCase(),c:'#6B7280',bg:'#F3F4F6'}); }
   window._antSolicPendientesParaMi = function(){
     return _antSolics().filter(s => {
       if(!s) return false;
       if(s.estado==='pendiente_cotizacion' && (_antSolicPerm('anticipos.cotizar')||_antEsGerente())) return true;
       if(s.estado==='pendiente_autorizacion' && _antEsGerente()) return true;
+      if(s.estado==='autorizada' && (_antSolicPerm('anticipos.cotizar')||_antEsGerente())) return true; // v820: falta ENTREGAR (compras)
       return false;
     });
   };
@@ -45841,16 +45843,38 @@ async function _anulAnularReal(){
     if(!_antEsGerente()){ showT('SOLO GERENTE/ADMIN AUTORIZA','red'); return; }
     const sol = _antSolics().find(s=>s.id===solId);
     if(!sol || sol.estado!=='pendiente_autorizacion'){ showT('SOLICITUD NO DISPONIBLE','red'); return; }
-    const cuotas = Number((document.getElementById('antAutCuotas')||{}).value)||1;
-    const ant = _anticBuildAnticipo(sol, cuotas, { id:'ant-'+Date.now()+'-'+Math.random().toString(36).slice(2,8), ts:Date.now(), fecha:new Date().toISOString().slice(0,10), creadoPor:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''), creadoNombre:(typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):'') });
-    _getAnticipos().push(ant);
-    sol.estado='autorizada'; sol._ts=Date.now(); sol.cuotas=ant.cantidadCuotas; sol.anticipoIdCreado=ant.id;
-    sol.decididoPor=(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''); sol.decididoEn=(typeof nowStr==='function'?nowStr():'');
-    _antSolicNotif(['anticipos.cotizar'], [sol.solicitadoPor], 'ANTICIPO AUTORIZADO', sol.colaboradorNombre+' · '+_subtipoLabelAnt(sol.subtipo)+' · '+_money(ant.montoTotal)+' en '+ant.cantidadCuotas+' cuotas. Anticipo creado.');
-    try{ if(window.resyncDescuentosAbiertas) window.resyncDescuentosAbiertas(); }catch(e){}
+    // v820: AUTORIZAR ya NO crea el anticipo. Solo lo deja listo para que COMPRAS lo entregue.
+    // El anticipo (y su entrada al RESUMEN para cobrar) nace cuando compras marca ENTREGADO.
+    // Cuotas 100% automáticas por monto (regla v416). El gerente ya no las escribe.
+    const cuotas = window._v416CuotasPorMonto(Number(sol.cotMonto)||0);
+    sol.estado='autorizada'; sol._ts=Date.now(); sol.cuotas=cuotas;
+    sol.autorizadoPor=(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''); sol.autorizadoEn=(typeof nowStr==='function'?nowStr():'');
+    sol.decididoPor=sol.autorizadoPor; sol.decididoEn=sol.autorizadoEn;
+    _antSolicNotif(['anticipos.cotizar'], [sol.solicitadoPor], 'ANTICIPO AUTORIZADO · POR ENTREGAR', sol.colaboradorNombre+' · '+_subtipoLabelAnt(sol.subtipo)+' · '+_money(Number(sol.cotMonto)||0)+' en '+cuotas+' cuotas. Falta ENTREGAR para cobrar.');
     var m=document.getElementById('antAutModal'); if(m) m.remove();
     _antSolicSave();
-    showT('ANTICIPO AUTORIZADO Y CREADO','green');
+    showT('AUTORIZADO · FALTA ENTREGAR','green');
+  };
+  // v820: ENTREGAR (compras o gerente). Recién acá nace el anticipo del catálogo y entra al
+  // RESUMEN para cobrar. Cuotas automáticas por monto (regla v416). Re-valida tras el modal
+  // (patrón stale-ref v769/v770): otro equipo pudo cambiar el estado durante el await.
+  window.entregarSolicitudAnticipo = async function(solId){
+    if(!(_antSolicPerm('anticipos.cotizar') || _antEsGerente())){ showT('SOLO COMPRAS O GERENTE ENTREGA','red'); return; }
+    const sol = _antSolics().find(s=>s.id===solId);
+    if(!sol || sol.estado!=='autorizada'){ showT('SOLICITUD NO DISPONIBLE PARA ENTREGAR','red'); return; }
+    const ok = await window.prConfirm({ title:'Marcar como entregado', body:'¿Confirmás que ya ENTREGASTE esto a '+sol.colaboradorNombre+'? Recién aquí se crea el anticipo y se podrá cobrar.', okText:'SÍ, ENTREGADO', cancelText:'NO', danger:false });
+    if(!ok) return;
+    const sol2 = _antSolics().find(s=>s.id===solId);
+    if(!sol2 || sol2.estado!=='autorizada'){ showT('LA SOLICITUD YA CAMBIÓ DE ESTADO','red'); try{ window.renderPlanillaAnticipos(); }catch(e){} return; }
+    const cuotas = window._v416CuotasPorMonto(Number(sol2.cotMonto)||0);
+    const ant = _anticBuildAnticipo(sol2, cuotas, { id:'ant-'+Date.now()+'-'+Math.random().toString(36).slice(2,8), ts:Date.now(), fecha:new Date().toISOString().slice(0,10), creadoPor:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''), creadoNombre:(typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):'') });
+    _getAnticipos().push(ant);
+    sol2.estado='entregada'; sol2._ts=Date.now(); sol2.cuotas=ant.cantidadCuotas; sol2.anticipoIdCreado=ant.id;
+    sol2.entregadoPor=(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''); sol2.entregadoEn=(typeof nowStr==='function'?nowStr():'');
+    _antSolicNotif(['planilla.authorize','users.manage'], [sol2.solicitadoPor], 'ANTICIPO ENTREGADO', sol2.colaboradorNombre+' · '+_subtipoLabelAnt(sol2.subtipo)+' · '+_money(ant.montoTotal)+' en '+ant.cantidadCuotas+' cuotas. Anticipo creado, listo para cobrar.');
+    try{ if(window.resyncDescuentosAbiertas) window.resyncDescuentosAbiertas(); }catch(e){}
+    _antSolicSave(); // saveState + CloudSync.forceUploadNow + render (es plata: sube ya, no espera el debounce)
+    showT('ENTREGADO · ANTICIPO CREADO','green');
   };
   // RECHAZAR (gerente)
   window.rechazarSolicitudAnticipoFlujo = function(solId){
@@ -45920,7 +45944,8 @@ async function _anulAnularReal(){
   window._antAbrirAutorizar = function(solId){
     if(!_antEsGerente()){ showT('SOLO GERENTE/ADMIN','red'); return; }
     const sol = _antSolics().find(s=>s.id===solId); if(!sol){ return; }
-    var cuotasSug = 1; try { var mm = Number(sol.cotMonto)||0; cuotasSug = Math.min(6, Math.max(1, Math.ceil(mm/500))); } catch(e){}
+    // v820: cuotas 100% automáticas por monto (regla v416). Solo se muestra, no se edita.
+    var cuotasAuto = window._v416CuotasPorMonto(Number(sol.cotMonto)||0);
     var arch = sol.cotArchivoUrl ? ('<a href="'+esc(sol.cotArchivoUrl)+'" target="_blank" style="color:#1565C0;font-weight:700;text-decoration:underline">VER COTIZACIÓN ('+esc(sol.cotArchivoNombre||'archivo')+')</a>') : '<span style="color:#888">sin archivo</span>';
     _antModalWrap('antAutModal','REVISAR Y AUTORIZAR',
       '<div style="background:#FAFAFA;border:1px solid #EEE;border-radius:8px;padding:12px;margin-bottom:14px;font-size:12.5px;line-height:1.6">'
@@ -45931,8 +45956,8 @@ async function _anulAnularReal(){
       +'<div style="margin-top:6px">'+arch+'</div>'
       +'<div style="color:#888;font-size:11px;margin-top:6px">Solicitó: '+esc(sol.solicitadoPorNombre||sol.solicitadoPor||'—')+' · Cotizó: '+esc(sol.cotizadoPor||'—')+'</div>'
       +'</div>'
-      +'<label style="display:block;margin-bottom:14px"><span style="'+_antLbl+'">Cuotas (1–6)</span><input id="antAutCuotas" type="number" min="1" max="6" value="'+cuotasSug+'" style="'+_antInp+'"></label>'
-      +'<button class="btn" onclick="window.autorizarSolicitudAnticipoFlujo(\''+esc(sol.id)+'\')" style="width:100%;background:#2E7D32;border-color:#2E7D32;color:#fff;padding:11px;font-size:12.5px;font-weight:700;margin-bottom:14px">AUTORIZAR Y CREAR ANTICIPO</button>'
+      +'<div style="background:#ECFDF5;border:1px solid #A7F3D0;border-radius:8px;padding:11px 12px;margin-bottom:14px;font-size:12px;color:#065F46;line-height:1.5">Se descontará en <strong>'+cuotasAuto+' cuota'+(cuotasAuto===1?'':'s')+'</strong> (automático por monto). El anticipo se crea cuando <strong>compras marque ENTREGADO</strong>.</div>'
+      +'<button class="btn" onclick="window.autorizarSolicitudAnticipoFlujo(\''+esc(sol.id)+'\')" style="width:100%;background:#2E7D32;border-color:#2E7D32;color:#fff;padding:11px;font-size:12.5px;font-weight:700;margin-bottom:14px">AUTORIZAR</button>'
       +'<div style="border-top:1px solid #EEE;padding-top:12px"><span style="'+_antLbl+'">¿Rechazar? Motivo (opcional)</span>'
       +'<input id="antAutMotivo" placeholder="MOTIVO DEL RECHAZO" style="'+_antInp+';text-transform:uppercase">'
       +'<button class="btn ghost" onclick="window.rechazarSolicitudAnticipoFlujo(\''+esc(sol.id)+'\')" style="width:100%;border-color:#C62828;color:#C62828;padding:9px;font-size:12px;font-weight:700;margin-top:8px">RECHAZAR SOLICITUD</button></div>');
@@ -45967,10 +45992,11 @@ async function _anulAnularReal(){
       let acciones='';
       if(s.estado==='pendiente_cotizacion' && puedeCotizar) acciones += '<button class="btn sm" onclick="window._antAbrirCotizar(\''+esc(s.id)+'\')" style="background:#1565C0;border-color:#1565C0;color:#fff;padding:6px 14px;font-size:11px">SUBIR COTIZACIÓN</button>';
       if(s.estado==='pendiente_autorizacion' && esGer) acciones += '<button class="btn sm" onclick="window._antAbrirAutorizar(\''+esc(s.id)+'\')" style="background:#2E7D32;border-color:#2E7D32;color:#fff;padding:6px 14px;font-size:11px">REVISAR / AUTORIZAR</button>';
+      if(s.estado==='autorizada' && (puedeCotizar||esGer)) acciones += '<button class="btn sm" onclick="window.entregarSolicitudAnticipo(\''+esc(s.id)+'\')" style="background:#15803D;border-color:#15803D;color:#fff;padding:6px 14px;font-size:11px">MARCAR ENTREGADO</button>'; // v820: compras entrega -> recién acá nace el anticipo
       if((s.estado==='pendiente_cotizacion'||s.estado==='pendiente_autorizacion') && (esCreador||esGer)) acciones += '<button class="btn ghost sm" onclick="window.cancelarSolicitudAnticipo(\''+esc(s.id)+'\')" style="border-color:#C62828;color:#C62828;padding:6px 14px;font-size:11px">CANCELAR</button>';
       const cot = (s.cotProveedor||s.cotMonto) ? ('<div style="font-size:11px;color:#1565C0;margin-top:3px">Cotización: '+esc(s.cotProveedor||'—')+' · '+_money(Number(s.cotMonto)||0)+(s.cotArchivoUrl?(' · <a href="'+esc(s.cotArchivoUrl)+'" target="_blank" style="color:#1565C0;text-decoration:underline">ver</a>'):'')+'</div>') : '';
       const mot = s.motivoRechazo ? ('<div style="font-size:11px;color:#B91C1C;margin-top:3px">Motivo: '+esc(s.motivoRechazo)+'</div>') : '';
-      html += '<div style="border:1px solid #E5E7EB;border-radius:8px;padding:12px;background:#FAFAFA">'
+      html += '<div style="border:1px solid #E5E7EB;border-radius:8px;padding:12px;background:#FAFAFA;text-transform:uppercase">' // v820: tarjeta de solicitud TODO en mayúsculas
         + '<div style="display:flex;justify-content:space-between;align-items:start;gap:8px;flex-wrap:wrap">'
         +   '<div><div style="font-size:13px;font-weight:800;color:#1a1a1a">'+esc(s.colaboradorNombre||'—')+'</div>'
         +     '<div style="font-size:11.5px;color:#555;margin-top:2px">'+esc(_subtipoLabelAnt(s.subtipo))+' · '+esc(s.descripcion||'')+'</div>'
