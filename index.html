@@ -3005,7 +3005,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v836</span>
+    <span style="opacity:.5;font-size:9px">v837</span>
   </footer>
 
 </div>
@@ -18551,6 +18551,22 @@ function _faltanSalida(dia, obra){
   });
   return out;
 }
+// v837: AUSENTES — asignados FIJOS a la obra (obraAsignada===obra, sin multiObra ni OFICINA) que
+// hoy NO están presentes (marcados ausentes O sin marcar). obra==='' → todas las obras. PURA.
+// (Mismo universo que _faltanIngreso pero contando los no-presentes, no solo los pendientes.)
+function _ausentes(personalGlobal, dia, obra){
+  var out = [];
+  (personalGlobal||[]).forEach(function(p){
+    if (!p) return;
+    if (p.tipo === 'OFICINA') return;
+    if (p.multiObra) return;
+    if (!p.obraAsignada) return;
+    if (obra && p.obraAsignada !== obra) return;
+    var r = dia && dia[p.id];
+    if (!(r && r.presente === true)) out.push(p);
+  });
+  return out;
+}
 // v651: modal con el listado de quiénes FALTAN de ingresar (respeta el filtro de obra como los demás KPIs).
 window._v651FaltanIngreso = function(){
   try{
@@ -18586,6 +18602,24 @@ window._v651FaltanSalida = function(){
     if(!arr.length){ body+='<div style="padding:30px;text-align:center;background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;color:#15803D;font-weight:700">NADIE PENDIENTE DE SALIDA</div>'; }
     else { body+='<div style="display:flex;flex-direction:column;gap:6px">'; arr.forEach(x=>{ body+='<div style="border:1px solid #E2E8F0;border-radius:9px;background:#fff;padding:10px 14px;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center"><div><div style="font-size:13px;font-weight:800;color:#0F172A">'+escH(nom(x.id))+'</div><div style="font-size:10px;color:#94A3B8;margin-top:1px">'+escH(carg(x.id))+(x.obraId?(' · '+escH(projName(x.obraId))):'')+'</div></div><div style="text-align:right;white-space:nowrap"><div style="font-size:9px;color:#94A3B8;font-weight:700">ENTRADA</div><div style="font-size:14px;font-weight:800;color:#0F172A">'+escH(x.entrada||'—')+'</div></div></div>'; }); body+='</div>'; }
     window.prConfirm({ title:'FALTAN DE DAR SALIDA', bodyHTML:body, okText:'CERRAR', cancelText:'', wide:true });
+  }catch(e){ if(typeof showToast==='function') showToast('NO SE PUDO ABRIR','red'); }
+};
+// v837: modal con el listado de AUSENTES (asignados a la obra que hoy no están presentes).
+window._asistAusentesModal = function(){
+  try{
+    const fecha=(typeof _asistFechaActual==='function')?_asistFechaActual():'';
+    const dia=((typeof _getAsistencia==='function')?_getAsistencia():{})[fecha]||{};
+    const filtro=(typeof _obraFiltroAsist==='function')?(_obraFiltroAsist()||''):'';
+    const projs=(typeof state!=='undefined'&&state&&Array.isArray(state.projects))?state.projects:[];
+    const projName=id=>{ if(!id) return '—'; const pr=projs.find(x=>x.id===id); return pr?String(pr.name||id).toUpperCase():String(id).toUpperCase(); };
+    const escH=s=>String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const pg=(typeof _getPersonalActivo==='function')?_getPersonalActivo():(((typeof state!=='undefined'&&state&&state.personalGlobal)||[]).filter(p=>p&&!p.baja));
+    const arr=_ausentes(pg, dia, filtro).slice().sort((a,b)=> (String(a.obraAsignada||'').localeCompare(String(b.obraAsignada||'')) || String(a.nombre||'').localeCompare(String(b.nombre||''),'es',{sensitivity:'base'})));
+    let body='';
+    body+='<div style="font-size:12px;color:#991B1B;font-weight:700;margin-bottom:12px;background:#FEE2E2;border:1px solid #EF4444;border-radius:8px;padding:10px 12px">AUSENTES: <b>'+arr.length+'</b> '+(filtro?('· '+escH(projName(filtro))):'· TODAS LAS OBRAS')+'</div>';
+    if(!arr.length){ body+='<div style="padding:30px;text-align:center;background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;color:#15803D;font-weight:700">NADIE AUSENTE</div>'; }
+    else { body+='<div style="display:flex;flex-direction:column;gap:6px">'; arr.forEach(p=>{ const r=dia&&dia[p.id]; const motivo=(r&&r.presente===false&&r.motivo)?escH(r.motivo):'SIN MARCAR'; body+='<div style="border:1px solid #E2E8F0;border-radius:9px;background:#fff;padding:10px 14px;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center"><div><div style="font-size:13px;font-weight:800;color:#0F172A">'+escH(p.nombre||'')+'</div><div style="font-size:10px;color:#94A3B8;margin-top:1px">'+escH(p.cargo||'')+' · '+escH(projName(p.obraAsignada))+'</div></div><div style="font-size:10px;font-weight:700;color:#B91C1C;text-align:right">'+motivo+'</div></div>'; }); body+='</div>'; }
+    window.prConfirm({ title:'AUSENTES', bodyHTML:body, okText:'CERRAR', cancelText:'', wide:true });
   }catch(e){ if(typeof showToast==='function') showToast('NO SE PUDO ABRIR','red'); }
 };
 
@@ -18637,6 +18671,7 @@ function renderPersonal(){
     const _kAsist = _genteObra + `<div class="kpi green"><div class="lbl">Hora prom. entrada</div><div class="val">${_avgEnt}</div><div class="sub">${fecha}</div></div>`
       + `<div class="kpi cafe"><div class="lbl">Hora prom. salida</div><div class="val">${_avgSal}</div><div class="sub">${fecha}</div></div>`
       + `<div class="kpi olive" onclick="window._v644ResumenPresentesPorObra&&window._v644ResumenPresentesPorObra()" style="cursor:pointer" title="Tocá para ver los presentes de cada obra"><div class="lbl">Presentes por obra (prom.)</div><div class="val">${Object.keys(_porObra).length?Math.round(presentes/Object.keys(_porObra).length):0}</div><div class="sub">TOCÁ PARA VER POR OBRA</div></div>`
+      + `<div class="kpi cafe" onclick="window._asistAusentesModal&&window._asistAusentesModal()" style="cursor:pointer" title="Tocá para ver quiénes están ausentes"><div class="lbl">Ausentes</div><div class="val">${(typeof _ausentes==='function'?_ausentes(_getPersonalActivo(), dia, _obraFiltroK).length:0)}</div><div class="sub">TOCÁ PARA VER</div></div>`
       + `<div class="kpi cafe" onclick="window._v651FaltanIngreso&&window._v651FaltanIngreso()" style="cursor:pointer" title="Tocá para ver quiénes faltan de ingresar"><div class="lbl">Faltan ingreso</div><div class="val">${(typeof _faltanIngreso==='function'?_faltanIngreso(_getPersonalActivo(), dia, _obraFiltroK).length:0)}</div><div class="sub">TOCÁ PARA VER</div></div>`
       + `<div class="kpi cafe" onclick="window._v651FaltanSalida&&window._v651FaltanSalida()" style="cursor:pointer" title="Tocá para ver quiénes faltan de dar salida"><div class="lbl">Faltan salida</div><div class="val">${(typeof _faltanSalida==='function'?_faltanSalida(dia, _obraFiltroK).length:0)}</div><div class="sub">TOCÁ PARA VER</div></div>`;
     // v788: el bloque PERSONAL+EMPRESAS solo en COLABORADORES (lista). En PÓLIZAS (u otras) va vacío.

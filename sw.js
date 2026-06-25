@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v836-pdf-semanal-sigla-de-obra-arriba-de-cada-cheque';
+const CACHE_VERSION = 'v837-kpi-ausentes-en-asistencia';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
