@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v832-pdf-descargable-avance-por-apartamento-4-vistas';
+const CACHE_VERSION = 'v833-pdf-avance-un-archivo-por-torre-leyenda-al-final';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

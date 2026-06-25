@@ -3005,7 +3005,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v832</span>
+    <span style="opacity:.5;font-size:9px">v833</span>
   </footer>
 
 </div>
@@ -12176,7 +12176,7 @@ function _avReporteSnapshot(tipo, p){
   (p.towers||[]).forEach(function(t){
     var levels=(t.levels||[]).filter(function(l){ return (l.aptos||[]).length; });
     if(!levels.length) return;
-    var tObj={ name:String(t.name||''), pct:0, niveles:[] }, tSum=0, tN=0; // tSum/tN sobre aptos que CUENTAN, en toda la torre
+    var tObj={ name:String(t.name||''), pct:0, kpis:{sinIniciar:0,enProceso:0,completos:0,total:0,pct:0}, niveles:[] }, tSum=0, tN=0; // tSum/tN sobre aptos que CUENTAN, en toda la torre
     levels.forEach(function(l){
       var aps=(l.aptos||[]);
       var basePcts=null;
@@ -12188,13 +12188,14 @@ function _avReporteSnapshot(tipo, p){
         lObj.aptos.push({ name:_avAptoNombre(a), n:m.n, green:m.green, pct:m.pct }); // se LISTAN todos (cuadritos), aunque no cuenten para KPIs
         if(m.cuenta){
           lSum+=m.pct; lN++; tSum+=m.pct; tN++; out.kpis.total++; sumPct+=m.pct;
-          if(m.green) out.kpis.completos++; else if(!m.iniciado) out.kpis.sinIniciar++; else out.kpis.enProceso++;
+          if(m.green){ out.kpis.completos++; tObj.kpis.completos++; } else if(!m.iniciado){ out.kpis.sinIniciar++; tObj.kpis.sinIniciar++; } else { out.kpis.enProceso++; tObj.kpis.enProceso++; }
         }
       });
       lObj.pct = (oficialLv && oficialLv[l.id]!=null) ? Math.round(Number(oficialLv[l.id])||0) : (lN?Math.round(lSum/lN):0);
       tObj.niveles.push(lObj);
     });
     tObj.pct = (oficialTw && oficialTw[t.id]!=null) ? Math.round(Number(oficialTw[t.id])||0) : (tN?Math.round(tSum/tN):0);
+    tObj.kpis.total=tN; tObj.kpis.pct=tObj.pct; // v833: KPIs por torre para el PDF separado por torre
     out.torres.push(tObj);
   });
   out.kpis.pct = out.kpis.total ? Math.round(sumPct/out.kpis.total) : 0;
@@ -19646,56 +19647,63 @@ function _pdfAvanceReporte(tipo){
     if(!p){ try{showToast('SIN PROYECTO ACTIVO','red');}catch(e){} return; }
     var snap=_avReporteSnapshot(tipo, p);
     if(!snap.torres.length){ try{showToast('NO HAY APARTAMENTOS EN ESTE PROYECTO','red');}catch(e){} return; }
-    var jsPDF=window.jspdf.jsPDF;
-    var doc=new jsPDF({unit:'pt',format:'a4',orientation:'portrait'});
-    var pageW=doc.internal.pageSize.width, pageH=doc.internal.pageSize.height, M=40, bottom=pageH-34;
-    _pdfLogo(doc);
-    doc.setFontSize(14); doc.setFont(undefined,'bold'); doc.setTextColor(0);
-    doc.text(snap.titulo, pageW/2, 44, {align:'center'});
-    var d=new Date(), fechaTxt=String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear();
-    doc.setFontSize(9.5); doc.setFont(undefined,'normal'); doc.setTextColor(90);
-    doc.text(String(p.name||'').toUpperCase()+'   ·   '+fechaTxt, pageW/2, 60, {align:'center'});
-    var k=snap.kpis;
-    doc.setFontSize(9); doc.setTextColor(40);
-    doc.text('SIN INICIAR: '+k.sinIniciar+'      EN PROCESO: '+k.enProceso+'      COMPLETOS: '+k.completos+'      AVANCE: '+k.pct+'%', pageW/2, 76, {align:'center'});
-    doc.setTextColor(0);
-    var y=_pdfDrawLeyendaReporte(doc, M, 96, pageW-2*M, snap.subtituloVerde);
-    var cellW=72, cellH=40, perRow=Math.max(1, Math.floor((pageW-2*M)/cellW));
-    function ensure(h){ if(y+h>bottom){ doc.addPage(); y=44; } }
-    snap.torres.forEach(function(t){
-      ensure(24+18+cellH);
-      doc.setFillColor(200,20,28); doc.rect(M, y, pageW-2*M, 18, 'F');
-      doc.setTextColor(255); doc.setFontSize(9.5); doc.setFont(undefined,'bold');
-      doc.text(String(t.name||'').toUpperCase(), M+8, y+12.5);
-      doc.text(t.pct+'%', pageW-M-8, y+12.5, {align:'right'});
-      doc.setTextColor(0); y+=24;
-      t.niveles.forEach(function(l){
-        ensure(18+cellH);
-        doc.setFillColor(241,245,249); doc.rect(M, y, pageW-2*M, 14, 'F');
-        doc.setTextColor(40); doc.setFontSize(8.5); doc.setFont(undefined,'bold');
-        doc.text(String(l.name||'').toUpperCase(), M+8, y+10);
-        doc.setTextColor(37,71,176); doc.text(l.pct+'%', pageW-M-8, y+10, {align:'right'});
-        doc.setTextColor(0); y+=18;
-        var col=0;
-        l.aptos.forEach(function(a){
-          if(col===0) ensure(cellH);
-          var x=M + col*cellW + cellW/2;
-          doc.setFont(undefined,'bold'); doc.setFontSize(7); doc.setTextColor(90);
-          doc.text(a.name.length>12?a.name.slice(0,12):a.name, x, y+8, {align:'center'});
-          doc.setTextColor(0);
-          _pdfDrawCuadrito(doc, x, y+24, a.n, a.green);
-          col++; if(col>=perRow){ col=0; y+=cellH; }
-        });
-        if(col!==0) y+=cellH;
-        y+=4;
-      });
-      y+=6;
-    });
-    var fn=(snap.titulo+' - '+String(p.name||'').toUpperCase()).replace(/[·\/\\:*?"<>|]/g,' ').replace(/\s+/g,' ').trim()+'.pdf';
-    _pdfDescargar(doc, fn);
+    // v833: UN PDF por torre (el usuario lo pidió). En desktop bajan N archivos; en el visor
+    // in-app se ve el último (limitación del visor de un archivo a la vez).
+    snap.torres.forEach(function(t){ _pdfAvanceReporteTorreDoc(tipo, p, snap, t); });
   }catch(e){ try{showToast('NO SE PUDO GENERAR EL PDF','red');}catch(_e){} try{console.warn('pdfAvanceReporte',e);}catch(_e){} }
 }
 window._pdfAvanceReporte=_pdfAvanceReporte;
+// v833: arma y entrega UN PDF de UNA torre (KPIs de la torre arriba, grilla, leyenda AL FINAL).
+function _pdfAvanceReporteTorreDoc(tipo, p, snap, t){
+  var jsPDF=window.jspdf.jsPDF;
+  var doc=new jsPDF({unit:'pt',format:'a4',orientation:'portrait'});
+  var pageW=doc.internal.pageSize.width, pageH=doc.internal.pageSize.height, M=40, bottom=pageH-34;
+  _pdfLogo(doc);
+  doc.setFontSize(14); doc.setFont(undefined,'bold'); doc.setTextColor(0);
+  doc.text(snap.titulo, pageW/2, 44, {align:'center'});
+  var d=new Date(), fechaTxt=String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear();
+  doc.setFontSize(9.5); doc.setFont(undefined,'normal'); doc.setTextColor(90);
+  doc.text(String(p.name||'').toUpperCase()+'   ·   '+String(t.name||'').toUpperCase()+'   ·   '+fechaTxt, pageW/2, 60, {align:'center'});
+  var k=t.kpis||snap.kpis;
+  doc.setFontSize(9); doc.setTextColor(40);
+  doc.text('SIN INICIAR: '+k.sinIniciar+'      EN PROCESO: '+k.enProceso+'      COMPLETOS: '+k.completos+'      AVANCE: '+k.pct+'%', pageW/2, 76, {align:'center'});
+  doc.setTextColor(0);
+  var y=90; // v833: la grilla arranca arriba; la leyenda va AL FINAL del documento
+  var cellW=72, cellH=40, perRow=Math.max(1, Math.floor((pageW-2*M)/cellW));
+  function ensure(h){ if(y+h>bottom){ doc.addPage(); y=44; } }
+  ensure(24+18+cellH);
+  doc.setFillColor(200,20,28); doc.rect(M, y, pageW-2*M, 18, 'F');
+  doc.setTextColor(255); doc.setFontSize(9.5); doc.setFont(undefined,'bold');
+  doc.text(String(t.name||'').toUpperCase(), M+8, y+12.5);
+  doc.text(t.pct+'%', pageW-M-8, y+12.5, {align:'right'});
+  doc.setTextColor(0); y+=24;
+  t.niveles.forEach(function(l){
+    ensure(18+cellH);
+    doc.setFillColor(241,245,249); doc.rect(M, y, pageW-2*M, 14, 'F');
+    doc.setTextColor(40); doc.setFontSize(8.5); doc.setFont(undefined,'bold');
+    doc.text(String(l.name||'').toUpperCase(), M+8, y+10);
+    doc.setTextColor(37,71,176); doc.text(l.pct+'%', pageW-M-8, y+10, {align:'right'});
+    doc.setTextColor(0); y+=18;
+    var col=0;
+    l.aptos.forEach(function(a){
+      if(col===0) ensure(cellH);
+      var x=M + col*cellW + cellW/2;
+      doc.setFont(undefined,'bold'); doc.setFontSize(7); doc.setTextColor(90);
+      doc.text(a.name.length>12?a.name.slice(0,12):a.name, x, y+8, {align:'center'});
+      doc.setTextColor(0);
+      _pdfDrawCuadrito(doc, x, y+24, a.n, a.green);
+      col++; if(col>=perRow){ col=0; y+=cellH; }
+    });
+    if(col!==0) y+=cellH;
+    y+=4;
+  });
+  // v833: LEYENDA al final del documento (después de toda la grilla).
+  y+=10; ensure(110);
+  _pdfDrawLeyendaReporte(doc, M, y+8, pageW-2*M, snap.subtituloVerde);
+  var fn=(snap.titulo+' - '+String(p.name||'')+' - '+String(t.name||'')).replace(/[·\/\\:*?"<>|]/g,' ').replace(/\s+/g,' ').trim().toUpperCase()+'.pdf';
+  _pdfDescargar(doc, fn);
+}
+window._pdfAvanceReporteTorreDoc=_pdfAvanceReporteTorreDoc;
 
 /* ════════════════════ v825/v827: TIPOGRAFÍA DE LA APP EN LOS PDFs ════════════════════
    jsPDF usa Helvetica; acá embebemos la fuente de la app (v827: Familjen Grotesk) en cada

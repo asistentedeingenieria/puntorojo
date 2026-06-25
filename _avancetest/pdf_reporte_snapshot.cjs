@@ -57,6 +57,7 @@ ok('físico a2 = green pct100', aptos(sf)[1].green===true && aptos(sf)[1].n===4 
 ok('físico a3 = n0 pct0', aptos(sf)[2].n===0 && aptos(sf)[2].pct===0);
 ok('físico KPIs completos1/enProceso1/sinIniciar1', sf.kpis.completos===1 && sf.kpis.enProceso===1 && sf.kpis.sinIniciar===1 && sf.kpis.total===3);
 ok('físico nivel% y torre% = 44 (avg term/6)', sf.torres[0].niveles[0].pct===44 && sf.torres[0].pct===44 && sf.kpis.pct===44);
+ok('físico KPIs POR TORRE (para el PDF separado por torre)', sf.torres[0].kpis.completos===1 && sf.torres[0].kpis.enProceso===1 && sf.torres[0].kpis.sinIniciar===1 && sf.torres[0].kpis.total===3 && sf.torres[0].kpis.pct===44);
 
 // COBRO: a1 cumul50→n2/50, a2 100→green, a3 0
 const sc = snap('cobro', P);

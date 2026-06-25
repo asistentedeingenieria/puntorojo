@@ -17,7 +17,9 @@ function extractFn(name){
 ok('_pdfAvanceReporte(tipo) existe', /function _pdfAvanceReporte\(tipo\)/.test(html));
 ok('generador usa _avReporteSnapshot(tipo, p)', /_avReporteSnapshot\(tipo, p\)/.test(html));
 ok('generador entrega con _pdfDescargar(doc, fn)', /_pdfDescargar\(doc, fn\)/.test(html));
-ok('generador pone el logo (_pdfLogo)', /function _pdfAvanceReporte[\s\S]{0,1500}_pdfLogo\(doc\)/.test(html));
+ok('el doc por torre pone el logo (_pdfLogo)', /function _pdfAvanceReporteTorreDoc[\s\S]{0,400}_pdfLogo\(doc\)/.test(html));
+ok('_pdfAvanceReporte hace UN PDF por torre (loop snap.torres)', /snap\.torres\.forEach\(function\(t\)\{ _pdfAvanceReporteTorreDoc\(tipo, p, snap, t\); \}\)/.test(html));
+ok('la leyenda va AL FINAL (después de la grilla de niveles)', /t\.niveles\.forEach[\s\S]{0,1500}LEYENDA al final del documento[\s\S]{0,120}_pdfDrawLeyendaReporte/.test(html));
 ok('_pdfDrawCuadrito existe', /function _pdfDrawCuadrito\(doc, cx, cy, n, green\)/.test(html));
 ok('_pdfDrawLeyendaReporte existe', /function _pdfDrawLeyendaReporte\(/.test(html));
 ok('cuadrito verde se dibuja con círculo + líneas (no glifo ✓)', /doc\.circle\(cx, cy, 7, 'F'\)[\s\S]{0,160}doc\.line\(/.test(html));
@@ -49,7 +51,7 @@ ok('botón material (string JS escapado)', /onclick="_pdfAvanceReporte\(\\'mater
 
 // ── funcional: el generador completo corre sin lanzar ──
 (function(){
-  const names=['_avAptoNombre','_avAptoMetric','_avReporteSnapshot','_avanceAptoNivelFisico','_avanceAptoNivelCobro','_avanceAptoNivelMaterial','_avanceAptoNivelPago','_pdfDrawCuadrito','_pdfDrawLeyendaReporte','_pdfAvanceReporte'];
+  const names=['_avAptoNombre','_avAptoMetric','_avReporteSnapshot','_avanceAptoNivelFisico','_avanceAptoNivelCobro','_avanceAptoNivelMaterial','_avanceAptoNivelPago','_pdfDrawCuadrito','_pdfDrawLeyendaReporte','_pdfAvanceReporteTorreDoc','_pdfAvanceReporte'];
   const src=names.map(extractFn).join('\n');
   const captured={ fn:null, text:0, rect:0, circle:0, pages:1 };
   function FakeDoc(){ this.internal={pageSize:{width:595,height:842}}; }
@@ -78,7 +80,7 @@ ok('botón material (string JS escapado)', /onclick="_pdfAvanceReporte\(\\'mater
   const run=new Function(...Object.keys(globals), src+'\nreturn _pdfAvanceReporte;')(...Object.values(globals));
   let threw=false; try{ run('fisico'); }catch(e){ threw=true; console.log('  generador lanzó:', e&&e.message); }
   ok('generador físico corre sin lanzar', !threw);
-  ok('entregó un PDF con nombre del reporte', /AVANCE F[IÍ]SICO POR APARTAMENTO - TORELO\.pdf/.test(captured.fn||''));
+  ok('entregó un PDF POR TORRE (nombre con la torre)', /AVANCE F[IÍ]SICO POR APARTAMENTO - TORELO - TORRE 1\.pdf/.test(captured.fn||''));
   ok('dibujó texto (título/nombres) y figuras (cuadritos)', captured.text>0 && (captured.rect>0||captured.circle>0));
   // los 4 tipos corren sin lanzar
   let allOk=true; ['cobro','material','pago'].forEach(t=>{ try{ run(t); }catch(e){ allOk=false; } });
