@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v828-foto-camara-se-libera-por-cuadritos-no-solo-fotos';
+const CACHE_VERSION = 'v829-quitar-boton-mas-agregar-apto-y-3-botones-importar-avance';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
