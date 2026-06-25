@@ -6,11 +6,12 @@ const fs=require('fs'),path=require('path');
 const html=fs.readFileSync(path.join(__dirname,'..','index.html'),'utf8');
 let pass=0,fail=0;const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
-// ── A: tipografía Barlow en toda la interfaz ──
+// ── A: tipografía de la app en toda la interfaz (v827: Familjen Grotesk) ──
 ok('A no quedan literales \'Inter\' en CSS', html.indexOf("'Inter'")<0);
-ok('A body usa Barlow Semi Condensed', /html,body\{[^}]*font-family:'Barlow Semi Condensed',sans-serif/.test(html));
-ok('A --font-sans ahora es Barlow', /--font-sans:'Barlow Semi Condensed'/.test(html));
-ok('A el link carga pesos altos de Barlow (800)', /Barlow\+Semi\+Condensed:wght@400;500;600;700;800/.test(html));
+ok('A no quedan literales \'Barlow Semi Condensed\' (reemplazada por Familjen)', html.indexOf("'Barlow Semi Condensed'")<0);
+ok('A body usa Familjen Grotesk', /html,body\{[^}]*font-family:'Familjen Grotesk',sans-serif/.test(html));
+ok('A --font-sans ahora es Familjen', /--font-sans:'Familjen Grotesk'/.test(html));
+ok('A el link carga Familjen (400-700)', /Familjen\+Grotesk:wght@400;500;600;700/.test(html));
 // v824 (fix revisión): Inter ya no se descarga ni se referencia (canvas/panel pasaron a Barlow)
 ok('A el link YA NO descarga Inter', !/family=Inter:/.test(html));
 ok('A sin refs Inter sin comillas (canvas/panel a Barlow)', !/12px Inter,/.test(html) && !/font-family:Inter,/.test(html));
