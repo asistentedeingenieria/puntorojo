@@ -3005,7 +3005,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v833</span>
+    <span style="opacity:.5;font-size:9px">v834</span>
   </footer>
 
 </div>
@@ -19273,17 +19273,42 @@ function _asistSemanaFilas(personal, asisGlobal, obraId, weekKeys){
     return weekKeys.some(function(fk){ return presente(p, (asisGlobal[fk]||{})[p.id]); });
   });
   return roster.map(function(p){
-    var dias = weekKeys.map(function(fk){ return presente(p, (asisGlobal[fk]||{})[p.id]); });
-    return { id:p.id, nombre:p.nombre||'', puesto:p.puesto||'', dias:dias, total:dias.filter(Boolean).length };
+    var dias=[], obrasSet={};
+    weekKeys.forEach(function(fk){
+      var reg=(asisGlobal[fk]||{})[p.id];
+      var pres=presente(p, reg);
+      dias.push(pres);
+      if(pres && reg){
+        // v834: recolectar EN QUÉ obra(s) estuvo ese día (para la columna OBRAS del PDF de TODAS).
+        if(reg.multiSesion && Array.isArray(reg.sessions) && reg.sessions.length){
+          reg.sessions.forEach(function(s){ if(s && s.obraId) obrasSet[String(s.obraId)]=true; });
+        } else {
+          var oid=efObra(p, reg); if(oid) obrasSet[oid]=true;
+        }
+      }
+    });
+    return { id:p.id, nombre:p.nombre||'', puesto:p.puesto||'', dias:dias, total:dias.filter(Boolean).length, obras:Object.keys(obrasSet).sort() };
   }).sort(function(a,b){ return String(a.nombre).localeCompare(String(b.nombre),'es',{sensitivity:'base'}); });
 }
-function _generarPdfSemanal(fechaBase, obraCtx){
+// v834: nombres de obra (coma) para la columna OBRAS del PDF semanal de TODAS LAS OBRAS.
+function _asistObrasLabel(obraIds, projs){
+  obraIds = obraIds||[]; projs = projs||[];
+  return obraIds.map(function(id){
+    if(String(id)==='OTRA') return 'OTRA';
+    var pr=projs.find(function(x){ return x && x.id===id; });
+    return pr ? String(pr.name||id).toUpperCase() : String(id).toUpperCase();
+  }).join(', ');
+}
+function _generarPdfSemanal(fechaBase, obraCtx, explicit){
   if(typeof can==='function' && !(can('personal.asistenciaPdf')||can('users.manage'))) { showToast('SIN PERMISO','red'); return; }
   var weekKeys=_semanaLunSab(fechaBase);
   var A=(typeof _getAsistencia==='function')?_getAsistencia():{};
   var projs=(typeof state!=='undefined'&&state&&Array.isArray(state.projects))?state.projects:[];
-  var obra = obraCtx || ((typeof _getUserObraAsignada==='function')?_getUserObraAsignada():'') || ((typeof activeProj==='function' && activeProj())?activeProj().id:'');
+  // v834: si el caller es explícito (botón PDF SEMANAL), la obra es autoritativa: '' = TODAS LAS
+  // OBRAS (no cae al proyecto activo). El resto de callers conservan el fallback histórico.
+  var obra = explicit ? String(obraCtx||'') : (obraCtx || ((typeof _getUserObraAsignada==='function')?_getUserObraAsignada():'') || ((typeof activeProj==='function' && activeProj())?activeProj().id:''));
   var obraName = obra ? (String((projs.find(function(x){return x.id===obra;})||{}).name||'').toUpperCase()||obra) : 'TODAS LAS OBRAS';
+  var verObras = (obra===''); // v834: en TODAS LAS OBRAS, columna extra OBRAS (de qué obra fue cada quien)
   var filas=_asistSemanaFilas((typeof _getPersonalActivo==='function')?_getPersonalActivo():[], A, obra, weekKeys);
   if(!filas.length){ showToast('SIN PERSONAL PARA ESA OBRA/SEMANA','red'); return; }
   if(typeof window.jspdf==='undefined'||!window.jspdf.jsPDF){ showToast('JSPDF NO CARGÓ — RECARGAR LA APP','red'); return; }
@@ -19296,15 +19321,16 @@ function _generarPdfSemanal(fechaBase, obraCtx){
   doc.setFontSize(9); doc.setFont(undefined,'normal');
   doc.text('SEMANA DEL '+_fmtDMY(weekKeys[0])+' AL '+_fmtDMY(weekKeys[5]), pageW/2, 66, {align:'center'});
   var DOW=['LUNES','MARTES','MIÉRCOLES','JUEVES','VIERNES','SÁBADO'];
-  var head=['#','NOMBRE'].concat(weekKeys.map(function(fk,i){ return DOW[i]+'\n'+_fmtDMY(fk).slice(0,5); })).concat(['DÍAS']);
-  var body=filas.map(function(f,i){ return [String(i+1), f.nombre].concat(weekKeys.map(function(){ return ''; })).concat([String(f.total)]); });
+  var head=['#','NOMBRE'].concat(weekKeys.map(function(fk,i){ return DOW[i]+'\n'+_fmtDMY(fk).slice(0,5); })).concat(['DÍAS']).concat(verObras?['OBRAS']:[]);
+  var body=filas.map(function(f,i){ return [String(i+1), f.nombre].concat(weekKeys.map(function(){ return ''; })).concat([String(f.total)]).concat(verObras?[_asistObrasLabel(f.obras, projs)]:[]); });
   // v809: una fila por persona (nombre completo en UNA línea) y la tabla ocupa toda la hoja.
-  var _wDay=62, _wNum=34, _wDias=40, _usable=pageW-60;
-  var _wName=Math.max(190, _usable - _wNum - (_wDay*6) - _wDias);
+  var _wDay=62, _wNum=34, _wDias=40, _usable=pageW-60, _wObras=verObras?132:0;
+  var _wName=Math.max(170, _usable - _wNum - (_wDay*6) - _wDias - _wObras);
   // v811: # más ancho + poco padding para que los números de 2 dígitos NO se partan (1\n0).
   var colStyles={0:{cellWidth:_wNum,halign:'center',cellPadding:{top:6,bottom:6,left:2,right:2}}, 1:{halign:'left',cellWidth:_wName,fontStyle:'bold'}};
   for(var c=2;c<=7;c++) colStyles[c]={halign:'center',cellWidth:_wDay};
   colStyles[8]={halign:'center',cellWidth:_wDias,fontStyle:'bold'};
+  if(verObras) colStyles[9]={halign:'left',cellWidth:_wObras,fontStyle:'normal',fontSize:8,cellPadding:{top:6,bottom:6,left:6,right:6}}; // v834: OBRAS visitadas
   doc.autoTable({
     startY:84, head:[head], body:body, theme:'striped', margin:{left:30,right:30},
     styles:{fontSize:10,valign:'middle',halign:'center',cellPadding:{top:6,bottom:6,left:8,right:8},lineColor:[232,232,232],lineWidth:0.2},
@@ -19358,9 +19384,9 @@ window.abrirPdfSemanal = function(){
   if(typeof window.prConfirm==='function'){
     window.prConfirm({ title:'PDF SEMANAL DE ASISTENCIA', bodyHTML:body, okText:'GENERAR PDF', cancelText:'CANCELAR' }).then(function(okp){
       if(!okp) return;
-      _generarPdfSemanal(window._pdfSemFechaVal || defKey, '');
+      _generarPdfSemanal(window._pdfSemFechaVal || defKey, (typeof _obraFiltroAsist==='function'?_obraFiltroAsist():''), true); // v834: respeta TODAS LAS OBRAS (encargado→su obra)
     });
-  } else { _generarPdfSemanal(defKey, ''); }
+  } else { _generarPdfSemanal(defKey, (typeof _obraFiltroAsist==='function'?_obraFiltroAsist():''), true); }
 };
 
 /* v787: ¿la fecha (YYYY-MM-DD) es SÁBADO? (getDay()===6). */
