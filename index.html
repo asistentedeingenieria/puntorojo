@@ -2893,6 +2893,7 @@ table{max-width:100%}
             <button class="btn cafe sm" data-perm="personal.asistenciaPdfTodas" onclick="abrirEstadoFuerza()" style="flex:0 0 auto">ESTADO DE FUERZA</button>
             <button class="btn olive sm" data-perm="personal.asistenciaPdf" onclick="descargarPdfDiaPresentes()" style="flex:0 0 auto">PDF PRESENTES DEL DÍA</button>
             <button class="btn olive sm" data-perm="personal.asistenciaPdf" onclick="abrirPdfSemanal()" style="flex:0 0 auto">PDF SEMANAL</button>
+            <button class="btn olive sm" data-perm="personal.asistenciaMensual" onclick="abrirPdfMensual()" style="flex:0 0 auto">PDF MENSUAL</button>
             <button class="btn ghost sm" data-perm="obra.ubicacion" onclick="_abrirUbicacionObra()" style="flex:0 0 auto" title="Fijar el punto de ubicación de esta obra">UBICACIÓN DE OBRA</button>
             <!-- v821: botón CARAS SIN REGISTRAR eliminado a pedido del user (ya no se usa). La función _abrirDiagnosticoCaras queda definida pero sin acceso desde la UI. -->
           </div>
@@ -3005,7 +3006,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v837</span>
+    <span style="opacity:.5;font-size:9px">v838</span>
   </footer>
 
 </div>
@@ -4554,6 +4555,7 @@ const PERMS_DISPONIBLES = [
   { key: 'anticipos.cotizar',   label: 'Cotizar anticipos (Compras)',      group: 'EDICIÓN PERSONAL' }, // v777
   { key: 'anticipos.verEstado', label: 'Ver estado de anticipos (solo lectura)', group: 'EDICIÓN PERSONAL' }, // v822: solo VER el status de los pedidos (sin pedir/cotizar/autorizar/entregar)
   { key: 'personal.pagoObra', label: 'Marcar "COBRA EN PLANILLA DE OBRA"', group: 'EDICIÓN PERSONAL' }, // v831: elegir QUIÉN puede marcar el opt-in de pago en planilla de obra
+  { key: 'personal.asistenciaMensual', label: 'Descargar reporte MENSUAL de asistencia', group: 'EDICIÓN PERSONAL' }, // v838: reporte mensual restringido (horas + ubicación EN OBRA/FUERA)
   { key: 'projects.create',  label: 'Crear proyectos nuevos',  group: 'ADMINISTRACIÓN' },
   { key: 'data.import',      label: 'Importar/resetear datos', group: 'ADMINISTRACIÓN' },
   { key: 'users.manage',     label: 'Gestionar usuarios',      group: 'ADMINISTRACIÓN' },
@@ -19483,6 +19485,115 @@ window.abrirPdfSemanal = function(){
     });
   } else { _generarPdfSemanal(defKey, (typeof _obraFiltroAsist==='function'?_obraFiltroAsist():''), true); }
 };
+/* ═══════════ v838: REPORTE MENSUAL DE ASISTENCIA (acceso restringido por permiso) ═══════════
+   Por persona, TODOS los días del mes con ENTRADA, SALIDA y UBICACIÓN (EN OBRA / FUERA) de
+   entrada Y salida. Permiso personal.asistenciaMensual. Respeta el filtro de obra. */
+function _mesesRecientes(hoyKey, n){
+  n = n || 12;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(String(hoyKey||''))) return [];
+  var base=new Date(hoyKey+'T12:00:00');
+  var MES=['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
+  var out=[];
+  for(var i=0;i<n;i++){ var d=new Date(base.getFullYear(), base.getMonth()-i, 1, 12,0,0); var y=d.getFullYear(), m=d.getMonth()+1; out.push({ key: y+'-'+String(m).padStart(2,'0'), label: MES[m-1]+' '+y }); }
+  return out;
+}
+// Ubicación de UNA marca (geoEntrada/geoSalida) vs la geocerca de su obra. PURA (recibe projs).
+function _asistUbic(reg, geoKey, projs){
+  var g = reg && reg[geoKey];
+  if(!g || g.lat==null) return { enObra:null, txt:'—' };
+  var obra=null; try{ obra=(projs||[]).find(function(x){ return x && x.id===reg.obraId; }); }catch(e){}
+  var ev=(typeof evalGeocerca==='function')?evalGeocerca(g, obra&&obra.geo):null;
+  if(!ev) return { enObra:null, txt:'—' };
+  return { enObra: ev.enObra, txt: ev.enObra?'EN OBRA':('FUERA '+Math.round(ev.distancia)+'M') };
+}
+// Filas del reporte mensual: por persona, un día por cada día del mes. PURA.
+function _asistMesFilas(personal, asisGlobal, obra, year, month, projs){
+  personal=personal||[]; asisGlobal=asisGlobal||{}; obra=String(obra||'');
+  var days=new Date(year, month, 0).getDate();
+  function pad(n){ return String(n).padStart(2,'0'); }
+  function efObra(p, reg){ return String((reg&&reg.obraId)||(reg&&reg.sessions&&reg.sessions[0]&&reg.sessions[0].obraId)||(p&&p.obraAsignada)||''); }
+  function presenteDia(p, reg){ if(!reg||!reg.presente) return false; if(!obra) return true; if(efObra(p,reg)===obra) return true; if(reg.multiSesion&&Array.isArray(reg.sessions)&&reg.sessions.some(function(s){return s&&String(s.obraId||'')===obra;})) return true; return false; }
+  function regDe(p, k){ var r=(asisGlobal[k]||{})[p.id]; if(r && typeof migrateAsistenciaRegistro==='function'){ r=migrateAsistenciaRegistro(r)||r; } return r; }
+  var roster=personal.filter(function(p){
+    if(!p||p.baja||p.tipo==='OFICINA') return false;
+    if(!obra) return true;
+    if(String(p.obraAsignada||'')===obra) return true;
+    for(var d=1; d<=days; d++){ if(presenteDia(p, (asisGlobal[year+'-'+pad(month)+'-'+pad(d)]||{})[p.id])) return true; }
+    return false;
+  });
+  return roster.map(function(p){
+    var dias=[];
+    for(var d=1; d<=days; d++){
+      var reg=regDe(p, year+'-'+pad(month)+'-'+pad(d));
+      if(presenteDia(p, reg)){
+        dias.push({ d:d, entrada:(reg.entrada||'—'), salida:(reg.salida||'—'), ubEnt:_asistUbic(reg,'geoEntrada',projs), ubSal:_asistUbic(reg,'geoSalida',projs), ausente:false });
+      } else if(reg && reg.presente===false && reg.motivo){
+        dias.push({ d:d, entrada:'AUSENTE', salida:'—', ubEnt:{enObra:null,txt:'—'}, ubSal:{enObra:null,txt:'—'}, ausente:true, motivo:reg.motivo });
+      } else {
+        dias.push({ d:d, entrada:'—', salida:'—', ubEnt:{enObra:null,txt:'—'}, ubSal:{enObra:null,txt:'—'}, ausente:false });
+      }
+    }
+    return { id:p.id, nombre:p.nombre||'', dias:dias };
+  }).sort(function(a,b){ return String(a.nombre).localeCompare(String(b.nombre),'es',{sensitivity:'base'}); });
+}
+window.abrirPdfMensual = function(){
+  if(typeof can==='function' && !(can('personal.asistenciaMensual')||can('users.manage'))) { showToast('SIN PERMISO','red'); return; }
+  var hoy=(typeof todayKey==='function')?todayKey():'';
+  var meses=(typeof _mesesRecientes==='function')?_mesesRecientes(hoy,12):[];
+  var defKey=(meses[0]&&meses[0].key)||(hoy?String(hoy).slice(0,7):'');
+  window._pdfMesVal=defKey;
+  var opts=meses.map(function(M,i){ return '<option value="'+M.key+'"'+(i===0?' selected':'')+'>'+M.label+'</option>'; }).join('');
+  var body='<div style="font-size:12.5px;color:#333;line-height:1.6">Elegí el MES. El reporte trae, por persona, todos los días con entrada, salida y si fue dentro o fuera de la obra.'
+    +'<div style="margin-top:12px"><label style="font-size:10px;letter-spacing:1px;color:#666;font-weight:700;text-transform:uppercase">Mes</label><br>'
+    +'<select id="pdfMesSel" onchange="window._pdfMesVal=this.value" style="margin-top:6px;padding:9px 11px;border:1px solid #ccc;border-radius:6px;font:inherit;font-size:13px;width:100%;max-width:320px">'+opts+'</select></div></div>';
+  if(typeof window.prConfirm==='function'){
+    window.prConfirm({ title:'REPORTE MENSUAL DE ASISTENCIA', bodyHTML:body, okText:'GENERAR PDF', cancelText:'CANCELAR' }).then(function(okp){
+      if(!okp) return;
+      _generarPdfMensual(window._pdfMesVal || defKey, (typeof _obraFiltroAsist==='function'?_obraFiltroAsist():''), true);
+    });
+  } else { _generarPdfMensual(defKey, (typeof _obraFiltroAsist==='function'?_obraFiltroAsist():''), true); }
+};
+function _generarPdfMensual(mesKey, obraCtx, explicit){
+  if(typeof can==='function' && !(can('personal.asistenciaMensual')||can('users.manage'))) { showToast('SIN PERMISO','red'); return; }
+  var mm=/^(\d{4})-(\d{2})$/.exec(String(mesKey||'')); if(!mm){ showToast('MES INVÁLIDO','red'); return; }
+  var year=parseInt(mm[1],10), month=parseInt(mm[2],10);
+  var A=(typeof _getAsistencia==='function')?_getAsistencia():{};
+  var projs=(typeof state!=='undefined'&&state&&Array.isArray(state.projects))?state.projects:[];
+  var obra = explicit ? String(obraCtx||'') : (obraCtx || ((typeof _getUserObraAsignada==='function')?_getUserObraAsignada():'') || '');
+  var obraName = obra ? (String((projs.find(function(x){return x.id===obra;})||{}).name||'').toUpperCase()||obra) : 'TODAS LAS OBRAS';
+  var filas=_asistMesFilas((typeof _getPersonalActivo==='function')?_getPersonalActivo():[], A, obra, year, month, projs);
+  if(!filas.length){ showToast('SIN PERSONAL PARA ESE MES/OBRA','red'); return; }
+  if(typeof window.jspdf==='undefined'||!window.jspdf.jsPDF){ showToast('JSPDF NO CARGÓ — RECARGAR LA APP','red'); return; }
+  var jsPDF=window.jspdf.jsPDF;
+  var doc=new jsPDF({ unit:'pt', format:'a4', orientation:'portrait' });
+  var pageW=doc.internal.pageSize.width;
+  var MES=['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
+  filas.forEach(function(f, idx){
+    var sy;
+    if(idx===0){ _pdfLogo(doc, 30); doc.setFontSize(14); doc.setFont(undefined,'bold'); doc.setTextColor(0); doc.text('ASISTENCIA MENSUAL · '+MES[month-1]+' '+year, pageW/2, 48, {align:'center'}); doc.setFontSize(9.5); doc.setFont(undefined,'normal'); doc.setTextColor(90); doc.text(obraName, pageW/2, 64, {align:'center'}); doc.setTextColor(0); sy=78; }
+    else { doc.addPage(); sy=44; }
+    doc.setFontSize(11); doc.setFont(undefined,'bold'); doc.setTextColor(0);
+    doc.text(String(f.nombre||'').toUpperCase(), 30, sy+12);
+    var body=f.dias.map(function(x){ return [String(x.d), x.entrada, x.ubEnt.txt, x.salida, x.ubSal.txt]; });
+    doc.autoTable({
+      startY:sy+18, head:[['DÍA','ENTRADA','UBIC. ENTRADA','SALIDA','UBIC. SALIDA']], body:body, theme:'striped', margin:{left:30,right:30},
+      styles:{fontSize:8.5,valign:'middle',halign:'center',cellPadding:{top:3,bottom:3,left:4,right:4},lineColor:[232,232,232],lineWidth:0.2},
+      alternateRowStyles:{fillColor:[250,248,243]},
+      columnStyles:{0:{cellWidth:34,fontStyle:'bold'},1:{cellWidth:62},3:{cellWidth:62}},
+      headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',halign:'center',fontSize:8.5},
+      didParseCell:function(data){
+        if(data.section!=='body') return;
+        var di=f.dias[data.row.index]; if(!di) return;
+        var ci=data.column.index;
+        if(ci===2 || ci===4){ var u=(ci===2)?di.ubEnt:di.ubSal; if(u&&u.enObra===true) data.cell.styles.textColor=[22,101,52]; else if(u&&u.enObra===false) data.cell.styles.textColor=[200,20,28]; else data.cell.styles.textColor=[148,163,184]; }
+        else if(di.ausente){ data.cell.styles.textColor=[200,20,28]; }
+      }
+    });
+  });
+  var fn=('ASISTENCIA MENSUAL - '+obraName+' - '+MES[month-1]+' '+year).replace(/[·\/\\:*?"<>|]/g,' ').replace(/\s+/g,' ').trim()+'.pdf';
+  _pdfDescargar(doc, fn);
+}
+window._generarPdfMensual=_generarPdfMensual;
 
 /* v787: ¿la fecha (YYYY-MM-DD) es SÁBADO? (getDay()===6). */
 function _efEsSabado(fecha){
