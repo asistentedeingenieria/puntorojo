@@ -3006,7 +3006,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v840</span>
+    <span style="opacity:.5;font-size:9px">v842</span>
   </footer>
 
 </div>
@@ -9009,7 +9009,7 @@ const CloudSync = {
     // referencia queda huerfana y el cambio (push/Object.assign/splice) no persiste. Esto
     // arregla de raiz toda la familia "await modal -> escribir" (aprobar/rechazar/procesar/
     // anular planilla, editar/eliminar anticipos y polizas, etc.).
-    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal')) return true;
+    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal')) return true; // v841-fix: los modales de anticipo (subida de documentos) posponen applyRemote durante la subida a Storage
     const focused = document.activeElement;
     if (focused && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)) return true;
     return false;
@@ -46399,18 +46399,41 @@ async function _anulAnularReal(){
     try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); }catch(e){}
     try{ window.renderPlanillaAnticipos(); }catch(e){}
   }
+  // v841: gate de ENTREGA — recién se puede marcar entregado con FACTURA + CARTA FIRMADA cargadas.
+  function _antDocsListos(sol){ return !!(sol && sol.facturaUrl && sol.cartaUrl); }
+  // v841: admin real (perms ['*']) para la salida de emergencia (reemplazar un archivo subido por error).
+  function _antEsAdmin(){ try{ return !!(typeof currentUser!=='undefined' && currentUser && Array.isArray(currentUser.perms) && currentUser.perms.includes('*')); }catch(e){ return false; } }
   // CREAR (supervisor)
-  window.crearSolicitudAnticipo = function(){
+  window.crearSolicitudAnticipo = async function(){
     if(!_antSolicPerm('anticipos.solicitar') && !_antEsGerente()){ showT('SIN PERMISO PARA SOLICITAR','red'); return; }
     const colab = String((document.getElementById('antSolColab')||{}).value||'').trim().toUpperCase();
     const subtipo = String((document.getElementById('antSolSubtipo')||{}).value||'PRESTAMO_PERSONAL');
     const desc = String((document.getElementById('antSolDesc')||{}).value||'').trim();
     if(!colab){ showT('ESCRIBÍ PARA QUIÉN ES EL PRÉSTAMO','red'); return; }
     if(!desc){ showT('DESCRIBÍ QUÉ NECESITA','red'); return; }
+    const solId = 'solant-'+uid();
+    // v842: foto de referencia OPCIONAL (best-effort) — para que compras vea qué se necesita.
+    // Si no la suben o falla la subida, la solicitud se crea igual.
+    const _fotoInp = document.getElementById('antSolFoto');
+    const file = _fotoInp && _fotoInp.files && _fotoInp.files[0];
+    let refFotoUrl='', refFotoNombre='';
+    if(file){
+      try{
+        if(typeof firebase!=='undefined' && firebase.storage){
+          try{ var _o=document.getElementById('prUploadOverlayMsg'); if(_o) _o.textContent='SUBIENDO FOTO…'; }catch(e){}
+          try{ window._prUploadShow && window._prUploadShow('SUBIENDO FOTO…'); }catch(e){}
+          const ref = firebase.storage().ref('anticipos-solicitud/'+solId+'-'+Date.now());
+          await ref.put(file, { contentType: file.type || 'application/octet-stream' });
+          refFotoUrl = await ref.getDownloadURL(); refFotoNombre = file.name||'';
+          try{ window._prUploadHide && window._prUploadHide(); }catch(e){}
+        }
+      }catch(e){ console.warn('[v842] foto solicitud', e); try{ window._prUploadHide && window._prUploadHide(); }catch(e2){} }
+    }
     const p = (typeof activeProj==='function')?activeProj():null;
-    const sol = { id:'solant-'+uid(), _ts:Date.now(), estado:'pendiente_cotizacion',
+    const sol = { id:solId, _ts:Date.now(), estado:'pendiente_cotizacion',
       projectId:(p&&p.id)||'', projectName:(p&&p.name)||'',
       colaboradorId:'', colaboradorNombre:colab, subtipo:subtipo, descripcion:desc,
+      refFotoUrl:refFotoUrl, refFotoNombre:refFotoNombre,
       solicitadoPor:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''),
       solicitadoPorNombre:(typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):''),
       solicitadoEn:(typeof nowStr==='function'?nowStr():'') };
@@ -46453,6 +46476,70 @@ async function _anulAnularReal(){
     _antSolicSave();
     showT('COTIZACIÓN ENVIADA · ESPERA AUTORIZACIÓN','green');
   };
+  // v841: SUBIR DOCUMENTO de entrega (factura del producto / carta firmada de recibido).
+  // Irreversible: una vez subido NO se reemplaza (salvo admin, salida de emergencia). La carta
+  // exige la factura primero. Confirma "¿es el correcto?" antes de subir. Re-lee tras cada await.
+  window.subirDocAnticipo = async function(solId, tipo){
+    tipo = (tipo==='carta') ? 'carta' : 'factura';
+    if(!(_antSolicPerm('anticipos.cotizar') || _antEsGerente())){ showT('SOLO COMPRAS O GERENTE SUBE DOCUMENTOS','red'); return; }
+    const urlKey = tipo==='carta' ? 'cartaUrl' : 'facturaUrl';
+    const nomKey = tipo==='carta' ? 'cartaNombre' : 'facturaNombre';
+    const porKey = tipo==='carta' ? 'cartaSubidaPor' : 'facturaSubidaPor';
+    const enKey  = tipo==='carta' ? 'cartaSubidaEn'  : 'facturaSubidaEn';
+    const carpeta = tipo==='carta' ? 'anticipos-carta' : 'anticipos-factura';
+    const etiqueta = tipo==='carta' ? 'LA CARTA FIRMADA' : 'LA FACTURA';
+    const esAdmin = _antEsAdmin();
+    // v841-fix: cerrar el modal en los aborts post-confirmación. Si no, el modal (.pr-ant-modal)
+    // queda abierto y congela applyRemote (isUserBusy) hasta que el usuario lo cierre a mano.
+    const _cerrarDoc = function(){ var m=document.getElementById('antDocModal'); if(m) m.remove(); };
+    const sol = _antSolics().find(s=>s.id===solId);
+    if(!sol || sol.estado!=='autorizada'){ showT('SOLICITUD NO DISPONIBLE','red'); return; }
+    if(tipo==='carta' && !sol.facturaUrl){ showT('SUBÍ PRIMERO LA FACTURA','red'); return; }
+    const yaExiste = !!sol[urlKey];
+    if(yaExiste && !esAdmin){ showT('ESE DOCUMENTO YA SE SUBIÓ · NO SE PUEDE MODIFICAR','red'); return; }
+    const fileInp = document.getElementById('antDocFile');
+    const file = fileInp && fileInp.files && fileInp.files[0];
+    if(!file){ showT('ELEGÍ EL ARCHIVO','red'); return; }
+    const cuerpo = yaExiste
+      ? ('REEMPLAZO DE EMERGENCIA (ADMIN). Vas a SOBRESCRIBIR '+etiqueta+' que ya estaba subida. Usalo solo para corregir un archivo equivocado. ¿Continuar?')
+      : ('¿Estás SEGURO de que estás subiendo el documento CORRECTO?\n\nUna vez subido NO se podrá modificar ni reemplazar.');
+    const ok = await window.prConfirm({ title:(yaExiste?'Reemplazar documento (admin)':('Subir '+(tipo==='carta'?'carta firmada':'factura'))), body:cuerpo, okText:(yaExiste?'SÍ, REEMPLAZAR':'SÍ, ES EL CORRECTO'), cancelText:(yaExiste?'NO':'REVISAR'), danger:true });
+    if(!ok) return;
+    // stale-ref v769/v770: re-leer + re-validar tras el modal (otro equipo pudo mover el estado).
+    let sol2 = _antSolics().find(s=>s.id===solId);
+    if(!sol2 || sol2.estado!=='autorizada'){ showT('LA SOLICITUD YA CAMBIÓ DE ESTADO','red'); _cerrarDoc(); try{ window.renderPlanillaAnticipos(); }catch(e){} return; }
+    if(tipo==='carta' && !sol2.facturaUrl){ showT('SUBÍ PRIMERO LA FACTURA','red'); _cerrarDoc(); try{ window.renderPlanillaAnticipos(); }catch(e){} return; }
+    if(sol2[urlKey] && !esAdmin){ showT('ESE DOCUMENTO YA SE SUBIÓ · NO SE PUEDE MODIFICAR','red'); _cerrarDoc(); try{ window.renderPlanillaAnticipos(); }catch(e){} return; }
+    if(typeof firebase==='undefined' || !firebase.storage){ showT('STORAGE NO DISPONIBLE · INTENTÁ DE NUEVO','red'); _cerrarDoc(); return; }
+    const urlPrevia = sol2[urlKey] || ''; // v841-fix #5: la URL que ESTE equipo viene reemplazando (solo admin); para no borrar la de otro tras una carrera
+    let url='', nombreArch='';
+    try {
+      try{ var _o=document.getElementById('prUploadOverlayMsg'); if(_o) _o.textContent='SUBIENDO '+etiqueta+'…'; }catch(e){}
+      try{ window._prUploadShow && window._prUploadShow('SUBIENDO '+etiqueta+'…'); }catch(e){}
+      const ref = firebase.storage().ref(carpeta+'/'+sol2.id+'-'+Date.now());
+      await ref.put(file, { contentType: file.type || 'application/octet-stream' });
+      url = await ref.getDownloadURL(); nombreArch = file.name||'';
+      try{ window._prUploadHide && window._prUploadHide(); }catch(e){}
+    } catch(e){ console.warn('[v841] doc anticipo', e); try{ window._prUploadHide && window._prUploadHide(); }catch(e2){} showT('NO SE PUDO SUBIR · INTENTÁ DE NUEVO','red'); return; }
+    // v841-fix: borra el archivo que ACABO de subir (limpieza si abortamos tras la subida por una carrera de sync).
+    const _borrarMiUrl = function(){ try{ if(url && String(url).indexOf('firebasestorage')>=0) firebase.storage().refFromURL(url).delete().catch(()=>{}); }catch(e){} };
+    // re-leer DE NUEVO tras el await de subida, antes de mutar (applyRemote pudo reasignar state).
+    sol2 = _antSolics().find(s=>s.id===solId);
+    if(!sol2 || sol2.estado!=='autorizada'){ showT('LA SOLICITUD YA CAMBIÓ DE ESTADO','red'); _borrarMiUrl(); _cerrarDoc(); try{ window.renderPlanillaAnticipos(); }catch(e){} return; }
+    // v841-fix #2: re-validar la secuencia factura→carta tras la subida (un admin pudo quitar/reemplazar la factura).
+    if(tipo==='carta' && !sol2.facturaUrl){ showT('SUBÍ PRIMERO LA FACTURA','red'); _borrarMiUrl(); _cerrarDoc(); try{ window.renderPlanillaAnticipos(); }catch(e){} return; }
+    // v841-fix #1: re-validar irreversibilidad tras la subida (otro equipo lo subió mientras subías).
+    if(sol2[urlKey] && !esAdmin){ showT('ESE DOCUMENTO YA SE SUBIÓ MIENTRAS SUBÍAS · NO SE MODIFICA','red'); _borrarMiUrl(); _cerrarDoc(); try{ window.renderPlanillaAnticipos(); }catch(e){} return; }
+    const oldUrl = sol2[urlKey];
+    // v841-fix #5: borrar el viejo SOLO si sigue siendo el que yo venía reemplazando (no el de otro equipo tras una carrera).
+    if(oldUrl && oldUrl!==url && oldUrl===urlPrevia && String(oldUrl).indexOf('firebasestorage')>=0){ try{ firebase.storage().refFromURL(oldUrl).delete().catch(()=>{}); }catch(e){} }
+    sol2[urlKey]=url; sol2[nomKey]=nombreArch;
+    sol2[porKey]=(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''); sol2[enKey]=(typeof nowStr==='function'?nowStr():'');
+    sol2._ts=Date.now();
+    _cerrarDoc();
+    _antSolicSave();
+    showT((tipo==='carta'?'CARTA FIRMADA SUBIDA':'FACTURA SUBIDA')+(yaExiste?' · REEMPLAZADA':''),'green');
+  };
   // AUTORIZAR (gerente) → crea el anticipo automáticamente
   window.autorizarSolicitudAnticipoFlujo = function(solId){
     if(!_antEsGerente()){ showT('SOLO GERENTE/ADMIN AUTORIZA','red'); return; }
@@ -46477,10 +46564,12 @@ async function _anulAnularReal(){
     if(!(_antSolicPerm('anticipos.cotizar') || _antEsGerente())){ showT('SOLO COMPRAS O GERENTE ENTREGA','red'); return; }
     const sol = _antSolics().find(s=>s.id===solId);
     if(!sol || sol.estado!=='autorizada'){ showT('SOLICITUD NO DISPONIBLE PARA ENTREGAR','red'); return; }
-    const ok = await window.prConfirm({ title:'Marcar como entregado', body:'¿Confirmás que ya ENTREGASTE esto a '+sol.colaboradorNombre+'? Recién aquí se crea el anticipo y se podrá cobrar.', okText:'SÍ, ENTREGADO', cancelText:'NO', danger:false });
+    if(!_antDocsListos(sol)){ showT('FALTAN DOCUMENTOS · SUBÍ FACTURA Y CARTA FIRMADA','red'); return; } // v841: candado de entrega
+    const ok = await window.prConfirm({ title:'Marcar como entregado', body:'Factura y carta firmada cargadas. ¿Confirmás que ya ENTREGASTE esto a '+sol.colaboradorNombre+'? Recién aquí se crea el anticipo y se podrá cobrar.', okText:'SÍ, ENTREGADO', cancelText:'NO', danger:false });
     if(!ok) return;
     const sol2 = _antSolics().find(s=>s.id===solId);
     if(!sol2 || sol2.estado!=='autorizada'){ showT('LA SOLICITUD YA CAMBIÓ DE ESTADO','red'); try{ window.renderPlanillaAnticipos(); }catch(e){} return; }
+    if(!_antDocsListos(sol2)){ showT('FALTAN DOCUMENTOS · SUBÍ FACTURA Y CARTA FIRMADA','red'); try{ window.renderPlanillaAnticipos(); }catch(e){} return; } // v841: re-valida tras el modal
     const cuotas = window._v416CuotasPorMonto(Number(sol2.cotMonto)||0);
     const ant = _anticBuildAnticipo(sol2, cuotas, { id:'ant-'+Date.now()+'-'+Math.random().toString(36).slice(2,8), ts:Date.now(), fecha:new Date().toISOString().slice(0,10), creadoPor:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''), creadoNombre:(typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):'') });
     _getAnticipos().push(ant);
@@ -46522,7 +46611,7 @@ async function _anulAnularReal(){
   // ── Modales (standalone, leen los inputs en el onclick) ──
   function _antModalWrap(id, titulo, bodyHTML){
     var prev=document.getElementById(id); if(prev) prev.remove();
-    var html='<div id="'+id+'" style="position:fixed;inset:0;background:rgba(20,20,20,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:14px;font-family:inherit">'
+    var html='<div id="'+id+'" class="pr-ant-modal" style="position:fixed;inset:0;background:rgba(20,20,20,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:14px;font-family:inherit">'
       +'<div style="background:#fff;border-radius:10px;max-width:520px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 16px 50px rgba(0,0,0,.25)">'
       +'<div style="padding:15px 20px;background:#C62828;color:#fff;display:flex;justify-content:space-between;align-items:center"><div style="font-size:13.5px;font-weight:800;letter-spacing:.3px">'+esc(titulo)+'</div><button onclick="var m=document.getElementById(\''+id+'\'); if(m) m.remove();" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer;line-height:1">×</button></div>'
       +'<div style="padding:16px 18px;overflow-y:auto;flex:1;background:#FFF">'+bodyHTML+'</div></div></div>';
@@ -46542,19 +46631,41 @@ async function _anulAnularReal(){
       +  '<div class="pr-combo-panel" id="antColabPanel" role="listbox"></div>'
       +'</div></label>'
       +'<label style="display:block;margin-bottom:12px"><span style="'+_antLbl+'">Tipo</span><select id="antSolSubtipo" style="'+_antInp+'">'+_antSubtipoOpts('PRESTAMO_PERSONAL')+'</select></label>'
-      +'<label style="display:block;margin-bottom:16px"><span style="'+_antLbl+'">¿Qué necesita? (descripción)</span><textarea id="antSolDesc" rows="3" placeholder="Ej: TALADRO DEWALT 20V…" style="'+_antInp+'"></textarea></label>'
+      +'<label style="display:block;margin-bottom:12px"><span style="'+_antLbl+'">¿Qué necesita? (descripción)</span><textarea id="antSolDesc" rows="3" placeholder="Ej: TALADRO DEWALT 20V…" style="'+_antInp+'"></textarea></label>'
+      +'<label style="display:block;margin-bottom:16px"><span style="'+_antLbl+'">Foto de referencia (opcional)</span><input id="antSolFoto" type="file" accept="image/*,application/pdf" style="'+_antInp+'"><span style="display:block;font-size:10px;color:#94A3B8;margin-top:4px;text-transform:none">Para que compras vea qué se necesita. No es obligatoria.</span></label>'
       +'<button class="btn" onclick="window.crearSolicitudAnticipo()" style="width:100%;background:#2E7D32;border-color:#2E7D32;color:#fff;padding:11px;font-size:12.5px;font-weight:700">ENVIAR SOLICITUD</button>');
   };
   window._antAbrirCotizar = function(solId){
     const sol = _antSolics().find(s=>s.id===solId); if(!sol){ return; }
     _antModalWrap('antCotModal','SUBIR COTIZACIÓN',
       '<div style="font-size:12px;color:#555;margin-bottom:12px;line-height:1.5">'+esc(sol.colaboradorNombre)+' · '+esc(_subtipoLabelAnt(sol.subtipo))+'<br><span style="color:#888">'+esc(sol.descripcion||'')+'</span></div>'
+      + (sol.refFotoUrl ? ('<div style="margin-bottom:12px"><a href="'+esc(sol.refFotoUrl)+'" target="_blank" style="color:#1565C0;font-weight:700;text-decoration:underline;font-size:12px">VER FOTO DE REFERENCIA ('+esc(sol.refFotoNombre||'archivo')+')</a></div>') : '') // v842
       +'<label style="display:block;margin-bottom:12px"><span style="'+_antLbl+'">Nombre correcto del ítem (es lo que se carga a ANTICIPOS)</span><input id="antCotItem" placeholder="Ej: TALADRO DEWALT DCD771 20V" value="'+esc(sol.descripcion||'')+'" style="'+_antInp+'"></label>'
       +'<label style="display:block;margin-bottom:12px"><span style="'+_antLbl+'">Proveedor</span><input id="antCotProv" placeholder="NOMBRE DEL PROVEEDOR" style="'+_antInp+'"></label>'
       +'<label style="display:block;margin-bottom:12px"><span style="'+_antLbl+'">Monto cotizado</span><input id="antCotMonto" type="number" inputmode="decimal" placeholder="0.00" style="'+_antInp+'"></label>'
       +'<label style="display:block;margin-bottom:12px"><span style="'+_antLbl+'">Cotización (foto o PDF)</span><input id="antCotFile" type="file" accept="image/*,application/pdf,.xlsx,.xls" style="'+_antInp+'"></label>'
       +'<label style="display:block;margin-bottom:16px"><span style="'+_antLbl+'">Nota (opcional)</span><input id="antCotNota" placeholder="" style="'+_antInp+'"></label>'
       +'<button class="btn" onclick="window.subirCotizacionAnticipo(\''+esc(sol.id)+'\')" style="width:100%;background:#1565C0;border-color:#1565C0;color:#fff;padding:11px;font-size:12.5px;font-weight:700">ENVIAR COTIZACIÓN</button>');
+  };
+  // v841: modal para subir FACTURA o CARTA FIRMADA antes de entregar (irreversible).
+  window._antAbrirSubirDoc = function(solId, tipo){
+    if(!(_antSolicPerm('anticipos.cotizar') || _antEsGerente())){ showT('SOLO COMPRAS O GERENTE SUBE DOCUMENTOS','red'); return; }
+    tipo = (tipo==='carta') ? 'carta' : 'factura';
+    const sol = _antSolics().find(s=>s.id===solId); if(!sol){ return; }
+    if(tipo==='carta' && !sol.facturaUrl){ showT('SUBÍ PRIMERO LA FACTURA','red'); return; }
+    const esAdmin = _antEsAdmin();
+    const yaExiste = (tipo==='carta') ? !!sol.cartaUrl : !!sol.facturaUrl;
+    if(yaExiste && !esAdmin){ showT('ESE DOCUMENTO YA SE SUBIÓ · NO SE PUEDE MODIFICAR','red'); return; }
+    const titulo = (tipo==='carta') ? 'SUBIR CARTA FIRMADA' : 'SUBIR FACTURA';
+    const desc = (tipo==='carta') ? ('CARTA FIRMADA DE RECIBIDO · la firma '+esc(sol.colaboradorNombre||'la persona')) : 'FACTURA DEL PRODUCTO';
+    const aviso = yaExiste
+      ? '<div style="background:#FEF2F2;border:1px solid #FCA5A5;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:#991B1B;line-height:1.5">REEMPLAZO DE EMERGENCIA (ADMIN): vas a sobrescribir un documento ya subido. Usalo solo para corregir un archivo equivocado.</div>'
+      : '<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:#92400E;line-height:1.5">Una vez subido, este documento NO se puede modificar ni reemplazar. Revisalo bien antes de subir.</div>';
+    _antModalWrap('antDocModal', titulo,
+      '<div style="font-size:12px;color:#555;margin-bottom:12px;line-height:1.5"><strong>'+esc(sol.colaboradorNombre||'')+'</strong><br><span style="color:#888">'+desc+'</span></div>'
+      + aviso
+      + '<label style="display:block;margin-bottom:16px"><span style="'+_antLbl+'">Archivo (foto o PDF)</span><input id="antDocFile" type="file" accept="image/*,application/pdf" style="'+_antInp+'"></label>'
+      + '<button class="btn" onclick="window.subirDocAnticipo(\''+esc(sol.id)+'\',\''+tipo+'\')" style="width:100%;background:#1565C0;border-color:#1565C0;color:#fff;padding:11px;font-size:12.5px;font-weight:700">SUBIR DOCUMENTO</button>');
   };
   window._antAbrirAutorizar = function(solId){
     if(!_antEsGerente()){ showT('SOLO GERENTE/ADMIN','red'); return; }
@@ -46605,24 +46716,58 @@ async function _anulAnularReal(){
     all.forEach(s => {
       const meta = _antSolicEstadoMeta(s.estado);
       const esCreador = (String(s.solicitadoPor||'').toLowerCase()===my);
-      let acciones='';
+      let acciones='', gateHTML='', docsVer='';
       if(s.estado==='pendiente_cotizacion' && puedeCotizar) acciones += '<button class="btn sm" onclick="window._antAbrirCotizar(\''+esc(s.id)+'\')" style="background:#1565C0;border-color:#1565C0;color:#fff;padding:6px 14px;font-size:11px">SUBIR COTIZACIÓN</button>';
       if(s.estado==='pendiente_autorizacion' && esGer) acciones += '<button class="btn sm" onclick="window._antAbrirAutorizar(\''+esc(s.id)+'\')" style="background:#2E7D32;border-color:#2E7D32;color:#fff;padding:6px 14px;font-size:11px">REVISAR / AUTORIZAR</button>';
-      if(s.estado==='autorizada' && (puedeCotizar||esGer)) acciones += '<button class="btn sm" onclick="window.entregarSolicitudAnticipo(\''+esc(s.id)+'\')" style="background:#15803D;border-color:#15803D;color:#fff;padding:6px 14px;font-size:11px">MARCAR ENTREGADO</button>'; // v820: compras entrega -> recién acá nace el anticipo
+      // v841: estado AUTORIZADA → gate de 2 pasos (factura, luego carta firmada). El botón
+      // MARCAR ENTREGADO queda deshabilitado hasta tener AMBOS documentos. Reemplazo solo-admin.
+      if(s.estado==='autorizada' && (puedeCotizar||esGer)){
+        const _esAdm = _antEsAdmin();
+        const facOk = !!s.facturaUrl, carOk = !!s.cartaUrl;
+        const _ver = function(u,n){ return '<a href="'+esc(u)+'" target="_blank" style="color:#15803D;font-weight:800;text-decoration:underline">VER ('+esc(n||'archivo')+')</a>'; };
+        const _reemp = function(t){ return _esAdm ? (' · <a href="#" onclick="window._antAbrirSubirDoc(\''+esc(s.id)+'\',\''+t+'\');return false" style="color:#B91C1C;font-weight:700;text-decoration:underline;font-size:10px">REEMPLAZAR (ADMIN)</a>') : ''; };
+        let _p1 = '<div style="font-size:10px;font-weight:800;letter-spacing:.5px;color:#475569">PASO 1 · FACTURA DEL PRODUCTO</div>';
+        _p1 += facOk
+          ? ('<div style="font-size:11.5px;color:#15803D;font-weight:700;margin-top:3px">&#10003; FACTURA SUBIDA · '+_ver(s.facturaUrl,s.facturaNombre)+_reemp('factura')+'</div>')
+          : '<div style="margin-top:4px"><button class="btn sm" onclick="window._antAbrirSubirDoc(\''+esc(s.id)+'\',\'factura\')" style="background:#1565C0;border-color:#1565C0;color:#fff;padding:6px 14px;font-size:11px">SUBIR FACTURA</button></div>';
+        let _p2 = '<div style="font-size:10px;font-weight:800;letter-spacing:.5px;color:#475569;margin-top:10px">PASO 2 · CARTA FIRMADA DE RECIBIDO</div>';
+        _p2 += !facOk
+          ? '<div style="font-size:11px;color:#94A3B8;margin-top:3px">SUBÍ PRIMERO LA FACTURA</div>'
+          : (carOk
+              ? ('<div style="font-size:11.5px;color:#15803D;font-weight:700;margin-top:3px">&#10003; CARTA SUBIDA · '+_ver(s.cartaUrl,s.cartaNombre)+_reemp('carta')+'</div>')
+              : '<div style="margin-top:4px"><button class="btn sm" onclick="window._antAbrirSubirDoc(\''+esc(s.id)+'\',\'carta\')" style="background:#1565C0;border-color:#1565C0;color:#fff;padding:6px 14px;font-size:11px">SUBIR CARTA</button></div>');
+        const _listo = _antDocsListos(s);
+        const _btnEnt = _listo
+          ? '<button class="btn sm" onclick="window.entregarSolicitudAnticipo(\''+esc(s.id)+'\')" style="background:#15803D;border-color:#15803D;color:#fff;padding:8px 16px;font-size:11.5px;font-weight:700">MARCAR ENTREGADO</button>'
+          : '<button class="btn sm" disabled title="SUBÍ FACTURA Y CARTA PARA HABILITAR" style="background:#E5E7EB;border-color:#E5E7EB;color:#9CA3AF;padding:8px 16px;font-size:11.5px;font-weight:700;cursor:not-allowed">MARCAR ENTREGADO</button>';
+        gateHTML = '<div style="border:1px dashed #CBD5E1;border-radius:8px;padding:11px 12px;margin-top:10px;background:#fff;text-transform:none">'
+          + _p1 + _p2
+          + '<div style="margin-top:12px;border-top:1px solid #F1F5F9;padding-top:10px">'+_btnEnt+'</div>'
+          + '</div>';
+      }
+      // v841: documentos visibles también después de ENTREGADA (queda el registro).
+      if(s.estado!=='autorizada' && (s.facturaUrl || s.cartaUrl)){
+        const _b=[];
+        if(s.facturaUrl) _b.push('FACTURA: <a href="'+esc(s.facturaUrl)+'" target="_blank" style="color:#15803D;text-decoration:underline">ver</a>');
+        if(s.cartaUrl) _b.push('CARTA: <a href="'+esc(s.cartaUrl)+'" target="_blank" style="color:#15803D;text-decoration:underline">ver</a>');
+        docsVer = '<div style="font-size:11px;color:#15803D;margin-top:3px">'+_b.join(' · ')+'</div>';
+      }
       if((s.estado==='pendiente_cotizacion'||s.estado==='pendiente_autorizacion') && (esCreador||esGer)) acciones += '<button class="btn ghost sm" onclick="window.cancelarSolicitudAnticipo(\''+esc(s.id)+'\')" style="border-color:#C62828;color:#C62828;padding:6px 14px;font-size:11px">CANCELAR</button>';
       const _cu = (Number(s.cuotas)>0) ? Number(s.cuotas) : ((s.cotMonto && typeof window._v416CuotasPorMonto==='function') ? window._v416CuotasPorMonto(Number(s.cotMonto)||0) : 0); // v822: cuántas cuotas (sol.cuotas o regla v416 por monto)
       const cot = (s.cotProveedor||s.cotMonto) ? ('<div style="font-size:11px;color:#1565C0;margin-top:3px">Cotización: '+esc(s.cotProveedor||'—')+' · '+_money(Number(s.cotMonto)||0)+(s.cotArchivoUrl?(' · <a href="'+esc(s.cotArchivoUrl)+'" target="_blank" style="color:#1565C0;text-decoration:underline">ver</a>'):'')+(_cu>0?(' · '+_cu+' cuota'+(_cu===1?'':'s')):'')+'</div>') : '';
       const mot = s.motivoRechazo ? ('<div style="font-size:11px;color:#B91C1C;margin-top:3px">Motivo: '+esc(s.motivoRechazo)+'</div>') : '';
+      const refFoto = s.refFotoUrl ? ('<div style="font-size:11px;color:#1565C0;margin-top:3px"><a href="'+esc(s.refFotoUrl)+'" target="_blank" style="color:#1565C0;text-decoration:underline">VER FOTO DE REFERENCIA</a></div>') : ''; // v842: foto de referencia de la solicitud
       html += '<div style="border:1px solid #E5E7EB;border-radius:8px;padding:12px;background:#FAFAFA;text-transform:uppercase">' // v820: tarjeta de solicitud TODO en mayúsculas
         + '<div style="display:flex;justify-content:space-between;align-items:start;gap:8px;flex-wrap:wrap">'
         +   '<div><div style="font-size:13px;font-weight:800;color:#1a1a1a">'+esc(s.colaboradorNombre||'—')+'</div>'
         +     '<div style="font-size:11.5px;color:#555;margin-top:2px">'+esc(_subtipoLabelAnt(s.subtipo))+' · '+esc(s.descripcion||'')+'</div>'
-        +     cot + mot
+        +     cot + mot + refFoto + docsVer
         +     '<div style="font-size:10.5px;color:#888;margin-top:3px">'+esc(s.projectName||'')+' · pidió '+esc(s.solicitadoPorNombre||s.solicitadoPor||'—')+' · '+esc(s.solicitadoEn||'')+'</div>'
         +   '</div>'
         +   '<span style="font-size:9.5px;font-weight:800;letter-spacing:.5px;padding:4px 9px;border-radius:20px;white-space:nowrap;color:'+meta.c+';background:'+meta.bg+'">'+meta.t+'</span>'
         + '</div>'
         + (acciones ? ('<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'+acciones+'</div>') : '')
+        + gateHTML
         + '</div>';
     });
     html += '</div></div>';
