@@ -30,7 +30,8 @@ const _nameLine = (html.match(/font-weight:700;font-size:12\.5px[^"]*"/)||[''])[
 ok('línea del nombre del colab localizada', _nameLine.length>0);
 ok('el nombre NO se trunca (sin white-space:nowrap)', _nameLine.indexOf('white-space:nowrap')<0);
 ok('el nombre NO usa text-overflow:ellipsis', _nameLine.indexOf('text-overflow:ellipsis')<0);
-ok('el nombre permite varias líneas (word-break)', _nameLine.indexOf('word-break')>=0);
+// v824: el user pidió el nombre COMPLETO en UNA sola fila (en móvil el botón baja) -> clase pp-name
+ok('v824 el nombre va en una sola fila (clase pp-name + fila pp-row)', /class="pp-name"/.test(html) && /class="pp-row"/.test(html));
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);

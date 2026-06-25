@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v823-ui-tarjeta-completa-visor-pdf-historial-niveles-colapsados';
+const CACHE_VERSION = 'v824-tipografia-barlow-global-mobile-friendly-tablas-scroll';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
