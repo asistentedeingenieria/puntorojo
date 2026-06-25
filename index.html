@@ -3005,7 +3005,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v831</span>
+    <span style="opacity:.5;font-size:9px">v832</span>
   </footer>
 
 </div>
@@ -12124,6 +12124,83 @@ function _avanceAptoNivelMaterial(pcts){
   var n = P(3)>=50?4 : P(2)>=100?3 : P(1)>=100?2 : P(0)>=100?1 : 0;
   return { green:false, n:n };
 }
+// ═══ v832 — SNAPSHOT para el PDF de AVANCE POR APARTAMENTO (4 vistas) ═══
+// Nombre de apto sin el prefijo "APARTAMENTO/APTO", en MAYÚSCULAS (igual que las tarjetas).
+function _avAptoNombre(a){ return String((a&&a.name)||'').replace(/^APARTAMENTO\s+/i,'').replace(/^APTO\s+/i,'').toUpperCase(); }
+// Métrica {n, green, pct} de un apto según el tipo de reporte (mismo cálculo que cada vista).
+function _avAptoMetric(tipo, p, a, basePcts, ne){
+  if(tipo==='fisico'){
+    var term=0, firm=0;
+    for(var i=0;i<6;i++){ if(!(Array.isArray(a.stages)&&a.stages[i])) continue; var ac=(typeof tieneAcuseFirmado==='function')&&tieneAcuseFirmado(a,i); if(ac){ term++; firm++; } else { term++; } }
+    var nf=_avanceAptoNivelFisico(term, firm===6);
+    return { n:nf.n, green:nf.green, pct: Math.round(term/6*100), iniciado: term>0, cuenta:true };
+  }
+  if(tipo==='cobro'){
+    var rec=(p.cobro&&p.cobro.avanceAptos&&p.cobro.avanceAptos[a.id])||{};
+    var hasData=(rec.pdfCumulativo!=null) || (rec.porEstimacion && Object.keys(rec.porEstimacion).length>0); // igual que la pantalla: solo cuentan los aptos del Excel/PDF
+    var cumul;
+    if(rec.pdfCumulativo!=null && rec.pdfCumulativo>0) cumul=Number(rec.pdfCumulativo)||0;
+    else { var por=rec.porEstimacion||{}; cumul=Object.keys(por).reduce(function(s,k){ return s+(Number(por[k])||0); },0); }
+    cumul=Math.min(100,cumul);
+    var nc=_avanceAptoNivelCobro(cumul);
+    return { n:nc.n, green:nc.green, pct: Math.round(cumul), iniciado: cumul>0, cuenta: !!hasData };
+  }
+  if(tipo==='material'){
+    var apm=(a.despachoManual&&Array.isArray(a.despachoManual))?a.despachoManual:(basePcts||[0,0,0,0]);
+    var nm=_avanceAptoNivelMaterial(apm);
+    var pm=Math.round((Number(apm[0]||0)+Number(apm[1]||0)+Number(apm[2]||0)+Number(apm[3]||0))/4);
+    return { n:nm.n, green:nm.green, pct: pm, iniciado: pm>0, cuenta:true };
+  }
+  // pago
+  var pc=(a.pagoManual&&Array.isArray(a.pagoManual))?a.pagoManual:[0,1,2,3,4].map(function(i){ return i<ne?paidPct5(p,a.id,i):0; });
+  var np=_avanceAptoNivelPago(pc);
+  var pp=np.green?100:Math.round(np.n/4*100);
+  return { n:np.n, green:np.green, pct: pp, iniciado: pp>0, cuenta:true };
+}
+// Recorre TODOS los aptos (ignora el colapso de pantalla) y arma la estructura normalizada.
+function _avReporteSnapshot(tipo, p){
+  p = p || ((typeof activeProj==='function')?activeProj():null);
+  var META={ fisico:{t:'AVANCE FÍSICO POR APARTAMENTO',v:'ACUSE FIRMADO AL 100%'},
+    cobro:{t:'AVANCE DE COBRO POR APARTAMENTO',v:'APTO COBRADO AL 100%'},
+    material:{t:'MATERIAL DESPACHADO POR APARTAMENTO',v:'DESPACHADO AL 100%'},
+    pago:{t:'AVANCE DE PAGOS POR APARTAMENTO',v:'PAGADO AL 100%'} };
+  var cfg=META[tipo]||{t:'AVANCE POR APARTAMENTO',v:''};
+  var out={ titulo:cfg.t, subtituloVerde:cfg.v, kpis:{sinIniciar:0,enProceso:0,completos:0,total:0,pct:0}, torres:[] };
+  if(!p) return out;
+  var pedidos=(p.materiales&&p.materiales.pedidos)||[], ordenes=(p.materiales&&p.materiales.ordenes)||[];
+  var ne=(typeof getEtapasP==='function')?((getEtapasP(p)||[]).length||5):5;
+  var sumPct=0;
+  // v832: cobro respeta el % oficial subido por PDF (igual que renderCobroAvanceApto).
+  var oficialLv=(tipo==='cobro' && p.cobro && p.cobro.avanceLevels)?p.cobro.avanceLevels:null;
+  var oficialTw=(tipo==='cobro' && p.cobro && p.cobro.avanceTorres)?p.cobro.avanceTorres:null;
+  (p.towers||[]).forEach(function(t){
+    var levels=(t.levels||[]).filter(function(l){ return (l.aptos||[]).length; });
+    if(!levels.length) return;
+    var tObj={ name:String(t.name||''), pct:0, niveles:[] }, tSum=0, tN=0; // tSum/tN sobre aptos que CUENTAN, en toda la torre
+    levels.forEach(function(l){
+      var aps=(l.aptos||[]);
+      var basePcts=null;
+      if(tipo==='material'){ basePcts=[0,1,2,3].map(function(ei){ return _etapaDespachoPct(_recetaEtapaItemKeys(p,t,l,ei).length, _itemsDespachadosEtapa(pedidos,ordenes,l.id,ei).length); }); }
+      var aord=(typeof window!=='undefined'&&window._sortPasilloUltimo)?window._sortPasilloUltimo(aps):aps;
+      var lObj={ name:String(l.name||''), pct:0, aptos:[] }, lSum=0, lN=0;
+      aord.forEach(function(a){
+        var m=_avAptoMetric(tipo, p, a, basePcts, ne);
+        lObj.aptos.push({ name:_avAptoNombre(a), n:m.n, green:m.green, pct:m.pct }); // se LISTAN todos (cuadritos), aunque no cuenten para KPIs
+        if(m.cuenta){
+          lSum+=m.pct; lN++; tSum+=m.pct; tN++; out.kpis.total++; sumPct+=m.pct;
+          if(m.green) out.kpis.completos++; else if(!m.iniciado) out.kpis.sinIniciar++; else out.kpis.enProceso++;
+        }
+      });
+      lObj.pct = (oficialLv && oficialLv[l.id]!=null) ? Math.round(Number(oficialLv[l.id])||0) : (lN?Math.round(lSum/lN):0);
+      tObj.niveles.push(lObj);
+    });
+    tObj.pct = (oficialTw && oficialTw[t.id]!=null) ? Math.round(Number(oficialTw[t.id])||0) : (tN?Math.round(tSum/tN):0);
+    out.torres.push(tObj);
+  });
+  out.kpis.pct = out.kpis.total ? Math.round(sumPct/out.kpis.total) : 0;
+  return out;
+}
+window._avReporteSnapshot=_avReporteSnapshot;
 // Resuelve la fuente de items de una etapa/nivel: PDF per-nivel (totales) o receta clásica.
 function _recetaEtapaResuelta(p, t, l, stageIdx){
   var data = p && p.materiales && p.materiales.recetaPorTorreYNivel, per=null;
@@ -12274,7 +12351,7 @@ function renderAvanceMateriales(){
     });
   }); });
   var _kpisDesp=_avKpisHtml(_kSin,_kProc,_kComp,'DESPACHADOS',(_kN?Math.round(_kSum/_kN):0));
-  var html='<div class="card"><div class="card-hd" style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3>AVANCE POR APARTAMENTO</h3></div>'+_kpisDesp+_leyendaAvanceApto('DESPACHADO AL 100%');
+  var html='<div class="card"><div class="card-hd" style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3>AVANCE POR APARTAMENTO</h3><button onclick="_pdfAvanceReporte(\'material\')" style="padding:7px 13px;background:var(--ink);color:#fff;border:none;border-radius:6px;font-family:inherit;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;flex-shrink:0">DESCARGAR PDF</button></div>'+_kpisDesp+_leyendaAvanceApto('DESPACHADO AL 100%');
   var hayAlgo=false;
   (p.towers||[]).forEach(function(t){
     var levels=(t.levels||[]).filter(function(l){ return (l.aptos||[]).length; });
@@ -12410,7 +12487,7 @@ window.renderAvanceFisicoCuadritos = function(){
 
   let html = `
     <div class="card">
-      <div class="card-hd"><h3>AVANCE FÍSICO POR APARTAMENTO</h3></div>
+      <div class="card-hd" style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3>AVANCE FÍSICO POR APARTAMENTO</h3><button onclick="_pdfAvanceReporte('fisico')" style="padding:7px 13px;background:var(--ink);color:#fff;border:none;border-radius:6px;font-family:inherit;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;flex-shrink:0">DESCARGAR PDF</button></div>
 
       <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:8px;margin-bottom:14px">
         <div style="text-align:center;padding:8px 10px;background:var(--white);border:1px solid var(--line);border-left:3px solid var(--mute);border-radius:4px">
@@ -19528,6 +19605,97 @@ function _efDescargarPDF(){
 
 /* v632: logo arriba a la izquierda en los PDF de asistencia. */
 function _pdfLogo(doc, x){ try{ if(typeof LOGO_DATA_URI==='string' && LOGO_DATA_URI) doc.addImage(LOGO_DATA_URI,'PNG',(x!=null?x:40),22,42,42); }catch(e){} } // v761b: x opcional para alinear con la tabla
+/* ═══ v832 — PDF de AVANCE POR APARTAMENTO (4 vistas: fisico/cobro/material/pago) ═══
+   Dibuja, por torre → nivel → apto, el mismo cuadrito 2×2 de la pantalla. El cheque verde
+   se DIBUJA con líneas (la fuente de jsPDF no trae ✓). Lo alimenta _avReporteSnapshot. */
+function _pdfDrawCuadrito(doc, cx, cy, n, green){
+  try{
+    if(green){
+      doc.setFillColor(5,150,105); doc.circle(cx, cy, 7, 'F'); // verde "completo"
+      doc.setDrawColor(255,255,255); doc.setLineWidth(1.3);
+      doc.line(cx-3.2, cy+0.4, cx-1, cy+2.8); doc.line(cx-1, cy+2.8, cx+3.6, cy-3); // cheque vectorial
+      doc.setDrawColor(0,0,0); doc.setLineWidth(0.5); return;
+    }
+    var sq=6, gap=2, fillOrder=[2,3,0,1], lit={};
+    for(var i=0;i<n && i<4;i++){ lit[fillOrder[i]]=true; }
+    var x0=cx-(sq+gap/2), y0=cy-(sq+gap/2);
+    for(var ci=0;ci<4;ci++){
+      var col=ci%2, row=ci<2?0:1, x=x0+col*(sq+gap), yy=y0+row*(sq+gap);
+      if(lit[ci]) doc.setFillColor(37,71,176); else doc.setFillColor(255,255,255); // azul marino / vacío
+      doc.setDrawColor(203,213,225); doc.setLineWidth(0.5);
+      doc.rect(x, yy, sq, sq, 'FD');
+    }
+    doc.setDrawColor(0,0,0); doc.setLineWidth(0.5);
+  }catch(e){}
+}
+function _pdfDrawLeyendaReporte(doc, x, y, w, verdeTxt){
+  doc.setFontSize(8); doc.setFont(undefined,'bold'); doc.setTextColor(60);
+  doc.text('CÓMO LEER · CADA APARTAMENTO', x, y);
+  var ly=y+14;
+  var items=[[1,'1RA · TABIQUE A 1 CARA'],[2,'2DA · TABIQUE A 2 CARAS'],[3,'3RA · ESTRUCTURA, CIELO Y FORRO'],[4,'4TA · MASILLA Y LIJA']];
+  doc.setFont(undefined,'normal'); doc.setFontSize(7.5); doc.setTextColor(30);
+  items.forEach(function(it){ _pdfDrawCuadrito(doc, x+8, ly-2.5, it[0], false); doc.text(it[1], x+22, ly); ly+=15; });
+  _pdfDrawCuadrito(doc, x+8, ly-2.5, 4, true); doc.text(String(verdeTxt||'COMPLETO AL 100%'), x+22, ly); ly+=15;
+  doc.setTextColor(0); doc.setLineWidth(0.5);
+  return ly+4;
+}
+function _pdfAvanceReporte(tipo){
+  try{
+    if(typeof window.jspdf==='undefined'||!window.jspdf.jsPDF){ try{showToast('JSPDF NO CARGÓ — RECARGAR LA APP','red');}catch(e){} return; }
+    var p=(typeof activeProj==='function')?activeProj():null;
+    if(!p){ try{showToast('SIN PROYECTO ACTIVO','red');}catch(e){} return; }
+    var snap=_avReporteSnapshot(tipo, p);
+    if(!snap.torres.length){ try{showToast('NO HAY APARTAMENTOS EN ESTE PROYECTO','red');}catch(e){} return; }
+    var jsPDF=window.jspdf.jsPDF;
+    var doc=new jsPDF({unit:'pt',format:'a4',orientation:'portrait'});
+    var pageW=doc.internal.pageSize.width, pageH=doc.internal.pageSize.height, M=40, bottom=pageH-34;
+    _pdfLogo(doc);
+    doc.setFontSize(14); doc.setFont(undefined,'bold'); doc.setTextColor(0);
+    doc.text(snap.titulo, pageW/2, 44, {align:'center'});
+    var d=new Date(), fechaTxt=String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear();
+    doc.setFontSize(9.5); doc.setFont(undefined,'normal'); doc.setTextColor(90);
+    doc.text(String(p.name||'').toUpperCase()+'   ·   '+fechaTxt, pageW/2, 60, {align:'center'});
+    var k=snap.kpis;
+    doc.setFontSize(9); doc.setTextColor(40);
+    doc.text('SIN INICIAR: '+k.sinIniciar+'      EN PROCESO: '+k.enProceso+'      COMPLETOS: '+k.completos+'      AVANCE: '+k.pct+'%', pageW/2, 76, {align:'center'});
+    doc.setTextColor(0);
+    var y=_pdfDrawLeyendaReporte(doc, M, 96, pageW-2*M, snap.subtituloVerde);
+    var cellW=72, cellH=40, perRow=Math.max(1, Math.floor((pageW-2*M)/cellW));
+    function ensure(h){ if(y+h>bottom){ doc.addPage(); y=44; } }
+    snap.torres.forEach(function(t){
+      ensure(24+18+cellH);
+      doc.setFillColor(200,20,28); doc.rect(M, y, pageW-2*M, 18, 'F');
+      doc.setTextColor(255); doc.setFontSize(9.5); doc.setFont(undefined,'bold');
+      doc.text(String(t.name||'').toUpperCase(), M+8, y+12.5);
+      doc.text(t.pct+'%', pageW-M-8, y+12.5, {align:'right'});
+      doc.setTextColor(0); y+=24;
+      t.niveles.forEach(function(l){
+        ensure(18+cellH);
+        doc.setFillColor(241,245,249); doc.rect(M, y, pageW-2*M, 14, 'F');
+        doc.setTextColor(40); doc.setFontSize(8.5); doc.setFont(undefined,'bold');
+        doc.text(String(l.name||'').toUpperCase(), M+8, y+10);
+        doc.setTextColor(37,71,176); doc.text(l.pct+'%', pageW-M-8, y+10, {align:'right'});
+        doc.setTextColor(0); y+=18;
+        var col=0;
+        l.aptos.forEach(function(a){
+          if(col===0) ensure(cellH);
+          var x=M + col*cellW + cellW/2;
+          doc.setFont(undefined,'bold'); doc.setFontSize(7); doc.setTextColor(90);
+          doc.text(a.name.length>12?a.name.slice(0,12):a.name, x, y+8, {align:'center'});
+          doc.setTextColor(0);
+          _pdfDrawCuadrito(doc, x, y+24, a.n, a.green);
+          col++; if(col>=perRow){ col=0; y+=cellH; }
+        });
+        if(col!==0) y+=cellH;
+        y+=4;
+      });
+      y+=6;
+    });
+    var fn=(snap.titulo+' - '+String(p.name||'').toUpperCase()).replace(/[·\/\\:*?"<>|]/g,' ').replace(/\s+/g,' ').trim()+'.pdf';
+    _pdfDescargar(doc, fn);
+  }catch(e){ try{showToast('NO SE PUDO GENERAR EL PDF','red');}catch(_e){} try{console.warn('pdfAvanceReporte',e);}catch(_e){} }
+}
+window._pdfAvanceReporte=_pdfAvanceReporte;
 
 /* ════════════════════ v825/v827: TIPOGRAFÍA DE LA APP EN LOS PDFs ════════════════════
    jsPDF usa Helvetica; acá embebemos la fuente de la app (v827: Familjen Grotesk) en cada
@@ -27195,6 +27363,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     const legendaHtml = _leyendaAvanceApto('APTO COBRADO AL 100%'); // v697: leyenda unificada Foto 1
 
     let html = `
+      <div style="display:flex;justify-content:flex-end;margin-bottom:10px"><button onclick="_pdfAvanceReporte('cobro')" style="padding:7px 13px;background:var(--ink);color:#fff;border:none;border-radius:6px;font-family:inherit;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer">DESCARGAR PDF</button></div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:8px;margin-bottom:14px">
         <div style="text-align:center;padding:8px 10px;background:var(--white);border:1px solid var(--line);border-left:3px solid var(--mute);border-radius:4px">
           <div style="font-size:8.5px;letter-spacing:1.2px;color:var(--mute);font-weight:700">SIN INICIAR</div>
@@ -38218,7 +38387,7 @@ window.addEventListener('load', () => {
 
     let html = `
       <div class="card">
-        <div class="card-hd" style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3>AVANCE DE PAGOS POR APARTAMENTO</h3></div>
+        <div class="card-hd" style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3>AVANCE DE PAGOS POR APARTAMENTO</h3><button onclick="_pdfAvanceReporte('pago')" style="padding:7px 13px;background:var(--ink);color:#fff;border:none;border-radius:6px;font-family:inherit;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;flex-shrink:0">DESCARGAR PDF</button></div>
         ${_kpisPago}
         ${_leyendaAvanceApto('PAGADO AL 100%')}
     `;
