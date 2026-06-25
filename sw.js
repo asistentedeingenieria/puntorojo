@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v838-reporte-mensual-asistencia-restringido';
+const CACHE_VERSION = 'v839-semanal-por-contrato-siglas-fijas-ausencia-otro';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
