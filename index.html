@@ -2991,7 +2991,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v824</span>
+    <span style="opacity:.5;font-size:9px">v825</span>
   </footer>
 
 </div>
@@ -19508,6 +19508,76 @@ function _efDescargarPDF(){
 
 /* v632: logo arriba a la izquierda en los PDF de asistencia. */
 function _pdfLogo(doc, x){ try{ if(typeof LOGO_DATA_URI==='string' && LOGO_DATA_URI) doc.addImage(LOGO_DATA_URI,'PNG',(x!=null?x:40),22,42,42); }catch(e){} } // v761b: x opcional para alinear con la tabla
+
+/* ════════════════════ v825: TIPOGRAFÍA BARLOW EN LOS PDFs ════════════════════
+   jsPDF usa Helvetica; acá embebemos Barlow Semi Condensed (la fuente del título) en cada
+   documento. El TTF se baja UNA vez de un CDN con CORS y se guarda en localStorage (base64),
+   así funciona offline tras la primera vez. Se aplica de forma CENTRAL: se envuelve el
+   constructor de jsPDF (para doc.text) y autoTable (para las tablas), sin tocar cada generador.
+   Si la fuente aún no cargó, cae a Helvetica (no crashea). */
+window._pdfBarlow = (function(){
+  var KEY='pr_barlow_pdf_v1';
+  var URLS={ n:'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/barlowsemicondensed/BarlowSemiCondensed-Regular.ttf',
+             b:'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/barlowsemicondensed/BarlowSemiCondensed-Bold.ttf' };
+  var cache=null;
+  function abToB64(buf){ var bytes=new Uint8Array(buf), bin='', CH=0x8000; for(var i=0;i<bytes.length;i+=CH){ bin+=String.fromCharCode.apply(null, bytes.subarray(i,i+CH)); } return btoa(bin); }
+  function fromLS(){ try{ var s=localStorage.getItem(KEY); if(s){ var o=JSON.parse(s); if(o&&o.n&&o.b){ cache=o; return true; } } }catch(e){} return false; }
+  function ready(){ if(cache) return cache; fromLS(); return cache; }
+  function prefetch(){
+    if(ready()) return Promise.resolve(cache);
+    if(typeof fetch!=='function') return Promise.resolve(null);
+    return Promise.all([ fetch(URLS.n).then(function(r){return r.arrayBuffer();}), fetch(URLS.b).then(function(r){return r.arrayBuffer();}) ])
+      .then(function(bufs){ cache={ n:abToB64(bufs[0]), b:abToB64(bufs[1]) }; try{ localStorage.setItem(KEY, JSON.stringify(cache)); }catch(e){} return cache; })
+      .catch(function(){ return null; });
+  }
+  return { prefetch:prefetch, ready:ready };
+})();
+/* Registra Barlow (normal+bold) en un doc y lo deja como fuente activa. true si pudo. */
+function _pdfApplyBarlow(doc){
+  try{
+    var c = window._pdfBarlow && window._pdfBarlow.ready();
+    if(!c || !doc || typeof doc.addFileToVFS!=='function') return false;
+    if(!doc.__barlow){
+      doc.addFileToVFS('BarlowSC-N.ttf', c.n); doc.addFont('BarlowSC-N.ttf','BarlowSC','normal');
+      doc.addFileToVFS('BarlowSC-B.ttf', c.b); doc.addFont('BarlowSC-B.ttf','BarlowSC','bold');
+      doc.__barlow=true;
+    }
+    doc.setFont('BarlowSC','normal');
+    return true;
+  }catch(e){ return false; }
+}
+window._pdfApplyBarlow = _pdfApplyBarlow;
+/* Parche central: cada doc nuevo registra Barlow; cada autoTable la usa por defecto. */
+(function(){
+  function patch(){
+    try{
+      if(!window.jspdf || !window.jspdf.jsPDF || window.jspdf.__barlowPatched) return !!(window.jspdf && window.jspdf.__barlowPatched);
+      var Orig = window.jspdf.jsPDF;
+      function Wrapped(a,b,c,d){ var doc=new Orig(a,b,c,d); try{ _pdfApplyBarlow(doc); }catch(e){} return doc; }
+      Wrapped.prototype = Orig.prototype;
+      for(var k in Orig){ if(Object.prototype.hasOwnProperty.call(Orig,k)){ try{ Wrapped[k]=Orig[k]; }catch(e){} } }
+      try{ Wrapped.API = Orig.API; }catch(e){}
+      window.jspdf.jsPDF = Wrapped;
+      // autoTable -> Barlow por defecto, SOLO en la forma doc.autoTable({...}) y sin pisar un font ya puesto.
+      try{
+        var proto = Orig.API || Orig.prototype;
+        if(proto && typeof proto.autoTable==='function' && !proto.__barlowAT){
+          var _at = proto.autoTable;
+          proto.autoTable = function(){
+            try{ var a0=arguments[0]; if(arguments.length===1 && a0 && typeof a0==='object' && !Array.isArray(a0) && window._pdfBarlow && window._pdfBarlow.ready()){ a0.styles=a0.styles||{}; if(!a0.styles.font) a0.styles.font='BarlowSC'; } }catch(e){}
+            return _at.apply(this, arguments);
+          };
+          proto.__barlowAT = true;
+        }
+      }catch(e){}
+      window.jspdf.__barlowPatched = true;
+      return true;
+    }catch(e){ return false; }
+  }
+  function boot(){ try{ if(window._pdfBarlow) window._pdfBarlow.prefetch(); }catch(e){} var t=0, iv=setInterval(function(){ if(patch() || (++t>40)) clearInterval(iv); }, 250); }
+  if(document.readyState!=='loading') boot(); else document.addEventListener('DOMContentLoaded', boot);
+})();
+/* ═══════════════════════════════════════════════════════════════════════════ */
 /* v782: entrega del PDF según el entorno. El WebView de Capacitor (la app de Play)
    NO puede descargar un blob (no tiene download listener), así que ahí el doc.save()
    y el <a download> no hacen NADA. Router:
