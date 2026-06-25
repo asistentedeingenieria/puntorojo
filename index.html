@@ -3005,7 +3005,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v835</span>
+    <span style="opacity:.5;font-size:9px">v836</span>
   </footer>
 
 </div>
@@ -19285,21 +19285,22 @@ function _asistSemanaFilas(personal, asisGlobal, obraId, weekKeys){
     return weekKeys.some(function(fk){ return presente(p, (asisGlobal[fk]||{})[p.id]); });
   });
   return roster.map(function(p){
-    var dias=[], obrasSet={};
+    var dias=[], obrasSet={}, diasObras=[];
     weekKeys.forEach(function(fk){
       var reg=(asisGlobal[fk]||{})[p.id];
       var pres=presente(p, reg);
       dias.push(pres);
+      var dayIds=[]; // v836: obras de ESE día (para la sigla arriba del ✓)
       if(pres && reg){
-        // v834: recolectar EN QUÉ obra(s) estuvo ese día (para la columna OBRAS del PDF de TODAS).
         if(reg.multiSesion && Array.isArray(reg.sessions) && reg.sessions.length){
-          reg.sessions.forEach(function(s){ if(s && s.obraId) obrasSet[String(s.obraId)]=true; });
+          reg.sessions.forEach(function(s){ if(s && s.obraId){ var k=String(s.obraId); if(dayIds.indexOf(k)<0) dayIds.push(k); obrasSet[k]=true; } });
         } else {
-          var oid=efObra(p, reg); if(oid) obrasSet[oid]=true;
+          var oid=efObra(p, reg); if(oid){ if(dayIds.indexOf(oid)<0) dayIds.push(oid); obrasSet[oid]=true; }
         }
       }
+      diasObras.push(dayIds.sort());
     });
-    return { id:p.id, nombre:p.nombre||'', puesto:p.puesto||'', dias:dias, total:dias.filter(Boolean).length, obras:Object.keys(obrasSet).sort() };
+    return { id:p.id, nombre:p.nombre||'', puesto:p.puesto||'', dias:dias, total:dias.filter(Boolean).length, obras:Object.keys(obrasSet).sort(), diasObras:diasObras };
   }).sort(function(a,b){ return String(a.nombre).localeCompare(String(b.nombre),'es',{sensitivity:'base'}); });
 }
 // v834: nombres de obra (coma) para la columna OBRAS del PDF semanal de TODAS LAS OBRAS.
@@ -19317,6 +19318,20 @@ function _asistDiaObraIds(pn, reg){
   if(reg && reg.multiSesion && Array.isArray(reg.sessions) && reg.sessions.length){ reg.sessions.forEach(function(s){ if(s && s.obraId) ids[String(s.obraId)]=true; }); }
   if(!Object.keys(ids).length){ var o=(reg&&reg.obraId)||(pn&&pn.obraAsignada)||''; if(o) ids[String(o)]=true; }
   return Object.keys(ids).sort();
+}
+// v836: siglas cortas y ÚNICAS por obra para el PDF semanal (la sigla va ARRIBA de cada ✓/✗).
+function _asistSiglas(obraIds, projs){
+  var used={}, map={};
+  (obraIds||[]).slice().sort().forEach(function(id){
+    var pr=(projs||[]).find(function(x){ return x && x.id===id; });
+    var name=String((pr&&pr.name)||id).toUpperCase().replace(/[^A-ZÁÉÍÓÚÑ0-9 ]/g,'');
+    var words=name.split(/\s+/).filter(function(w){ return w && ['DE','DEL','LA','EL','LOS','LAS','FASE','TORRE','Y'].indexOf(w)<0; });
+    var joined=words.join('')||String(id).toUpperCase().replace(/[^A-Z0-9]/g,'');
+    var sig=(joined.slice(0,3)||'OBR').toUpperCase();
+    var s=sig, k=2; while(used[s]){ s=(sig.slice(0,2)+k); k++; }
+    used[s]=true; map[id]=s;
+  });
+  return map;
 }
 function _generarPdfSemanal(fechaBase, obraCtx, explicit){
   if(typeof can==='function' && !(can('personal.asistenciaPdf')||can('users.manage'))) { showToast('SIN PERMISO','red'); return; }
@@ -19340,19 +19355,25 @@ function _generarPdfSemanal(fechaBase, obraCtx, explicit){
   doc.setFontSize(9); doc.setFont(undefined,'normal');
   doc.text('SEMANA DEL '+_fmtDMY(weekKeys[0])+' AL '+_fmtDMY(weekKeys[5]), pageW/2, 66, {align:'center'});
   var DOW=['LUNES','MARTES','MIÉRCOLES','JUEVES','VIERNES','SÁBADO'];
-  var head=['#','NOMBRE'].concat(weekKeys.map(function(fk,i){ return DOW[i]+'\n'+_fmtDMY(fk).slice(0,5); })).concat(['DÍAS']).concat(verObras?['OBRAS']:[]);
-  var body=filas.map(function(f,i){ return [String(i+1), f.nombre].concat(weekKeys.map(function(){ return ''; })).concat([String(f.total)]).concat(verObras?[_asistObrasLabel(f.obras, projs)]:[]); });
+  var head=['#','NOMBRE'].concat(weekKeys.map(function(fk,i){ return DOW[i]+'\n'+_fmtDMY(fk).slice(0,5); })).concat(['DÍAS']);
+  var body=filas.map(function(f,i){ return [String(i+1), f.nombre].concat(weekKeys.map(function(){ return ''; })).concat([String(f.total)]); });
+  // v836: en TODAS LAS OBRAS, la SIGLA de la obra va ARRIBA de cada ✓/✗ (qué día en qué obra).
+  var sigMap={};
+  if(verObras){
+    var allIds={}; filas.forEach(function(f){ (f.diasObras||[]).forEach(function(ids){ (ids||[]).forEach(function(id){ allIds[id]=true; }); }); });
+    sigMap=_asistSiglas(Object.keys(allIds), projs);
+    filas.forEach(function(f){ f.diasSiglas=(f.diasObras||[]).map(function(ids){ return (ids||[]).map(function(id){ return sigMap[id]||''; }).filter(Boolean).join('/'); }); });
+  }
   // v809: una fila por persona (nombre completo en UNA línea) y la tabla ocupa toda la hoja.
-  var _wDay=62, _wNum=34, _wDias=40, _usable=pageW-60, _wObras=verObras?132:0;
-  var _wName=Math.max(170, _usable - _wNum - (_wDay*6) - _wDias - _wObras);
+  var _wDay=verObras?70:62, _wNum=34, _wDias=40, _usable=pageW-60;
+  var _wName=Math.max(170, _usable - _wNum - (_wDay*6) - _wDias);
   // v811: # más ancho + poco padding para que los números de 2 dígitos NO se partan (1\n0).
   var colStyles={0:{cellWidth:_wNum,halign:'center',cellPadding:{top:6,bottom:6,left:2,right:2}}, 1:{halign:'left',cellWidth:_wName,fontStyle:'bold'}};
   for(var c=2;c<=7;c++) colStyles[c]={halign:'center',cellWidth:_wDay};
   colStyles[8]={halign:'center',cellWidth:_wDias,fontStyle:'bold'};
-  if(verObras) colStyles[9]={halign:'left',cellWidth:_wObras,fontStyle:'normal',fontSize:8,cellPadding:{top:6,bottom:6,left:6,right:6}}; // v834: OBRAS visitadas
   doc.autoTable({
     startY:84, head:[head], body:body, theme:'striped', margin:{left:30,right:30},
-    styles:{fontSize:10,valign:'middle',halign:'center',cellPadding:{top:6,bottom:6,left:8,right:8},lineColor:[232,232,232],lineWidth:0.2},
+    styles:{fontSize:10,valign:'middle',halign:'center',cellPadding:{top:verObras?12:6,bottom:6,left:8,right:8},minCellHeight:verObras?30:0,lineColor:[232,232,232],lineWidth:0.2},
     alternateRowStyles:{fillColor:[250,248,243]},
     columnStyles:colStyles,
     headStyles:{fillColor:[200,20,28],textColor:255,fontStyle:'bold',halign:'center',fontSize:9,cellPadding:{top:7,bottom:7,left:3,right:3}},
@@ -19361,12 +19382,32 @@ function _generarPdfSemanal(fechaBase, obraCtx, explicit){
       var ci=data.column.index; if(ci<2 || ci>7) return;
       var fila=filas[data.row.index]; if(!fila) return;
       var pres=fila.dias[ci-2];
-      var x=data.cell.x+data.cell.width/2, y=data.cell.y+data.cell.height/2;
-      doc.setLineWidth(1.6);
-      if(pres){ doc.setDrawColor(22,101,52); doc.line(x-5,y, x-1,y+4); doc.line(x-1,y+4, x+6,y-6); }
-      else { doc.setDrawColor(200,20,28); doc.line(x-4,y-4,x+4,y+4); doc.line(x+4,y-4,x-4,y+4); }
+      var cell=data.cell, cx=cell.x+cell.width/2;
+      if(pres && verObras){
+        var sig=(fila.diasSiglas && fila.diasSiglas[ci-2]) || '';
+        if(sig){ doc.setFont(undefined,'bold'); doc.setFontSize(6.3); doc.setTextColor(90); doc.text(sig, cx, cell.y+cell.height*0.40, {align:'center'}); doc.setTextColor(0); }
+        var yc=cell.y+cell.height*0.72;
+        doc.setLineWidth(1.6); doc.setDrawColor(22,101,52); doc.line(cx-5,yc, cx-1,yc+4); doc.line(cx-1,yc+4, cx+6,yc-6);
+      } else {
+        var y=cell.y+cell.height/2;
+        doc.setLineWidth(1.6);
+        if(pres){ doc.setDrawColor(22,101,52); doc.line(cx-5,y, cx-1,y+4); doc.line(cx-1,y+4, cx+6,y-6); }
+        else { doc.setDrawColor(200,20,28); doc.line(cx-4,y-4,cx+4,y+4); doc.line(cx+4,y-4,cx-4,y+4); }
+      }
     }
   });
+  // v836: leyenda de SIGLAS abajo (solo en TODAS LAS OBRAS).
+  if(verObras){
+    var _sk=Object.keys(sigMap);
+    if(_sk.length){
+      var _leg='SIGLAS POR OBRA — '+_sk.map(function(id){ var pr=projs.find(function(x){return x&&x.id===id;}); return sigMap[id]+': '+String((pr&&pr.name)||id).toUpperCase(); }).join('     ·     ');
+      var _ly=(doc.lastAutoTable?doc.lastAutoTable.finalY:84)+16, _ph=doc.internal.pageSize.height;
+      if(_ly>_ph-30){ doc.addPage(); _ly=50; }
+      doc.setFont(undefined,'normal'); doc.setFontSize(8); doc.setTextColor(70);
+      doc.text(doc.splitTextToSize(_leg, pageW-60), 30, _ly);
+      doc.setTextColor(0);
+    }
+  }
   try{ _pdfDescargar(doc, 'ASISTENCIA SEMANAL'+(obraName?(' - '+((typeof _obraNombreArchivo==='function')?_obraNombreArchivo(obraName):obraName)):'')+' - '+_fmtDMY(weekKeys[0]).replace(/\//g,'-')+' AL '+_fmtDMY(weekKeys[5]).replace(/\//g,'-')+'.pdf'); }
   catch(e){ try{ doc.save('ASISTENCIA-SEMANAL.pdf'); }catch(_){} }
 }
