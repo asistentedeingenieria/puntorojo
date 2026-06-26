@@ -2534,6 +2534,17 @@ table{max-width:100%}
         <div class="card-hd"><h3>RESUMEN POR PROYECTO</h3></div>
         <div id="dashProjects"></div>
       </div>
+      <!-- v848: análisis de apartamentos desparejos (cobro/físico/materiales/planilla fuera de nivel) -->
+      <div class="card" data-perm="view.avance">
+        <div class="card-hd" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <div><h3>ANÁLISIS DE APARTAMENTOS DESPAREJOS</h3><span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600">Cobro · físico · materiales · planilla — fuera de nivel vs el avance físico</span></div>
+          <div style="display:flex;gap:8px">
+            <button class="btn sm" onclick="window._avDesparejosUI()" style="background:var(--ink);color:#fff;border-color:var(--ink)">ANALIZAR</button>
+            <button class="btn sm" id="btnDesparejosPdf" onclick="window._pdfAnalisisDesparejos()" style="display:none">DESCARGAR PDF</button>
+          </div>
+        </div>
+        <div id="dashDesparejos"><div class="empty" style="padding:20px;font-size:12px">Tocá <strong>ANALIZAR</strong> para revisar qué apartamentos están fuera de nivel entre cobro, físico, materiales y planilla (todos los proyectos y torres).</div></div>
+      </div>
     </section>
 
     <!-- v710: el botón "MARCAR MI ASISTENCIA" pasó a ser el ícono de cámara del header (#btnMiAsistenciaTop) -->
@@ -3006,7 +3017,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v847</span>
+    <span style="opacity:.5;font-size:9px">v848</span>
   </footer>
 
 </div>
@@ -12199,7 +12210,7 @@ function _avReporteSnapshot(tipo, p){
       var lObj={ name:String(l.name||''), pct:0, aptos:[] }, lSum=0, lN=0;
       aord.forEach(function(a){
         var m=_avAptoMetric(tipo, p, a, basePcts, ne);
-        lObj.aptos.push({ name:_avAptoNombre(a), n:m.n, green:m.green, pct:m.pct }); // se LISTAN todos (cuadritos), aunque no cuenten para KPIs
+        lObj.aptos.push({ name:_avAptoNombre(a), n:m.n, green:m.green, pct:m.pct, cuenta:m.cuenta }); // se LISTAN todos (cuadritos), aunque no cuenten para KPIs · v848: cuenta para el análisis "sin datos"
         if(m.cuenta){
           lSum+=m.pct; lN++; tSum+=m.pct; tN++; out.kpis.total++; sumPct+=m.pct;
           if(m.green){ out.kpis.completos++; tObj.kpis.completos++; } else if(!m.iniciado){ out.kpis.sinIniciar++; tObj.kpis.sinIniciar++; } else { out.kpis.enProceso++; tObj.kpis.enProceso++; }
@@ -12216,6 +12227,106 @@ function _avReporteSnapshot(tipo, p){
   return out;
 }
 window._avReporteSnapshot=_avReporteSnapshot;
+// ════════════ v848: ANÁLISIS DE APARTAMENTOS DESPAREJOS ════════════
+// Referencia = FÍSICO. Un apto se marca si alguna dimensión (cobro/material/planilla) difiere
+// más de TOL% del físico. Si una dimensión entera de la torre está plana (>=90% en 0%) → nota de
+// torre y se excluye del per-apto. Áreas comunes (pasillo/cine/etc.) NO participan. PURA y testeable.
+function _avAnalisisTorreApt(units, TOL){
+  var DIMS=[['cobro','COBRO'],['material','MATERIAL'],['pago','PLANILLA']];
+  var ALL=[['fisico','AVANCE FÍSICO'],['cobro','COBRO'],['material','MATERIAL'],['pago','PLANILLA']];
+  var out={ notas:[], desparejos:[] };
+  var u=(units||[]).filter(function(a){ return a && !a.esComun; });
+  if(!u.length) return out;
+  var flat={};
+  ALL.forEach(function(d){
+    var k=d[0];
+    var ceros=u.filter(function(a){ var mm=a.m&&a.m[k]; return !mm || (Number(mm.pct)||0)===0; }).length;
+    if(ceros >= u.length*0.9){ flat[k]=true; out.notas.push('OJO: '+d[1]+' sin registrar ('+ceros+'/'+u.length+' en 0%)'); }
+  });
+  if(flat.fisico) return out; // la referencia está plana → solo la nota, no comparamos apto por apto
+  u.forEach(function(a){
+    var fp=Number(a.m.fisico.pct)||0, dims=[], sev=0;
+    DIMS.forEach(function(d){
+      var k=d[0]; if(flat[k]) return;
+      var mm=a.m[k]||{pct:0,cuenta:false};
+      var dp=Number(mm.pct)||0, dif=dp-fp;
+      if(Math.abs(dif)>TOL){ dims.push({ tipo:k, label:d[1], pct:dp, diff:dif, sinDatos: !mm.cuenta }); if(Math.abs(dif)>sev) sev=Math.abs(dif); }
+    });
+    if(dims.length) out.desparejos.push({ name:a.name, fisicoPct:fp, dims:dims, sev:sev });
+  });
+  out.desparejos.sort(function(x,y){ return y.sev-x.sev; });
+  return out;
+}
+window._avAnalisisTorreApt=_avAnalisisTorreApt;
+function _avEsAreaComun(nombre){ return /(^|[^0-9A-Z])(PASILLO|PASILLOS|CINE|AZOTEA|LOBBY|BODEGA|GRADAS|DUCTO|GIMNASIO|SAL[OÓ]N|SUM|TERRAZA|CISTERNA|GARITA|RECEPCION|RECEPCIÓN)([^0-9A-Z]|$)/i.test(String(nombre||'')); }
+// Recorre TODOS los proyectos/torres y arma el análisis. Reusa _avReporteSnapshot (que ya calcula
+// bien las 4 dimensiones, incl. el basePcts de material) + el campo cuenta (v848) para "sin datos".
+function _avAnalisisDesparejos(TOL){
+  TOL = (typeof TOL==='number') ? TOL : 40;
+  function snap(t,p){ try{ return _avReporteSnapshot(t,p); }catch(e){ return {torres:[]}; } }
+  var res={ tol:TOL, proyectos:[], totalDesp:0, totalNotas:0, totalTorres:0 };
+  var projs=(window.state && window.state.projects)||[];
+  projs.forEach(function(p){
+    var byT={ fisico:snap('fisico',p), cobro:snap('cobro',p), material:snap('material',p), pago:snap('pago',p) };
+    var pObj={ name:String(p.name||p.id||''), torres:[] };
+    (byT.fisico.torres||[]).forEach(function(tF,ti){
+      var units=[];
+      (tF.niveles||[]).forEach(function(lF,li){
+        (lF.aptos||[]).forEach(function(aF,ai){
+          var get=function(s){ try{ return s.torres[ti].niveles[li].aptos[ai]; }catch(e){ return null; } };
+          var m={};
+          ['fisico','cobro','material','pago'].forEach(function(k){ var a=get(byT[k]); m[k]={ pct:(a?(Number(a.pct)||0):0), cuenta:(a?(a.cuenta!==false):false) }; });
+          units.push({ name:String(aF.name||'?'), esComun:_avEsAreaComun(aF.name), m:m });
+        });
+      });
+      var an=_avAnalisisTorreApt(units, TOL);
+      if(an.notas.length || an.desparejos.length){
+        pObj.torres.push({ name:String(tF.name||''), notas:an.notas, desparejos:an.desparejos });
+        res.totalTorres++; res.totalDesp+=an.desparejos.length; res.totalNotas+=an.notas.length;
+      }
+    });
+    if(pObj.torres.length) res.proyectos.push(pObj);
+  });
+  return res;
+}
+window._avAnalisisDesparejos=_avAnalisisDesparejos;
+// v848: UI on-demand del análisis (se calcula al tocar ANALIZAR, no en cada render del dashboard).
+window._avDesparejosUI=function(){
+  var cont=document.getElementById('dashDesparejos'); if(!cont) return;
+  cont.innerHTML='<div class="empty" style="padding:20px">ANALIZANDO…</div>';
+  setTimeout(function(){
+    try{
+      var res=_avAnalisisDesparejos(40); window._avDesparejosLast=res;
+      cont.innerHTML=_avDesparejosHTML(res);
+      var b=document.getElementById('btnDesparejosPdf'); if(b) b.style.display='';
+    }catch(e){ console.warn('desparejos UI', e); cont.innerHTML='<div class="empty" style="padding:20px;color:#b00">No se pudo generar el análisis.</div>'; }
+  },20);
+};
+function _avDesparejosHTML(res){
+  var _esc=(typeof esc==='function')?esc:function(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});};
+  if(!res || !res.proyectos.length) return '<div class="empty" style="padding:20px">Todo parejo — no hay apartamentos fuera de nivel.</div>';
+  var col=function(d){ return d.diff<0?'#B91C1C':'#B45309'; };
+  var h='<div style="font-size:12.5px;color:#475569;margin:4px 0 14px">Tolerancia 40% · referencia <strong>AVANCE FÍSICO</strong> · <strong>'+res.totalDesp+'</strong> apto'+(res.totalDesp===1?'':'s')+' desparejo'+(res.totalDesp===1?'':'s')+' · '+res.totalNotas+' aviso'+(res.totalNotas===1?'':'s')+' de torre · áreas comunes excluidas</div>';
+  res.proyectos.forEach(function(p){
+    h+='<div style="margin-bottom:14px"><div style="font-size:13px;font-weight:800;color:#1a1a1a;border-bottom:2px solid #E5E7EB;padding-bottom:4px;margin-bottom:8px">'+_esc(p.name)+'</div>';
+    p.torres.forEach(function(t){
+      h+='<div style="margin:6px 0 10px 4px"><div style="font-size:11.5px;font-weight:700;color:#334155">'+_esc(t.name||'')+' <span style="font-weight:600;color:#94A3B8">· '+t.desparejos.length+' desparejo'+(t.desparejos.length===1?'':'s')+'</span></div>';
+      t.notas.forEach(function(n){ h+='<div style="font-size:11px;color:#92400E;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:5px 8px;margin:4px 0">'+_esc(n)+'</div>'; });
+      if(t.desparejos.length){
+        h+='<div style="display:grid;gap:4px;margin-top:4px">';
+        t.desparejos.forEach(function(a){
+          var dd=a.dims.map(function(d){ return '<span style="color:'+col(d)+';font-weight:700">'+_esc(d.label)+' '+(d.sinDatos?'SIN DATOS':d.pct+'%')+'</span> ('+(d.diff<0?'':'+')+d.diff+')'; }).join('  ·  ');
+          h+='<div style="font-size:11px;color:#475569;display:flex;gap:8px;flex-wrap:wrap;align-items:baseline"><strong style="color:#1a1a1a;min-width:54px">'+_esc(a.name)+'</strong><span style="color:#64748B">FÍSICO '+a.fisicoPct+'%</span><span style="color:#CBD5E1">→</span>'+dd+'</div>';
+        });
+        h+='</div>';
+      }
+      h+='</div>';
+    });
+    h+='</div>';
+  });
+  return h;
+}
+window._avDesparejosHTML=_avDesparejosHTML;
 // Resuelve la fuente de items de una etapa/nivel: PDF per-nivel (totales) o receta clásica.
 function _recetaEtapaResuelta(p, t, l, stageIdx){
   var data = p && p.materiales && p.materiales.recetaPorTorreYNivel, per=null;
@@ -19982,6 +20093,39 @@ function _pdfAvanceReporteTorreDoc(tipo, p, snap, t){
   _pdfDescargar(doc, fn);
 }
 window._pdfAvanceReporteTorreDoc=_pdfAvanceReporteTorreDoc;
+// v848: PDF del ANÁLISIS DE APARTAMENTOS DESPAREJOS (todos los proyectos/torres).
+function _pdfAnalisisDesparejos(){
+  try{
+    if(typeof window.jspdf==='undefined'||!window.jspdf.jsPDF){ try{showToast('JSPDF NO CARGÓ — RECARGAR LA APP','red');}catch(e){} return; }
+    var res=(window._avDesparejosLast)||(window._avAnalisisDesparejos?window._avAnalisisDesparejos(40):null);
+    if(!res || !res.proyectos.length){ try{showToast('TODO PAREJO — NADA QUE REPORTAR','red');}catch(e){} return; }
+    var jsPDF=window.jspdf.jsPDF, doc=new jsPDF({unit:'pt',format:'a4',orientation:'portrait'});
+    var pageW=doc.internal.pageSize.width, pageH=doc.internal.pageSize.height, M=40, bottom=pageH-34, y=44;
+    try{ _pdfLogo(doc); }catch(e){}
+    doc.setFontSize(14); doc.setFont(undefined,'bold'); doc.setTextColor(0);
+    doc.text('APARTAMENTOS DESPAREJOS', pageW/2, y, {align:'center'}); y+=18;
+    var dd=new Date(), ft=String(dd.getDate()).padStart(2,'0')+'/'+String(dd.getMonth()+1).padStart(2,'0')+'/'+dd.getFullYear();
+    doc.setFontSize(9.5); doc.setFont(undefined,'normal'); doc.setTextColor(90);
+    doc.text('Tolerancia 40% · referencia AVANCE FÍSICO · '+res.totalDesp+' desparejos · '+res.totalNotas+' avisos · '+ft, pageW/2, y, {align:'center'}); y+=20; doc.setTextColor(0);
+    function ensure(hh){ if(y+hh>bottom){ doc.addPage(); y=44; } }
+    res.proyectos.forEach(function(p){
+      ensure(22); doc.setFillColor(200,20,28); doc.rect(M,y,pageW-2*M,16,'F'); doc.setTextColor(255); doc.setFontSize(11); doc.setFont(undefined,'bold'); doc.text(String(p.name||'').toUpperCase(), M+8, y+11.5); doc.setTextColor(0); y+=22;
+      (p.torres||[]).forEach(function(t){
+        ensure(16); doc.setFontSize(10); doc.setFont(undefined,'bold'); doc.setTextColor(40); doc.text(String(t.name||'').toUpperCase()+'   ('+t.desparejos.length+' desparejo'+(t.desparejos.length===1?'':'s')+')', M+4, y+8); doc.setTextColor(0); y+=14;
+        (t.notas||[]).forEach(function(n){ ensure(12); doc.setFontSize(8.5); doc.setFont(undefined,'normal'); doc.setTextColor(180,83,9); doc.text(String(n), M+10, y+7); doc.setTextColor(0); y+=11; });
+        (t.desparejos||[]).forEach(function(a){
+          ensure(11); doc.setFontSize(8.5); doc.setFont(undefined,'normal');
+          var dl=(a.dims||[]).map(function(d){ return d.label+' '+(d.sinDatos?'SIN DATOS':d.pct+'%')+'('+(d.diff<0?'':'+')+d.diff+')'; }).join('   ');
+          doc.text(String(a.name)+'  [FÍSICO '+a.fisicoPct+'%]   '+dl, M+10, y+7); y+=11;
+        });
+        y+=4;
+      });
+      y+=6;
+    });
+    _pdfDescargar(doc, ('APARTAMENTOS DESPAREJOS - '+ft).replace(/[·\/\\:*?"<>|]/g,' ').replace(/\s+/g,' ').trim()+'.pdf');
+  }catch(e){ try{showToast('NO SE PUDO GENERAR EL PDF','red');}catch(_e){} try{console.warn('pdfDesparejos',e);}catch(_e){} }
+}
+window._pdfAnalisisDesparejos=_pdfAnalisisDesparejos;
 
 /* ════════════════════ v825/v827: TIPOGRAFÍA DE LA APP EN LOS PDFs ════════════════════
    jsPDF usa Helvetica; acá embebemos la fuente de la app (v827: Familjen Grotesk) en cada
