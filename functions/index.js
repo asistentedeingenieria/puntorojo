@@ -153,6 +153,34 @@ exports.onNotificationCreated = onDocumentCreated(
   }
 );
 
+// A1 (seguridad): ¿el que creó el doc-trigger es staff real (tiene algún permiso)?
+// true = staff, false = sin permisos / no existe (phishing/spam → descartar),
+// null = no se sabe (cliente viejo sin createdByUid) → el llamador decide (transición).
+async function creatorIsStaff(db, uid){
+  if (!uid) return null;
+  try {
+    const u = await db.collection('users').doc(uid).get();
+    if (!u.exists) return false;
+    const perms = Array.isArray(u.data().perms) ? u.data().perms : [];
+    return perms.length > 0;
+  } catch (e) { console.warn('creatorIsStaff err:', e && e.message); return null; }
+}
+
+// A1/M1 (seguridad): destinatarios derivados del SERVIDOR (no del doc del cliente, que podría
+// redirigir los avisos a un email externo). Emails de los users con alguno de esos permisos (o '*').
+async function usersByPerm(db, perms){
+  const out = [];
+  const snap = await db.collection('users').get();
+  snap.forEach(doc => {
+    const u = doc.data() || {};
+    const up = Array.isArray(u.perms) ? u.perms : [];
+    if (up.includes('*') || perms.some(p => up.includes(p))) {
+      if (u.email) out.push(String(u.email).toLowerCase());
+    }
+  });
+  return out;
+}
+
 // C1 (seguridad): acota y sanea los destinatarios de un fan-out de notificación.
 // Evita el broadcast total ('*'), la amplificación por arrays gigantes y entradas no-string.
 function _sanitizeNotifyTargets(req){
@@ -201,6 +229,17 @@ exports.onNotifyByPerm = onDocumentCreated(
     const excludeUid = String(req.excludeUid || '');
 
     const db = getFirestore();
+
+    // A1: descartar si el creador NO es staff real (cuenta sin permisos = phishing/spam a admins).
+    // Lenient en transición: si el doc no trae createdByUid (cliente viejo) se permite + log.
+    const createdByUid = String(req.createdByUid || '');
+    const _staff = await creatorIsStaff(db, createdByUid);
+    if (_staff === false) {
+      console.warn('notifyByPerm: creador sin permisos, descartado:', createdByUid);
+      try { await snap.ref.delete(); } catch (e) {}
+      return;
+    }
+    if (_staff === null) console.warn('notifyByPerm sin createdByUid (cliente viejo?) — permitido en transición');
 
     if (!toPerms.length && !toEmails.length) {
       console.log('notifyByPerm sin destinatarios — borro.');
@@ -457,9 +496,18 @@ exports.onExcepcionPagoCreada = onDocumentCreated(
       return;
     }
 
-    const adminEmails = Array.isArray(exc.adminEmails) ? exc.adminEmails.filter(x => x && typeof x === 'string') : [];
+    const db = getFirestore();
+    // A1: descartar si el solicitante NO es staff real (cuenta sin permisos = forja/spam).
+    const _staff = await creatorIsStaff(db, String(exc.createdByUid || ''));
+    if (_staff === false) {
+      console.warn('excepcionesPago: creador sin permisos, no envío email:', exc.createdByUid);
+      return;
+    }
+    // M1: destinatarios derivados del SERVIDOR, no de exc.adminEmails (que un doc forjado podría
+    // apuntar a un email externo para exfiltrar la solicitud).
+    const adminEmails = await usersByPerm(db, ['users.manage', 'planilla.authorize']);
     if (adminEmails.length === 0) {
-      console.warn(`Excepción ${event.params.excId} sin adminEmails — no hay a quién avisar.`);
+      console.warn(`Excepción ${event.params.excId} sin admins con permiso — no hay a quién avisar.`);
       return;
     }
 
@@ -543,7 +591,17 @@ exports.onExcepcionPagoDecidida = onDocumentUpdated(
       return;
     }
 
-    const supervisorEmail = after.supervisorEmail;
+    // M1: el destinatario (el supervisor solicitante) se deriva del SERVIDOR vía createdByUid,
+    // no de after.supervisorEmail (que un doc forjado podría redirigir). Fallback al campo del
+    // doc solo si no hay createdByUid (cliente viejo, transición).
+    const db = getFirestore();
+    let supervisorEmail = '';
+    const _cb = String(after.createdByUid || '');
+    if (_cb) {
+      try { const su = await db.collection('users').doc(_cb).get(); if (su.exists && su.data().email) supervisorEmail = String(su.data().email); }
+      catch (e) { console.warn('lookup supervisor email fail:', e && e.message); }
+    }
+    if (!supervisorEmail) supervisorEmail = after.supervisorEmail || '';
     if (!supervisorEmail) {
       console.warn(`Excepción ${event.params.excId} sin supervisorEmail`);
       return;
