@@ -1,35 +1,26 @@
-v842: entrega de anticipo con factura+carta firmada (irreversibles) + foto opcional en la solicitud
+v843: FIX tormenta de SINCRONIZANDO — la limpieza de cobro re-subía en bucle (resource-exhausted)
 
-v841 — GATE DE DOCUMENTOS ANTES DE ENTREGAR (sub-pestaña SOLICITUDES, estado AUTORIZADA):
-- Antes de MARCAR ENTREGADO hay que subir, en secuencia: PASO 1 FACTURA del producto y
-  PASO 2 CARTA FIRMADA de recibido. La carta queda bloqueada hasta tener la factura; el botón
-  ENTREGAR queda deshabilitado hasta tener AMBOS (candado también en la lógica de
-  entregarSolicitudAnticipo, no solo en la UI).
-- Documentos IRREVERSIBLES: una vez subido, solo queda VER; sin reemplazar ni borrar. Salida de
-  emergencia SOLO admin (perms ['*']) → REEMPLAZAR (ADMIN). Confirmación "¿es el documento
-  correcto? no se podrá modificar" antes de cada subida.
-- Suben solo compras (anticipos.cotizar) o gerente. Archivos a Firebase Storage
-  (anticipos-factura/ y anticipos-carta/), URLs en la solicitud; VER queda visible tras ENTREGADA.
-- Helper puro _antDocsListos(sol) (factura && carta) + _antEsAdmin().
+CAUSA RAÍZ (diagnosticada con instrumentación en vivo, confirmada por band-aid):
+La limpieza defensiva de filas de cobro vacías dentro de ensureDataV9 (index.html ~8155-8168:
+filtra filas sin monto/fecha/factura/estado o con id terminado en '_auto') quitaba filas en
+CADA applyRemote. El cambio de conteo (afterRowCount !== beforeRowCount) encendía needsResync,
+que fuerza _coreHash='' + re-subida del core y de los proyectos pesados (ESSENZA 746 KB,
+VICINIA 668 KB). Esas subidas pesadas, repetidas y con ~30 usuarios, saturaban la cola de
+escrituras de Firestore (FirebaseError resource-exhausted: write stream exhausted) → la versión
+limpia no lograba propagarse → el remoto seguía con las filas vacías → la limpieza volvía a
+quitarlas → BUCLE infinito de re-subida del core ("SINCRONIZANDO" eterno en toda la app, de 12
+a 35 s por subida). Confirmado por eliminación: blindaje de caras NO (las 65 caras están en el
+doc, FALTAN=0), ningún _mergeXxx encendió needsResync, no había llamadas a saveState, y diag6
+mostró que el contenido del core NUNCA cambia ([core IGUAL]) — el RE-SUBIDO era puro needsResync.
 
-Fixes de la revisión adversarial (carreras de sync en la subida concurrente):
-- #1/#2: re-validar irreversibilidad y secuencia factura→carta TRAS la subida (3er re-read),
-  borrando mi propia url (_borrarMiUrl) si abortamos.
-- #5: borrar el archivo viejo SOLO si sigue siendo el que yo venía reemplazando (oldUrl===urlPrevia),
-  para no borrar el de otro equipo.
-- #4: los modales de anticipo (_antModalWrap → clase pr-ant-modal) entran a isUserBusy → applyRemote
-  se posterga durante la subida.
-- Regresión de #4 (2da revisión): los aborts dejaban el modal abierto y congelaban el sync;
-  ahora _cerrarDoc() cierra el modal en todos los aborts.
-- Residual aceptado: LWW de _mergeById puede dropear un doc en carrera admin-vs-admin (mismo patrón
-  que todas las solicitudes; recuperable re-subiendo; no se borra ningún archivo vivo).
+FIX: gatear ese needsResync con un flag de sesión (this._cobroCleanupResynced). La limpieza
+re-sube A LO SUMO UNA VEZ por sesión; las vueltas siguientes limpian localmente pero NO fuerzan
+re-subida. Así: (1) se corta el bucle; (2) esa primera subida limpia propaga el remoto sin las
+filas vacías → la flota converge y deja de tormentar. Solo toca ESE disparador (líneas 8812-8814);
+no cambia ningún merge ni dato de plata. La limpieza local sigue ocurriendo siempre (la pantalla
+nunca muestra basura). Verificado en vivo: con la misma lógica (band-aid) el chip pasó a EN LÍNEA
+y las subidas quedaron en "core sin cambios".
 
-v842 — FOTO DE REFERENCIA OPCIONAL en SOLICITAR ANTICIPO:
-- crearSolicitudAnticipo ahora es async: input #antSolFoto (opcional), sube best-effort a
-  anticipos-solicitud/ y guarda refFotoUrl/refFotoNombre. Si no hay foto o falla, la solicitud se
-  crea igual. Compras la ve en la tarjeta y en el modal SUBIR COTIZACIÓN (VER FOTO DE REFERENCIA).
-
-Tests: anticipo_docs_entrega.cjs (34), anticipo_docs_race_fix.cjs (10), anticipo_solicitud_foto.cjs (17).
-Suite completa verde. valjs baseline (blocks=27 errs=1).
+Test: _avancetest/sync_cleanup_loop_fix.cjs (4). Suite completa verde. valjs baseline (blocks=27 errs=1).
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>

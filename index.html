@@ -3006,7 +3006,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v842</span>
+    <span style="opacity:.5;font-size:9px">v843</span>
   </footer>
 
 </div>
@@ -8810,8 +8810,17 @@ const CloudSync = {
       ensureDataV9(merged);
       const afterRowCount = (merged.projects || []).reduce((s, pr) => s + ((pr.cobro && pr.cobro.rows) ? pr.cobro.rows.length : 0), 0);
       if (afterRowCount !== beforeRowCount) {
-        needsResync = true;
-        console.warn(`CloudSync: limpieza removió ${beforeRowCount - afterRowCount} filas vacías. Se re-subirá.`);
+        // v843: la limpieza de filas de cobro vacías re-sube A LO SUMO UNA VEZ por sesión. Antes
+        // encendía needsResync en CADA applyRemote; si la subida limpia no lograba propagarse
+        // (proyecto pesado + cola de Firestore saturada), entraba en un BUCLE de re-subida del core
+        // que saturaba las escrituras (resource-exhausted) → "SINCRONIZANDO" eterno en toda la app.
+        if (!this._cobroCleanupResynced) {
+          needsResync = true;
+          this._cobroCleanupResynced = true;
+          console.warn(`CloudSync: limpieza removió ${beforeRowCount - afterRowCount} filas vacías. Se re-subirá (una vez por sesión).`);
+        } else {
+          console.warn(`CloudSync: limpieza removió ${beforeRowCount - afterRowCount} filas vacías (ya se re-subió esta sesión; NO se re-sube de nuevo para evitar el bucle).`);
+        }
       }
     } catch(e) { console.warn('ensureDataV9 falló en applyRemote:', e); }
 

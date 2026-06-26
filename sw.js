@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v842-anticipo-docs-entrega-fixes-carrera-foto-solicitud';
+const CACHE_VERSION = 'v843-fix-tormenta-sync-limpieza-cobro-once-per-session';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
