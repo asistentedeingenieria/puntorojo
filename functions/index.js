@@ -153,6 +153,19 @@ exports.onNotificationCreated = onDocumentCreated(
   }
 );
 
+// C1 (seguridad): acota y sanea los destinatarios de un fan-out de notificación.
+// Evita el broadcast total ('*'), la amplificación por arrays gigantes y entradas no-string.
+function _sanitizeNotifyTargets(req){
+  const toPerms = (Array.isArray(req && req.toPerms) ? req.toPerms : [])
+    .filter(p => typeof p === 'string' && p !== '*' && /^[a-z0-9._-]+$/i.test(p))
+    .slice(0, 5);
+  const toEmails = (Array.isArray(req && req.toEmails) ? req.toEmails : [])
+    .map(e => String(e || '').toLowerCase().trim())
+    .filter(Boolean)
+    .slice(0, 50);
+  return { toPerms, toEmails };
+}
+
 /* ════════════════════════════════════════════════════════════════
    onNotifyByPerm — FAN-OUT de notificaciones por PERMISO (push en tiempo real).
    ────────────────────────────────────────────────────────────────
@@ -180,8 +193,7 @@ exports.onNotifyByPerm = onDocumentCreated(
     const snap = event.data;
     if (!snap) return;
     const req = snap.data() || {};
-    const toPerms  = Array.isArray(req.toPerms)  ? req.toPerms.filter(x => typeof x === 'string') : [];
-    const toEmails = Array.isArray(req.toEmails) ? req.toEmails.map(e => String(e || '').toLowerCase()).filter(Boolean) : [];
+    const { toPerms, toEmails } = _sanitizeNotifyTargets(req);   // C1: caps + sin '*'
     const title = String(req.title || 'PUNTO ROJO').slice(0, 120);
     const body  = String(req.body  || '').slice(0, 300);
     const projectId = String(req.projectId || '');
@@ -216,14 +228,18 @@ exports.onNotifyByPerm = onDocumentCreated(
     }
 
     // Un doc de notificación por destinatario → dispara onNotificationCreated → push.
-    const writes = targets.map(uid =>
-      db.collection('users').doc(uid).collection('notifications').add({
-        type, title, body, projectId,
-        createdAt: FieldValue.serverTimestamp(),
-        fanout: true
-      }).catch(e => console.warn('notif write fail', uid, e && e.message))
-    );
-    await Promise.all(writes);
+    // C1: fan-out en lotes con concurrencia acotada (no un Promise.all de N escrituras de golpe,
+    // que con un fan-out grande podía saturar Firestore).
+    for (let i = 0; i < targets.length; i += 25) {
+      const chunk = targets.slice(i, i + 25);
+      await Promise.all(chunk.map(uid =>
+        db.collection('users').doc(uid).collection('notifications').add({
+          type, title, body, projectId,
+          createdAt: FieldValue.serverTimestamp(),
+          fanout: true
+        }).catch(e => console.warn('notif write fail', uid, e && e.message))
+      ));
+    }
     console.log(`notifyByPerm → ${targets.length} usuario(s) notificados: "${title}"`);
 
     try { await snap.ref.delete(); } catch (e) {}
@@ -619,6 +635,31 @@ exports.onAiQuestion = onDocumentCreated(
 
     const key = ANTHROPIC_API_KEY.value();
     if (!key) { await responder({ error: 'El asistente todavía no está configurado.' }); return; }
+
+    // A4 (seguridad): rate limit por usuario para no quemar la API de Anthropic. Ventana de 60s,
+    // tope 8 preguntas. Doc contador aiRateLimit/{uid} en transacción (no necesita índice
+    // compuesto). El uid es de confianza si la regla de aiQuestions exige uid==auth.uid (B1).
+    const db = getFirestore();
+    const uid = String(q.uid || '').trim();
+    if (uid) {
+      let allowed = true;
+      try {
+        const rlRef = db.collection('aiRateLimit').doc(uid);
+        await db.runTransaction(async (tx) => {
+          const rs = await tx.get(rlRef);
+          const now = Date.now();
+          const d = rs.exists ? (rs.data() || {}) : null;
+          if (!d || (now - (d.windowStart || 0)) > 60000) {
+            tx.set(rlRef, { windowStart: now, count: 1 });
+          } else if ((d.count || 0) >= 8) {
+            allowed = false;
+          } else {
+            tx.update(rlRef, { count: (d.count || 0) + 1 });
+          }
+        });
+      } catch (rlErr) { console.warn('aiRateLimit tx fail:', rlErr && rlErr.message); }
+      if (!allowed) { await responder({ error: 'Demasiadas preguntas seguidas. Esperá un minuto.' }); return; }
+    }
 
     const sys = [
       'Sos el asistente de la app Punto Rojo (gestión de obra de drywall en Guatemala).',
