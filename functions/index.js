@@ -337,8 +337,11 @@ exports.getReceptorAcuses = onRequest(
         generadoEn: Date.now()
       });
     } catch (e) {
-      console.error('getReceptorAcuses error:', e && e.message);
-      res.status(500).json({ error: 'Error interno: ' + (e.message || '') });
+      // M3: no devolver e.message al cliente (mapea la estructura de Firestore). Log server-side
+      // con un id de referencia para poder rastrearlo sin filtrar detalles.
+      const errId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+      console.error('getReceptorAcuses[' + errId + '] error:', e && e.message);
+      res.status(500).json({ error: 'Error interno del servidor', ref: errId });
     }
   }
 );
@@ -383,6 +386,16 @@ function fechaGT(ts){
   if (!ts) return '—';
   try { return new Date(ts).toLocaleString('es-GT', { dateStyle:'long', timeStyle:'short' }); }
   catch(e){ return new Date(ts).toString(); }
+}
+
+// M1 (seguridad): escapar TODO campo de usuario antes de meterlo al HTML del email.
+// Antes solo se escapaba `<` en razon/notaDecision; el resto (obrero, nombres, apto) iba crudo
+// → un usuario podía inyectar HTML/CSS (tracking via background:url, links de phishing) en el
+// correo que reciben los admins/supervisores.
+function escHtml(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 function emailLayout(title, body){
@@ -437,21 +450,25 @@ exports.onExcepcionPagoCreada = onDocumentCreated(
     const transporter = buildTransport(user, pass);
     const subject = `[Punto Rojo] Solicitud de pago sin acuse — ${exc.aptoNombre || ''} · ${exc.etapaNombre || ''}`;
 
+    // M1: tope de longitud server-side (el cliente valida mínimos, pero un doc forjado podría
+    // traer una razón gigante que rompa/atrase el envío del email).
+    const razon = String(exc.razon || '').slice(0, 500);
+
     const body = `
-      <p><strong>${exc.supervisorNombre || exc.supervisorEmail || 'Un supervisor'}</strong> solicita aprobación para pagar una etapa que <strong style="color:#C8141C">no tiene acuse firmado por el cliente</strong>.</p>
+      <p><strong>${escHtml(exc.supervisorNombre || exc.supervisorEmail || 'Un supervisor')}</strong> solicita aprobación para pagar una etapa que <strong style="color:#C8141C">no tiene acuse firmado por el cliente</strong>.</p>
 
       <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
-        <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700;width:160px">Proyecto:</td><td style="padding:6px 10px">${exc.projectName || '—'}</td></tr>
-        <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700">Ubicación:</td><td style="padding:6px 10px">${exc.torreNombre || ''} · ${exc.nivelNombre || ''} · <strong>${exc.aptoNombre || ''}</strong></td></tr>
-        <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700">Etapa:</td><td style="padding:6px 10px">${exc.etapaNombre || '—'}</td></tr>
-        <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700">Obrero:</td><td style="padding:6px 10px"><strong>${exc.obrero || '—'}</strong></td></tr>
+        <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700;width:160px">Proyecto:</td><td style="padding:6px 10px">${escHtml(exc.projectName || '—')}</td></tr>
+        <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700">Ubicación:</td><td style="padding:6px 10px">${escHtml(exc.torreNombre || '')} · ${escHtml(exc.nivelNombre || '')} · <strong>${escHtml(exc.aptoNombre || '')}</strong></td></tr>
+        <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700">Etapa:</td><td style="padding:6px 10px">${escHtml(exc.etapaNombre || '—')}</td></tr>
+        <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700">Obrero:</td><td style="padding:6px 10px"><strong>${escHtml(exc.obrero || '—')}</strong></td></tr>
         <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700">Monto bruto:</td><td style="padding:6px 10px;font-weight:700;color:#C8141C">${fmtMoneda(exc.monto)}</td></tr>
         <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700">Solicitada:</td><td style="padding:6px 10px">${fechaGT(exc.solicitadoEn)}</td></tr>
       </table>
 
       <div style="background:#FEF3C7;border-left:4px solid #F59E0B;padding:12px 14px;margin:14px 0;border-radius:3px">
         <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:#92400E;margin-bottom:6px">MOTIVO DEL SUPERVISOR</div>
-        <div style="color:#222;font-style:italic">"${(exc.razon || '').replace(/</g,'&lt;')}"</div>
+        <div style="color:#222;font-style:italic">"${escHtml(razon)}"</div>
       </div>
 
       <p>Para aprobar o rechazar, entrá a la app y andá a <strong>Planillas → Excepciones</strong>.</p>
@@ -528,19 +545,20 @@ exports.onExcepcionPagoDecidida = onDocumentUpdated(
       ? `<p style="color:#16A34A;font-weight:700">Ya podés generar el pago en la app. Recordá que el cliente todavía debe firmar el acuse después.</p>`
       : `<p style="color:#C8141C;font-weight:700">No vas a poder pagar esta etapa hasta que el cliente firme el acuse de recepción.</p>`;
 
-    const notaTxt = (after.notaDecision && after.notaDecision.trim())
-      ? `<div style="background:#fff;border:1px solid #ddd;padding:10px 14px;margin:12px 0;border-radius:3px"><div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:#666;margin-bottom:6px">NOTA DEL ADMINISTRADOR</div><div>${after.notaDecision.replace(/</g,'&lt;')}</div></div>`
+    const nota = String(after.notaDecision || '').slice(0, 500);   // M1: tope de longitud
+    const notaTxt = (nota && nota.trim())
+      ? `<div style="background:#fff;border:1px solid #ddd;padding:10px 14px;margin:12px 0;border-radius:3px"><div style="font-size:11px;font-weight:700;letter-spacing:1.5px;color:#666;margin-bottom:6px">NOTA DEL ADMINISTRADOR</div><div>${escHtml(nota)}</div></div>`
       : '';
 
     const body = `
       <div style="background:${colorBanner};color:#fff;padding:14px 16px;border-radius:4px;text-align:center;font-weight:700;font-size:14px;letter-spacing:2px;margin-bottom:16px">${tituloBanner}</div>
 
-      <p>El administrador <strong>${after.decididoPorNombre || after.decididoPor || 'Admin'}</strong> respondió tu solicitud:</p>
+      <p>El administrador <strong>${escHtml(after.decididoPorNombre || after.decididoPor || 'Admin')}</strong> respondió tu solicitud:</p>
 
       <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
-        <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700;width:160px">Apartamento:</td><td style="padding:6px 10px"><strong>${after.aptoNombre || '—'}</strong></td></tr>
-        <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700">Etapa:</td><td style="padding:6px 10px">${after.etapaNombre || '—'}</td></tr>
-        <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700">Obrero:</td><td style="padding:6px 10px">${after.obrero || '—'}</td></tr>
+        <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700;width:160px">Apartamento:</td><td style="padding:6px 10px"><strong>${escHtml(after.aptoNombre || '—')}</strong></td></tr>
+        <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700">Etapa:</td><td style="padding:6px 10px">${escHtml(after.etapaNombre || '—')}</td></tr>
+        <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700">Obrero:</td><td style="padding:6px 10px">${escHtml(after.obrero || '—')}</td></tr>
         <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700">Monto:</td><td style="padding:6px 10px;font-weight:700">${fmtMoneda(after.monto)}</td></tr>
         <tr><td style="padding:6px 10px;background:#f5f1e8;font-weight:700">Decidida:</td><td style="padding:6px 10px">${fechaGT(after.decididoEn)}</td></tr>
       </table>
@@ -628,9 +646,10 @@ exports.onAiQuestion = onDocumentCreated(
       if (!respuesta) respuesta = 'No pude armar una respuesta. Probá reformular la pregunta.';
       await responder({ respuesta });
     } catch (e) {
+      // M2: el diagnóstico (status/mensaje de la API) va SOLO al log del servidor, NO al cliente
+      // (filtraba el estado de la API de Anthropic — p.ej. 429 — y facilitaba coordinar el abuso).
       console.error('onAiQuestion error:', e && (e.status || ''), e && e.message);
-      var _diag = e ? (e.status ? (' [' + e.status + ']') : (e.message ? (' [' + String(e.message).slice(0, 90) + ']') : '')) : '';
-      await responder({ error: 'No pude responder ahora, probá de nuevo.' + _diag });
+      await responder({ error: 'No pude responder ahora, probá de nuevo.' });
     }
   }
 );
