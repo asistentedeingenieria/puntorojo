@@ -3006,7 +3006,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v843</span>
+    <span style="opacity:.5;font-size:9px">v844</span>
   </footer>
 
 </div>
@@ -8957,7 +8957,9 @@ const CloudSync = {
         merged.solicitudesColaboradores = _mSolC.list; if (_mSolC.changed) needsResync = true;
         const _mSolPE = _mergeById((state && state.solicitudesPagoEtapa) || [], merged.solicitudesPagoEtapa || [], null); // v775: solicitudes de pago a otra persona
         merged.solicitudesPagoEtapa = _mSolPE.list; if (_mSolPE.changed) needsResync = true;
-        const _mSolAn = _mergeById((state && state.solicitudesAnticipo) || [], merged.solicitudesAnticipo || [], null); // v777: solicitudes de anticipo
+        const _solAnTomb = Object.assign({}, (state && state.solicitudesAnticipoEliminadas) || {}, merged.solicitudesAnticipoEliminadas || {}); // v844: tombstone — el admin puede borrar canceladas y el sync NO las revive
+        merged.solicitudesAnticipoEliminadas = _solAnTomb;
+        const _mSolAn = _mergeById((state && state.solicitudesAnticipo) || [], merged.solicitudesAnticipo || [], _solAnTomb); // v777: solicitudes de anticipo · v844: con tombstone
         merged.solicitudesAnticipo = _mSolAn.list; if (_mSolAn.changed) needsResync = true;
       }
     } catch(e){ console.warn('blindaje de plata en applyRemote:', e); }
@@ -46617,6 +46619,25 @@ async function _anulAnularReal(){
     _antSolicSave();
     showT('SOLICITUD CANCELADA','info');
   };
+  // v844: ELIMINAR (solo ADMIN) una solicitud CANCELADA — definitivo. Tombstone para que el sync
+  // NUNCA la revuelva a traer (solicitudesAnticipo se une por id; sin tombstone reaparecería).
+  window.eliminarSolicitudAnticipo = async function(solId){
+    if(!_antEsAdmin()){ showT('SOLO ADMIN PUEDE ELIMINAR','red'); return; }
+    const sol = _antSolics().find(s=>s.id===solId);
+    if(!sol || sol.estado!=='cancelada'){ showT('SOLO SE PUEDEN ELIMINAR LAS CANCELADAS','red'); return; }
+    const ok = await window.prConfirm({ title:'Eliminar solicitud cancelada', body:'¿Eliminar definitivamente esta solicitud cancelada de '+sol.colaboradorNombre+'? No se podrá recuperar y no volverá a aparecer.', okText:'SÍ, ELIMINAR', cancelText:'NO', danger:true });
+    if(!ok) return;
+    // stale-ref v769/v770: re-leer + re-validar tras el modal.
+    const sol2 = _antSolics().find(s=>s.id===solId);
+    if(!sol2 || sol2.estado!=='cancelada'){ showT('LA SOLICITUD YA CAMBIÓ DE ESTADO','red'); try{ window.renderPlanillaAnticipos(); }catch(e){} return; }
+    // tombstone (que no resucite por sync) + quitar del array.
+    try{ if(!state.solicitudesAnticipoEliminadas || typeof state.solicitudesAnticipoEliminadas!=='object' || Array.isArray(state.solicitudesAnticipoEliminadas)) state.solicitudesAnticipoEliminadas={}; state.solicitudesAnticipoEliminadas[solId]=Date.now(); }catch(e){}
+    // best-effort: borrar los archivos de Storage de la solicitud (foto de referencia / cotización).
+    try{ if(typeof firebase!=='undefined' && firebase.storage){ [sol2.refFotoUrl, sol2.cotArchivoUrl].forEach(function(u){ if(u && String(u).indexOf('firebasestorage')>=0){ try{ firebase.storage().refFromURL(u).delete().catch(()=>{}); }catch(e){} } }); } }catch(e){}
+    const arr = _antSolics(); const i = arr.findIndex(s=>s.id===solId); if(i>=0) arr.splice(i,1);
+    _antSolicSave();
+    showT('SOLICITUD ELIMINADA','info');
+  };
   // ── Modales (standalone, leen los inputs en el onclick) ──
   function _antModalWrap(id, titulo, bodyHTML){
     var prev=document.getElementById(id); if(prev) prev.remove();
@@ -46762,6 +46783,7 @@ async function _anulAnularReal(){
         docsVer = '<div style="font-size:11px;color:#15803D;margin-top:3px">'+_b.join(' · ')+'</div>';
       }
       if((s.estado==='pendiente_cotizacion'||s.estado==='pendiente_autorizacion') && (esCreador||esGer)) acciones += '<button class="btn ghost sm" onclick="window.cancelarSolicitudAnticipo(\''+esc(s.id)+'\')" style="border-color:#C62828;color:#C62828;padding:6px 14px;font-size:11px">CANCELAR</button>';
+      if(s.estado==='cancelada' && _antEsAdmin()) acciones += '<button class="btn ghost sm" onclick="window.eliminarSolicitudAnticipo(\''+esc(s.id)+'\')" style="border-color:#B91C1C;color:#B91C1C;padding:6px 14px;font-size:11px">ELIMINAR</button>'; // v844: admin borra canceladas (con tombstone)
       const _cu = (Number(s.cuotas)>0) ? Number(s.cuotas) : ((s.cotMonto && typeof window._v416CuotasPorMonto==='function') ? window._v416CuotasPorMonto(Number(s.cotMonto)||0) : 0); // v822: cuántas cuotas (sol.cuotas o regla v416 por monto)
       const cot = (s.cotProveedor||s.cotMonto) ? ('<div style="font-size:11px;color:#1565C0;margin-top:3px">Cotización: '+esc(s.cotProveedor||'—')+' · '+_money(Number(s.cotMonto)||0)+(s.cotArchivoUrl?(' · <a href="'+esc(s.cotArchivoUrl)+'" target="_blank" style="color:#1565C0;text-decoration:underline">ver</a>'):'')+(_cu>0?(' · '+_cu+' cuota'+(_cu===1?'':'s')):'')+'</div>') : '';
       const mot = s.motivoRechazo ? ('<div style="font-size:11px;color:#B91C1C;margin-top:3px">Motivo: '+esc(s.motivoRechazo)+'</div>') : '';

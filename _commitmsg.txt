@@ -1,26 +1,19 @@
-v843: FIX tormenta de SINCRONIZANDO — la limpieza de cobro re-subía en bucle (resource-exhausted)
+v844: el admin puede ELIMINAR definitivamente una solicitud de anticipo CANCELADA (con tombstone)
 
-CAUSA RAÍZ (diagnosticada con instrumentación en vivo, confirmada por band-aid):
-La limpieza defensiva de filas de cobro vacías dentro de ensureDataV9 (index.html ~8155-8168:
-filtra filas sin monto/fecha/factura/estado o con id terminado en '_auto') quitaba filas en
-CADA applyRemote. El cambio de conteo (afterRowCount !== beforeRowCount) encendía needsResync,
-que fuerza _coreHash='' + re-subida del core y de los proyectos pesados (ESSENZA 746 KB,
-VICINIA 668 KB). Esas subidas pesadas, repetidas y con ~30 usuarios, saturaban la cola de
-escrituras de Firestore (FirebaseError resource-exhausted: write stream exhausted) → la versión
-limpia no lograba propagarse → el remoto seguía con las filas vacías → la limpieza volvía a
-quitarlas → BUCLE infinito de re-subida del core ("SINCRONIZANDO" eterno en toda la app, de 12
-a 35 s por subida). Confirmado por eliminación: blindaje de caras NO (las 65 caras están en el
-doc, FALTAN=0), ningún _mergeXxx encendió needsResync, no había llamadas a saveState, y diag6
-mostró que el contenido del core NUNCA cambia ([core IGUAL]) — el RE-SUBIDO era puro needsResync.
+Pedido del user: poder borrar las solicitudes CANCELADAS (como admin) y que no vuelvan a salir nunca.
 
-FIX: gatear ese needsResync con un flag de sesión (this._cobroCleanupResynced). La limpieza
-re-sube A LO SUMO UNA VEZ por sesión; las vueltas siguientes limpian localmente pero NO fuerzan
-re-subida. Así: (1) se corta el bucle; (2) esa primera subida limpia propaga el remoto sin las
-filas vacías → la flota converge y deja de tormentar. Solo toca ESE disparador (líneas 8812-8814);
-no cambia ningún merge ni dato de plata. La limpieza local sigue ocurriendo siempre (la pantalla
-nunca muestra basura). Verificado en vivo: con la misma lógica (band-aid) el chip pasó a EN LÍNEA
-y las subidas quedaron en "core sin cambios".
+- window.eliminarSolicitudAnticipo(solId): gate _antEsAdmin() (perms ['*']); solo estado 'cancelada';
+  prConfirm danger; re-lee del state vivo tras el modal (stale-ref v769/v770); agrega tombstone
+  (state.solicitudesAnticipoEliminadas[id]=ts), borra los archivos de Storage best-effort
+  (refFotoUrl/cotArchivoUrl), quita del array y persiste con _antSolicSave (saveState+forceUploadNow).
+- applyRemote: el merge de solicitudesAnticipo pasó de _mergeById(..., null) a usar un tombstone
+  (_solAnTomb = union local U remoto de solicitudesAnticipoEliminadas) — EXACTO patrón de anticipos
+  (v752, anticiposEliminados). Sin esto la solicitud reaparecía: solicitudesAnticipo se une por id y
+  un dispositivo con copia vieja la revivía. Converge en una vuelta (no hay loop: el id se quita
+  genuinamente y el tombstone lo mantiene fuera).
+- _antSolicRender: botón ELIMINAR (rojo) solo para estado 'cancelada' y _antEsAdmin().
 
-Test: _avancetest/sync_cleanup_loop_fix.cjs (4). Suite completa verde. valjs baseline (blocks=27 errs=1).
+Test: _avancetest/anticipo_eliminar_cancelada.cjs (12). Suite completa verde. valjs baseline
+(blocks=27 errs=1).
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
