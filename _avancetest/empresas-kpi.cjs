@@ -12,7 +12,7 @@ ok('se conserva agregar empresa (input + fn)', html.indexOf('_kpiEmpInput')>=0 &
 
 // v788: EMPRESAS (y el bloque PERSONAL) solo en COLABORADORES, NO en PÓLIZAS
 ok('EMPRESAS/PERSONAL solo en COLABORADORES (lista), vacio en otras subs', html.indexOf("(_sub==='lista' ? (_persPair+_empManage) : '')")>=0);
-ok('persKpis se limpia al entrar a POLIZAS', html.indexOf("if (tab === 'polizas') kpis.innerHTML='';")>=0);
+ok('persKpis se limpia al entrar a POLIZAS', /if \(tab === 'polizas'[^)]*\) kpis\.innerHTML='';/.test(html)); // v860: la condición ahora admite también GERENCIA
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);

@@ -2878,6 +2878,7 @@ table{max-width:100%}
         <button class="mat-tab active" data-perstab="lista" onclick="setPersonalSubTab('lista')">COLABORADORES</button>
         <button class="mat-tab" data-perstab="asistencia" onclick="setPersonalSubTab('asistencia')">ASISTENCIA</button>
         <button class="mat-tab" data-perstab="polizas" onclick="setPersonalSubTab('polizas')" data-perm="polizas.edit">PÓLIZAS</button>
+        <button class="mat-tab" data-perstab="gerencia" onclick="setPersonalSubTab('gerencia')" data-perm="personal.gerencia">GERENCIA</button>
       </div>
       <div class="kpi-grid" id="persKpis" data-perm="kpis.personal"></div>
 
@@ -2913,6 +2914,18 @@ table{max-width:100%}
         <div class="asist-grid" id="asistGrid"></div>
       </div>
       <div id="planilla-polizas" style="display:none"></div>
+
+      <!-- v860: GERENCIA — roster PRIVADO de gerentes generales / dueños (gateado por personal.gerencia) -->
+      <div class="card" id="pers-gerencia-panel" style="display:none">
+        <div class="card-hd"><h3>GERENCIA</h3>
+          <div class="hd-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex:1 1 100%;margin-top:4px">
+            <input id="gerBuscar" class="inline" placeholder="Buscar nombre / cargo / empresa / DPI…" oninput="_gerSetBuscar(this.value)" style="flex:1 1 200px;min-width:160px">
+            <button class="btn olive sm" data-perm="personal.gerencia" onclick="_gerenciaModal(null)" style="flex:0 0 auto">+ AGREGAR</button>
+          </div>
+        </div>
+        <div class="colab-headbar"><span>NOMBRE</span><span>CARGO</span></div>
+        <div id="gerBody" class="colab-list"></div>
+      </div>
     </section>
 
 
@@ -3018,7 +3031,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v859</span>
+    <span style="opacity:.5;font-size:9px">v860</span>
   </footer>
 
 </div>
@@ -4569,6 +4582,7 @@ const PERMS_DISPONIBLES = [
   { key: 'anticipos.verEstado', label: 'Ver estado de anticipos (solo lectura)', group: 'EDICIÓN PERSONAL' }, // v822: solo VER el status de los pedidos (sin pedir/cotizar/autorizar/entregar)
   { key: 'personal.pagoObra', label: 'Marcar "COBRA EN PLANILLA DE OBRA"', group: 'EDICIÓN PERSONAL' }, // v831: elegir QUIÉN puede marcar el opt-in de pago en planilla de obra
   { key: 'personal.asistenciaMensual', label: 'Descargar reporte MENSUAL de asistencia', group: 'EDICIÓN PERSONAL' }, // v838: reporte mensual restringido (horas + ubicación EN OBRA/FUERA)
+  { key: 'personal.gerencia', label: 'Ver y gestionar GERENCIA (gerentes/dueños)', group: 'EDICIÓN PERSONAL' }, // v860: pestaña PRIVADA de gerencia
   { key: 'projects.create',  label: 'Crear proyectos nuevos',  group: 'ADMINISTRACIÓN' },
   { key: 'data.import',      label: 'Importar/resetear datos', group: 'ADMINISTRACIÓN' },
   { key: 'users.manage',     label: 'Gestionar usuarios',      group: 'ADMINISTRACIÓN' },
@@ -8993,6 +9007,12 @@ const CloudSync = {
         merged.solicitudesAnticipoEliminadas = _solAnTomb;
         const _mSolAn = _mergeById((state && state.solicitudesAnticipo) || [], merged.solicitudesAnticipo || [], _solAnTomb); // v777: solicitudes de anticipo · v844: con tombstone
         merged.solicitudesAnticipo = _mSolAn.list; if (_mSolAn.changed) needsResync = true;
+
+        // v860: GERENCIA — roster privado; mismo union-merge idempotente + tombstones que el resto.
+        const _gerTomb = Object.assign({}, (state && state.gerenciaEliminados) || {}, merged.gerenciaEliminados || {});
+        merged.gerenciaEliminados = _gerTomb;
+        const _mGer = _mergeById((state && state.gerenciaGlobal) || [], merged.gerenciaGlobal || [], _gerTomb);
+        merged.gerenciaGlobal = _mGer.list; if (_mGer.changed) needsResync = true;
       }
     } catch(e){ console.warn('blindaje de plata en applyRemote:', e); }
 
@@ -21224,6 +21244,86 @@ async function _subirDpiBlob(person, lado, file){
   const url=await ref.getDownloadURL();
   person[lado==='frente'?'dpiFrenteURL':'dpiReversoURL']=url;
 }
+/* ── v860: GERENCIA — roster PRIVADO de gerentes generales / dueños ──
+   Array propio state.gerenciaGlobal (SEPARADO de personalGlobal → nunca se filtra a las listas ni
+   combos de colaboradores que ve el resto). Gateado por el permiso personal.gerencia. Sync con
+   union-merge idempotente (_mergeById) + tombstones, igual que pólizas/personal. */
+function _getGerencia(){ try{ if(typeof state!=='undefined' && state){ if(!Array.isArray(state.gerenciaGlobal)) state.gerenciaGlobal=[]; return state.gerenciaGlobal; } }catch(e){} return []; }
+function _getGerenciaTomb(){ try{ if(typeof state!=='undefined' && state){ if(!state.gerenciaEliminados||typeof state.gerenciaEliminados!=='object') state.gerenciaEliminados={}; return state.gerenciaEliminados; } }catch(e){} return {}; }
+function _gerPuede(){ return (typeof can==='function') && (can('personal.gerencia')||can('users.manage')); }
+var _gerBuscarTxt='';
+function _gerSetBuscar(v){ _gerBuscarTxt=String(v||'').toLowerCase(); renderGerencia(); }
+// CRUD puro (testeable)
+function _gerenciaUpsert(list, entry){
+  var out = Array.isArray(list)?list.slice():[];
+  var i = -1; for(var k=0;k<out.length;k++){ if(out[k] && out[k].id===entry.id){ i=k; break; } }
+  if(i>=0) out[i]=entry; else out.push(entry);
+  return out;
+}
+function _gerenciaRemove(list, id, tombs){
+  if(tombs) tombs[id] = Date.now();
+  return (Array.isArray(list)?list:[]).filter(function(g){ return g && g.id!==id; });
+}
+function renderGerencia(){
+  var body=document.getElementById('gerBody'); if(!body) return;
+  if(!_gerPuede()){ body.innerHTML='<div style="padding:20px;color:var(--mute);font-size:12px;text-align:center">SIN PERMISO</div>'; return; }
+  var esc=function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]);}); };
+  var q=_gerBuscarTxt;
+  var list=_getGerencia().filter(function(g){ if(!g)return false; if(!q) return true; return (String(g.nombre||'')+' '+String(g.cargo||'')+' '+String(g.empresa||'')+' '+String(g.dpi||'')).toLowerCase().indexOf(q)>=0; });
+  list=list.slice().sort(function(a,b){ return String(a.nombre||'').localeCompare(String(b.nombre||'')); });
+  if(!list.length){ body.innerHTML='<div style="padding:24px;color:var(--mute);font-size:12px;text-align:center">SIN REGISTROS · agregá un gerente o dueño con <b>+ AGREGAR</b></div>'; return; }
+  body.innerHTML=list.map(function(g){
+    var dpiTxt=g.dpi?(' · DPI '+esc(g.dpi)):''; var telTxt=g.telefono?(' · '+esc(g.telefono)):'';
+    return '<div class="colab-item"><div class="colab-head" onclick="_gerenciaModal(\''+g.id+'\')" style="cursor:pointer">'
+      +'<span class="colab-name">'+esc(g.nombre||'(sin nombre)')+'</span>'
+      +'<span class="colab-obra" style="color:var(--mute);font-size:11px;text-align:right">'+esc(g.cargo||'—')+(g.empresa?(' · '+esc(g.empresa)):'')+dpiTxt+telTxt+'</span>'
+      +'</div></div>';
+  }).join('');
+}
+function _gerenciaModal(id){
+  if(!_gerPuede()){ showToast('SIN PERMISO','red'); return; }
+  var g = id ? (_getGerencia().find(function(x){return x.id===id;})||null) : null;
+  var e=g||{}; var esc=function(s){ return String(s==null?'':s).replace(/"/g,'&quot;'); };
+  var html='<div class="modal-bg show" id="_gerModal" style="z-index:100040" onclick="if(event.target===this)_gerCloseModal()">'
+    +'<div class="modal" style="max-width:440px" onclick="event.stopPropagation()">'
+    +'<div class="modal-hd"><h3>'+(g?'EDITAR':'NUEVO')+' · GERENCIA</h3><button class="x" onclick="_gerCloseModal()">✕</button></div>'
+    +'<div class="modal-bd" style="display:flex;flex-direction:column;gap:10px">'
+    +'<label class="fld"><span>NOMBRE COMPLETO</span><input id="_gerNombre" value="'+esc(e.nombre)+'"></label>'
+    +'<label class="fld"><span>CARGO</span><input id="_gerCargo" placeholder="ej. GERENTE GENERAL · DUEÑO · DIRECTOR" value="'+esc(e.cargo)+'"></label>'
+    +'<label class="fld"><span>EMPRESA</span><input id="_gerEmpresa" value="'+esc(e.empresa)+'"></label>'
+    +'<label class="fld"><span>DPI</span><input id="_gerDpi" value="'+esc(e.dpi)+'"></label>'
+    +'<label class="fld"><span>TELÉFONO</span><input id="_gerTel" value="'+esc(e.telefono)+'"></label>'
+    +'</div>'
+    +'<div class="modal-ft" style="display:flex;gap:10px;justify-content:space-between;align-items:center;margin-top:18px">'
+    + (g?'<button class="btn ghost" style="color:var(--red)" onclick="_eliminarGerencia(\''+g.id+'\')">ELIMINAR</button>':'<span></span>')
+    +'<div style="display:flex;gap:10px"><button class="btn ghost" onclick="_gerCloseModal()">CANCELAR</button><button class="btn primary" onclick="_saveGerencia(\''+(g?g.id:'')+'\')">GUARDAR</button></div>'
+    +'</div></div></div>';
+  var w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);
+  if(typeof window._prLockScroll==='function') window._prLockScroll();
+  setTimeout(function(){ var n=document.getElementById('_gerNombre'); if(n) n.focus(); }, 60);
+}
+function _gerCloseModal(){ var m=document.getElementById('_gerModal'); if(m) m.remove(); if(typeof window._prUnlockScroll==='function') window._prUnlockScroll(); }
+function _gerVal(idel){ var el=document.getElementById(idel); return el?String(el.value||'').trim():''; }
+function _saveGerencia(id){
+  if(!_gerPuede()){ showToast('SIN PERMISO','red'); return; }
+  var nombre=_gerVal('_gerNombre'); if(!nombre){ showToast('ESCRIBÍ EL NOMBRE','red'); return; }
+  var entry={ id: id || ('ger-'+Date.now()+'-'+Math.floor(Math.random()*1000)),
+    nombre: nombre.toUpperCase(), cargo: _gerVal('_gerCargo'), empresa: _gerVal('_gerEmpresa'),
+    dpi: _gerVal('_gerDpi'), telefono: _gerVal('_gerTel'), _ts: Date.now() };
+  if(id){ var prev=_getGerencia().find(function(x){return x.id===id;}); if(prev){ ['dpiFrenteURL','dpiReversoURL'].forEach(function(k){ if(prev[k]) entry[k]=prev[k]; }); } } // v860: preservar foto DPI (próximo paso)
+  state.gerenciaGlobal=_gerenciaUpsert(_getGerencia(), entry);
+  try{ var T=_getGerenciaTomb(); delete T[entry.id]; }catch(e){}
+  try{ saveState(); }catch(e){}
+  try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); }catch(e){}
+  _gerCloseModal(); renderGerencia(); showToast(id?'GERENCIA ACTUALIZADA':'AGREGADO A GERENCIA','green');
+}
+function _eliminarGerencia(id){
+  if(!_gerPuede()){ showToast('SIN PERMISO','red'); return; }
+  var g=_getGerencia().find(function(x){return x.id===id;}); if(!g) return;
+  var go=function(){ state.gerenciaGlobal=_gerenciaRemove(_getGerencia(), id, _getGerenciaTomb()); try{ saveState(); }catch(e){} try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); }catch(e){} _gerCloseModal(); renderGerencia(); showToast('ELIMINADO DE GERENCIA','green'); };
+  if(typeof window.prConfirm==='function'){ window.prConfirm({ title:'ELIMINAR DE GERENCIA', bodyHTML:'¿Eliminar a <b>'+String(g.nombre||'').replace(/</g,'&lt;')+'</b> de GERENCIA?', okText:'ELIMINAR', danger:true }).then(function(ok){ if(ok) go(); }); }
+  else if(confirm('¿Eliminar a '+(g.nombre||'')+'?')){ go(); }
+}
 function agregarPersonaGlobal(){ if(!(can('personal.add')||can('users.manage'))){ showToast('SIN PERMISO PARA AGREGAR','red'); return; } _personaModalGlobal(null); }
 function editarPersonaGlobal(id){ if(!(can('personal.edit')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; } const c=_personaById(id); if(c) _personaModalGlobal(c); }
 /* v758: opciones de TORRE para la ficha = torres de la obra del colaborador (obraAsignada);
@@ -26190,7 +26290,7 @@ function _resyncFingerprint(merged){
     var parts = [
       merged.personalGlobal, merged.colaboradoresGlobal, merged.polizasGlobales, merged.anticiposGlobales,
       merged.solicitudesPolizas, merged.solicitudesAnticipos, merged.solicitudesColaboradores,
-      merged.solicitudesPagoEtapa, merged.solicitudesAnticipo, merged.asistenciaGlobal,
+      merged.solicitudesPagoEtapa, merged.solicitudesAnticipo, merged.asistenciaGlobal, merged.gerenciaGlobal,
       (merged.projects||[]).map(function(p){ return p && p.id; })
     ];
     var s = JSON.stringify(parts);
@@ -30284,14 +30384,17 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     const listaPanel = document.getElementById('pers-lista-panel');
     const asistPanel = document.getElementById('pers-asist-panel');
     const polizasPanel = document.getElementById('planilla-polizas');
+    const gerenciaPanel = document.getElementById('pers-gerencia-panel'); // v860
     const kpis = document.getElementById('persKpis');
     // #pers-lista-panel nunca se muestra a quien no puede ver COLABORADORES.
     const _verLista = (typeof _puedeVerColaboradores!=='function') || _puedeVerColaboradores();
     if (listaPanel) listaPanel.style.display = (tab === 'lista' && _verLista) ? '' : 'none';
     if (asistPanel) asistPanel.style.display = tab === 'asistencia' ? '' : 'none';
     if (polizasPanel) polizasPanel.style.display = tab === 'polizas' ? '' : 'none';
-    if (kpis){ kpis.style.display = tab === 'polizas' ? 'none' : ''; if (tab === 'polizas') kpis.innerHTML=''; } // v788: en PÓLIZAS no se muestra PERSONAL/EMPRESAS (el data-perm reactivaba el display)
+    if (gerenciaPanel) gerenciaPanel.style.display = tab === 'gerencia' ? '' : 'none'; // v860
+    if (kpis){ kpis.style.display = (tab === 'polizas' || tab === 'gerencia') ? 'none' : ''; if (tab === 'polizas' || tab === 'gerencia') kpis.innerHTML=''; } // v788/v860: en PÓLIZAS/GERENCIA no se muestra PERSONAL/EMPRESAS
     if (tab === 'polizas'){ if (typeof window.renderPlanillaPolizas === 'function'){ try { window.renderPlanillaPolizas(); } catch(e){} } }
+    else if (tab === 'gerencia'){ if (typeof renderGerencia === 'function'){ try { renderGerencia(); } catch(e){} } } // v860
     else if (!silent) renderPersonal();
   };
 
