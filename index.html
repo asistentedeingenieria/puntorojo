@@ -3018,7 +3018,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v856</span>
+    <span style="opacity:.5;font-size:9px">v857</span>
   </footer>
 
 </div>
@@ -9015,14 +9015,39 @@ const CloudSync = {
     // v277: sync silencioso, sin toast intrusivo.
     // Si la limpieza removió filas, re-subir el state limpio a la nube para que
     // todos los dispositivos se sincronicen sin la basura.
-    if (needsResync && this.ref) {
-      this._coreHash = '';   // v664: forzar la re-subida del core — la limpieza/blindaje modificó datos (p.ej. colaboradores/caras preservados) que DEBEN propagarse aunque el hash coincidiera por casualidad.
-      this.uploadCurrent().catch(e => console.warn('Re-sync post-limpieza falló:', e));
-    } else if (asistNeedsResync && this.ref) {
-      // v649: SOLO cambió la asistencia (unión de marcas locales que el remoto no traía). Se migra/propaga
-      // por el doc appState/asistencia SIN re-subir el core, para que marcar no dispare el guardado pesado.
-      // (Si needsResync también estuviera activo, uploadCurrent ya sube el doc de asistencia vía _asistHash.)
-      try { this.scheduleAsistenciaSave(); } catch(e) { console.warn('Re-sync de asistencia falló:', e); }
+    if ((needsResync || asistNeedsResync) && this.ref) {
+      // v857 #1: CORTACIRCUITOS anti-bucle. Antes de re-subir, verificar que no sea un BUCLE (el mismo
+      // estado re-sincronizándose una y otra vez por un merge no idempotente o un dato raro). Si lo es,
+      // se PAUSA la re-subida 60s y se avisa — los datos YA quedaron aplicados local (state=merged
+      // arriba); solo se corta el círculo que satura el sync. Esto blinda contra "SINCRONIZANDO eterno"
+      // de forma definitiva, sin importar cuánto crezcan los proyectos.
+      var _bkNow = Date.now();
+      var _circuitOpen = !!(this._resyncBlockedUntil && _bkNow < this._resyncBlockedUntil);
+      if (!_circuitOpen) {
+        var _bk = _evalResyncBreaker(this._resyncTimes, _bkNow, _resyncFingerprint(merged));
+        this._resyncTimes = _bk.entries;
+        if (_bk.tripped) {
+          this._resyncBlockedUntil = _bk.blockedUntil;
+          _circuitOpen = true;
+          var _dif = [];
+          try {
+            ['colaboradoresGlobal','personalGlobal','polizasGlobales','anticiposGlobales','solicitudesPolizas','solicitudesAnticipos','solicitudesColaboradores','solicitudesPagoEtapa','solicitudesAnticipo'].forEach(function(k){ try{ if (JSON.stringify(merged[k]) !== JSON.stringify(remoteData[k])) _dif.push(k); }catch(e){} });
+            if (asistNeedsResync) _dif.push('asistencia');
+            try { if (JSON.stringify(merged.projects||[]) !== JSON.stringify(remoteData.projects||[])) _dif.push('projects(colab/tomas/caras)'); }catch(e){}
+          } catch(e){}
+          console.error('[CIRCUIT-BREAKER] Bucle de re-sync detectado — se PAUSA la re-subida 60s. Difiere del remoto en:', (_dif.join(', ') || '(?)'));
+          try { if (typeof showToast === 'function') showToast('SYNC EN PAUSA (bucle detectado · 60s)', 'red'); } catch(e){}
+        }
+      }
+      if (!_circuitOpen) {
+        if (needsResync) {
+          this._coreHash = '';   // v664: forzar la re-subida del core — limpieza/blindaje modificó datos que DEBEN propagarse.
+          this.uploadCurrent().catch(e => console.warn('Re-sync post-limpieza falló:', e));
+        } else if (asistNeedsResync) {
+          // v649: SOLO cambió la asistencia → ruta LIVIANA (doc appState/asistencia, sin re-subir el core).
+          try { this.scheduleAsistenciaSave(); } catch(e) { console.warn('Re-sync de asistencia falló:', e); }
+        }
+      }
     }
   },
 
@@ -26111,6 +26136,34 @@ function _mergeLibEtapasIntoMerged(merged, localState){
     if(mLib.changed || mTomb.changed) changed = true;
   }))));
   return changed;
+}
+
+// v857 #1: CORTACIRCUITOS anti-bucle de re-sync. Si un merge no idempotente (o un dato raro) hace
+// que el MISMO estado se re-suba en bucle, lo detecta y pausa la re-subida — los datos ya quedaron
+// aplicados localmente; solo se frena el círculo. Blinda contra "SINCRONIZANDO eterno" para siempre,
+// pase lo que pase al crecer. _resyncFingerprint = huella determinista del estado re-sincronizado;
+// _evalResyncBreaker = puro: dispara solo si la MISMA huella se repite K+ veces en la ventana (un
+// bucle), nunca por cambios reales distintos (aunque vengan muy seguido).
+function _resyncFingerprint(merged){
+  try {
+    var parts = [
+      merged.personalGlobal, merged.colaboradoresGlobal, merged.polizasGlobales, merged.anticiposGlobales,
+      merged.solicitudesPolizas, merged.solicitudesAnticipos, merged.solicitudesColaboradores,
+      merged.solicitudesPagoEtapa, merged.solicitudesAnticipo, merged.asistenciaGlobal,
+      (merged.projects||[]).map(function(p){ return p && p.id; })
+    ];
+    var s = JSON.stringify(parts);
+    var h = 5381; for (var i=0;i<s.length;i++){ h = ((h*33) ^ s.charCodeAt(i)) >>> 0; }
+    return String(h);
+  } catch(e){ return 'err'; }
+}
+function _evalResyncBreaker(prevEntries, now, fp){
+  var WIN = 90000, K = 4, COOL = 60000;   // misma huella >4 veces en 90s = bucle → pausa 60s
+  var entries = (Array.isArray(prevEntries) ? prevEntries : []).filter(function(e){ return e && (now - e.t) < WIN; });
+  entries.push({ t: now, h: fp });
+  var same = 0; for (var i=0;i<entries.length;i++){ if (entries[i].h === fp) same++; }
+  if (same > K) return { entries: [], tripped: true, blockedUntil: now + COOL };
+  return { entries: entries, tripped: false, blockedUntil: 0 };
 }
 
 function _mergeById(localList, remoteList, tombSet){
