@@ -3031,7 +3031,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v860</span>
+    <span style="opacity:.5;font-size:9px">v861</span>
   </footer>
 
 </div>
@@ -21284,6 +21284,17 @@ function _gerenciaModal(id){
   if(!_gerPuede()){ showToast('SIN PERMISO','red'); return; }
   var g = id ? (_getGerencia().find(function(x){return x.id===id;})||null) : null;
   var e=g||{}; var esc=function(s){ return String(s==null?'':s).replace(/"/g,'&quot;'); };
+  // v861: foto del DPI (solo al EDITAR — la subida necesita el id). En NUEVO, hint para guardar primero.
+  var dpiSec = g ? (function(){
+    var fS='position:relative;flex:1;cursor:pointer;border:1px dashed var(--line);border-radius:6px;padding:10px;text-align:center;font-size:10px;letter-spacing:.5px;color:var(--mute);background-size:cover;background-position:center;min-height:70px;display:flex;align-items:flex-end;justify-content:center';
+    var fBg=e.dpiFrenteURL?';background-image:url('+e.dpiFrenteURL+')':''; var rBg=e.dpiReversoURL?';background-image:url('+e.dpiReversoURL+')':'';
+    var verBtn=function(url,t){ return '<button type="button" onclick="event.preventDefault();event.stopPropagation();_dpiLightbox(this.getAttribute(\'data-url\'),\''+t+'\')" data-url="'+esc(url)+'" style="position:absolute;top:5px;right:5px;background:rgba(28,25,23,.85);color:#fff;border:none;padding:4px 8px;border-radius:3px;font-size:9px;letter-spacing:1px;font-weight:700;cursor:pointer">VER</button>'; };
+    return '<div style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px;font-size:10px;color:var(--mute);letter-spacing:.5px">FOTO DEL DPI</div>'
+      +'<div style="display:flex;gap:10px;margin-top:6px">'
+      +'<label style="'+fS+fBg+'">'+(e.dpiFrenteURL?'FRENTE &#10003;':'SUBIR FRENTE')+(e.dpiFrenteURL?verBtn(e.dpiFrenteURL,'DPI - FRENTE'):'')+'<input type="file" accept="image/*" style="display:none" onchange="uploadGerenciaDPI(event,\''+g.id+'\',\'frente\')"></label>'
+      +'<label style="'+fS+rBg+'">'+(e.dpiReversoURL?'ATRÁS &#10003;':'SUBIR ATRÁS')+(e.dpiReversoURL?verBtn(e.dpiReversoURL,'DPI - REVERSO'):'')+'<input type="file" accept="image/*" style="display:none" onchange="uploadGerenciaDPI(event,\''+g.id+'\',\'reverso\')"></label>'
+      +'</div>';
+  })() : '<div style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px;font-size:10px;color:var(--mute);letter-spacing:.5px">FOTO DEL DPI</div><div style="font-size:11px;color:var(--mute);margin-top:6px">Guardá primero; al reabrir la ficha vas a poder subir la foto del DPI.</div>';
   var html='<div class="modal-bg show" id="_gerModal" style="z-index:100040" onclick="if(event.target===this)_gerCloseModal()">'
     +'<div class="modal" style="max-width:440px" onclick="event.stopPropagation()">'
     +'<div class="modal-hd"><h3>'+(g?'EDITAR':'NUEVO')+' · GERENCIA</h3><button class="x" onclick="_gerCloseModal()">✕</button></div>'
@@ -21293,6 +21304,7 @@ function _gerenciaModal(id){
     +'<label class="fld"><span>EMPRESA</span><input id="_gerEmpresa" value="'+esc(e.empresa)+'"></label>'
     +'<label class="fld"><span>DPI</span><input id="_gerDpi" value="'+esc(e.dpi)+'"></label>'
     +'<label class="fld"><span>TELÉFONO</span><input id="_gerTel" value="'+esc(e.telefono)+'"></label>'
+    +dpiSec
     +'</div>'
     +'<div class="modal-ft" style="display:flex;gap:10px;justify-content:space-between;align-items:center;margin-top:18px">'
     + (g?'<button class="btn ghost" style="color:var(--red)" onclick="_eliminarGerencia(\''+g.id+'\')">ELIMINAR</button>':'<span></span>')
@@ -21323,6 +21335,30 @@ function _eliminarGerencia(id){
   var go=function(){ state.gerenciaGlobal=_gerenciaRemove(_getGerencia(), id, _getGerenciaTomb()); try{ saveState(); }catch(e){} try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); }catch(e){} _gerCloseModal(); renderGerencia(); showToast('ELIMINADO DE GERENCIA','green'); };
   if(typeof window.prConfirm==='function'){ window.prConfirm({ title:'ELIMINAR DE GERENCIA', bodyHTML:'¿Eliminar a <b>'+String(g.nombre||'').replace(/</g,'&lt;')+'</b> de GERENCIA?', okText:'ELIMINAR', danger:true }).then(function(ok){ if(ok) go(); }); }
   else if(confirm('¿Eliminar a '+(g.nombre||'')+'?')){ go(); }
+}
+// v861: subir foto del DPI de un gerente (carpeta gerencia/<id>/ en Storage, separada de dpi/ de
+// colaboradores). Mismo patrón que uploadPersonaDPI pero sobre gerenciaGlobal + permiso gerencia.
+async function uploadGerenciaDPI(event, gerId, lado){
+  if(!_gerPuede()) return showToast('SIN PERMISO','red');
+  var file=event.target.files&&event.target.files[0]; if(!file){ return; }
+  var g=_getGerencia().find(function(x){return x.id===gerId;}); if(!g){ event.target.value=''; return; }
+  try{
+    window._prUploadShow&&window._prUploadShow();
+    if(typeof firebase==='undefined'||!firebase.storage) throw new Error('Storage no disponible');
+    var ext=((file.name.split('.').pop())||'jpg').toLowerCase();
+    var ref=firebase.storage().ref('gerencia/'+gerId+'/'+lado+'.'+ext);
+    await ref.put(file,{contentType:file.type||'image/jpeg'});
+    var url=await ref.getDownloadURL();
+    g[lado==='frente'?'dpiFrenteURL':'dpiReversoURL']=url;
+    g._ts=Date.now(); // sellar para que el merge no revierta el DPI
+    try{ saveState(); }catch(e){}
+    try{ if(typeof CloudSync!=='undefined'&&CloudSync.forceUploadNow) await CloudSync.forceUploadNow(); }catch(e){}
+    window._prUploadHide&&window._prUploadHide();
+    showToast('DPI '+(lado==='frente'?'FRENTE':'ATRÁS')+' GUARDADO','green');
+    var open=document.getElementById('_gerModal'); if(open){ _gerCloseModal(); _gerenciaModal(gerId); }
+    renderGerencia();
+  }catch(e){ window._prUploadHide&&window._prUploadHide(); console.error('[GER-DPI]',e); showToast('ERROR AL SUBIR DPI','red'); }
+  finally{ event.target.value=''; }
 }
 function agregarPersonaGlobal(){ if(!(can('personal.add')||can('users.manage'))){ showToast('SIN PERMISO PARA AGREGAR','red'); return; } _personaModalGlobal(null); }
 function editarPersonaGlobal(id){ if(!(can('personal.edit')||can('users.manage'))){ showToast('SIN PERMISO','red'); return; } const c=_personaById(id); if(c) _personaModalGlobal(c); }
