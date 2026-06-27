@@ -15,11 +15,13 @@ ok('_initAppCheck existe', !!src);
 ok('conserva kill-switch PR_DISABLE_APPCHECK', src.indexOf('PR_DISABLE_APPCHECK') >= 0);
 ok('conserva ReCaptchaV3Provider', src.indexOf('ReCaptchaV3Provider') >= 0);
 
-// Funcional: con stubs, _initAppCheck debe LLAMAR a activate (en NO-OP no lo hacía por el return).
+// Funcional: v854 REVIRTIÓ App Check a NO-OP (return temprano). _initAppCheck NO debe llamar a
+// activate (su reactivación en v851 coincidió con pérdida de escrituras en prod, patrón de v468).
+// El provider y el kill-switch quedan en el código para re-activarlo cuando la consola esté lista.
 if (src) {
-  let activateCalled = false, providerKey = null;
+  let activateCalled = false;
   const win = {};
-  function ReCaptchaV3Provider(key){ providerKey = key; }
+  function ReCaptchaV3Provider(key){ }
   const appCheckFn = function(){ return { activate: function(provider, autoRefresh){ activateCalled = true; } }; };
   appCheckFn.ReCaptchaV3Provider = ReCaptchaV3Provider;
   const firebaseStub = { appCheck: appCheckFn };
@@ -29,9 +31,8 @@ if (src) {
   const fn = new Function('window','firebase','document','localStorage','RECAPTCHA_V3_SITE_KEY','console',
                           src + '\nreturn _initAppCheck;')(win, firebaseStub, docStub, lsStub, '6Ltest_sitekey', consoleStub);
   fn();
-  ok('_initAppCheck LLAMA a appCheck().activate()', activateCalled === true);
-  ok('usa el site key configurado', providerKey === '6Ltest_sitekey');
-  ok('marca __pr_appCheckActivated', win.__pr_appCheckActivated === true);
+  ok('v854: _initAppCheck NO llama a activate (NO-OP)', activateCalled === false);
+  ok('v854: no marca __pr_appCheckActivated', !win.__pr_appCheckActivated);
 }
 
 console.log('PASS='+pass+' FAIL='+fail);
