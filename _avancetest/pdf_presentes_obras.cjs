@@ -26,7 +26,7 @@ if (src){
 
 // ── estructural: wiring en descargarPdfDiaPresentes ──
 ok('detecta modo TODAS (_obraCtx==="")', /_esTodas\s*=\s*\(_obraCtx===''\)/.test(html));
-ok('head agrega OBRA solo en TODAS', /_esTodas\s*\?\s*\['#','NOMBRE','PUESTO','OBRA'\]\s*:\s*\['#','NOMBRE','PUESTO'\]/.test(html));
+ok('head agrega OBRA solo en TODAS', /_esTodas\s*\?\s*\['#','NOMBRE','PUESTO','ENTRADA','SALIDA','OBRA'\]\s*:\s*\['#','NOMBRE','PUESTO','ENTRADA','SALIDA'\]/.test(html)); // v862: + ENTRADA/SALIDA
 ok('etiqueta la obra del día (_asistObrasLabel + _asistDiaObraIds)', /_asistObrasLabel\(_asistDiaObraIds\(/.test(html));
 ok('ordena por obra cuando TODAS', /a\.obra\.localeCompare\(b\.obra/.test(html));
 ok('título dice TODAS LAS OBRAS en ese modo', /_esTodas\s*\?\s*'TODAS LAS OBRAS'/.test(html));
