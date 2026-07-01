@@ -41,7 +41,7 @@ ok('gerenciaGlobal NO está en personalGlobal (aislado)', html.indexOf('personal
 // v861: foto del DPI en GERENCIA
 ok('uploadGerenciaDPI existe', /function uploadGerenciaDPI\(/.test(html));
 ok('uploadGerenciaDPI usa carpeta gerencia/ en Storage', html.indexOf("storage().ref('gerencia/") >= 0);
-ok('uploadGerenciaDPI setea dpiFrente/ReversoURL', /uploadGerenciaDPI[\s\S]{0,700}dpiFrenteURL/.test(html));
+ok('uploadGerenciaDPI setea dpiFrente/ReversoURL', /uploadGerenciaDPI[\s\S]{0,900}dpiFrenteURL/.test(html)); // v866: +guard isReadOnly corrió el offset
 ok('modal de gerencia (edit) cablea la subida de DPI', /onchange="uploadGerenciaDPI\(event/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);

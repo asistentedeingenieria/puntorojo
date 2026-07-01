@@ -1,26 +1,39 @@
-v865: desbloqueo TEMPORAL del marcado de etapas SIN foto (avance fisico)
+v866: usuario SOLO LECTURA — ve todo, no modifica nada (+ dashboard ejecutivo)
 
-El user pidio que, POR EL MOMENTO, TODOS los usuarios puedan seleccionar
-(marcar) las etapas del avance fisico sin haber subido las 2 fotos, porque
-el proyecto ya va avanzado.
+Nuevo tipo de usuario para gerentes/dueños que solo necesitan VISUALIZAR.
+Preset de un clic en GESTIONAR USUARIOS ("SOLO LECTURA — VE TODO, NO
+MODIFICA NADA"), mutuamente excluyente con ADMINISTRADOR. Deja al usuario
+con perms:['view.*'].
 
-Antes: solo el gerente (planilla.authorize||users.manage) marcaba sin
-fotos; el encargado recibia 'block-photos' ("FALTAN LAS 2 FOTOS
-REQUERIDAS"). Ahora un interruptor reversible _marcarEtapasSinFoto()
-(default ON) hace que toggleStage trate el marcado como si tuviera fotos:
+Mecánica:
+- isReadOnly(): detecta el token 'view.*' (y sin '*').
+- can(): para un solo-lectura da true a vistas/KPIs y a los permisos que
+  SOLO hacen visible una pestaña sensible (pólizas/gerencia/OC/anticipos)
+  vía _permEsSoloVer + _PERMS_SOLO_VER; false a TODA acción. Así ve el
+  Dashboard ejecutivo, Cobro, Avance, Materiales, Personal/Asistencia,
+  Actividad, Planillas, Anticipos, Pólizas y GERENCIA, de todas las obras.
+- Candado de escritura (garantía dura): saveState() y
+  CloudSync.uploadCurrent/uploadAsistencia NO hacen nada para un
+  solo-lectura → ningún dato de Firestore se persiste ni sincroniza aunque
+  un botón se colara. Aviso throttleado "MODO SOLO LECTURA".
 
-  _avanceToggleAccion(wasActive, esGerente,
-      (sinFoto.length === 0) || _marcarEtapasSinFoto())
+Verificación adversarial (2 agentes) sobre escrituras directas y Storage:
+la única fuga real alcanzable por un solo-lectura era uploadGerenciaDPI
+(Storage, gateada por personal.gerencia que SÍ ve). Tapada + guards en
+_saveGerencia/_eliminarGerencia. El resto de "hallazgos" eran gateados por
+users.manage/ia.usar/receptores.manage/cobro.edit/avance.edit (ocultos
+para solo-lectura) o escrituras de la propia cuenta (notificaciones).
 
-Alcance (intacto):
-- Sigue exigiendo can('avance.edit') — NO marca quien no tiene permiso.
-- El candado de DESMARCAR sigue gerente-only (v728/v821).
-- La regla de fotos NO se borro, solo se condiciona al interruptor.
+NO se toca users.manage: MODELOS Y COSTOS, ACUSES MAESTROS, CATÁLOGO DE
+PRECIOS, HABILITAR/ANULAR ETAPA y GESTIONAR USUARIOS quedan ocultos al
+solo-lectura (son superficies de administración, no datos de obra).
 
-Reversible: window._PR_MARCAR_SIN_FOTO = false (por dispositivo) o revertir
-la linea marcada "v865" en toggleStage (re-bloqueo global).
+Nota: la garantía es del lado app (cliente). El candado 100% server-side
+sería una regla de Firestore que niegue escrituras a un usuario con
+perms:['view.*'] — va aparte en la consola (Claude no la puede tocar).
 
-TDD: _avancetest/marcar_etapas_sin_foto.cjs (13/13, incluye regresion de
-_avanceToggleAccion). Suite completa verde. valjs baseline.
+TDD: _avancetest/solo_lectura.cjs (41: can/isReadOnly/_permEsSoloVer con
+harness + candado de escritura + preset del modal + guards de gerencia).
+Suite completa verde. valjs baseline.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>

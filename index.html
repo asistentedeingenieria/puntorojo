@@ -3039,7 +3039,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v865</span>
+    <span style="opacity:.5;font-size:9px">v866</span>
   </footer>
 
 </div>
@@ -4317,6 +4317,11 @@ table{max-width:100%}
       <label for="euFullAdmin" style="font-size:11px;letter-spacing:1px;text-transform:uppercase;font-weight:700;color:var(--red);cursor:pointer;margin:0">ADMINISTRADOR — TODOS LOS PERMISOS</label>
     </div>
 
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--paper);border-radius:2px;margin-bottom:10px">
+      <input type="checkbox" id="euSoloLectura" onchange="toggleEuSoloLectura(this.checked)" style="width:18px;height:18px">
+      <label for="euSoloLectura" style="font-size:11px;letter-spacing:1px;text-transform:uppercase;font-weight:700;color:var(--cafe);cursor:pointer;margin:0">SOLO LECTURA — VE TODO, NO MODIFICA NADA</label>
+    </div>
+
     <div id="euPermsList"></div>
 
     <div id="euError" class="auth-error"></div>
@@ -5147,10 +5152,34 @@ function getCurrentUser(){
   return currentUser;
 }
 
+// v866: SOLO LECTURA — un usuario con el token 'view.*' (y sin '*') VE TODO pero NO MODIFICA NADA.
+// isReadOnly() lo detecta; el candado de escritura (saveState/CloudSync no-op) es la garantía dura.
+function isReadOnly(){
+  const u = getCurrentUser();
+  return !!(u && u.perms && u.perms.indexOf('view.*') >= 0 && u.perms.indexOf('*') < 0);
+}
+// ¿el permiso es de PURA VISUALIZACIÓN? (para el modo SOLO LECTURA). true para vistas/KPIs y para
+// los perms que —aunque también gatean edición— son los ÚNICOS que hacen VISIBLE una pestaña
+// sensible (pólizas/gerencia/OC/anticipos). Las ACCIONES por esas pestañas quedan bloqueadas por el
+// candado de escritura (saveState/uploadCurrent no-op).
+var _PERMS_SOLO_VER = ['anticipos.verEstado','personal.verUbicacion','planilla.porPersona','polizas.edit','personal.gerencia','compras.autorizar'];
+function _permEsSoloVer(perm){
+  if (!perm) return true;
+  if (perm.indexOf('view.') === 0 || perm.indexOf('kpis.') === 0) return true;
+  return _PERMS_SOLO_VER.indexOf(perm) >= 0;
+}
+// aviso throttleado cuando un usuario solo-lectura intenta modificar (saveState no persiste).
+var _roToastTs = 0;
+function _roAviso(){
+  var now = (typeof Date!=='undefined' && Date.now) ? Date.now() : 0;
+  if (now - _roToastTs > 3000) { _roToastTs = now; try { showToast('MODO SOLO LECTURA · NO SE GUARDAN CAMBIOS','amber'); } catch(e){} }
+}
+
 function can(perm){
   const u = getCurrentUser();
   if (!u) return false;
   if (u.perms && u.perms.includes('*')) return true;
+  if (u.perms && u.perms.includes('view.*')) return _permEsSoloVer(perm); // v866: SOLO LECTURA — ve todo, no modifica
   if (u.perms && u.perms.includes(perm)) return true;
   // Si piden view.X y el usuario tiene permisos de edición del módulo, view es implícito
   if (perm.startsWith('view.')) {
@@ -6477,6 +6506,7 @@ function openNewUser(){
   });
   document.getElementById('euError').textContent = '';
   document.getElementById('euFullAdmin').checked = false;
+  { var _roNew=document.getElementById('euSoloLectura'); if(_roNew) _roNew.checked=false; } // v866
   renderPermsChecklist([]);
   // Mostrar tabs (solo aparecen al crear, no al editar) y resetear a USUARIO/CORREO
   const tabs = document.getElementById('euMethodTabs');
@@ -6525,8 +6555,10 @@ function openEditUser(uid){
   document.getElementById('euError').textContent = '';
   const isFullAdmin = u.perms && u.perms.includes('*');
   document.getElementById('euFullAdmin').checked = isFullAdmin;
-  renderPermsChecklist(isFullAdmin ? [] : (u.perms || []));
-  document.getElementById('euPermsList').classList.toggle('perms-disabled', isFullAdmin);
+  const isSoloLecturaU = !isFullAdmin && u.perms && u.perms.includes('view.*'); // v866: SOLO LECTURA
+  var _roEl = document.getElementById('euSoloLectura'); if (_roEl) _roEl.checked = !!isSoloLecturaU;
+  renderPermsChecklist((isFullAdmin || isSoloLecturaU) ? [] : (u.perms || []));
+  document.getElementById('euPermsList').classList.toggle('perms-disabled', !!(isFullAdmin || isSoloLecturaU));
   document.getElementById('modalEditUser').classList.add('show');
 }
 
@@ -6550,9 +6582,19 @@ function renderPermsChecklist(selectedPerms){
   `).join('');
 }
 
+function _euRefreshPermsDisabled(){
+  var fa=document.getElementById('euFullAdmin'), ro=document.getElementById('euSoloLectura');
+  var list=document.getElementById('euPermsList');
+  if(list) list.classList.toggle('perms-disabled', !!((fa&&fa.checked)||(ro&&ro.checked)));
+}
 function toggleEuFullAdmin(checked){
-  const list = document.getElementById('euPermsList');
-  list.classList.toggle('perms-disabled', checked);
+  if (checked) { var ro=document.getElementById('euSoloLectura'); if(ro) ro.checked=false; } // v866: admin y solo-lectura excluyentes
+  _euRefreshPermsDisabled();
+}
+// v866: SOLO LECTURA — ve todo, no modifica. Deshabilita la lista de perms y destilda ADMINISTRADOR.
+function toggleEuSoloLectura(checked){
+  if (checked) { var fa=document.getElementById('euFullAdmin'); if(fa) fa.checked=false; }
+  _euRefreshPermsDisabled();
 }
 
 async function saveUser(){
@@ -6621,13 +6663,15 @@ async function saveUser(){
   }
 
   // Recopilar permisos
+  const isSoloLectura = !isFullAdmin && !!(document.getElementById('euSoloLectura') && document.getElementById('euSoloLectura').checked); // v866: SOLO LECTURA
   const perms = isFullAdmin ? ['*'] :
+    isSoloLectura ? ['view.*'] :
     PERMS_DISPONIBLES.filter(p => {
       const el = document.getElementById('perm-' + p.key);
       return el && el.checked;
     }).map(p => p.key);
 
-  if (!isFullAdmin && perms.length === 0) {
+  if (!isFullAdmin && !isSoloLectura && perms.length === 0) {
     err.textContent = 'SELECCIONA AL MENOS UN PERMISO O MARCA COMO ADMINISTRADOR';
     return;
   }
@@ -8395,6 +8439,7 @@ function migrateData(data){
 }
 
 function saveState(){
+  if (isReadOnly()) { _roAviso(); return; } // v866: SOLO LECTURA no persiste NADA (ni local ni nube)
   // v421: la NUBE (Firestore) es la fuente de verdad; localStorage es solo un
   // cache para arranque rapido y modo offline. Por eso, aunque el cache local
   // este lleno, SIEMPRE empujamos los cambios a la nube — asi nunca se pierde nada.
@@ -8626,6 +8671,7 @@ const CloudSync = {
   /* v491: sube el state PARTIDO en core + un doc por proyecto. Cada doc << 1MB.
      Solo reescribe los proyectos que cambiaron (hash). appState/main NO se toca. */
   async uploadCurrent(){
+    if (typeof isReadOnly==='function' && isReadOnly()) return; // v866: SOLO LECTURA no sube nada a la nube
     if (!this.coreRef) return;
     const db = firebase.firestore();
     const data = this.stripLocal(state);              // clon sin base64 ni activeProjectId
@@ -8731,6 +8777,7 @@ const CloudSync = {
      no re-subir el core entero en cada marca → mata el "trabando" con muchos marcando a la vez.
      Comparte this._asistHash con uploadCurrent, así nunca se duplican escrituras. */
   async uploadAsistencia(){
+    if (typeof isReadOnly==='function' && isReadOnly()) return; // v866: SOLO LECTURA no sube nada a la nube
     if (!this.coreRef) return;
     const db = firebase.firestore();
     const _asistPayload = (state.asistenciaGlobal && typeof state.asistenciaGlobal==='object') ? state.asistenciaGlobal : {};
@@ -21351,6 +21398,7 @@ function _gerCloseModal(){ var m=document.getElementById('_gerModal'); if(m) m.r
 function _gerVal(idel){ var el=document.getElementById(idel); return el?String(el.value||'').trim():''; }
 function _saveGerencia(id){
   if(!_gerPuede()){ showToast('SIN PERMISO','red'); return; }
+  if(isReadOnly()){ showToast('MODO SOLO LECTURA','amber'); return; } // v866
   var nombre=_gerVal('_gerNombre'); if(!nombre){ showToast('ESCRIBÍ EL NOMBRE','red'); return; }
   var entry={ id: id || ('ger-'+Date.now()+'-'+Math.floor(Math.random()*1000)),
     nombre: nombre.toUpperCase(), cargo: _gerVal('_gerCargo'), empresa: _gerVal('_gerEmpresa'),
@@ -21364,6 +21412,7 @@ function _saveGerencia(id){
 }
 function _eliminarGerencia(id){
   if(!_gerPuede()){ showToast('SIN PERMISO','red'); return; }
+  if(isReadOnly()){ showToast('MODO SOLO LECTURA','amber'); return; } // v866
   var g=_getGerencia().find(function(x){return x.id===id;}); if(!g) return;
   var go=function(){ state.gerenciaGlobal=_gerenciaRemove(_getGerencia(), id, _getGerenciaTomb()); try{ saveState(); }catch(e){} try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); }catch(e){} _gerCloseModal(); renderGerencia(); showToast('ELIMINADO DE GERENCIA','green'); };
   if(typeof window.prConfirm==='function'){ window.prConfirm({ title:'ELIMINAR DE GERENCIA', bodyHTML:'¿Eliminar a <b>'+String(g.nombre||'').replace(/</g,'&lt;')+'</b> de GERENCIA?', okText:'ELIMINAR', danger:true }).then(function(ok){ if(ok) go(); }); }
@@ -21373,6 +21422,7 @@ function _eliminarGerencia(id){
 // colaboradores). Mismo patrón que uploadPersonaDPI pero sobre gerenciaGlobal + permiso gerencia.
 async function uploadGerenciaDPI(event, gerId, lado){
   if(!_gerPuede()) return showToast('SIN PERMISO','red');
+  if(isReadOnly()) return showToast('MODO SOLO LECTURA','amber'); // v866: no sube DPI a Storage
   var file=event.target.files&&event.target.files[0]; if(!file){ return; }
   var g=_getGerencia().find(function(x){return x.id===gerId;}); if(!g){ event.target.value=''; return; }
   try{
