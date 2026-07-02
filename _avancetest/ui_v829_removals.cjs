@@ -9,7 +9,7 @@ let pass = 0, fail = 0; const ok = (n, c) => c ? pass++ : (fail++, console.log('
 // 1) "+" fuera, "×" dentro
 ok('el botón "+" AGREGAR APTO se quitó', !/title="AGREGAR APTO">\+<\/button>/.test(html));
 ok('ya no se llama openNewApto desde un botón +', !/onclick="openNewApto\([^)]*\)" title="AGREGAR APTO"/.test(html));
-ok('la "×" ELIMINAR NIVEL sigue presente', /title="ELIMINAR NIVEL">✕<\/button>/.test(html));
+ok('la "×" ELIMINAR NIVEL ya NO existe (v877: el user pidió quitarla)', !/title="ELIMINAR NIVEL">✕<\/button>/.test(html));
 
 // 2) ningún botón llama a abrirImportarAvance
 ok('ningún onclick llama abrirImportarAvance', !/onclick="abrirImportarAvance\(/.test(html));
