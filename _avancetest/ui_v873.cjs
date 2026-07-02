@@ -10,7 +10,11 @@ ok('metas = Panel (sin "Gestión de obra")', html.indexOf('Gestión de obra') < 
 ok('favicon neutro data-URI (sin globo)', /rel="icon"[^>]*data:image\/svg\+xml/.test(html));
 ok('favicon = puntito rojo (círculo, v874)', /rel="icon"[^>]*circle[^>]*%23C8141C/.test(html));
 ok('favicon NO usa logo.png', !/rel="icon"[^>]*logo\.png/.test(html));
-ok('splash con overlay radial', /pr-splash-bg::after\{[^}]*radial-gradient/.test(html));
+ok('splash con glows radiales CSS', /pr-splash-bg::after\{[^}]*radial-gradient/.test(html) && /pr-splash-bg::before\{[^}]*radial-gradient/.test(html));
+// v875: el splash NO usa imágenes (gradiente + glows 100% CSS)
+const _spl = html.slice(html.indexOf('id="prSplash"'), html.indexOf('pr-splash-status'));
+ok('splash SIN imágenes en el markup', _spl.indexOf('assets/bg-') < 0 && _spl.indexOf('bg-slide') < 0);
+ok('fondo del splash es gradiente CSS (sin url)', /\.pr-splash\{[^}]*linear-gradient/.test(html) && !/\.pr-splash\{[^}]*url\(/.test(html));
 ok('sin botón VINCULAR NOMBRES (el header dormido no cuenta)', html.indexOf("'vincular'; window.renderPlanillaPolizas") < 0);
 ok('el render de vincular queda dormido (no borrado)', html.indexOf("_polView === 'vincular'") >= 0);
 
