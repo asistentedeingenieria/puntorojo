@@ -5,7 +5,7 @@ const html=fs.readFileSync(path.join(__dirname,'..','index.html'),'utf8');
 let pass=0,fail=0;const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
 // cableado de la sub-pestaña (4 puntos)
-ok('botón de la sub-pestaña', /data-plantab="planillapersona"[\s\S]{0,80}PLANILLA POR PERSONA/.test(html));
+ok('botón de la sub-pestaña', /data-plantab="planillapersona"[\s\S]{0,80}LIQUIDACIÓN POR PERSONA/.test(html));
 ok('panel planilla-planillapersona', html.indexOf('id="planilla-planillapersona"')>=0);
 ok('clave en el array de display (setPlanillaTab vivo)', /'resumenpersona','planillapersona','anticipos'/.test(html));
 ok('dispatch en renderPlanilla vivo', html.indexOf("currentPlanillaTab === 'planillapersona' && typeof window.renderPlanillaPorPersona === 'function'")>=0);
@@ -23,7 +23,7 @@ ok('soloIdx para una sola persona', html.indexOf('opts.soloIdx')>=0);
 // no se rompió la firma del generador
 ok('_generarYDescargarExcel acepta opts', html.indexOf('async function _generarYDescargarExcel(data, opts)')>=0);
 // v793: autorización única para ver la pestaña
-ok('permiso planilla.porPersona registrado (EDICIÓN PLANILLAS)', /pushPerm\(\{\s*key:'planilla\.porPersona'[\s\S]{0,120}group:'EDICIÓN PLANILLAS'/.test(html));
+ok('permiso planilla.porPersona registrado (EDICIÓN PLANILLAS)', /pushPerm\(\{\s*key:'planilla\.porPersona'[\s\S]{0,120}group:'EDICIÓN LIQUIDACIONES'/.test(html));
 ok('el botón de la sub-pestaña está gateado por data-perm', /data-plantab="planillapersona"[^>]*data-perm="planilla\.porPersona"|data-perm="planilla\.porPersona"[^>]*data-plantab="planillapersona"/.test(html));
 // v794: los nombres se ven COMPLETOS (no truncados con ...)
 const _nameLine = (html.match(/font-weight:700;font-size:12\.5px[^"]*"/)||[''])[0];

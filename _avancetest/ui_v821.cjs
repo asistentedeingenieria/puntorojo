@@ -14,7 +14,7 @@ ok('A1 botón CARAS SIN REGISTRAR eliminado', !/>CARAS SIN REGISTRAR<\/button>/.
 ok('A2 _personalPickList expone pagoObra', /pagoObra:p\.pagoObra===true/.test(html));
 ok('A2 el combo PERSONA A PAGAR filtra por pagoObra', /window\._personalPickList\(\)\.filter\(function\(c\)\{ return c && c\.pagoObra; \}\)/.test(html));
 ok('A2 handler _togglePagoObra existe', html.indexOf('window._togglePagoObra')>=0);
-ok('A2 check discreto en COLABORADORES (label + handler)', /COBRA EN PLANILLA DE OBRA/.test(html) && /_togglePagoObra\(/.test(html));
+ok('A2 check discreto en COLABORADORES (label + handler)', /COBRA EN LIQUIDACIÓN DE OBRA/.test(html) && /_togglePagoObra\(/.test(html));
 
 // ── A3: botón PREGUNTÁ -> ícono solo, tamaño campana (34x34, transparente) ──
 ok('A3 sin texto PREGUNTÁ en el botón', html.indexOf('<span>PREGUNTÁ</span>')<0);
