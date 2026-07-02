@@ -3038,7 +3038,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v871</span>
+    <span style="opacity:.5;font-size:9px">v872</span>
   </footer>
 
 </div>
@@ -3755,7 +3755,6 @@ table{max-width:100%}
 
     <div class="field">
       <label>AYUDA</label>
-      <button class="btn ghost sm" style="width:100%;padding:12px;margin-bottom:8px" onclick="closeModal('settings');setTimeout(() => startTour(true), 250)">VER TOUR DE BIENVENIDA</button>
       <div class="hint">Repaso de 30 segundos sobre cómo usar la app. Útil si recién se entró o se desean repasar las funciones.</div>
     </div>
 
@@ -36982,8 +36981,7 @@ function applyAuthSession(fbUser, profileData){
       // Arrancar el timer del reporte semanal automático (Viernes 16:00).
       // Es no-op si el usuario actual no es admin.
       try { _startAutoReporteTimer(); } catch(e) { console.warn('Auto-reporte timer:', e); }
-      // Tour de bienvenida (solo primer login del usuario)
-      try { _maybeStartTour(); } catch(e) { console.warn('Tour:', e); }
+      // v872: tour de bienvenida ELIMINADO (pedido del user) — ya no se auto-arranca.
       // Polling del inbox de mensajes (solo admin) — actualiza badge
       try { _startInboxPolling(); } catch(e) { console.warn('Inbox poll:', e); }
       // Procesar firmas pendientes que receptores enviaron desde el portal
@@ -46953,8 +46951,8 @@ async function _anulAnularReal(){
     try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); }catch(e){}
     try{ window.renderPlanillaAnticipos(); }catch(e){}
   }
-  // v841: gate de ENTREGA — recién se puede marcar entregado con FACTURA + CARTA FIRMADA cargadas.
-  function _antDocsListos(sol){ return !!(sol && sol.facturaUrl && sol.cartaUrl); }
+  // v872: gate de ENTREGA — solo requiere la FACTURA (el user quitó la carta firmada del flujo).
+  function _antDocsListos(sol){ return !!(sol && sol.facturaUrl); }
   // v841: admin real (perms ['*']) para la salida de emergencia (reemplazar un archivo subido por error).
   function _antEsAdmin(){ try{ return !!(typeof currentUser!=='undefined' && currentUser && Array.isArray(currentUser.perms) && currentUser.perms.includes('*')); }catch(e){ return false; } }
   // CREAR (supervisor)
@@ -47123,12 +47121,12 @@ async function _anulAnularReal(){
     if(!(_antSolicPerm('anticipos.cotizar') || _antEsGerente())){ showT('SOLO COMPRAS O GERENTE ENTREGA','red'); return; }
     const sol = _antSolics().find(s=>s.id===solId);
     if(!sol || sol.estado!=='autorizada'){ showT('SOLICITUD NO DISPONIBLE PARA ENTREGAR','red'); return; }
-    if(!_antDocsListos(sol)){ showT('FALTAN DOCUMENTOS · SUBÍ FACTURA Y CARTA FIRMADA','red'); return; } // v841: candado de entrega
-    const ok = await window.prConfirm({ title:'Marcar como entregado', body:'Factura y carta firmada cargadas. ¿Confirmás que ya ENTREGASTE esto a '+sol.colaboradorNombre+'? Recién aquí se crea el anticipo y se podrá cobrar.', okText:'SÍ, ENTREGADO', cancelText:'NO', danger:false });
+    if(!_antDocsListos(sol)){ showT('FALTA LA FACTURA · SUBILA PRIMERO','red'); return; } // v872: candado de entrega (solo factura)
+    const ok = await window.prConfirm({ title:'Marcar como entregado', body:'Factura cargada. ¿Confirmás que ya ENTREGASTE esto a '+sol.colaboradorNombre+'? Recién aquí se crea el anticipo y se podrá cobrar.', okText:'SÍ, ENTREGADO', cancelText:'NO', danger:false });
     if(!ok) return;
     const sol2 = _antSolics().find(s=>s.id===solId);
     if(!sol2 || sol2.estado!=='autorizada'){ showT('LA SOLICITUD YA CAMBIÓ DE ESTADO','red'); try{ window.renderPlanillaAnticipos(); }catch(e){} return; }
-    if(!_antDocsListos(sol2)){ showT('FALTAN DOCUMENTOS · SUBÍ FACTURA Y CARTA FIRMADA','red'); try{ window.renderPlanillaAnticipos(); }catch(e){} return; } // v841: re-valida tras el modal
+    if(!_antDocsListos(sol2)){ showT('FALTA LA FACTURA · SUBILA PRIMERO','red'); try{ window.renderPlanillaAnticipos(); }catch(e){} return; } // v872: re-valida tras el modal (solo factura)
     const cuotas = window._v416CuotasPorMonto(Number(sol2.cotMonto)||0);
     const ant = _anticBuildAnticipo(sol2, cuotas, { id:'ant-'+Date.now()+'-'+Math.random().toString(36).slice(2,8), ts:Date.now(), fecha:new Date().toISOString().slice(0,10), creadoPor:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''), creadoNombre:(typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):'') });
     _getAnticipos().push(ant);
@@ -47298,37 +47296,30 @@ async function _anulAnularReal(){
       let acciones='', gateHTML='', docsVer='';
       if(s.estado==='pendiente_cotizacion' && puedeCotizar) acciones += '<button class="btn sm" onclick="window._antAbrirCotizar(\''+esc(s.id)+'\')" style="background:#1565C0;border-color:#1565C0;color:#fff;padding:6px 14px;font-size:11px">SUBIR COTIZACIÓN</button>';
       if(s.estado==='pendiente_autorizacion' && esGer) acciones += '<button class="btn sm" onclick="window._antAbrirAutorizar(\''+esc(s.id)+'\')" style="background:#2E7D32;border-color:#2E7D32;color:#fff;padding:6px 14px;font-size:11px">REVISAR / AUTORIZAR</button>';
-      // v841: estado AUTORIZADA → gate de 2 pasos (factura, luego carta firmada). El botón
-      // MARCAR ENTREGADO queda deshabilitado hasta tener AMBOS documentos. Reemplazo solo-admin.
+      // v872: estado AUTORIZADA → el ÚLTIMO paso es subir la FACTURA; con ella, compras puede
+      // MARCAR ENTREGADO (la carta firmada se quitó del flujo). Reemplazo solo-admin.
       if(s.estado==='autorizada' && (puedeCotizar||esGer)){
         const _esAdm = _antEsAdmin();
-        const facOk = !!s.facturaUrl, carOk = !!s.cartaUrl;
+        const facOk = !!s.facturaUrl;
         const _ver = function(u,n){ return '<a href="'+esc(u)+'" target="_blank" style="color:#15803D;font-weight:800;text-decoration:underline">VER ('+esc(n||'archivo')+')</a>'; };
         const _reemp = function(t){ return _esAdm ? (' · <a href="#" onclick="window._antAbrirSubirDoc(\''+esc(s.id)+'\',\''+t+'\');return false" style="color:#B91C1C;font-weight:700;text-decoration:underline;font-size:10px">REEMPLAZAR (ADMIN)</a>') : ''; };
-        let _p1 = '<div style="font-size:10px;font-weight:800;letter-spacing:.5px;color:#475569">PASO 1 · FACTURA DEL PRODUCTO</div>';
+        let _p1 = '<div style="font-size:10px;font-weight:800;letter-spacing:.5px;color:#475569">ÚLTIMO PASO · FACTURA DEL PRODUCTO</div>';
         _p1 += facOk
           ? ('<div style="font-size:11.5px;color:#15803D;font-weight:700;margin-top:3px">&#10003; FACTURA SUBIDA · '+_ver(s.facturaUrl,s.facturaNombre)+_reemp('factura')+'</div>')
           : '<div style="margin-top:4px"><button class="btn sm" onclick="window._antAbrirSubirDoc(\''+esc(s.id)+'\',\'factura\')" style="background:#1565C0;border-color:#1565C0;color:#fff;padding:6px 14px;font-size:11px">SUBIR FACTURA</button></div>';
-        let _p2 = '<div style="font-size:10px;font-weight:800;letter-spacing:.5px;color:#475569;margin-top:10px">PASO 2 · CARTA FIRMADA DE RECIBIDO</div>';
-        _p2 += !facOk
-          ? '<div style="font-size:11px;color:#94A3B8;margin-top:3px">SUBÍ PRIMERO LA FACTURA</div>'
-          : (carOk
-              ? ('<div style="font-size:11.5px;color:#15803D;font-weight:700;margin-top:3px">&#10003; CARTA SUBIDA · '+_ver(s.cartaUrl,s.cartaNombre)+_reemp('carta')+'</div>')
-              : '<div style="margin-top:4px"><button class="btn sm" onclick="window._antAbrirSubirDoc(\''+esc(s.id)+'\',\'carta\')" style="background:#1565C0;border-color:#1565C0;color:#fff;padding:6px 14px;font-size:11px">SUBIR CARTA</button></div>');
         const _listo = _antDocsListos(s);
         const _btnEnt = _listo
           ? '<button class="btn sm" onclick="window.entregarSolicitudAnticipo(\''+esc(s.id)+'\')" style="background:#15803D;border-color:#15803D;color:#fff;padding:8px 16px;font-size:11.5px;font-weight:700">MARCAR ENTREGADO</button>'
-          : '<button class="btn sm" disabled title="SUBÍ FACTURA Y CARTA PARA HABILITAR" style="background:#E5E7EB;border-color:#E5E7EB;color:#9CA3AF;padding:8px 16px;font-size:11.5px;font-weight:700;cursor:not-allowed">MARCAR ENTREGADO</button>';
+          : '<button class="btn sm" disabled title="SUBÍ LA FACTURA PARA HABILITAR" style="background:#E5E7EB;border-color:#E5E7EB;color:#9CA3AF;padding:8px 16px;font-size:11.5px;font-weight:700;cursor:not-allowed">MARCAR ENTREGADO</button>';
         gateHTML = '<div style="border:1px dashed #CBD5E1;border-radius:8px;padding:11px 12px;margin-top:10px;background:#fff;text-transform:none">'
-          + _p1 + _p2
+          + _p1
           + '<div style="margin-top:12px;border-top:1px solid #F1F5F9;padding-top:10px">'+_btnEnt+'</div>'
           + '</div>';
       }
       // v841: documentos visibles también después de ENTREGADA (queda el registro).
-      if(s.estado!=='autorizada' && (s.facturaUrl || s.cartaUrl)){
-        const _b=[];
+      if(s.estado!=='autorizada' && s.facturaUrl){
+        const _b=[]; // v872: la carta se quitó del flujo — no se muestran las viejas
         if(s.facturaUrl) _b.push('FACTURA: <a href="'+esc(s.facturaUrl)+'" target="_blank" style="color:#15803D;text-decoration:underline">ver</a>');
-        if(s.cartaUrl) _b.push('CARTA: <a href="'+esc(s.cartaUrl)+'" target="_blank" style="color:#15803D;text-decoration:underline">ver</a>');
         docsVer = '<div style="font-size:11px;color:#15803D;margin-top:3px">'+_b.join(' · ')+'</div>';
       }
       if((s.estado==='pendiente_cotizacion'||s.estado==='pendiente_autorizacion') && (esCreador||esGer)) acciones += '<button class="btn ghost sm" onclick="window.cancelarSolicitudAnticipo(\''+esc(s.id)+'\')" style="border-color:#C62828;color:#C62828;padding:6px 14px;font-size:11px">CANCELAR</button>';

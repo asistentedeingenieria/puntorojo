@@ -14,7 +14,7 @@ ok('_antDocsListos existe', !!srcDocs);
 if(srcDocs){
   const f = new Function(srcDocs+'\nreturn _antDocsListos;')();
   ok('vacío -> false', f({})===false);
-  ok('solo factura -> false', f({facturaUrl:'a'})===false);
+  ok('solo factura -> LISTO (v872: la carta ya no cuenta)', f({facturaUrl:'a'})===true);
   ok('solo carta -> false', f({cartaUrl:'b'})===false);
   ok('ambos -> true', f({facturaUrl:'a',cartaUrl:'b'})===true);
   ok('null -> false', f(null)===false);
@@ -49,19 +49,19 @@ ok('llama subirDocAnticipo', srcModal.indexOf('subirDocAnticipo')>=0);
 // 5) entregarSolicitudAnticipo: candado de documentos (lógica, no solo UI)
 const srcEnt = extractAssigned('entregarSolicitudAnticipo');
 ok('entregar existe', !!srcEnt);
-ok('entregar exige documentos', srcEnt.indexOf('_antDocsListos')>=0 && srcEnt.indexOf('FALTAN DOCUMENTOS')>=0);
+ok('entregar exige documentos', srcEnt.indexOf('_antDocsListos')>=0 && srcEnt.indexOf('FALTA LA FACTURA')>=0);
 ok('entregar valida en sol y sol2', (srcEnt.match(/_antDocsListos/g)||[]).length>=2);
 
 // 6) _antSolicRender: UI del gate de 2 pasos + botón gated
 const srcRen = extractFn('_antSolicRender');
 ok('render existe', !!srcRen);
-ok('render PASO 1 + SUBIR FACTURA', srcRen.indexOf('PASO 1')>=0 && srcRen.indexOf('SUBIR FACTURA')>=0);
-ok('render PASO 2 + SUBIR CARTA', srcRen.indexOf('PASO 2')>=0 && srcRen.indexOf('SUBIR CARTA')>=0);
+ok('render PASO 1 + SUBIR FACTURA', srcRen.indexOf('ÚLTIMO PASO')>=0 && srcRen.indexOf('SUBIR FACTURA')>=0);
+ok('render SIN paso de carta (v872)', srcRen.indexOf('PASO 2')<0 && srcRen.indexOf('SUBIR CARTA')<0);
 ok('render gate usa _antDocsListos', srcRen.indexOf('_antDocsListos')>=0);
 ok('render MARCAR ENTREGADO con disabled', srcRen.indexOf('disabled')>=0 && srcRen.indexOf('MARCAR ENTREGADO')>=0);
 ok('render abre subir doc', srcRen.indexOf('_antAbrirSubirDoc')>=0);
 ok('render reemplazo admin', srcRen.indexOf('REEMPLAZAR (ADMIN)')>=0);
-ok('render irreversible UI (facOk/carOk)', srcRen.indexOf('facOk')>=0 && srcRen.indexOf('carOk')>=0);
+ok('render irreversible UI (facOk, sin carOk v872)', srcRen.indexOf('facOk')>=0 && srcRen.indexOf('carOk')<0);
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
