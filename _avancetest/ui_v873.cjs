@@ -8,6 +8,7 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 ok('title = Panel', html.indexOf('<title>Panel</title>') >= 0);
 ok('metas = Panel (sin "Gestión de obra")', html.indexOf('Gestión de obra') < 0);
 ok('favicon neutro data-URI (sin globo)', /rel="icon"[^>]*data:image\/svg\+xml/.test(html));
+ok('favicon = puntito rojo (círculo, v874)', /rel="icon"[^>]*circle[^>]*%23C8141C/.test(html));
 ok('favicon NO usa logo.png', !/rel="icon"[^>]*logo\.png/.test(html));
 ok('splash con overlay radial', /pr-splash-bg::after\{[^}]*radial-gradient/.test(html));
 ok('sin botón VINCULAR NOMBRES (el header dormido no cuenta)', html.indexOf("'vincular'; window.renderPlanillaPolizas") < 0);
