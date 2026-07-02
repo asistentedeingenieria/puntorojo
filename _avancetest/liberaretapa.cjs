@@ -29,7 +29,7 @@ if(srcMap && srcLib){
 }
 
 // estructural: control re-activado + mensaje + uso del helper + merge en applyRemote
-ok('control re-activado (_PAGO_LIBRE_TODO=false)', /_PAGO_LIBRE_TODO\s*=\s*false/.test(html));
+ok('v882: control DESACTIVADO por pedido del user (_PAGO_LIBRE_TODO=true, todo pagable)', /_PAGO_LIBRE_TODO\s*=\s*true/.test(html));
 ok('mensaje ETAPA NO DISPONIBLE DE PAGO', html.indexOf('ETAPA NO DISPONIBLE DE PAGO')>=0);
 ok('applyRemote usa _mergeLibEtapasIntoMerged', html.indexOf('_mergeLibEtapasIntoMerged(merged')>=0);
 ok('gate usa _etapaLiberada', /_lib493\s*=\s*_etapaLiberada\(/.test(html));
