@@ -37,5 +37,11 @@ ok('Dashboard: tarjeta Amortizado acumulado en dashKpis', /dashKpis[\s\S]{0,2600
 ok('Dashboard: acumula _amortPagadaProyecto en el loop global', /totalAmortizado\s*\+=\s*_amortPagadaProyecto\(p\)/.test(html));
 ok('Dashboard: fila por proyecto muestra AMORTIZADO', /proj-row-stats[\s\S]{0,900}AMORTIZADO/.test(html));
 
+// v871: la tarjeta AMORTIZADO va JUNTO a PENDIENTE DE PAGO (antes de Avance físico promedio)
+const iPend = html.indexOf('Pendiente de pago</div>');
+const iAmort = html.indexOf('Amortizado acumulado</div>', iPend);
+const iAvance = html.indexOf('Avance físico promedio</div>');
+ok('Dashboard: orden Pendiente → Amortizado → Avance físico', iPend >= 0 && iAmort > iPend && iAvance > iAmort);
+
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
