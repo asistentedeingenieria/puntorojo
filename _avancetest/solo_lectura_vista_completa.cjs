@@ -8,8 +8,10 @@ const fs = require('fs'), path = require('path');
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
-// 1) PERSONAL visible para solo-lectura
+// 1) PERSONAL visible para solo-lectura — pestaña Y sub-pestañas (v879)
 ok('_puedeVerPersonalSeccion abre para isReadOnly', /_puedeVerPersonalSeccion\(\)\{ if \(typeof isReadOnly==='function' && isReadOnly\(\)\) return true;/.test(html));
+ok('_puedeVerColaboradores abre para isReadOnly', /_puedeVerColaboradores\(\)\{ if \(typeof isReadOnly==='function' && isReadOnly\(\)\) return true;/.test(html));
+ok('_puedeVerAsistencia abre para isReadOnly', /_puedeVerAsistencia\(\)\{ if \(typeof isReadOnly==='function' && isReadOnly\(\)\) return true;/.test(html));
 
 // 2) los filtros de sub-pestañas NO atrapan al solo-lectura
 ok('_antSoloVer devuelve false para isReadOnly', /_antSoloVer = function\(\)\{ try \{ if \(typeof isReadOnly==='function' && isReadOnly\(\)\) return false;/.test(html));
