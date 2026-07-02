@@ -22,9 +22,9 @@ ok('span badge ÓRDENES DE COMPRA (sub)', html.indexOf('id="tabBadge-ordenes"')>
 ok('_cntOCsPend gateado por compras.autorizar + status', /_cntOCsPend[\s\S]{0,260}compras\.autorizar[\s\S]{0,400}AUTORIZADA/.test(html));
 // contadores suman las fuentes correctas
 ok('planilla suma anticipo+pagoetapa+admin358', /_cntPlanillaPend\s*=\s*function\(\)\{[\s\S]{0,200}_cntAnticipoPend\(\)[\s\S]{0,80}_cntPagoEtapaPend\(\)[\s\S]{0,80}_cntAdmin358Pend\(\)/.test(html));
-ok('anticipo usa _antSolicPendientesParaMi', /_cntAnticipoPend[\s\S]{0,200}_antSolicPendientesParaMi/.test(html));
+ok('anticipo usa _antSolicPendientesParaMi', /_cntAnticipoPend[\s\S]{0,500}_antSolicPendientesParaMi/.test(html)); // v878: la rama solo-lectura corrió el offset
 ok('pago etapa gateado por gerente + suma desmarcar', /_cntPagoEtapaPend[\s\S]{0,400}_solPagoEtapaPendientes[\s\S]{0,200}desmarcarSolicitudes/.test(html));
-ok('admin358 gateado por users.manage + estado PENDIENTE', /_cntAdmin358Pend[\s\S]{0,200}users\.manage[\s\S]{0,160}PENDIENTE/.test(html));
+ok('admin358 gateado por users.manage + estado PENDIENTE', /_cntAdmin358Pend[\s\S]{0,200}users\.manage[\s\S]{0,300}PENDIENTE/.test(html)); // v878: +isReadOnly corrió el offset
 // se refresca en cada render (hook applyPermissions)
 ok('updateTabBadges se llama en el pase de permisos', /updateTabBadges\(\)/.test(html) && /data-perm[\s\S]{0,2000}updateTabBadges\(\)/.test(html));
 
