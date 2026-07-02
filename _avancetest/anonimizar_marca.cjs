@@ -17,7 +17,7 @@ ok('_pdfLogo ya no dibuja nada', !!pl && pl.indexOf('addImage') < 0);
 ok('sin addImage del logo en portadas', (html.match(/addImage\(LOGO_DATA_URI/g)||[]).length === 0);
 
 // ── nombre fuera de lo visible ──
-ok('title neutro', html.indexOf('<title>Gestión de obra</title>') >= 0);
+ok('title neutro', html.indexOf('<title>Panel</title>') >= 0); // v873: Panel
 ok('sin ¡Bienvenido a Punto Rojo!', html.indexOf('Bienvenido a Punto Rojo') < 0);
 ok('sin BIENVENIDO A PUNTO ROJO', html.indexOf('BIENVENIDO A PUNTO ROJO') < 0);
 ok('notifs del navegador con título neutro', html.indexOf("new Notification('PUNTO ROJO'") < 0);

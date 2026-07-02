@@ -48,7 +48,7 @@ ok('el form de póliza guarda el ID (aCargoDeColabId via _colabIdPorNombre)', /a
 ok('tab VINCULAR NOMBRES + vista vincular', /VINCULAR NOMBRES/.test(html) && /_polView=\\?'vincular\\?'|_polView === 'vincular'/.test(html));
 ok('la vista vincular usa _nombresPorVincular + combobox inline', /_polView === 'vincular'\)\{[\s\S]{0,2500}_nombresPorVincular\(/.test(html) && /prComboInline\(comboId/.test(html));
 ok('botón VINCULAR AUTOMÁTICO + VINCULAR por fila', /window\._vincularAuto\(\)/.test(html) && /window\._vincularUno\(/.test(html));
-ok('vincular gateado por puedeEditar', /if \(puedeEditar\)\{[\s\S]{0,800}VINCULAR NOMBRES'\+\(_vincN/.test(html));
+ok('botón del tab removido en v873 (render dormido)', !/VINCULAR NOMBRES'\+\(_vincN/.test(html));
 // v814 (revisión adversarial): correcciones
 const bApl=extract('_aplicarVinculo');
 ok('FIX crítico: _aplicarVinculo lee state.polizasGlobales (no _getPolizas, fuera de scope)', !!bApl && /polizasGlobales/.test(bApl) && bApl.indexOf('_getPolizas(')<0);
