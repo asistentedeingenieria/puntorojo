@@ -3038,7 +3038,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v867</span>
+    <span style="opacity:.5;font-size:9px">v868</span>
   </footer>
 
 </div>
@@ -10661,10 +10661,13 @@ function renderDashboard(){
     `Datos referidos al ${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()} · ${state.projects.length} proyecto${state.projects.length!==1?'s':''} activo${state.projects.length!==1?'s':''}`;
 
   let totalContratado = 0, totalCobrado = 0, totalPendiente = 0, avanceFisicoSum = 0, avanceFisicoCount = 0, alertas = 0, aptosCompletos = 0;
+  let totalAmortizado = 0, totalAnticipos = 0; // v868
 
   state.projects.forEach(p => {
     totalContratado += totalProyectoNeto(p);
     const cfg = cobroConfig(p);
+    totalAmortizado += _amortPagadaProyecto(p);
+    totalAnticipos += totalProyectoNeto(p) * cfg.antic;
     (p.cobro.rows||[]).forEach(r => {
       const v = rowValues(r, cfg);
       if (r.sc === 'PAGADO') totalCobrado += v.netCI;
@@ -10690,6 +10693,7 @@ function renderDashboard(){
     <div class="kpi"><div class="lbl">Pendiente de pago</div><div class="val red">${fQkpi(totalPendiente)}</div><div class="sub">Estimaciones emitidas sin cobrar</div></div>
     <div class="kpi cafe"><div class="lbl">Avance físico promedio</div><div class="val">${avanceProm}%</div><div class="sub">Promedio sobre ${avanceFisicoCount} apto${avanceFisicoCount!==1?'s':''}</div></div>
     <div class="kpi green"><div class="lbl">Aptos al 100%</div><div class="val green">${aptosCompletos}</div><div class="sub">De ${avanceFisicoCount} (${avanceFisicoCount ? Math.round(aptosCompletos/avanceFisicoCount*100) : 0}%)</div></div>
+    <div class="kpi cafe"><div class="lbl">Amortizado acumulado</div><div class="val amber">${fQkpi(totalAmortizado)}</div><div class="sub">De ${fQ(totalAnticipos)} en anticipos · ${totalAnticipos ? Math.round(totalAmortizado/totalAnticipos*100) : 0}%</div></div>
     <div class="kpi olive"><div class="lbl">Proyectos activos</div><div class="val">${state.projects.length}</div><div class="sub">En gestión simultánea</div></div>
   `;
 
@@ -10720,6 +10724,7 @@ function renderDashboard(){
             <div><strong style="color:var(--green-dark)">${fQ(cobrado)}</strong><small> (${pctCobro}%)</small><span class="lbl">COBRADO</span></div>
             <div><strong style="color:var(--cafe)">${fQ(pendiente)}</strong><span class="lbl">COBRO EN PROCESO</span></div>
             <div><strong style="color:var(--red)">${fQ(pendienteCobro)}</strong><span class="lbl">PENDIENTE DE COBRO</span></div>
+            <div><strong style="color:var(--cafe)">${fQ(_amortPagadaProyecto(p))}</strong><small> (${(totalRef*cfg.antic) ? Math.round(_amortPagadaProyecto(p)/(totalRef*cfg.antic)*100) : 0}%)</small><span class="lbl">AMORTIZADO</span></div>
             <div><strong style="color:var(--ink)">${avanceP}%</strong><small> (${niveles} NIV)</small><span class="lbl">AVANCE</span></div>
           </div>
         </div>
@@ -10800,6 +10805,17 @@ function rowValues(r, cfg){
   return { vpSI, vpCI, amCI, retenido, netCI };
 }
 
+/* v868: AMORTIZADO ACUMULADO — amortización YA descontada del anticipo: suma amCI de las
+   estimaciones PAGADAS (rowValues excluye el anticipo y las SIN AMORT.). Criterio del user:
+   solo lo cobrado cuenta como amortizado. */
+function _amortPagadaProyecto(p){
+  try {
+    if (!p || !p.cobro || !Array.isArray(p.cobro.rows)) return 0;
+    const cfg = cobroConfig(p);
+    return p.cobro.rows.reduce((s,r)=>{ if(!r || r.sc!=='PAGADO') return s; return s + rowValues(r,cfg).amCI; }, 0);
+  } catch(e){ return 0; }
+}
+
 /* Sincronizar: si está PAGADO, la factura debe estar EMITIDA */
 function syncFact(r){ if (r.sc === 'PAGADO') r.sf = 'EMITIDA'; }
 
@@ -10875,10 +10891,15 @@ function renderCobro(){
   const pctPend = 100 - pctPag;
 
   // KPIs (siempre con IVA)
+  // v868: amortizado acumulado (solo estimaciones PAGADAS) vs el anticipo total a amortizar
+  const tAmPag = _amortPagadaProyecto(p);
+  const anticipoTotal = totalRef * cfg.antic;
+  const pctAm = anticipoTotal ? Math.round(tAmPag / anticipoTotal * 100) : 0;
   document.getElementById('cobroKpis').innerHTML = `
     <div class="kpi"><div class="lbl">Contratado neto (C/IVA)</div><div class="val">${fQkpi(totalRef)}</div><div class="sub">${descuentoProyecto(p) > 0 ? 'Incluye descuento autorizado de ' + fQ(descuentoProyecto(p)) : 'Gran total del proyecto'}</div></div>
     <div class="kpi green"><div class="lbl">Total cobrado</div><div class="val green">${fQkpi(tPag)}</div><div class="sub">${pctPag}% del total</div></div>
     <div class="kpi"><div class="lbl">Saldo pendiente</div><div class="val red">${fQkpi(Math.max(0, totalRef - tPag))}</div><div class="sub">Por cobrar</div></div>
+    <div class="kpi cafe"><div class="lbl">Amortizado acumulado</div><div class="val amber">${fQkpi(tAmPag)}</div><div class="sub">DE ${fQ(anticipoTotal)} DEL ANTICIPO · ${pctAm}%</div></div>
   `;
 
   // THEAD, TBODY, TFOOT
