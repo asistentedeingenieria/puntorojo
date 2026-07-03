@@ -3038,7 +3038,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v882</span>
+    <span style="opacity:.5;font-size:9px">v883</span>
   </footer>
 
 </div>
@@ -38851,7 +38851,10 @@ window.addEventListener('load', () => {
     // gerente/admin autoriza. Etapa 1 y etapa 5 quedan libres. Aplica a TODOS los proyectos.
     {
       const _ownerConf = (typeof _etapaOwnerConflicto==='function') ? _etapaOwnerConflicto(p, aid, stageIdx, colab.nombre) : null;
-      if(_ownerConf){
+      // v883: si la gerente YA APROBÓ esta combinación apto+etapa+persona, el candado deja pasar
+      // y el pago lo genera EL SUPERVISOR (la solicitud se marca 'usada' al crear el pago).
+      window.__solpeAprobada = _ownerConf ? _solPagoAprobada(p.id, aid, stageIdx, colab.id, upper(colab.nombre)) : null;
+      if(_ownerConf && !window.__solpeAprobada){
         const _okOtro = await window.prConfirm({
           title: 'ETAPA #1 PAGADA A OTRA PERSONA',
           bodyHTML: '<div style="font-size:13px;line-height:1.6;color:#1F2937">'
@@ -38910,6 +38913,8 @@ window.addEventListener('load', () => {
       excepcionRazon: (pagoSinAcuse && a.pagoExcepciones && a.pagoExcepciones[String(fisicoIdx)]) ? (a.pagoExcepciones[String(fisicoIdx)].razon || '') : ''
     });
 
+    // v883: consumir la solicitud aprobada del candado (queda 'usada' y enlazada al pago; no se reutiliza)
+    try{ if(window.__solpeAprobada){ window.__solpeAprobada.estado='usada'; window.__solpeAprobada.pagoId=pagoId; window.__solpeAprobada._ts=Date.now(); window.__solpeAprobada=null; } }catch(e){}
     if (pagoSinAcuse && excAprobada && typeof window._consumirExcepcionPago === 'function') {
       window._consumirExcepcionPago(a, fisicoIdx, pagoId);
     }
@@ -38971,6 +38976,10 @@ window.addEventListener('load', () => {
     });
     return { pagoId, neto };
   }
+  // v883: ¿hay una solicitud APROBADA para esta combinación apto+etapa+persona? (el candado la deja pasar)
+  function _solPagoAprobada(pId, aid, stageIdx, colabId, colabNombre){
+    try{ return (state.solicitudesPagoEtapa||[]).find(function(s){ return s && s.estado==='aprobada' && s.projectId===pId && s.aid===aid && Number(s.stageIdx)===Number(stageIdx) && ((colabId && s.colaboradorId===colabId) || (colabNombre && s.colaboradorNombre===colabNombre)); })||null; }catch(e){ return null; }
+  }
   window._solPagoEtapaPendientes = function(){ return (state.solicitudesPagoEtapa||[]).filter(s=>s && s.estado==='pendiente'); };
   window.autorizarSolicitudPagoEtapa = function(solId){
     if(!(can('planilla.authorize') || can('users.manage'))){ showToast('SOLO GERENTE/ADMIN AUTORIZA','red'); return; }
@@ -38979,17 +38988,17 @@ window.addEventListener('load', () => {
     if(sol.estado!=='pendiente'){ showToast('SOLICITUD YA RESUELTA','red'); return; }
     const p = (state.projects||[]).find(x=>x.id===sol.projectId);
     if(!p){ showToast('PROYECTO NO ENCONTRADO','red'); return; }
-    const colab = { id:sol.colaboradorId, nombre:sol.colaboradorNombre, rol:sol.colaboradorRol||'PERSONAL' };
-    const r = _crearPagoEtapaPlanilla(p, sol.tid, sol.lid, sol.aid, sol.stageIdx, colab, sol.target);
-    if(!r){ showToast('NO SE PUDO CREAR EL PAGO (¿etapa ya pagada o sin monto?)','red'); return; }
+    // v883: autorizar YA NO crea el pago (antes nacía en la sesión de la GERENTE con generadoPor=ella,
+    // le armaba SU liquidación y al supervisor la etapa le figuraba pagada). Solo se APRUEBA;
+    // el supervisor genera el pago y el candado lo deja pasar (ver _solPagoAprobada).
     sol.estado='aprobada'; sol._ts=Date.now();
     sol.decididoPor=(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''); sol.decididoEn=(typeof nowStr==='function'?nowStr():'');
     try{ saveState(); }catch(e){}
     try{ if(typeof CloudSync!=='undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); }catch(e){}
-    try{ if(typeof window.prAddNotif==='function' && sol.solicitadoPor) window.prAddNotif({ toEmails:[sol.solicitadoPor], title:'PAGO AUTORIZADO', body:'Se autorizó el pago de '+sol.aptoName+' · '+sol.etapaNombre+' a '+sol.colaboradorNombre+'.', type:'pago.solicitud' }); }catch(e){}
+    try{ if(typeof window.prAddNotif==='function' && sol.solicitadoPor) window.prAddNotif({ toEmails:[sol.solicitadoPor], title:'SOLICITUD DE PAGO APROBADA', body:'Se aprobó pagar '+sol.aptoName+' · '+sol.etapaNombre+' a '+sol.colaboradorNombre+'. Ya podés GENERAR el pago desde PAGOS POR ETAPA.', type:'pago.solicitud' }); }catch(e){}
     try{ if(typeof renderPlanilla==='function') renderPlanilla(); }catch(e){}
     try{ if(document.getElementById('solPagoEtapaModal')) window.verSolicitudesPagoEtapa(); }catch(e){}
-    showToast('PAGO AUTORIZADO Y GENERADO','green');
+    showToast('SOLICITUD APROBADA · EL SUPERVISOR GENERA EL PAGO','green');
   };
   window.rechazarSolicitudPagoEtapa = async function(solId){
     if(!(can('planilla.authorize') || can('users.manage'))){ showToast('SOLO GERENTE/ADMIN','red'); return; }
