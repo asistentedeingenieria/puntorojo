@@ -14,6 +14,9 @@ ok('✕ sola (sin palabra QUITAR) con el handler vivo', /eliminarDescuentoPlanil
 ok('ya no existe el botón QUITAR viejo', html.indexOf('title="Quitar este anticipo"') < 0);
 ok('el texto verde largo se fue (queda tooltip ?)', html.indexOf('Sistema aplicó automáticamente. Las <strong>pólizas</strong>') < 0);
 ok('tooltip de ayuda presente', html.indexOf('Las pólizas son obligatorias (no se eliminan). Los anticipos los puede quitar') >= 0);
+// v885: tooltip propio legible + ✕ sin fondo
+ok('el ? usa tooltip propio (pr-tip con data-tip)', /class="pr-tip" data-tip="/.test(html) && /\.pr-tip:hover::after\{content:attr\(data-tip\)/.test(html));
+ok('la ✕ quedó sin fondo ni borde', /title="Quitar este descuento esta quincena" style="border:none;background:none/.test(html));
 ok('badge OBLIGATORIA viejo fuera de este bloque', html.indexOf('border-radius:3px;letter-spacing:.5px;margin-left:6px">OBLIGATORIA</span>') < 0);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
