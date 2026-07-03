@@ -3041,7 +3041,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v886</span>
+    <span style="opacity:.5;font-size:9px">v887</span>
   </footer>
 
 </div>
@@ -41701,7 +41701,11 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   /* v803: pólizas ACTIVAS que NO se aplicaron en una planilla (doble chequeo).
      razon 'SIN PAGO' = la persona no tuvo pago esa quincena; 'NO EMPATO' = tuvo pago pero
      ningún descuento POLIZA quedó a su nombre (atrapa errores de tipeo en el catálogo).
-     Mismo match que _v411 (normalización NFD + substring) para ser consistente. */
+     Mismo match que _v411 (normalización NFD + substring) para ser consistente.
+     v887: la póliza se descuenta UNA sola vez por quincena — si a la persona ya se le
+     descontó en OTRA planilla del MISMO sábado (cualquier proyecto), acá no está pendiente.
+     Descuentos propios: match laxo de siempre. Descuentos de OTRAS planillas: match ESTRICTO
+     estilo v811 (polizaIds mandan; con ids NO cae a nombre; nombre EXACTO solo sin ids). */
   function _polizasPendientesDePlanilla(pl, p, st){
     st = st || (typeof state!=='undefined' ? state : {});
     var norm = (typeof _v464NormKey==='function') ? _v464NormKey : function(s){ return String(s||'').toUpperCase().replace(/\s+/g,' ').trim(); };
@@ -41712,11 +41716,33 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     var pagoNombres = [];
     ((p && p.planilla && p.planilla.pagos)||[]).forEach(function(pg){ if(!pl || !Array.isArray(pl.pagosIds) || pl.pagosIds.indexOf(pg.id)<0) return; var n=String(pg.colaborador||'').trim(); if(n) pagoNombres.push(n); });
     var aplicados = ((pl && pl.descuentosPlanilla)||[]).filter(function(d){ return d && d.subtipo==='POLIZA'; });
+    // v887: descuentos POLIZA de las DEMÁS planillas no rechazadas de la misma quincena
+    // (mismo sábado que esta planilla), de TODOS los proyectos.
+    var sab = (typeof _fechaSabadoDDMMYYYY==='function') ? _fechaSabadoDDMMYYYY : function(ref){ var d=new Date(ref); if(isNaN(d.getTime())) return ''; var s=new Date(d.getTime()); s.setDate(d.getDate()+(6-d.getDay())); return String(s.getDate()).padStart(2,'0')+String(s.getMonth()+1).padStart(2,'0')+s.getFullYear(); };
+    var qk=''; try{ qk = String(sab((pl && (pl.fechaEnvio||pl.fechaCreacion))||'')||''); }catch(e){ qk=''; }
+    var aplicadosOtras = [];
+    if(/^\d{8}$/.test(qk)){
+      ((st && st.projects)||[]).forEach(function(pr){
+        var arr = (pr && pr.planilla && pr.planilla.planillasArmadas) || [];
+        arr.forEach(function(o){
+          if(!o || o.estado==='rechazada' || (pl && o.id===pl.id)) return;
+          var okq=''; try{ okq = String(sab(o.fechaEnvio||o.fechaCreacion||'')||''); }catch(e){ return; }
+          if(okq!==qk) return;
+          (o.descuentosPlanilla||[]).forEach(function(d){ if(d && d.subtipo==='POLIZA') aplicadosOtras.push(d); });
+        });
+      });
+    }
     function yaAplicada(h){
-      return aplicados.some(function(d){
+      var propia = aplicados.some(function(d){
         if(match(d.colaboradorNombre, h.nombre)) return true;
         var ids = d.polizaIds||[];
         return h.polizas.some(function(po){ return ids.indexOf(po.id)>=0; });
+      });
+      if(propia) return true;
+      return aplicadosOtras.some(function(d){
+        var ids = d.polizaIds||[];
+        if(ids.length) return h.polizas.some(function(po){ return ids.indexOf(po.id)>=0; });
+        return norm(d.colaboradorNombre) === norm(h.nombre);
       });
     }
     var out=[];
@@ -41990,7 +42016,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       var pl=((p.planilla&&p.planilla.planillasArmadas)||[]).find(function(x){return x.id===planillaId;}); if(!pl) return;
       var pend=(window._polizasPendientesDePlanilla(pl, p, (typeof state!=='undefined'?state:{})))||[];
       var esc=function(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(m){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]);}); };
-      var body='<div style="font-size:12px;color:#333;line-height:1.5;text-align:left">Pólizas ACTIVAS a las que <b>no</b> se les descontó en esta planilla. Revisá si hay que generarles pago o corregir el nombre en el catálogo de pólizas.';
+      var body='<div style="font-size:12px;color:#333;line-height:1.5;text-align:left">Pólizas ACTIVAS a las que <b>no</b> se les descontó en NINGUNA liquidación de esta quincena (se revisan TODAS las liquidaciones de TODOS los proyectos con el mismo sábado; la póliza solo se descuenta en una). Revisá si hay que generarles pago o corregir el nombre en el catálogo de pólizas.';
       if(!pend.length){ body+='<div style="margin-top:10px;color:#2E7D32;font-weight:700">No hay pendientes: a todos se les aplicó la póliza.</div>'; }
       else {
         body+='<table style="width:100%;border-collapse:collapse;margin-top:10px;font-size:11px"><thead><tr><th style="text-align:left;padding:4px 6px;background:#f5f1e8">PERSONA</th><th style="text-align:left;padding:4px 6px;background:#f5f1e8">RAZÓN</th></tr></thead><tbody>';
