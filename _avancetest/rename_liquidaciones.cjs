@@ -7,7 +7,7 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
 // ── visible: la pestaña y el encabezado renombrados ──
-ok('pestaña del menú dice LIQUIDACIONES A PROVEEDORES', html.indexOf('>LIQUIDACIONES A PROVEEDORES<') >= 0);
+ok('pestaña del menú dice LIQUIDACIÓN PROVEEDORES (v886: acortada a pedido)', html.indexOf('>LIQUIDACIÓN PROVEEDORES<') >= 0);
 ok('ya no existe la pestaña >PLANILLAS<', html.indexOf('>PLANILLAS<') < 0);
 ok('encabezado de sección renombrado', html.indexOf('PAGO DE PLANILLAS') < 0);
 ok('título h1 renombrado', html.indexOf('planillas.</em>') < 0);
