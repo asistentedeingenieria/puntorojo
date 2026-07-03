@@ -3041,7 +3041,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v890</span>
+    <span style="opacity:.5;font-size:9px">v891</span>
   </footer>
 
 </div>
@@ -9090,6 +9090,21 @@ const CloudSync = {
       if (typeof _mergeLibEtapasIntoMerged === 'function' && _mergeLibEtapasIntoMerged(merged, state)) needsResync = true;
     } catch(e){ console.warn('merge libEtapas en applyRemote:', e); }
 
+    // v891 BLINDAJE DE PLANILLAS ARMADAS Y PAGOS: el remoto NUNCA borra una planilla armada,
+    // un pago o una planilla de retenciones que no trae (incidente 03-jul-2026: un dispositivo
+    // con el doc viejo de ESSENZA desarmó la planilla del día en la nube y en todos lados).
+    // Unión por id + _ts + tombstones, por proyecto. Ver _mergePlanillaProyecto.
+    try {
+      if (typeof _mergePlanillaProyecto === 'function') {
+        const _locProj = {}; ((state && state.projects) || []).forEach(p => { if (p && p.id) _locProj[p.id] = p; });
+        (merged.projects || []).forEach(rp => {
+          const _chgPl = _mergePlanillaProyecto(_locProj[rp && rp.id], rp);
+          // solo-lectura: su subida es no-op — marcar needsResync solo ciclaría el breaker
+          if (_chgPl && !(typeof isReadOnly === 'function' && isReadOnly())) needsResync = true;
+        });
+      }
+    } catch(e){ console.warn('blindaje de planillas en applyRemote:', e); }
+
     state = merged;
     // v495: recalcular _projHashes desde el remoteData REALMENTE aplicado en esta llamada.
     // Solo se llega aqui tras los early-return (pendingWrite / isUserBusy) — es decir, solo
@@ -9610,6 +9625,8 @@ window.v456LiberarEtapasMarcadas = async function(){
 
   const idsToRemove = new Set();
   liberar.forEach(x => x.pagos.forEach(pg => idsToRemove.add(pg.id)));
+  p.planilla.pagosEliminados = p.planilla.pagosEliminados || {}; // v891 tombstones
+  idsToRemove.forEach(id => { p.planilla.pagosEliminados[id] = Date.now(); });
   p.planilla.pagos = pagos.filter(pg => !idsToRemove.has(pg.id));
   try { if (typeof logActivity === 'function') logActivity('delete','Etapas liberadas (lista manual)', p.name+' · '+totalEtapasLib+' etapas · '+idsToRemove.size+' registros · '+money(totalBruto)); } catch(e){}
   try { if (typeof saveState === 'function') saveState(); } catch(e){}
@@ -9708,6 +9725,8 @@ window.v460LiberarUnaEtapa = async function(prefTorre, prefApto, prefEtapa){
   if (!ok2) return;
 
   const ids = new Set(matches.map(m => m.id));
+  p.planilla.pagosEliminados = p.planilla.pagosEliminados || {}; // v891 tombstones
+  ids.forEach(id => { p.planilla.pagosEliminados[id] = Date.now(); });
   p.planilla.pagos = pagos.filter(pg => !ids.has(pg.id));
   try { if (typeof logActivity === 'function') logActivity('delete','Etapa liberada (manual)', p.name+' · T'+torre+(nivel?' N'+nivel:'')+' · '+aptoRaw+' etapa '+etapa+' · '+ids.size+' registro(s) · '+money(bruto)); } catch(e){}
   try { if (typeof saveState === 'function') saveState(); } catch(e){}
@@ -24958,6 +24977,12 @@ async function ejecutarLimpiezaSelectiva(){
         + (p.planilla.planillasArmadas || []).length
         + (p.planilla.retencionesPlanillas || []).length
         + (p.planilla.retencionesPagadas || []).length;
+      // v891: tombstones para que el reset no resucite vía union-merge
+      p.planilla.pagosEliminados = p.planilla.pagosEliminados || {};
+      (p.planilla.pagos||[]).forEach(pg => { if(pg && pg.id) p.planilla.pagosEliminados[pg.id] = Date.now(); });
+      p.planilla.planillasEliminadas = p.planilla.planillasEliminadas || {};
+      (p.planilla.planillasArmadas||[]).forEach(plx => { if(plx && plx.id) p.planilla.planillasEliminadas[plx.id] = Date.now(); });
+      (p.planilla.retencionesPlanillas||[]).forEach(rpx => { if(rpx && rpx.id) p.planilla.planillasEliminadas[rpx.id] = Date.now(); });
       p.planilla.pagos = [];
       p.planilla.ajustes = [];
       p.planilla.planillasArmadas = [];
@@ -24973,6 +24998,12 @@ async function ejecutarLimpiezaSelectiva(){
         + (p.planilla.planillasArmadas || []).length
         + (p.planilla.retencionesPlanillas || []).length
         + Object.keys(p.planilla.aptoModelMap || {}).length;
+      // v891: tombstones para que el reset no resucite vía union-merge
+      p.planilla.pagosEliminados = p.planilla.pagosEliminados || {};
+      (p.planilla.pagos||[]).forEach(pg => { if(pg && pg.id) p.planilla.pagosEliminados[pg.id] = Date.now(); });
+      p.planilla.planillasEliminadas = p.planilla.planillasEliminadas || {};
+      (p.planilla.planillasArmadas||[]).forEach(plx => { if(plx && plx.id) p.planilla.planillasEliminadas[plx.id] = Date.now(); });
+      (p.planilla.retencionesPlanillas||[]).forEach(rpx => { if(rpx && rpx.id) p.planilla.planillasEliminadas[rpx.id] = Date.now(); });
       // Datos de pagos / cobros internos
       p.planilla.recetaCostos = [0,0,0,0,0,0];
       p.planilla.pagos = [];
@@ -26443,7 +26474,15 @@ function _resyncFingerprint(merged){
       merged.personalGlobal, merged.colaboradoresGlobal, merged.polizasGlobales, merged.anticiposGlobales,
       merged.solicitudesPolizas, merged.solicitudesAnticipos, merged.solicitudesColaboradores,
       merged.solicitudesPagoEtapa, merged.solicitudesAnticipo, merged.asistenciaGlobal, merged.gerenciaGlobal,
-      (merged.projects||[]).map(function(p){ return p && p.id; })
+      // v891: incluir la firma de planillas/pagos por proyecto — sin esto, resyncs legítimos
+      // y DISTINTOS del union-merge de planillas daban la misma huella y el breaker pausaba
+      // el sync 60s en pleno tráfico de quincena ("bucle detectado" falso).
+      (merged.projects||[]).map(function(p){
+        if (!p) return '';
+        var pla = p.planilla || {};
+        var sig = function(arr){ return (arr||[]).map(function(o){ return o ? (o.id+'@'+(o._ts||o.ts||0)) : ''; }).join(','); };
+        return String(p.id)+'|'+sig(pla.planillasArmadas)+'|'+sig(pla.pagos)+'|'+sig(pla.retencionesPlanillas);
+      })
     ];
     var s = JSON.stringify(parts);
     var h = 5381; for (var i=0;i<s.length;i++){ h = ((h*33) ^ s.charCodeAt(i)) >>> 0; }
@@ -26472,6 +26511,53 @@ function _mergeById(localList, remoteList, tombSet){
   });
   if (tombSet) Object.keys(byId).forEach(function(id){ if (tombSet[id]) delete byId[id]; });
   return { list: Object.keys(byId).map(function(id){ return byId[id]; }), changed: changed };
+}
+
+/* v891: BLINDAJE DE PLANILLAS ARMADAS, PAGOS Y RETENCIONES de UN proyecto.
+   Incidente real (03-jul-2026): un dispositivo con el doc de ESSENZA de antes de armarse
+   la planilla del día subió su copia vieja y la planilla DESAPARECIÓ de la nube y de todos
+   los dispositivos (los pagos sobrevivieron de suerte). Eran los últimos arrays de plata
+   en last-write-wins. Unión por id (gana el _ts/ts más nuevo) + tombstones por id
+   (planillasEliminadas/pagosEliminados = borrados reales, no reviven). Mismo patrón que
+   asistencia/colaboradores/personal/tomas/pólizas. Muta rp (el merged) y devuelve true
+   si hay que resubir. Idempotente (regla v856). */
+function _mergePlanillaProyecto(lp, rp){
+  try {
+    if (!rp) return false;
+    var lpl = (lp && lp.planilla) || {};
+    var _hayLocal = (lpl.planillasArmadas||[]).length || (lpl.pagos||[]).length || (lpl.retencionesPlanillas||[]).length;
+    if (!rp.planilla){
+      if (!_hayLocal) return false;
+      rp.planilla = {}; // doc remoto sin objeto planilla: NO dejar que el LWW borre la plata local
+    }
+    var changed = false;
+    // tombstones: unión monótona; si el remoto no conocía borrados locales hay que resubirlos
+    var rTombPl = rp.planilla.planillasEliminadas || {};
+    var tombPl = Object.assign({}, lpl.planillasEliminadas || {}, rTombPl);
+    if (Object.keys(tombPl).length !== Object.keys(rTombPl).length) changed = true;
+    var rTombPg = rp.planilla.pagosEliminados || {};
+    var tombPg = Object.assign({}, lpl.pagosEliminados || {}, rTombPg);
+    if (Object.keys(tombPg).length !== Object.keys(rTombPg).length) changed = true;
+    // un tombstone que mata un item que el remoto todavía trae = el borrado debe propagarse
+    var _mataRemoto = function(arr, tomb){ return (arr||[]).some(function(o){ return o && o.id && tomb[o.id]; }); };
+    if (_mataRemoto(rp.planilla.planillasArmadas, tombPl) || _mataRemoto(rp.planilla.retencionesPlanillas, tombPl) || _mataRemoto(rp.planilla.pagos, tombPg)) changed = true;
+    // registros legacy SIN id: preservarlos tal como venían en el remoto (el merge por id los descartaría)
+    var _sinId = function(arr){ return (arr||[]).filter(function(o){ return o && !o.id; }); };
+    var sinIdPl = _sinId(rp.planilla.planillasArmadas), sinIdPg = _sinId(rp.planilla.pagos), sinIdRet = _sinId(rp.planilla.retencionesPlanillas);
+    // no crear campos vacíos que el doc remoto no traía (evita hash-mismatch y resubidas masivas)
+    if (Object.keys(tombPl).length || rp.planilla.planillasEliminadas) rp.planilla.planillasEliminadas = tombPl;
+    if (Object.keys(tombPg).length || rp.planilla.pagosEliminados) rp.planilla.pagosEliminados = tombPg;
+    var mPl = _mergeById(lpl.planillasArmadas || [], rp.planilla.planillasArmadas || [], tombPl);
+    if (mPl.changed) changed = true;
+    if (mPl.changed || rp.planilla.planillasArmadas) rp.planilla.planillasArmadas = mPl.list.concat(sinIdPl);
+    var mPg = _mergeById(lpl.pagos || [], rp.planilla.pagos || [], tombPg);
+    if (mPg.changed) changed = true;
+    if (mPg.changed || rp.planilla.pagos) rp.planilla.pagos = mPg.list.concat(sinIdPg);
+    var mRet = _mergeById(lpl.retencionesPlanillas || [], rp.planilla.retencionesPlanillas || [], tombPl);
+    if (mRet.changed) changed = true;
+    if (mRet.changed || rp.planilla.retencionesPlanillas) rp.planilla.retencionesPlanillas = mRet.list.concat(sinIdRet);
+    return changed;
+  } catch(e){ console.warn('[v891] _mergePlanillaProyecto:', e); return false; }
 }
 
 function _mergeAsistencia(localAsis, remoteAsis, tombSet){
@@ -30837,7 +30923,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   window.autorizarPagoPlanilla = async function(id){
     if (!can('planilla.authorize') && !can('users.manage')) return showToast('SIN PERMISO PARA AUTORIZAR', 'red');
     const p = activeProj(); const pg=(p.planilla.pagos||[]).find(x=>x.id===id); if(!pg) return;
-    pg.autorizado = true; pg.autorizadoPor = (getCurrentUser()?.displayName || getCurrentUser()?.username || '').toUpperCase(); pg.autorizadoTs = Date.now();
+    pg.autorizado = true; pg.autorizadoPor = (getCurrentUser()?.displayName || getCurrentUser()?.username || '').toUpperCase(); pg.autorizadoTs = Date.now(); pg._ts = Date.now();
     logActivity('auth', `Pago liquidación autorizado`, `${p.name} · ${pg.aptoName||pg.tipo} · ${pg.colaborador||''}`);
     saveState(); renderPlanilla(); showToast('PAGO AUTORIZADO','green');
 
@@ -32066,6 +32152,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       if(!Array.isArray(existente.pagosIds)) existente.pagosIds = [];
       nuevosPagosIds.forEach(pid => { if(!existente.pagosIds.includes(pid)) existente.pagosIds.push(pid); });
       existente.granTotal = existente.trabajadores.reduce((s,t) => s + Number(t.total||0), 0);
+      existente._ts = Date.now(); // v891
       if(supEmail && existente.supervisorEmail && supEmail.toLowerCase() !== String(existente.supervisorEmail).toLowerCase()){
         if(!Array.isArray(existente.contribuidores)) existente.contribuidores = [];
         if(!existente.contribuidores.some(c => String(c.email).toLowerCase() === supEmail.toLowerCase())){
@@ -32082,6 +32169,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
 
     const retpl = {
       id: 'retpl-'+uid(),
+      _ts: Date.now(),
       estado: 'pendiente_pm',
       proyecto: p.name,
       fechaRef: fechaRefIso,
@@ -32210,6 +32298,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     });
     if(!ok) return;
     retpl.estado = 'aprobada';
+    retpl._ts = Date.now(); // v891
     retpl.fechaAprobacion = new Date().toISOString();
     retpl.pmNombre = (typeof window._getUserDisplayName === 'function') ? window._getUserDisplayName() : '';
     retpl.pmEmail = (typeof window._getUserEmail === 'function') ? window._getUserEmail() : '';
@@ -32220,7 +32309,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     (retpl.pagosIds||[]).forEach(pid => {
       const pg = (p.planilla.pagos||[]).find(x => x.id === pid);
       if(pg){
-        pg.retencionPagada = true;
+        pg.retencionPagada = true; pg._ts = Date.now();
         pg.retencionPagadaTs = _retLibTs;
         pg.retencionPagadaPor = _retLibPor;
         pg.retencionPagadaPorEmail = _retLibEmail;
@@ -32276,6 +32365,8 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       + '<div style="font-size:11.5px;color:#666;margin-bottom:10px">'+(retpl.pagosIds||[]).length+' retenciones · '+fQ(retpl.granTotal||0)+'</div>';
     const ok = await window.prConfirm({ title: 'Cancelar envío de liquidación de retenciones', bodyHTML, okText: 'CANCELAR ENVÍO', cancelText: 'NO HACER NADA', danger: true });
     if(!ok) return;
+    p.planilla.planillasEliminadas = p.planilla.planillasEliminadas || {}; // v891 tombstone (retenciones usan el mismo mapa)
+    p.planilla.planillasEliminadas[retplId] = Date.now();
     p.planilla.retencionesPlanillas = (p.planilla.retencionesPlanillas||[]).filter(x => x.id !== retplId);
     saveState();
     renderPlanilla();
@@ -32319,6 +32410,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       const pg = (p.planilla.pagos||[]).find(x => x.id === pid);
       if(pg && pg.retencionPagada){
         pg.retencionPagada = false;
+        pg._ts = Date.now(); // v891: sin esto la copia remota "pagada" (mismo _ts) gana el merge y la reversión se pierde
         delete pg.retencionPagadaTs;
         delete pg.retencionPagadaPor;
         delete pg.retencionPagadaPorEmail;
@@ -32328,6 +32420,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     if(Array.isArray(p.planilla.retencionesPagadas)){
       p.planilla.retencionesPagadas = p.planilla.retencionesPagadas.filter(rp => rp.retplId !== retpl.id);
     }
+    try { var _ridDel = (p.planilla.retencionesPlanillas[idx]||{}).id; if(_ridDel){ p.planilla.planillasEliminadas = p.planilla.planillasEliminadas || {}; p.planilla.planillasEliminadas[_ridDel] = Date.now(); } } catch(e){} // v891 tombstone
     p.planilla.retencionesPlanillas.splice(idx, 1);
     logActivity('delete',
       `Planilla de retenciones APROBADA eliminada del historial`,
@@ -39571,12 +39664,16 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       if(!ok) return;
     }
 
+    // v891: tombstone — el union-merge no debe revivir el pago eliminado
+    p.planilla.pagosEliminados = p.planilla.pagosEliminados || {};
+    p.planilla.pagosEliminados[pagoId] = Date.now();
     p.planilla.pagos = (p.planilla.pagos || []).filter(x => x.id !== pagoId);
 
     if(typeof logActivity === 'function'){
       try { logActivity('delete','Pago planilla eliminado', (p.name||'')+' · '+detalleTxt+' · '+colab+' · '+pctTxt+' · '+montoTxt); } catch(e){}
     }
     if(typeof saveState === 'function') saveState();
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} // v891: cerrar la ventana de carrera
     if(typeof renderPlanilla === 'function') renderPlanilla();
     if(typeof showToast === 'function') showToast('PAGO ELIMINADO · % DISPONIBLE OTRA VEZ','green');
   };
@@ -41111,12 +41208,19 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     });
     if(!ok) return;
 
+    // v891: tombstones — sin esto cualquier dispositivo con el doc viejo resucita todo vía union-merge
+    p.planilla.pagosEliminados = p.planilla.pagosEliminados || {};
+    (p.planilla.pagos||[]).forEach(pg => { if(pg && pg.id) p.planilla.pagosEliminados[pg.id] = Date.now(); });
+    p.planilla.planillasEliminadas = p.planilla.planillasEliminadas || {};
+    (p.planilla.planillasArmadas||[]).forEach(plx => { if(plx && plx.id) p.planilla.planillasEliminadas[plx.id] = Date.now(); });
+
     p.planilla.pagos = [];
     p.planilla.retencionesPagadas = [];
     p.planilla.planillasArmadas = [];
     p.planilla.ajustes = [];
 
     try { saveState(); } catch(e){ console.error('[v253] saveState error:', e); }
+    try { if(typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} // v891
     try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){ console.error('[v253] render error:', e); }
 
     showT(`LIMPIO · ${pagos.length} PAGOS · ${planillas.length} PLANILLAS · ${retsPag.length} RETENCIONES · ${ajustes.length} AJUSTES`, 'green');
@@ -42286,6 +42390,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         });
       });
       pl.autoDescuentos = true;
+      // v891 OJO (revisión adversarial): acá NO se sella pl._ts — _v411 corre también sobre
+      // copias potencialmente stale (resync de catálogo, last-chance) y un _ts nuevo en una
+      // copia vieja la haría "ganar" el union-merge y revertir aprobaciones concurrentes.
+      // El sello lo pone resyncDescuentosAbiertas SOLO cuando el contenido cambió de verdad.
       pl.autoDescuentosTs = ahora;
       pl.autoDescuentosVersion = 412;
       pl.autoDescuentosApplied = applied;
@@ -42333,6 +42441,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           if (beforeJSON === afterJSON) return; // nada cambió (ni monto)
           dirtyCount++;
           pl._resyncTs = Date.now();
+          pl._ts = Date.now(); // v891: solo cuando el resync cambió el contenido de verdad
           let entraSale = beforeKeys.size !== afterKeys.size;
           if (!entraSale){ afterKeys.forEach(k => { if (!beforeKeys.has(k)) entraSale = true; }); }
           if (!entraSale){ beforeKeys.forEach(k => { if (!afterKeys.has(k)) entraSale = true; }); }
@@ -42456,7 +42565,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       _s.projects.forEach(function(pr){
         ((pr && pr.planilla && pr.planilla.planillasArmadas)||[]).forEach(function(pl){
           if (!pl || !OPEN[pl.estado]) return;
-          if (_polRecalcPlanillaPolizas(pl, pr, _s, ownerMap)) dirty++;
+          if (_polRecalcPlanillaPolizas(pl, pr, _s, ownerMap)){ pl._ts = Date.now(); dirty++; }
         });
       });
       if (dirty > 0){
@@ -42498,6 +42607,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
     const planilla = {
       id: 'pln-'+uid(),
+      _ts: Date.now(),
       numero: numero,
       estado: 'pendiente_pm',
       fechaCreacion: ahora,
@@ -42565,7 +42675,11 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       console.error('[v305] CloudSync upload error:', e);
       try {
         const ix = p.planilla.planillasArmadas.findIndex(x => x.id === planilla.id);
-        if (ix >= 0) p.planilla.planillasArmadas.splice(ix, 1);
+        if (ix >= 0){
+          p.planilla.planillasArmadas.splice(ix, 1);
+          p.planilla.planillasEliminadas = p.planilla.planillasEliminadas || {}; // v891: el debounce pudo haberla subido
+          p.planilla.planillasEliminadas[planilla.id] = Date.now();
+        }
         (p.planilla.pagos || []).forEach(pg => { if (ids.includes(pg.id)){ delete pg.planillaId; delete pg.estadoPlanilla; } });
         if(typeof saveState === 'function') saveState();
         if(typeof renderPlanilla === 'function') renderPlanilla();
@@ -42657,22 +42771,24 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     // v412: si tiene auto-descuentos, va directo a 'aprobada'. Si no, flujo legacy.
     if (hasAutoDescuentos){
       pl.estado = 'aprobada';
+      pl._ts = Date.now(); // v891: la mutación más nueva gana en el union-merge
       pl.fechaRespuesta = ahora;
       pl.fechaAprobacionFinal = ahora;
       pl.pmEmail = pmEmail; pl.pmNombre = pmNombre;
       if(!Array.isArray(pl.descuentosPlanilla)) pl.descuentosPlanilla = [];
       pl.historial.push({ fecha: ahora, evento: 'aprobada', autor: pmEmail, autorNombre: pmNombre, comentario: 'Aprobada directamente por Gerente (auto-descuentos v412)' });
       (p.planilla.pagos || []).forEach(pg => {
-        if(pl.pagosIds.includes(pg.id)){ pg.autorizado = true; pg.estadoPlanilla = 'aprobada'; pg.fechaAutorizado = ahora; pg.autorizadoPor = pmEmail; }
+        if(pl.pagosIds.includes(pg.id)){ pg.autorizado = true; pg.estadoPlanilla = 'aprobada'; pg.fechaAutorizado = ahora; pg.autorizadoPor = pmEmail; pg._ts = Date.now(); }
       });
     } else {
       pl.estado = 'aprobada_inicial';
+      pl._ts = Date.now(); // v891
       pl.fechaRespuesta = ahora;
       pl.pmEmail = pmEmail; pl.pmNombre = pmNombre;
       if(!Array.isArray(pl.descuentosPlanilla)) pl.descuentosPlanilla = [];
       pl.historial.push({ fecha: ahora, evento: 'aprobada_inicial', autor: pmEmail, autorNombre: pmNombre, comentario: 'Visto bueno del Gerente de Proyectos — pendiente descuentos' });
       (p.planilla.pagos || []).forEach(pg => {
-        if(pl.pagosIds.includes(pg.id)){ pg.autorizado = true; pg.estadoPlanilla = 'aprobada_inicial'; pg.fechaAutorizado = ahora; pg.autorizadoPor = pmEmail; }
+        if(pl.pagosIds.includes(pg.id)){ pg.autorizado = true; pg.estadoPlanilla = 'aprobada_inicial'; pg.fechaAutorizado = ahora; pg.autorizadoPor = pmEmail; pg._ts = Date.now(); }
       });
     }
 
@@ -42805,6 +42921,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       const anticipoId = tipo === 'anticipo' ? c.getAttribute('data-id') : null;
       const polizaIds = tipo === 'poliza' ? (c.getAttribute('data-polizaids') || '').split(',').filter(Boolean) : null;
       pl.descuentosPlanilla.push({ id: 'desc-'+uid(), subtipo: subtipo, desc: desc, monto: +monto.toFixed(2), cuotaActual: cuotaAct > 0 ? cuotaAct : null, cuotasTotales: cuotaTot > 0 ? cuotaTot : null, colaboradorNombre: nombreColab, colaboradorId: colaboradorId, anticipoId: anticipoId, polizaIds: polizaIds, ts: ahora, autor: autor, autorNombre: autorNombre });
+      pl._ts = Date.now(); // v891
       agregados++;
     });
     pl.historial.push({ fecha: ahora, evento: 'descuentos_agregados', autor: autor, autorNombre: autorNombre, comentario: agregados+' descuento(s) · '+nombreColab });
@@ -42895,6 +43012,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     if(!ok) return;
     // v337: delete robusto + recalc + forceUploadNow
     pl.descuentosPlanilla.splice(idx, 1);
+    pl._ts = Date.now(); // v891
     pl.historial = pl.historial || [];
     pl.historial.push({
       fecha: nowStr(),
@@ -42943,12 +43061,13 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const autorNombre = _getUserDisplayName();
     // v282: nuevo estado intermedio. Vuelve al gerente para autorizacion final.
     pl.estado = 'pendiente_pm_final';
+    pl._ts = Date.now(); // v891
     pl.fechaDescuentosFinalizado = ahora;
     pl.descuentosFinalizadoEmail = autor;
     pl.descuentosFinalizadoNombre = autorNombre;
     pl.historial.push({ fecha: ahora, evento: 'descuentos_finalizados', autor: autor, autorNombre: autorNombre, comentario: desc.length+' descuento(s) · Total: Q '+totalDesc.toFixed(2)+' · enviada al gerente para autorizacion final' });
     (p.planilla.pagos||[]).forEach(pg => {
-      if(pl.pagosIds.includes(pg.id)) pg.estadoPlanilla = 'pendiente_pm_final';
+      if(pl.pagosIds.includes(pg.id)){ pg.estadoPlanilla = 'pendiente_pm_final'; pg._ts = Date.now(); }
     });
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     // v768: forzar subida inmediata (planillasArmadas es last-write-wins).
@@ -42988,6 +43107,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const pmEmail = _getUserEmail();
     const pmNombre = _getUserDisplayName();
     pl.estado = 'aprobada_inicial';
+    pl._ts = Date.now(); // v891
     pl.fechaRespuesta = ahora;
     pl.pmEmail = pmEmail;
     pl.pmNombre = pmNombre;
@@ -42997,7 +43117,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     pl.historial.push({ fecha: ahora, evento: 'descuentos_rechazados', autor: pmEmail, autorNombre: pmNombre, comentario: comentario });
 
     (p.planilla.pagos||[]).forEach(pg => {
-      if(pl.pagosIds.includes(pg.id)) pg.estadoPlanilla = 'aprobada_inicial';
+      if(pl.pagosIds.includes(pg.id)){ pg.estadoPlanilla = 'aprobada_inicial'; pg._ts = Date.now(); }
     });
 
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
@@ -43061,12 +43181,13 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const pmEmail = _getUserEmail();
     const pmNombre = _getUserDisplayName();
     pl.estado = 'aprobada';
+    pl._ts = Date.now(); // v891
     pl.fechaProcesado = ahora;
     pl.procesadoEmail = pmEmail;
     pl.procesadoNombre = pmNombre;
     pl.historial.push({ fecha: ahora, evento: 'procesada', autor: pmEmail, autorNombre: pmNombre, comentario: 'Autorizacion final del gerente · neto: Q '+netoFinal.toFixed(2) });
     (p.planilla.pagos||[]).forEach(pg => {
-      if(pl.pagosIds.includes(pg.id)) pg.estadoPlanilla = 'aprobada';
+      if(pl.pagosIds.includes(pg.id)){ pg.estadoPlanilla = 'aprobada'; pg._ts = Date.now(); }
     });
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     // v768: forzar subida inmediata de la aprobación FINAL (plata lista para pago; planillasArmadas es last-write-wins).
@@ -43111,12 +43232,13 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const autor = _getUserEmail();
     const autorNombre = _getUserDisplayName();
     pl.estado = 'archivada';
+    pl._ts = Date.now(); // v891
     pl.fechaCierre = ahora;
     pl.cerradaPorEmail = autor;
     pl.cerradaPorNombre = autorNombre;
     pl.historial.push({ fecha: ahora, evento: 'cerrada', autor: autor, autorNombre: autorNombre, comentario: 'Pago confirmado y planilla archivada' });
     (p.planilla.pagos||[]).forEach(pg => {
-      if(pl.pagosIds.includes(pg.id)) pg.estadoPlanilla = 'archivada';
+      if(pl.pagosIds.includes(pg.id)){ pg.estadoPlanilla = 'archivada'; pg._ts = Date.now(); }
     });
     try { if(typeof saveState === 'function') saveState(); } catch(e){}
     // v768: forzar subida inmediata del archivado (planillasArmadas es last-write-wins).
@@ -43193,6 +43315,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const pmEmail = _getUserEmail();
     const pmNombre = _getUserDisplayName();
     pl.estado = 'rechazada';
+    pl._ts = Date.now(); // v891
     pl.fechaRespuesta = ahora;
     pl.pmEmail = pmEmail;
     pl.pmNombre = pmNombre;
@@ -43200,7 +43323,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     pl.historial.push({ fecha: ahora, evento: 'rechazada', autor: pmEmail, autorNombre: pmNombre, comentario: comentario });
 
     (p.planilla.pagos || []).forEach(pg => {
-      if(pl.pagosIds.includes(pg.id)) pg.estadoPlanilla = 'rechazada';
+      if(pl.pagosIds.includes(pg.id)){ pg.estadoPlanilla = 'rechazada'; pg._ts = Date.now(); }
     });
 
     try { if(typeof saveState === 'function') saveState(); } catch(e){ console.error('[v226] saveState error:', e); }
@@ -43266,12 +43389,14 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const supEmail = _getUserEmail();
     const supNombre = _getUserDisplayName();
     pl.estado = 'archivada';
+    pl._ts = Date.now(); // v891
     pl.historial.push({ fecha: ahora, evento: 'modificada', autor: supEmail, autorNombre: supNombre, comentario: 'Liberada para nueva edición' });
 
     (p.planilla.pagos || []).forEach(pg => {
       if(pl.pagosIds.includes(pg.id)){
         delete pg.planillaId;
         delete pg.estadoPlanilla;
+        pg._ts = Date.now(); // v891
       }
     });
 
@@ -43299,6 +43424,11 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const bodyHTML = '<div style="padding:10px 12px;background:#FFF1F2;border:1px solid #FECDD3;border-radius:8px;color:#9F1239;font-size:11.5px;line-height:1.5;margin-bottom:12px">Esta acción <strong>borra completamente</strong> la planilla, sus <strong>'+nPagos+' pago(s)</strong> de LIQUIDACIÓN GENERADA y sus <strong>'+nDesc+' descuento(s)</strong>. El % de cada etapa vuelve a estar disponible para poder generar el pago nuevamente. Solo disponible para admin en modo prueba.</div><div style="font-size:12.5px;color:#333;line-height:1.5"><div><strong>'+esc(_planillaTitulo(pl))+'</strong></div><div style="color:var(--mute);margin-top:4px">Estado: '+esc(pl.estado||'—')+'</div><div style="margin-top:4px">'+nPagos+' pago(s) · '+nDesc+' descuento(s)</div></div>';
     const ok = await window.prConfirm({ title:'ELIMINAR PLANILLA', bodyHTML, okText:'ELIMINAR TODO DEFINITIVAMENTE', danger:true });
     if (!ok) return;
+    // v891: tombstones — el union-merge NO debe revivir lo borrado deliberadamente
+    p.planilla.planillasEliminadas = p.planilla.planillasEliminadas || {};
+    p.planilla.planillasEliminadas[pl.id] = Date.now();
+    p.planilla.pagosEliminados = p.planilla.pagosEliminados || {};
+    pagosIds.forEach(id => { p.planilla.pagosEliminados[id] = Date.now(); });
     // v370: borrar los pagos completamente para que % vuelva a estar disponible
     p.planilla.pagos = (p.planilla.pagos || []).filter(pg => !pagosIds.includes(pg.id));
     p.planilla.planillasArmadas.splice(idx, 1);
@@ -43497,6 +43627,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     pg.bruto     = newBruto;
     pg.retencion = newRet;
     pg.neto      = newNeto;
+    pg._ts       = Date.now(); // v891
 
     const ahora = nowStr();
     const autor = _getUserEmail();
@@ -43535,7 +43666,11 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     pl = (p.planilla.planillasArmadas || []).find(x => x.id === planillaId);
     if(!pl){ showT('LIQUIDACIÓN NO ENCONTRADA','red'); return; }
 
+    // v891: tombstone — el union-merge no debe revivir el pago quitado
+    p.planilla.pagosEliminados = p.planilla.pagosEliminados || {};
+    p.planilla.pagosEliminados[pagoId] = Date.now();
     pl.pagosIds = (pl.pagosIds || []).filter(id => id !== pagoId);
+    pl._ts = Date.now(); // v891
     p.planilla.pagos = (p.planilla.pagos || []).filter(x => x.id !== pagoId);
 
     const ahora = nowStr();
@@ -43592,10 +43727,12 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       pl = (p.planilla.planillasArmadas || []).find(x => x.id === planillaId);
       if(!pl){ showT('LIQUIDACIÓN NO ENCONTRADA','red'); return; }
       pl.pagosIds = Array.from(new Set([...(pl.pagosIds||[]), ...idsAgregar]));
+      pl._ts = Date.now(); // v891
       (p.planilla.pagos || []).forEach(pg => {
         if(idsAgregar.includes(pg.id)){
           pg.planillaId = pl.id;
           pg.estadoPlanilla = pl.estado;
+          pg._ts = Date.now(); // v891
         }
       });
       const ahora = nowStr();
@@ -44059,6 +44196,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     }
 
     pl.pagosIds = Array.from(new Set([...(pl.pagosIds||[]), ...idsCreados]));
+    pl._ts = Date.now(); // v891
     pl.historial = pl.historial || [];
     pl.historial.push({
       fecha: nowIso,
@@ -44127,6 +44265,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const supEmail = _getUserEmail();
     const supNombre = _getUserDisplayName();
     pl.estado = 'pendiente_pm';
+    pl._ts = Date.now(); // v891
     pl.fechaEnvio = ahora;
     pl.fechaRespuesta = null;
     pl.intentos = Number(pl.intentos || 1) + 1;
@@ -44138,6 +44277,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       if((pl.pagosIds || []).includes(pg.id)){
         pg.planillaId = pl.id;
         pg.estadoPlanilla = 'pendiente_pm';
+        pg._ts = Date.now(); // v891
       }
     });
 
@@ -46567,6 +46707,8 @@ function _anulHabilitar(){
   var c=_anulEtapaClasificar((p.planilla&&p.planilla.pagos)||[], sel.aptoId, sel.stageIdx);
   if(!c.marcadores.length){ showToast('NO HAY MARCADORES PARA QUITAR','red'); return; }
   var ids=c.marcadores.map(function(x){return x.id;});
+  p.planilla.pagosEliminados = p.planilla.pagosEliminados || {}; // v891 tombstones
+  ids.forEach(function(id){ p.planilla.pagosEliminados[id] = Date.now(); });
   p.planilla.pagos=(p.planilla.pagos||[]).filter(function(pg){ return ids.indexOf(pg.id)<0; });
   try{ saveState(); }catch(e){}
   try{ if(typeof CloudSync!=='undefined' && CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
@@ -46589,6 +46731,8 @@ async function _anulAnularReal(){
   finally { if(_m) _m.style.zIndex='100055'; }
   if(!okc) return;
   var ids=c.reales.map(function(x){return x.id;});
+  p.planilla.pagosEliminados = p.planilla.pagosEliminados || {}; // v891 tombstones
+  ids.forEach(function(id){ p.planilla.pagosEliminados[id] = Date.now(); });
   p.planilla.pagos=(p.planilla.pagos||[]).filter(function(pg){ return ids.indexOf(pg.id)<0; });
   try{ saveState(); }catch(e){}
   try{ if(typeof CloudSync!=='undefined' && CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
