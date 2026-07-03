@@ -78,6 +78,10 @@ ok('sin fecha: no revienta y VICTOR queda pendiente (solo chequeo propio)', Arra
 
 // ── estructural: el texto del modal explica la regla global por quincena ──
 ok('modal explica que es por quincena GLOBAL (ninguna liquidación de esta quincena)', /no<\/b> se les descontó en NINGUNA liquidación de esta quincena/.test(html));
+// v889: el user pidió SOLO esa frase — sin el paréntesis explicativo ni el "Revisá si..."
+ok('v889: sin el paréntesis "(se revisan TODAS..."', html.indexOf('(se revisan TODAS las liquidaciones') < 0);
+ok('v889: sin la frase "Revisá si hay que generarles pago"', html.indexOf('Revisá si hay que generarles pago') < 0);
+ok('v889: la frase termina en punto tras "quincena"', /no<\/b> se les descontó en NINGUNA liquidación de esta quincena\./.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
