@@ -3041,7 +3041,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v889</span>
+    <span style="opacity:.5;font-size:9px">v890</span>
   </footer>
 
 </div>
@@ -42232,7 +42232,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           return false;
         };
         const polizas = (_s.polizasGlobales||[]).filter(po => {
-          if (po.estatus !== 'ACTIVA' && po.estatus !== 'EN PROCESO') return false;
+          if (!po || (po.estatus !== 'ACTIVA' && po.estatus !== 'EN PROCESO')) return false;
           return matchColab(po.aCargoDeNombre);
         });
         console.log('[v412 mobile] colab', c.nombre, '· pólizas activas encontradas:', polizas.length);
@@ -42357,6 +42357,115 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         try { showT('PLANILLAS ABIERTAS ACTUALIZADAS: '+dirtyCount, 'green'); } catch(e){}
       }
     } catch(e){ console.error('resyncDescuentosAbiertas:', e); }
+  };
+
+  // v890: recalcula SOLO los descuentos de PÓLIZA auto-aplicados de UNA planilla abierta
+  // contra el catálogo actual (mismo match/monto/dueña que _v411). NO toca anticipos —
+  // los quitados con ✕ no reviven. En sitio e idempotente (regla v856): devuelve true
+  // únicamente si algo cambió de verdad. Corrige el caso "se dio de baja una póliza
+  // después de armar la liquidación y el descuento quedó congelado".
+  function _polRecalcPlanillaPolizas(pl, pr, st, ownerMap){
+    try {
+      if (!pl || pl.autoDescuentos !== true) return false;
+      if (!Array.isArray(pl.descuentosPlanilla)) pl.descuentosPlanilla = [];
+      // guard espejo de _v411 (_catalogoTieneData): con el catálogo de pólizas vacío o
+      // anómalo NO se toca nada — un state a medias borraría los descuentos y subiría el borrado.
+      if (!st || !Array.isArray(st.polizasGlobales) || !st.polizasGlobales.length) return false;
+      var norm = (typeof _v464NormKey==='function') ? _v464NormKey : function(s){ return String(s||'').toUpperCase().replace(/\s+/g,' ').trim(); };
+      ownerMap = ownerMap || {};
+      var montoUnit = (st && st.polizasConfig && typeof st.polizasConfig.montoDefault === 'number') ? st.polizasConfig.montoDefault : 44.95;
+      var personas = {};
+      ((pr && pr.planilla && pr.planilla.pagos)||[]).forEach(function(pg){
+        if (!pg || !Array.isArray(pl.pagosIds) || pl.pagosIds.indexOf(pg.id)<0) return;
+        var nombre = String(pg.colaborador||'').trim(); if(!nombre) return;
+        var k = norm(nombre); if(!k || k.replace(/[\s\-_]/g,'')==='PREAPP') return;
+        if (!personas[k]) personas[k] = { nombre:nombre, key:k, colaboradorId: pg.colaboradorId || '' };
+      });
+      function matchColab(key, otroNombre){
+        var otroKey = norm(otroNombre); if(!otroKey) return false;
+        if (otroKey === key) return true;
+        if (otroKey.length>=8 && key.length>=8 && (otroKey.indexOf(key)>=0 || key.indexOf(otroKey)>=0)) return true;
+        return false;
+      }
+      // guard: si la planilla dice tener pagos pero ninguno se encontró en el proyecto
+      // (pr equivocado / state a medias), no tocar nada.
+      if ((Array.isArray(pl.pagosIds) ? pl.pagosIds.length : 0) > 0 && !Object.keys(personas).length) return false;
+      var changed = false;
+      var existentes = {};
+      var dupes = [];
+      pl.descuentosPlanilla.forEach(function(d){
+        if (!(d && d.subtipo==='POLIZA' && d.autoAplicado)) return;
+        var kd = norm(d.colaboradorNombre);
+        if (existentes[kd]) dupes.push(d); else existentes[kd] = d;
+      });
+      // duplicados de la misma persona (datos históricos / LWW parcial): colapsar a 1.
+      dupes.forEach(function(d){ var i = pl.descuentosPlanilla.indexOf(d); if(i>=0){ pl.descuentosPlanilla.splice(i,1); changed = true; } });
+      var keys = {};
+      Object.keys(personas).forEach(function(k){ keys[k]=1; });
+      Object.keys(existentes).forEach(function(k){ keys[k]=1; });
+      Object.keys(keys).forEach(function(k){
+        var per = personas[k];
+        var d = existentes[k];
+        var esDuena = (ownerMap[k] === pl.id) || !ownerMap[k];
+        var esperado = (per && esDuena) ? ((st && st.polizasGlobales)||[]).filter(function(po){
+          if (!po || (po.estatus!=='ACTIVA' && po.estatus!=='EN PROCESO')) return false;
+          return matchColab(k, po.aCargoDeNombre);
+        }) : [];
+        if (!esperado.length){
+          if (d){ var i = pl.descuentosPlanilla.indexOf(d); if(i>=0){ pl.descuentosPlanilla.splice(i,1); changed = true; } }
+          return;
+        }
+        var monto = +(esperado.length * montoUnit).toFixed(2);
+        var ids = esperado.map(function(po){ return po.id; });
+        var desc = esperado.length === 1 ? ('PÓLIZA SEGURO · ' + (esperado[0].aseguradoNombre || '')) : ('PÓLIZAS · ' + esperado.length + ' ACTIVAS');
+        if (!d){
+          pl.descuentosPlanilla.push({
+            id: 'desc-' + Date.now() + '-' + Math.random().toString(36).slice(2,8),
+            subtipo:'POLIZA', desc: desc, monto: monto,
+            colaboradorNombre: per.nombre, colaboradorId: per.colaboradorId,
+            polizaIds: ids, polizasCount: esperado.length,
+            ts: (typeof nowStr === 'function') ? nowStr() : new Date().toISOString(),
+            autor:'sistema', autorNombre:'AUTO v890', autoAplicado:true, bloqueado:true
+          });
+          changed = true;
+          return;
+        }
+        var idsViejos = Array.isArray(d.polizaIds) ? d.polizaIds.slice().sort().join(',') : '';
+        var idsNuevos = ids.slice().sort().join(',');
+        if (Number(d.monto) !== monto || idsViejos !== idsNuevos || (Number(d.polizasCount)||0) !== esperado.length || d.desc !== desc){
+          d.monto = monto; d.polizaIds = ids; d.polizasCount = esperado.length; d.desc = desc;
+          changed = true;
+        }
+      });
+      return changed;
+    } catch(e){ console.warn('[v890] _polRecalcPlanillaPolizas:', e); return false; }
+  }
+  window._polRecalcPlanillaPolizas = _polRecalcPlanillaPolizas;
+  // v890: auto-curación — recorre las planillas ABIERTAS de TODOS los proyectos y les
+  // recalcula las pólizas. Corre en cada render de planillas: cambios hechos en otro
+  // dispositivo (o por la ruta de solicitudes) se corrigen solos al abrir la vista.
+  // Solo guarda/sube si algo cambió (idempotente, no genera bucles de sync).
+  window._polSelfHealPolizas = function(){
+    try {
+      var _s = (typeof state !== 'undefined') ? state : window.state;
+      if (!_s || !Array.isArray(_s.projects)) return 0;
+      var OPEN = { pendiente_pm:1, aprobada_inicial:1, pendiente_pm_final:1 };
+      var ownerMap = {};
+      try { ownerMap = (typeof _v464PolizaOwnerMap==='function') ? _v464PolizaOwnerMap() : {}; } catch(e){ ownerMap = {}; }
+      var dirty = 0;
+      _s.projects.forEach(function(pr){
+        ((pr && pr.planilla && pr.planilla.planillasArmadas)||[]).forEach(function(pl){
+          if (!pl || !OPEN[pl.estado]) return;
+          if (_polRecalcPlanillaPolizas(pl, pr, _s, ownerMap)) dirty++;
+        });
+      });
+      if (dirty > 0){
+        try { if (typeof saveState === 'function') saveState(); } catch(e){}
+        try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); } catch(e){}
+        try { showT('DESCUENTOS DE PÓLIZAS ACTUALIZADOS EN '+dirty+' LIQUIDACIÓN'+(dirty!==1?'ES':''), 'green'); } catch(e){}
+      }
+      return dirty;
+    } catch(e){ console.warn('[v890] _polSelfHealPolizas:', e); return 0; }
   };
 
   window._v226Enviar = async function(){
@@ -44209,6 +44318,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         }
       }
     } catch(e){ console.warn('[v412 mobile] bloque auto-apply on render error:', e); }
+    // v890: auto-curación de pólizas en planillas abiertas (todos los proyectos).
+    try { if (window._polSelfHealPolizas) window._polSelfHealPolizas(); } catch(e){ console.warn('[v890] self-heal polizas:', e); }
 
     const disponibles = _pagosDisponiblesParaArmar(p);
     const totalDisp = disponibles.reduce((s,x)=>s+Number(x.neto||x.monto||0),0);
@@ -48563,6 +48674,7 @@ async function _anulAnularReal(){
     else if (sol.tipo === 'EDITAR' && sol.cambios){ Object.assign(polizas[idx], sol.cambios); polizas[idx]._ts = Date.now(); }
     else if (sol.tipo === 'DAR_DE_BAJA'){ polizas[idx].estatus = 'CANCELADA'; if (sol.cambios && sol.cambios.fechaBaja) polizas[idx].fechaBaja = sol.cambios.fechaBaja; else polizas[idx].fechaBaja = new Date().toISOString().slice(0,10); if (sol.cambios && sol.cambios.observaciones) polizas[idx].observaciones = sol.cambios.observaciones; polizas[idx]._ts = Date.now(); }
     _marcarProcesadaPol(sol, 'APROBADA', null);
+    try { if (window.resyncDescuentosAbiertas) window.resyncDescuentosAbiertas(); } catch(e){ console.warn('[v890] resync hook solicitud poliza:', e); }
     showT('SOLICITUD APROBADA · CAMBIO APLICADO','green');
   };
   window.rechazarSolicitudPoliza = async function(solId){
