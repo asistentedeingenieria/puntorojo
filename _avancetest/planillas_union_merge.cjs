@@ -105,7 +105,7 @@ if (f) {
 
 // ── estructural: hook en applyRemote + tombstones + sellos _ts ──
 ok('hook v891 en applyRemote (por proyecto, marca needsResync)', /const _chgPl = _mergePlanillaProyecto\(_locProj\[rp && rp\.id\], rp\);/.test(html));
-ok('hook v891 no marca needsResync para solo-lectura', /_chgPl && !\(typeof isReadOnly === 'function' && isReadOnly\(\)\)\) needsResync = true;/.test(html));
+ok('hook v891 no marca needsResync para solo-lectura', /_chgPl && !\(typeof isReadOnly === 'function' && isReadOnly\(\)\)\) \{ needsResync = true; _blindados\+\+; \}/.test(html));
 // hallazgo crítico de la revisión: _v411 corre sobre copias potencialmente stale — NO debe sellar _ts
 ok('_v411 NO sella pl._ts (lo sella el resync solo con cambio real)', /acá NO se sella pl\._ts/.test(html) && /pl\._resyncTs = Date\.now\(\);\r?\n\s*pl\._ts = Date\.now\(\);/.test(html.replace(/\r\n/g,'\n')));
 // hallazgos: borrados sin tombstone resucitaban — todos los caminos de borrado tombstonean

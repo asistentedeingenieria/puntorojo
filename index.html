@@ -3041,7 +3041,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v891</span>
+    <span style="opacity:.5;font-size:9px">v892</span>
   </footer>
 
 </div>
@@ -8525,6 +8525,36 @@ function _asistPendingClear(keys){ if(!keys||!keys.length) return; try{ const o=
 // cuando cambian. Este helper arma {personaId: face} desde personalGlobal.
 function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=>{ if(p&&p.id&&p.face&&p.face.descriptors&&p.face.descriptors.length) o[p.id]=p.face; }); return o; }
 
+// v892: BLOQUEO DE VERSIONES VIEJAS — una app con código anterior NO puede escribir a la nube.
+// La versión mínima vive en appState/config.minSyncVersion (doc chiquito que las versiones
+// viejas ni conocen, así no lo pueden pisar) con listener en vivo (kill-switch instantáneo).
+// Si este código es menor a la mínima, TODAS las subidas se bloquean y sale un aviso a
+// pantalla completa hasta actualizar. Fail-open: sin doc config o mínima 0 → no bloquea.
+// Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
+// lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
+// Y el minSyncVersion del doc config (comando de consola del admin).
+const APP_SYNC_VERSION = 892;
+function _versionBloqueada(appVer, minVer){
+  var m = Number(minVer);
+  if (!isFinite(m) || m <= 0) return false;
+  return Number(appVer) < m;
+}
+function _mostrarBloqueoVersion(minVer){
+  try {
+    if (document.getElementById('verBloqueoOverlay')) return;
+    var d = document.createElement('div');
+    d.id = 'verBloqueoOverlay';
+    d.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(17,17,17,.96);display:flex;align-items:center;justify-content:center;text-align:center;padding:24px';
+    d.innerHTML = '<div style="max-width:420px;color:#fff">'
+      + '<div style="font-size:40px;margin-bottom:14px">&#9940;</div>'
+      + '<div style="font-size:18px;font-weight:800;letter-spacing:.5px;margin-bottom:10px">VERSIÓN DESACTUALIZADA</div>'
+      + '<div style="font-size:13px;line-height:1.6;opacity:.9;margin-bottom:18px">Esta versión de la app ya no puede guardar cambios (mínima requerida: v'+Number(minVer)+', esta es v'+APP_SYNC_VERSION+'). Actualizá para seguir trabajando — tus datos locales no se pierden.</div>'
+      + '<button onclick="window.location.reload()" style="background:#C62828;border:none;color:#fff;font:inherit;font-weight:800;font-size:14px;letter-spacing:.5px;padding:14px 28px;border-radius:8px;cursor:pointer">ACTUALIZAR AHORA</button>'
+      + '</div>';
+    document.body.appendChild(d);
+  } catch(e){}
+}
+
 const CloudSync = {
   enabled: false,
   ref: null,                 // Doc reference: /appState/main (legacy / respaldo, ya no se reescribe)
@@ -8547,6 +8577,18 @@ const CloudSync = {
     this.ref = db.collection('appState').doc('main');     // legacy / respaldo
     this.coreRef = db.collection('appState').doc('core');  // v491: modelo multi-doc
     this._projHashes = {};
+    // v892: versión mínima de sync — listener en vivo del doc appState/config (kill-switch:
+    // el admin la sube y TODOS los clientes v892+ desactualizados quedan bloqueados al instante).
+    this._minSyncVersion = 0;
+    try {
+      const cfgRef = db.collection('appState').doc('config');
+      cfgRef.onSnapshot((s) => {
+        try {
+          this._minSyncVersion = Number((s && s.exists && (s.data()||{}).minSyncVersion) || 0) || 0;
+          if (_versionBloqueada(APP_SYNC_VERSION, this._minSyncVersion)) _mostrarBloqueoVersion(this._minSyncVersion);
+        } catch(e){}
+      }, (e) => { console.warn('[v892] listener config:', e && e.message); });
+    } catch(e){ console.warn('[v892] config no disponible:', e && e.message); }
 
     try {
       const coreSnap = await this.coreRef.get();
@@ -8684,6 +8726,7 @@ const CloudSync = {
      Solo reescribe los proyectos que cambiaron (hash). appState/main NO se toca. */
   async uploadCurrent(){
     if (typeof isReadOnly==='function' && isReadOnly()) return; // v866: SOLO LECTURA no sube nada a la nube
+    if (_versionBloqueada(APP_SYNC_VERSION, this._minSyncVersion)) { _mostrarBloqueoVersion(this._minSyncVersion); console.warn('[v892] subida BLOQUEADA: v'+APP_SYNC_VERSION+' < mínima v'+this._minSyncVersion); return; } // v892
     if (!this.coreRef) return;
     const db = firebase.firestore();
     const data = this.stripLocal(state);              // clon sin base64 ni activeProjectId
@@ -8698,7 +8741,7 @@ const CloudSync = {
     delete data.asistenciaGlobal;
     const projects = Array.isArray(data.projects) ? data.projects : [];
     delete data.projects;
-    const stamp = { ts: Date.now(), by: (currentUser && (currentUser.email || currentUser.username)) || 'sistema' };
+    const stamp = { ts: Date.now(), by: (currentUser && (currentUser.email || currentUser.username)) || 'sistema', ver: APP_SYNC_VERSION }; // v892: forense — quién y con qué versión
     data._projectIds = projects.map(p => p && p.id).filter(Boolean);
     data._lastUpdate = stamp;
     // v496: aviso AUTOMATICO si el doc core se acerca al limite duro de 1MB de Firestore.
@@ -8790,6 +8833,7 @@ const CloudSync = {
      Comparte this._asistHash con uploadCurrent, así nunca se duplican escrituras. */
   async uploadAsistencia(){
     if (typeof isReadOnly==='function' && isReadOnly()) return; // v866: SOLO LECTURA no sube nada a la nube
+    if (_versionBloqueada(APP_SYNC_VERSION, this._minSyncVersion)) { _mostrarBloqueoVersion(this._minSyncVersion); return; } // v892
     if (!this.coreRef) return;
     const db = firebase.firestore();
     const _asistPayload = (state.asistenciaGlobal && typeof state.asistenciaGlobal==='object') ? state.asistenciaGlobal : {};
@@ -8797,7 +8841,7 @@ const CloudSync = {
     const _asistJson = JSON.stringify(_asistPayload);
     if (_asistJson.length > 900000 && !this._asistSizeWarned) { this._asistSizeWarned = true; try { showToast('AVISO: la asistencia pesa '+Math.round(_asistJson.length/1024)+' KB (límite 1 MB). Archivá días viejos.','red'); } catch(e){} } else if (_asistJson.length < 800000) { this._asistSizeWarned = false; } // v649: telemetría de tamaño
     if (this._asistHash === _asistJson) return;   // sin cambios → no escribir
-    const stamp = { ts: Date.now(), by: (currentUser && (currentUser.email || currentUser.username)) || 'sistema' };
+    const stamp = { ts: Date.now(), by: (currentUser && (currentUser.email || currentUser.username)) || 'sistema', ver: APP_SYNC_VERSION }; // v892: forense — quién y con qué versión
     await db.collection('appState').doc('asistencia').set({ asistencia: _asistPayload, _lastUpdate: stamp });
     this._asistHash = _asistJson;
   },
@@ -9097,11 +9141,26 @@ const CloudSync = {
     try {
       if (typeof _mergePlanillaProyecto === 'function') {
         const _locProj = {}; ((state && state.projects) || []).forEach(p => { if (p && p.id) _locProj[p.id] = p; });
+        let _blindados = 0;
         (merged.projects || []).forEach(rp => {
           const _chgPl = _mergePlanillaProyecto(_locProj[rp && rp.id], rp);
           // solo-lectura: su subida es no-op — marcar needsResync solo ciclaría el breaker
-          if (_chgPl && !(typeof isReadOnly === 'function' && isReadOnly())) needsResync = true;
+          if (_chgPl && !(typeof isReadOnly === 'function' && isReadOnly())) { needsResync = true; _blindados++; }
         });
+        // v892: ALARMA — que un rescate del blindaje nunca pase desapercibido. Rastro en
+        // ACTIVIDAD siempre; el toast con freno de 30 min (las carreras normales de segundos
+        // entre dispositivos también disparan el merge — sin freno sería ruido y nadie le
+        // creería el día de un incidente real).
+        if (_blindados) {
+          try { if (typeof logActivity === 'function') logActivity('update', 'BLINDAJE DE PLANILLAS ACTIVADO', _blindados + ' proyecto(s): una copia con datos viejos intentó retroceder planillas/pagos; se conservó la versión correcta y se re-subió'); } catch(e){}
+          try {
+            var _ahoraBl = Date.now();
+            if (!window._blindajeToastTs || (_ahoraBl - window._blindajeToastTs) > 1800000) {
+              window._blindajeToastTs = _ahoraBl;
+              showT('BLINDAJE: SE RESCATARON DATOS DE PLANILLA DE UNA COPIA VIEJA', '');
+            }
+          } catch(e){}
+        }
       }
     } catch(e){ console.warn('blindaje de planillas en applyRemote:', e); }
 
