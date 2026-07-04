@@ -49,6 +49,11 @@ El README documenta la convención original de 3 archivos (web `puntorojo.html` 
 
 1. Subí el chip de versión en `index.html`: `<span style="opacity:.5;font-size:9px">vNNN</span>`.
 2. Subí `CACHE_VERSION` en `sw.js` (p. ej. `'vNNN-descripcion-corta'`).
+2b. **Si el cambio toca la lógica de SYNC** (applyRemote, merges, uploads): subí también
+   `const APP_SYNC_VERSION` en `index.html` y decile a Antonio que suba `minSyncVersion`
+   en `appState/config` (comando de consola) — eso bloquea a los clientes con código viejo
+   antes de que puedan escribir (v892). Y recordá: toda mutación de `pl`/`pg`/`retpl` sella
+   `._ts=Date.now()`; todo borrado escribe su tombstone (`pagosEliminados`/`planillasEliminadas`).
 3. Validá: `node _recetatest/valjs.js` → **baseline esperado `blocks=27 errs=1`**;
    el `PARSE ERR block#13` es un **falso positivo conocido** (= PASS).
 4. Corré los `.cjs` relevantes de la feature (p. ej. `node _avancetest/flujoanticipos.cjs`).
