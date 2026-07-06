@@ -17,7 +17,7 @@ ok('selector de quincena (más reciente por numero desc)', /\(b\.numero\|\|0\)-\
 ok('reusa _construirDatos con planilla: pl', /_construirDatos\(p, pl\.pagosIds[\s\S]{0,200}planilla: pl/.test(html));
 // rama un-PDF-por-persona en el generador, reusando lo existente
 ok('rama opts.porPersona en _generarYDescargarExcel', /if\(opts && opts\.porPersona\)/.test(html));
-ok('la rama reusa _v336BuildWorkerBody', /opts\.porPersona[\s\S]{0,1200}_v336BuildWorkerBody\(c\)/.test(html));
+ok('la rama reusa _v336BuildWorkerBody', /opts\.porPersona[\s\S]{0,1800}_v336BuildWorkerBody\(c\)/.test(html)); // v895: ventana ampliada (los ternarios de fechaTituloLit alargaron el bloque)
 ok('la rama usa _pdfDescargar (móvil-aware)', /opts\.porPersona[\s\S]{0,2200}_pdfDescargar\(d2/.test(html));
 ok('soloIdx para una sola persona', html.indexOf('opts.soloIdx')>=0);
 // no se rompió la firma del generador

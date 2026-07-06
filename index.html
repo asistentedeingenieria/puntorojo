@@ -3041,7 +3041,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v894</span>
+    <span style="opacity:.5;font-size:9px">v895</span>
   </footer>
 
 </div>
@@ -41671,6 +41671,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   function _planillaTitulo(pl){
     const p = _activeProj();
     const projName = (p && p.name) || 'Proyecto';
+    if (pl && /^\d{8}$/.test(String(pl.fechaTituloLit||''))) return 'Planilla ' + projName + '_' + pl.fechaTituloLit; // v895: fecha literal fijada por consola
     const fechaRef = (pl && (pl.fechaEnvio || pl.fechaCreacion)) || new Date().toISOString();
     return 'Planilla ' + projName + '_' + _fechaSabadoDDMMYYYY(fechaRef);
   }
@@ -42333,6 +42334,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       const pagos = (pr.planilla && pr.planilla.pagos) || [];
       (pr.planilla && pr.planilla.planillasArmadas || []).forEach(pl => {
         if (!_V465_OPEN[pl.estado]) return;
+        if (pl.sinDescuentoPolizas === true) return; // v895: no descuenta pólizas → no puede ser dueña
         const t = Date.parse(pl.fechaEnvio || pl.fechaCreacion || '');
         const sortNum = isFinite(t) ? t : 0;
         const composite = String(sortNum).padStart(16,'0') + '|' + String(pr.id||'') + '|' + String(pl.id||'');
@@ -42411,7 +42413,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         // v465: dedup — la póliza solo se aplica en la planilla DUEÑA de esta persona.
         // Red de seguridad: si no hay dueña registrada (ej. planilla no entró al mapa), se aplica igual.
         const _esDuenaPoliza = (polizaOwnerByPersona[c.key] === pl.id) || !polizaOwnerByPersona[c.key];
-        if (polizas.length > 0 && _esDuenaPoliza){
+        if (polizas.length > 0 && _esDuenaPoliza && pl.sinDescuentoPolizas !== true){ // v895: marca por-planilla fijada por consola
           const montoTotal = +(polizas.length * montoUnitPoliza).toFixed(2);
           const desc = polizas.length === 1
             ? 'PÓLIZA SEGURO · ' + (polizas[0].aseguradoNombre || '')
@@ -42584,7 +42586,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         var per = personas[k];
         var d = existentes[k];
         var esDuena = (ownerMap[k] === pl.id) || !ownerMap[k];
-        var esperado = (per && esDuena) ? ((st && st.polizasGlobales)||[]).filter(function(po){
+        var esperado = (per && esDuena && pl.sinDescuentoPolizas !== true) ? ((st && st.polizasGlobales)||[]).filter(function(po){ // v895: con la marca, esperado=[] → quita los existentes
           if (!po || (po.estatus!=='ACTIVA' && po.estatus!=='EN PROCESO')) return false;
           return matchColab(k, po.aCargoDeNombre);
         }) : [];
@@ -44883,6 +44885,11 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     return d;
   }
   // v271: formato DD/MM/YYYY consistente con cero a la izquierda.
+  // v895: pl.fechaTituloLit ('DDMMYYYY') = fecha LITERAL fijada por consola que anula el
+  // sábado de la semana en título/PDF/Excel/preview de ESA planilla (caso: re-fechar una
+  // liquidación a un día que no es sábado sin mover su fechaEnvio real).
+  function _fechaLitSlash(lit){ lit=String(lit||''); return /^\d{8}$/.test(lit) ? (lit.slice(0,2)+'/'+lit.slice(2,4)+'/'+lit.slice(4)) : ''; }
+  function _fechaLitDate(lit){ lit=String(lit||''); return /^\d{8}$/.test(lit) ? new Date(Number(lit.slice(4)), Number(lit.slice(2,4))-1, Number(lit.slice(0,2))) : new Date(); }
   function _fmtFechaSabado(iso){
     try {
       const d = _sabadoDeSemana(iso);
@@ -45019,6 +45026,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       torres: ((p && p.towers) || []).map(t => t.name).join(' Y '),
       numero: meta.numero || 'PREVIEW',
       fecha: meta.fecha || new Date().toISOString(),
+      fechaTituloLit: (meta.planilla && meta.planilla.fechaTituloLit) || '', // v895
       planillaId: meta.planillaId || null,
       estado: meta.estado || 'PREVIEW',
       supervisorNombre: meta.supervisorNombre || '',
@@ -45251,7 +45259,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       const _torresHd = _compactarTorres(data.torres);
       const _tituloHd = ('LIQUIDACIÓN TABLAYESO - ' + (data.proyecto||'') + (_torresHd?' - '+_torresHd:'')).toUpperCase();
       const _supervisorHd = String(data.supervisorNombre || '').toUpperCase() || '—';
-      const _fechaSabHd = _fmtFechaSabado(data.fecha);
+      const _fechaSabHd = data.fechaTituloLit ? _fechaLitSlash(data.fechaTituloLit) : _fmtFechaSabado(data.fecha); // v895
       doc.setFont('helvetica','bold');
       doc.setFontSize(10);
       doc.text(_tituloHd, 306, y, { align:'center' });
@@ -45270,7 +45278,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       //   a) Si el bloque no cabe en la pagina, salta a la siguiente (no se parte).
       //   b) cellPadding reducido en filas de descuentos largos para que el texto
       //      envuelva sin cortarse.
-      const _fechaTxt = _fmtFechaSabado(data.fecha);
+      const _fechaTxt = data.fechaTituloLit ? _fechaLitSlash(data.fechaTituloLit) : _fmtFechaSabado(data.fecha); // v895
       const COLS = 6;
       const pageH = doc.internal.pageSize.getHeight();
       const marginBottom = 40;
@@ -45370,10 +45378,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         if(opts.soloIdx!=null){ var _one=_lista[opts.soloIdx]; _lista = _one?[_one]:[]; }
         if(!_lista.length){ showT('SIN PERSONAS EN ESTA PLANILLA','red'); return; }
         var _projCl = (data.proyecto||'Proyecto').replace(/[\\\/\?\*\[\]:"|<>]/g,'').trim();
-        var _sab = _fechaSabadoDDMM(data.fecha);
+        var _sab = data.fechaTituloLit || _fechaSabadoDDMM(data.fecha); // v895
         var _titHd = ('LIQUIDACIÓN TABLAYESO - ' + (data.proyecto||'') + (_compactarTorres(data.torres)?(' - '+_compactarTorres(data.torres)):'')).toUpperCase();
         var _supHd = String(data.supervisorNombre || '').toUpperCase() || '—';
-        var _fSabHd = _fmtFechaSabado(data.fecha);
+        var _fSabHd = data.fechaTituloLit ? _fechaLitSlash(data.fechaTituloLit) : _fmtFechaSabado(data.fecha); // v895
         var _n=0;
         _lista.forEach(function(c){
           var d2 = new jsPDF({ unit:'pt', format:'letter' });
@@ -45411,7 +45419,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
       // "GRAN TOTAL LIQUIDACIÓN DE TABLAYESO <fecha sabado>"
       if(data.colabs.length > 1){
-        const _fechaSabTxt = _fmtFechaSabado(data.fecha);
+        const _fechaSabTxt = data.fechaTituloLit ? _fechaLitSlash(data.fechaTituloLit) : _fmtFechaSabado(data.fecha); // v895
         const footBody = [
           [
             { content: 'GRAN TOTAL LIQUIDACIÓN DE TABLAYESO  ' + _fechaSabTxt, colSpan: 5, styles: { fontStyle:'bold', halign:'right', fillColor:[255,255,0], textColor:[0,0,0], cellPadding: { top: 5, right: 12, bottom: 5, left: 5 } } },
@@ -45430,7 +45438,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
       // v262: filename "Planilla <Proyecto>_<DDMMYYYY del sabado>.pdf"
       const projClean = (data.proyecto||'Proyecto').replace(/[\\\/\?\*\[\]:"|<>]/g,'').trim();
-      const filename = 'Planilla ' + projClean + '_' + _fechaSabadoDDMM(data.fecha) + '.pdf';
+      const filename = 'Planilla ' + projClean + '_' + (data.fechaTituloLit || _fechaSabadoDDMM(data.fecha)) + '.pdf'; // v895
       doc.save(filename);
       showT('PDF DESCARGADO: '+filename,'green');
     } catch(e){
@@ -45457,7 +45465,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       // v339: usar SIEMPRE el SABADO de esa semana (las planillas se pagan
       // los sabados cada 15 dias). _sabadoDeSemana ajusta cualquier fecha al
       // sabado correspondiente.
-      const dt = _sabadoDeSemana(data.fecha);
+      const dt = data.fechaTituloLit ? _fechaLitDate(data.fechaTituloLit) : _sabadoDeSemana(data.fecha); // v895
       const pad = n => String(n).padStart(2,'0');
       const ddmmyyyy = pad(dt.getDate()) + pad(dt.getMonth()+1) + dt.getFullYear();
       const ws = wb.addWorksheet('PLANILLA ' + ddmmyyyy);
@@ -45811,7 +45819,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       const finalBlob = await zip.generateAsync({ type:'blob', compression:'DEFLATE' });
 
       const projClean = (data.proyecto||'Proyecto').replace(/[\\\/\?\*\[\]:"|<>]/g,'').trim();
-      const filename = 'Planilla ' + projClean + '_' + _fechaSabadoDDMM(data.fecha) + '.xlsx';
+      const filename = 'Planilla ' + projClean + '_' + (data.fechaTituloLit || _fechaSabadoDDMM(data.fecha)) + '.xlsx'; // v895
       const url = URL.createObjectURL(finalBlob);
       const a = document.createElement('a');
       a.href = url;
@@ -45832,7 +45840,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   // desglose simple (apto -> etapas -> totales). Diseno tipo recibo.
   function _renderPreviewHTML(data){
     // v267: cabecera 3 lineas SIN bordes ni fondos. Texto plano centrado, discreto.
-    const fechaLiqTxt = _fmtFechaSabado(data.fecha);
+    const fechaLiqTxt = data.fechaTituloLit ? _fechaLitSlash(data.fechaTituloLit) : _fmtFechaSabado(data.fecha); // v895
     const torresTxt = _compactarTorres(data.torres);
     const tituloTop = ('LIQUIDACIÓN TABLAYESO - ' + (data.proyecto||'') + (torresTxt?' - '+torresTxt:'')).toUpperCase();
     const supervisorTxt = String(data.supervisorNombre || '').toUpperCase() || '—';
