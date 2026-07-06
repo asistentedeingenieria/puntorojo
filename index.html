@@ -3041,7 +3041,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v895</span>
+    <span style="opacity:.5;font-size:9px">v896</span>
   </footer>
 
 </div>
@@ -8533,7 +8533,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 892;
+const APP_SYNC_VERSION = 896;
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -8657,11 +8657,36 @@ const CloudSync = {
   _chipDone(){
     if (this.uploadingNow || this._asistUploading) return;   // todavía sube otra cosa
     try { clearTimeout(this._syncChipTimer); } catch(e){} this._syncChipTimer = null;
+    this._retryDelay = 0; // v896: subida OK → el backoff arranca de cero la próxima vez
     try { setSyncStatus('synced'); } catch(e){}
   },
-  _chipError(){
-    try { clearTimeout(this._syncChipTimer); } catch(e){} this._syncChipTimer = null;
-    try { setSyncStatus('error'); } catch(e){}
+  /* v896 (incidente 06-jul): el chip ya no grita ERROR DE SYNC por errores REINTENTABLES
+     (resource-exhausted en hora pico, red inestable) — muestra REINTENTANDO... y reintenta
+     solo con backoff (5s→60s máx; el hash-skip hace gratis los reintentos de más). ERROR DE
+     SYNC queda para fallos FATALES (permisos/datos), y el error real se guarda
+     (this._lastSyncError) y se reporta a users/{uid}.lastSyncError — diagnóstico remoto
+     sin pedirle el teléfono a nadie. */
+  _chipError(e){
+    try { clearTimeout(this._syncChipTimer); } catch(err){} this._syncChipTimer = null;
+    const code = (e && e.code) ? String(e.code) : '';
+    this._lastSyncError = { code: code || 'sin-codigo', msg: String((e && e.message) || e || ''), ts: Date.now(), ver: APP_SYNC_VERSION };
+    if (_syncErrReintentable(code)) {
+      try { setSyncStatus('syncing', 'REINTENTANDO...'); } catch(err){}
+      if (!this._retryTimer) {
+        this._retryDelay = this._retryDelay ? Math.min(this._retryDelay * 2, 60000) : 5000;
+        this._retryTimer = setTimeout(() => {
+          this._retryTimer = null;
+          try { this.scheduleSave(); } catch(err){}
+          try { this.scheduleAsistenciaSave(); } catch(err){}
+        }, this._retryDelay);
+      }
+      return;
+    }
+    try { setSyncStatus('error'); } catch(err){}
+    try {
+      const u = firebase.auth().currentUser;
+      if (u && typeof saveUserDoc === 'function') saveUserDoc(u.uid, { lastSyncError: this._lastSyncError }).catch(function(){});
+    } catch(err){}
   },
 
   /* Programa una escritura a la nube. Si hay otra pendiente, se reemplaza. */
@@ -8675,7 +8700,7 @@ const CloudSync = {
       this.uploadCurrent().then(() => {
         this.uploadingNow = false; this._chipDone();
       }).catch((e) => {
-        this.uploadingNow = false; console.error('CloudSync auto-save error:', e); this._chipError();
+        this.uploadingNow = false; console.error('CloudSync auto-save error:', e); this._chipError(e);
       });
     }, 1200);
   },
@@ -8696,7 +8721,7 @@ const CloudSync = {
     } catch(e) {
       this.uploadingNow = false;
       console.error('CloudSync forceUploadNow error:', e);
-      this._chipError();
+      this._chipError(e);
       throw e;
     }
   },
@@ -8821,11 +8846,10 @@ const CloudSync = {
       catch(e){ console.warn('Doc de caras no se subió (se conservan locales):', e && e.message); }
     }
     // v649: la asistencia va en su PROPIO commit (doc appState/asistencia), solo si cambió. Si falla
-    // (reglas/red) NO rompe el guardado del core; queda local y se reintenta. Comparte _asistHash con uploadAsistencia.
-    if (this._asistHash !== _asistJson) {
-      try { await db.collection('appState').doc('asistencia').set({ asistencia: _asistPayload, _lastUpdate: stamp }); this._asistHash = _asistJson; }
-      catch(e){ console.warn('Doc de asistencia no se subió (se conserva local):', e && e.message); }
-    }
+    // NO rompe el guardado del core; queda local y se reintenta. v896: diff por día vía
+    // _asistUploadSmart (comparte _asistHash/_asistDayHashes con uploadAsistencia).
+    try { await this._asistUploadSmart(db, stamp); }
+    catch(e){ console.warn('Doc de asistencia no se subió (se conserva local):', e && e.message); }
   },
 
   /* v649: sube SOLO el doc appState/asistencia (no el core). Lo usa el marcado de asistencia para
@@ -8836,14 +8860,39 @@ const CloudSync = {
     if (_versionBloqueada(APP_SYNC_VERSION, this._minSyncVersion)) { _mostrarBloqueoVersion(this._minSyncVersion); return; } // v892
     if (!this.coreRef) return;
     const db = firebase.firestore();
+    const stamp = { ts: Date.now(), by: (currentUser && (currentUser.email || currentUser.username)) || 'sistema', ver: APP_SYNC_VERSION }; // v892: forense — quién y con qué versión
+    await this._asistUploadSmart(db, stamp); // v896: diff por día
+  },
+
+  /* v896 (incidente 06-jul: resource-exhausted en la hora pico de marcado): sube la asistencia
+     con DIFF POR DÍA. Antes CADA marca re-subía el doc completo (~360 KB con 25 días) y la cola
+     del SDK se ahogaba en obra. Ahora viajan SOLO los días que cambiaron como update() de campos
+     (~15 KB por marca). Set completo cuando: no hay baseline (primera subida), cambiaron >8 días
+     de golpe, o el update parcial falla (red de seguridad). Bonus: el update parcial NO pisa los
+     días que otro dispositivo cambió en paralelo. Comparte _asistHash/_asistDayHashes con la
+     siembra de applyRemote. */
+  async _asistUploadSmart(db, stamp){
     const _asistPayload = (state.asistenciaGlobal && typeof state.asistenciaGlobal==='object') ? state.asistenciaGlobal : {};
     if (!this._asistHash) this._asistHash = '';
     const _asistJson = JSON.stringify(_asistPayload);
     if (_asistJson.length > 900000 && !this._asistSizeWarned) { this._asistSizeWarned = true; try { showToast('AVISO: la asistencia pesa '+Math.round(_asistJson.length/1024)+' KB (límite 1 MB). Archivá días viejos.','red'); } catch(e){} } else if (_asistJson.length < 800000) { this._asistSizeWarned = false; } // v649: telemetría de tamaño
     if (this._asistHash === _asistJson) return;   // sin cambios → no escribir
-    const stamp = { ts: Date.now(), by: (currentUser && (currentUser.email || currentUser.username)) || 'sistema', ver: APP_SYNC_VERSION }; // v892: forense — quién y con qué versión
-    await db.collection('appState').doc('asistencia').set({ asistencia: _asistPayload, _lastUpdate: stamp });
-    this._asistHash = _asistJson;
+    const ref = db.collection('appState').doc('asistencia');
+    const diff = _asistDiffDays(this._asistDayHashes || null, _asistPayload);
+    const nCambios = diff.changed.length + diff.removed.length;
+    if (this._asistDayHashes && nCambios > 0 && nCambios <= 8) {
+      const args = [];
+      diff.changed.forEach(f => { args.push(new firebase.firestore.FieldPath('asistencia', f), _asistPayload[f]); });
+      diff.removed.forEach(f => { args.push(new firebase.firestore.FieldPath('asistencia', f), firebase.firestore.FieldValue.delete()); });
+      args.push(new firebase.firestore.FieldPath('_lastUpdate'), stamp);
+      try {
+        await ref.update.apply(ref, args);
+        this._asistHash = _asistJson; this._asistDayHashes = diff.dayJson;
+        return;
+      } catch(e){ console.warn('[v896] update parcial de asistencia falló ('+(e && e.code)+') — va set completo'); }
+    }
+    await ref.set({ asistencia: _asistPayload, _lastUpdate: stamp });
+    this._asistHash = _asistJson; this._asistDayHashes = diff.dayJson;
   },
 
   /* v649: debounce del guardado liviano de asistencia (espeja scheduleSave pero solo asistencia). */
@@ -8855,7 +8904,7 @@ const CloudSync = {
       this._asistUploading = true;
       this._armSyncingChip();
       this.uploadAsistencia().then(() => { this._asistUploading = false; this._chipDone(); })
-        .catch((e) => { this._asistUploading = false; console.warn('CloudSync uploadAsistencia:', e); this._chipError(); });
+        .catch((e) => { this._asistUploading = false; console.warn('CloudSync uploadAsistencia:', e); this._chipError(e); });
     }, 1200);
   },
 
@@ -9009,6 +9058,8 @@ const CloudSync = {
     // que el doc no tenía, state.asistenciaGlobal (unión) ≠ _asistHash y la próxima subida las MIGRA al
     // doc. Si se sembrara con la unión, el strip del core las borraría sin escribirlas → pérdida.
     try { this._asistHash = JSON.stringify(merged._asistDocOnly || {}); } catch(e){ this._asistHash = ''; }
+    // v896: sembrar también los hashes POR DÍA — el diff del upload parcial compara contra esto
+    try { const _dob = merged._asistDocOnly || {}; const _dh = {}; Object.keys(_dob).forEach(f => { _dh[f] = JSON.stringify(_dob[f]); }); this._asistDayHashes = _dh; } catch(e){ this._asistDayHashes = null; }
     try { delete merged._asistDocOnly; } catch(e){}
     try {
       if (typeof _mergeAsistencia === 'function') {
@@ -10330,6 +10381,30 @@ function showSplash(message){
 function updateSplashStatus(msg){
   const st = document.getElementById('prSplashStatus');
   if (st) st.textContent = msg;
+}
+
+/* v896: clasifica un error de subida — REINTENTABLE (la nube ocupada o red: el reintento
+   automático lo resuelve solo, no es culpa del usuario ni de los datos) vs FATAL (permisos,
+   datos inválidos o un bug propio: reintentar no sirve, hay que verlo). Sin código = FATAL
+   a propósito: un TypeError nuestro debe salir a la luz, no esconderse en reintentos. */
+function _syncErrReintentable(code){
+  code = String(code || '').toLowerCase();
+  return code === 'resource-exhausted' || code === 'unavailable' || code === 'deadline-exceeded'
+      || code === 'aborted' || code === 'cancelled' || code === 'unknown' || code === 'internal';
+}
+/* v896: diff POR DÍA de la asistencia contra el último estado conocido de la nube. PURO.
+   baseline = {fecha: json} (null = sin baseline → todo es cambio); payload = asistenciaGlobal.
+   Devuelve { changed:[fechas], removed:[fechas], dayJson:{fecha: json} }. */
+function _asistDiffDays(baseline, payload){
+  var dayJson = {}, changed = [], removed = [];
+  var keys = (payload && typeof payload === 'object') ? Object.keys(payload) : [];
+  keys.forEach(function(f){
+    var j = JSON.stringify(payload[f]);
+    dayJson[f] = j;
+    if (!baseline || baseline[f] !== j) changed.push(f);
+  });
+  if (baseline) Object.keys(baseline).forEach(function(f){ if (!(f in dayJson)) removed.push(f); });
+  return { changed: changed, removed: removed, dayJson: dayJson };
 }
 
 /* Indicador de sincronización en la barra de usuario.

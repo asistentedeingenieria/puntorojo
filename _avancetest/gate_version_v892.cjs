@@ -13,7 +13,9 @@ function extractFn(name){ let m=html.indexOf('function '+name+'('); if(m<0) retu
 let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
 // ── 1. constante y helper puro ──
-ok('APP_SYNC_VERSION = 892', /const APP_SYNC_VERSION = 892;/.test(html));
+// v896: la constante SUBE con cada cambio de sync (ese es su diseño) — validar >= 892, no el literal
+const _asv = (html.match(/const APP_SYNC_VERSION = (\d+);/)||[])[1];
+ok('APP_SYNC_VERSION >= 892', Number(_asv) >= 892);
 const src = extractFn('_versionBloqueada');
 ok('_versionBloqueada existe', !!src);
 if (src) {
