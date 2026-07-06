@@ -100,7 +100,9 @@ function fin(){
   ok('los 3 catch pasan el error al chip', (html.match(/this\._chipError\(e\)/g)||[]).length >= 3);
   ok('chip REINTENTANDO para errores reintentables', html.indexOf("setSyncStatus('syncing', 'REINTENTANDO...')")>=0);
   ok('reporte forense del error fatal', /saveUserDoc\(u\.uid, \{ lastSyncError: this\._lastSyncError \}\)/.test(html));
-  ok('APP_SYNC_VERSION subida a 896', /const APP_SYNC_VERSION = 896/.test(html));
+  // v897: la constante SUBE con cada cambio de sync (diseño) — validar >= 896, no el literal
+  const _asv896 = (html.match(/const APP_SYNC_VERSION = (\d+);/)||[])[1];
+  ok('APP_SYNC_VERSION >= 896', Number(_asv896) >= 896);
   console.log('PASS=' + pass + ' FAIL=' + fail);
   process.exit(fail ? 1 : 0);
 }

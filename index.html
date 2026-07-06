@@ -3041,7 +3041,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v896</span>
+    <span style="opacity:.5;font-size:9px">v897</span>
   </footer>
 
 </div>
@@ -8533,7 +8533,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 896;
+const APP_SYNC_VERSION = 897;
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9193,7 +9193,13 @@ const CloudSync = {
       if (typeof _mergePlanillaProyecto === 'function') {
         const _locProj = {}; ((state && state.projects) || []).forEach(p => { if (p && p.id) _locProj[p.id] = p; });
         let _blindados = 0;
+        let _blindadosFotos = 0; // v897
         (merged.projects || []).forEach(rp => {
+          // v897 BLINDAJE DE FOTOS DE AVANCE: unión por URL por apto — ver _mergeFotosProyecto
+          try {
+            const _chgF = (typeof _mergeFotosProyecto === 'function') ? _mergeFotosProyecto(_locProj[rp && rp.id], rp) : 0;
+            if (_chgF && !(typeof isReadOnly === 'function' && isReadOnly())) { needsResync = true; _blindadosFotos += _chgF; }
+          } catch(e){ console.warn('blindaje de fotos en applyRemote:', e); }
           const _chgPl = _mergePlanillaProyecto(_locProj[rp && rp.id], rp);
           // solo-lectura: su subida es no-op — marcar needsResync solo ciclaría el breaker
           if (_chgPl && !(typeof isReadOnly === 'function' && isReadOnly())) { needsResync = true; _blindados++; }
@@ -9209,6 +9215,17 @@ const CloudSync = {
             if (!window._blindajeToastTs || (_ahoraBl - window._blindajeToastTs) > 1800000) {
               window._blindajeToastTs = _ahoraBl;
               showT('BLINDAJE: SE RESCATARON DATOS DE PLANILLA DE UNA COPIA VIEJA', '');
+            }
+          } catch(e){}
+        }
+        // v897: misma alarma para fotos de avance rescatadas (comparte el freno de 30 min)
+        if (_blindadosFotos) {
+          try { if (typeof logActivity === 'function') logActivity('update', 'BLINDAJE DE FOTOS ACTIVADO', _blindadosFotos + ' apto(s): una copia con datos viejos intentó borrar fotos de avance; se preservaron y se re-subieron'); } catch(e){}
+          try {
+            var _ahoraBf = Date.now();
+            if (!window._blindajeToastTs || (_ahoraBf - window._blindajeToastTs) > 1800000) {
+              window._blindajeToastTs = _ahoraBf;
+              showT('BLINDAJE: SE RESCATARON FOTOS DE AVANCE', '');
             }
           } catch(e){}
         }
@@ -14622,6 +14639,14 @@ async function deletePhoto(etapaIdx, slotIdx){
   const l = t.levels.find(x => x.id === photoCtx.levelId);
   const a = (l.aptos||[]).find(x => x.id === photoCtx.aptoId);
   const oldRef = (a.photos && Array.isArray(a.photos[etapaIdx])) ? a.photos[etapaIdx][slotIdx] : null;
+
+  // v897: tombstone del borrado — el union-merge de fotos no la resucita en otros dispositivos
+  if (oldRef && typeof oldRef === 'string') {
+    if (!a.fotosEliminadas || typeof a.fotosEliminadas !== 'object') a.fotosEliminadas = {};
+    a.fotosEliminadas[oldRef] = Date.now();
+    const _fk = Object.keys(a.fotosEliminadas);
+    if (_fk.length > 60){ _fk.sort((x,y) => a.fotosEliminadas[x]-a.fotosEliminadas[y]).slice(0, _fk.length-60).forEach(k => { delete a.fotosEliminadas[k]; }); }
+  }
 
   // v291: splice para mantener arrays compactos.
   if (a.photos && Array.isArray(a.photos[etapaIdx])) {
@@ -26489,6 +26514,86 @@ function _mergePersonal(localList, remoteList, tombSet){
   });
   if (tombSet) Object.keys(byId).forEach(function(id){ if (tombSet[id]) delete byId[id]; });
   return { list: Object.keys(byId).map(function(id){ return byId[id]; }), changed: changed };
+}
+
+/* v897 BLINDAJE DE FOTOS DE AVANCE (incidente 07-jul: "las fotos no se suben / nadie las ve").
+   Las fotos viven en el doc del proyecto y ese doc era LAST-WRITE-WINS: dos teléfonos subiendo
+   fotos a la vez (o uno bloqueado por el candado de versión que recarga) se borraban los
+   metadatos entre sí — los bytes quedaban huérfanos en Storage y la app no mostraba nada.
+   Unión por URL por apto/etapa: una foto local que el remoto no trae SE PRESERVA (con su
+   ts/hash/pHash, respetando su slot si está libre; slot ocupado por OTRA foto → quedan las dos).
+   Los borrados reales viven en a.fotosEliminadas {url: ts}: no resucitan y se propagan.
+   PURO por apto. Idempotente (regla v856): sin nada que rescatar devuelve false. */
+function _mergeFotosApto(la, ra){
+  if (!la || !ra) return false;
+  var changed = false;
+  // tombstones: unión de ambos lados (un borrado hecho en cualquier dispositivo vale en todos)
+  var tomb = {};
+  [la.fotosEliminadas, ra.fotosEliminadas].forEach(function(t){
+    if (t && typeof t === 'object') Object.keys(t).forEach(function(u){ tomb[u] = Math.max(tomb[u]||0, Number(t[u])||0); });
+  });
+  if (Object.keys(tomb).length && JSON.stringify(ra.fotosEliminadas||{}) !== JSON.stringify(tomb)){ ra.fotosEliminadas = tomb; changed = true; }
+  var etapas = {};
+  if (la.photos && typeof la.photos==='object') Object.keys(la.photos).forEach(function(e){ etapas[e]=1; });
+  if (ra.photos && typeof ra.photos==='object') Object.keys(ra.photos).forEach(function(e){ etapas[e]=1; });
+  Object.keys(etapas).forEach(function(e){
+    var rlRaw = (ra.photos && Array.isArray(ra.photos[e])) ? ra.photos[e] : [];
+    var ll = (la.photos && Array.isArray(la.photos[e])) ? la.photos[e] : [];
+    // precheck barato: ¿hay algo que rescatar o algún tombstone que aplicar? (corre en cada snapshot)
+    var haveR = {}; var need = false;
+    rlRaw.forEach(function(u){ if (typeof u==='string' && u){ haveR[u]=1; if (tomb[u]) need = true; } });
+    ll.forEach(function(u){ if (typeof u==='string' && u && !haveR[u] && !tomb[u]) need = true; });
+    if (!need) return;
+    var rl  = rlRaw.slice();
+    var rts = (ra.photoTs && Array.isArray(ra.photoTs[e])) ? ra.photoTs[e].slice() : rl.map(function(){ return null; });
+    var rh  = (ra.photoHashes && Array.isArray(ra.photoHashes[e])) ? ra.photoHashes[e].slice() : rl.map(function(){ return null; });
+    var rph = (ra.photoPHashes && Array.isArray(ra.photoPHashes[e])) ? ra.photoPHashes[e].slice() : rl.map(function(){ return null; });
+    // borrados reales: sacar del remoto las URLs tombstoneadas (el borrado vale en todos lados)
+    for (var k = rl.length - 1; k >= 0; k--){
+      if (typeof rl[k]==='string' && rl[k] && tomb[rl[k]]){ rl.splice(k,1); rts.splice(k,1); rh.splice(k,1); rph.splice(k,1); }
+    }
+    var have = {}; rl.forEach(function(u){ if (typeof u==='string' && u) have[u]=1; });
+    ll.forEach(function(u, i){
+      if (typeof u!=='string' || !u || have[u] || tomb[u]) return;
+      var ts = (la.photoTs && Array.isArray(la.photoTs[e])) ? la.photoTs[e][i] : null;
+      var h  = (la.photoHashes && Array.isArray(la.photoHashes[e])) ? la.photoHashes[e][i] : null;
+      var ph = (la.photoPHashes && Array.isArray(la.photoPHashes[e])) ? la.photoPHashes[e][i] : null;
+      if (rl[i] == null){                     // el slot original está libre → respetarlo
+        while (rl.length <= i){ rl.push(null); rts.push(null); rh.push(null); rph.push(null); }
+        rl[i]=u; rts[i]=(ts==null?null:ts); rh[i]=(h==null?null:h); rph[i]=(ph==null?null:ph);
+      } else {                                // slot ocupado por OTRA foto → se conservan las dos
+        rl.push(u); rts.push(ts==null?null:ts); rh.push(h==null?null:h); rph.push(ph==null?null:ph);
+      }
+      have[u]=1;
+    });
+    if (!ra.photos || typeof ra.photos!=='object') ra.photos = {};
+    if (!ra.photoTs || typeof ra.photoTs!=='object') ra.photoTs = {};
+    if (!ra.photoHashes || typeof ra.photoHashes!=='object') ra.photoHashes = {};
+    if (!ra.photoPHashes || typeof ra.photoPHashes!=='object') ra.photoPHashes = {};
+    ra.photos[e]=rl; ra.photoTs[e]=rts; ra.photoHashes[e]=rh; ra.photoPHashes[e]=rph;
+    changed = true;
+  });
+  return changed;
+}
+/* v897: recorre torre→nivel→apto POR ID y une las fotos (ver _mergeFotosApto).
+   Devuelve cuántos aptos rescataron/propagaron algo (0 = nada que hacer). */
+function _mergeFotosProyecto(lp, rp){
+  if (!lp || !rp || !Array.isArray(lp.towers) || !Array.isArray(rp.towers)) return 0;
+  var n = 0;
+  var lT = {}; lp.towers.forEach(function(t){ if (t && t.id) lT[t.id] = t; });
+  rp.towers.forEach(function(rt){
+    var lt = rt && lT[rt.id]; if (!lt || !Array.isArray(rt.levels) || !Array.isArray(lt.levels)) return;
+    var lL = {}; lt.levels.forEach(function(l){ if (l && l.id) lL[l.id] = l; });
+    rt.levels.forEach(function(rlv){
+      var llv = rlv && lL[rlv.id]; if (!llv) return;
+      var lA = {}; (llv.aptos||[]).forEach(function(a){ if (a && a.id) lA[a.id] = a; });
+      (rlv.aptos||[]).forEach(function(raApto){
+        var laApto = raApto && lA[raApto.id]; if (!laApto) return;
+        try { if (_mergeFotosApto(laApto, raApto)) n++; } catch(e){}
+      });
+    });
+  });
+  return n;
 }
 
 // v752 SYNC DE PLATA: unión por id genérica para pólizas / anticipos / solicitudes.
