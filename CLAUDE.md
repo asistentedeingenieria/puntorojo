@@ -23,8 +23,13 @@ depender de la memoria local de una máquina en particular.
 
 ## Dónde vive todo
 
-- **Código + app:** este repo de GitHub. Push a `main` → **Netlify** redeploya
-  solo → `puntorojo.app`. No hay workflow de deploy web (Netlify escucha el push).
+- **Código + app:** este repo de GitHub. Push a `main` → **GitHub Pages** publica
+  `puntorojo.app` (~1 min). El DNS vive en Cloudflare con la nube en GRIS (DNS only,
+  CNAME → asistentedeingenieria.github.io): Cloudflare NO proxea ni cachea nada.
+  `puntorojo.netlify.app` es un ESPEJO del mismo repo (sin el dominio) — NO trabajar
+  ahí (otro origen = otro localStorage). Historia (08-jul-2026): el dominio lo servía
+  un Worker de Cloudflare con build propio que falló y congeló la app en v897 para
+  toda la flota; se retiró. NO volver a poner proxy/cache/worker delante del dominio.
 - **Datos** (planillas, anticipos, asistencia, personal, caras): **Firebase
   Firestore**, proyecto `punto-rojo-3fcf1`. Compartidos en tiempo real entre
   usuarios. ⚠️ **Claude NO puede leer ni modificar Firestore ni el navegador del
@@ -58,8 +63,12 @@ El README documenta la convención original de 3 archivos (web `puntorojo.html` 
    el `PARSE ERR block#13` es un **falso positivo conocido** (= PASS).
 4. Corré los `.cjs` relevantes de la feature (p. ej. `node _avancetest/flujoanticipos.cjs`).
 5. Commit a `main` (footer `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`),
-   luego `git push origin main`. Netlify redeploya.
-6. Antonio recarga; la PWA toma la versión nueva.
+   luego `git push origin main`. GitHub Pages publica solo (~1 min).
+6. **Verificá el dominio ANTES de decir "desplegado" y SIEMPRE antes de que Antonio
+   suba `minSyncVersion`:** `curl -s https://puntorojo.app/ | grep -o "APP_SYNC_VERSION = [0-9]*"`
+   debe mostrar la versión nueva. (Regla del 08-jul: se subió el mínimo con el dominio
+   sirviendo una versión vieja y toda la flota quedó bloqueada en bucle.)
+7. Antonio recarga; la PWA toma la versión nueva.
 
 Mensajes de commit largos: escribilos a un archivo y usá `git commit -F archivo`
 (las here-strings se rompen con comillas internas).
