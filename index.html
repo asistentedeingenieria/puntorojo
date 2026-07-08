@@ -3041,7 +3041,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v898</span>
+    <span style="opacity:.5;font-size:9px">v899</span>
   </footer>
 
 </div>
@@ -8709,6 +8709,7 @@ const CloudSync = {
       this._armSyncingChip();
       this.uploadCurrent().then(() => {
         this.uploadingNow = false; this._chipDone();
+        try { if (typeof _fotosPendClear === 'function') _fotosPendClear(); } catch(e2){} // v899: la nube confirmó → chip POR COMPARTIR fuera
       }).catch((e) => {
         this.uploadingNow = false; console.error('CloudSync auto-save error:', e); this._chipError(e);
       });
@@ -8728,6 +8729,7 @@ const CloudSync = {
     try {
       await this.uploadCurrent();
       this.uploadingNow = false; this._chipDone();
+      try { if (typeof _fotosPendClear === 'function') _fotosPendClear(); } catch(e2){} // v899: la nube confirmó → chip POR COMPARTIR fuera
     } catch(e) {
       this.uploadingNow = false;
       console.error('CloudSync forceUploadNow error:', e);
@@ -13643,6 +13645,21 @@ function openPhotosModal(towerId, levelId, aptoId){
   document.getElementById('modalPhotos').classList.add('show');
 }
 
+/* v899: FOTOS "POR COMPARTIR" — marcador LOCAL por dispositivo (localStorage, NO se sincroniza:
+   significa "este teléfono aún no confirmó que la nube recibió la referencia de la foto").
+   Se agrega al guardar la foto y se limpia SOLO cuando uploadCurrent commitea de verdad
+   (scheduleSave / forceUploadNow) — nunca por reloj. El chip ámbar se dibuja en el tile. */
+function _fotosPendGet(){ try { return JSON.parse(localStorage.getItem('pr_fotos_pend_v1')||'{}')||{}; } catch(e){ return {}; } }
+function _fotosPendAdd(url){ if(!url) return; try { var m=_fotosPendGet(); m[url]=Date.now(); localStorage.setItem('pr_fotos_pend_v1', JSON.stringify(m)); } catch(e){} }
+function _fotoEstaPendiente(url){ try { return !!(url && _fotosPendGet()[url]); } catch(e){ return false; } }
+function _fotosPendClear(){
+  try {
+    if (!Object.keys(_fotosPendGet()).length) return;
+    localStorage.setItem('pr_fotos_pend_v1', '{}');
+    // refrescar el chip si el modal de fotos está a la vista
+    try { if (typeof photoCtx!=='undefined' && photoCtx && photoCtx.aptoId && typeof renderPhotosModal==='function') renderPhotosModal(); } catch(e){}
+  } catch(e){}
+}
 function renderPhotosModal(){
   const p = activeProj();
   const t = p.towers.find(x => x.id === photoCtx.towerId); if (!t) return;
@@ -13695,6 +13712,7 @@ function renderPhotosModal(){
       return `<div class="photo-slot has-img">
         <img src="${src}" onclick="viewPhoto('${src.replace(/'/g,"\\'")}')">
         <div class="photo-slot-lbl">FOTO ${photoIdx+1}</div>
+        ${(typeof _fotoEstaPendiente==='function' && _fotoEstaPendiente(src)) ? `<div style="position:absolute;top:6px;left:6px;background:#B45309;color:#fff;font-size:9px;font-weight:800;letter-spacing:.6px;padding:3px 7px;border-radius:999px;z-index:2" title="Guardada en este teléfono; esperando confirmación de la nube">POR COMPARTIR</div>` : ''}
         ${!_ro ? `<div class="photo-slot-actions">
           <button class="photo-slot-action" onclick="deletePhoto(${idx},${photoIdx})">ELIMINAR</button>
         </div>` : ''}
@@ -14575,11 +14593,18 @@ async function _uploadPhotoBlob(blob, etapaIdx, slotIdx){
     a.photoHashes[etapaIdx][slotIdx] = hash;
     a.photoPHashes[etapaIdx][slotIdx] = pHash;
     saveState();
+    if (typeof _fotosPendAdd === 'function') _fotosPendAdd(url); // v899: chip POR COMPARTIR hasta que la nube confirme
 
     logActivity('update', `Foto agregada: ${l.name} · ${a.name}`, `${p.name} · ${ETAPAS[etapaIdx].name} (foto ${slotIdx+1})`);
     renderPhotosModal();
     renderAvance();
-    showToast('FOTO GUARDADA', 'green');
+    // v899: confirmación REAL — antes el toast decía "guardada" cuando solo el ARCHIVO había
+    // subido a Storage; la referencia viajaba después en la cola y con mala señal el encargado
+    // cerraba la app sin que los demás vieran la foto. Ahora se espera el commit de la nube.
+    showToast('CONFIRMANDO EN LA NUBE...', '');
+    let _nube = false;
+    try { if (typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow) { await CloudSync.forceUploadNow(); _nube = true; } } catch(e2){ console.warn('[v899] confirmación de foto:', e2 && (e2.code || e2.message)); }
+    showToast(_nube ? 'FOTO GUARDADA Y COMPARTIDA' : 'FOTO GUARDADA EN ESTE TELÉFONO · SE COMPARTE AL RECUPERAR SEÑAL', _nube ? 'green' : 'red');
   } catch(err) {
     console.error('Error subiendo foto:', err);
     showToast('ERROR AL SUBIR FOTO: ' + (err.code || err.message || 'desconocido'), 'red');
@@ -14620,11 +14645,16 @@ async function uploadPhoto(event, etapaIdx, slotIdx){
     a.photos[etapaIdx][slotIdx] = url;
     a.photoTs[etapaIdx][slotIdx] = Date.now(); // para reportes semanales
     saveState();
+    if (typeof _fotosPendAdd === 'function') _fotosPendAdd(url); // v899: chip POR COMPARTIR hasta que la nube confirme
 
     logActivity('update', `Foto agregada: ${l.name} · ${a.name}`, `${p.name} · ${ETAPAS[etapaIdx].name} (foto ${slotIdx+1})`);
     renderPhotosModal();
     renderAvance();
-    showToast('FOTO GUARDADA EN LA NUBE', 'green');
+    // v899: confirmación REAL del commit en la nube (mismo patrón que el flujo de cámara)
+    showToast('CONFIRMANDO EN LA NUBE...', '');
+    let _nube = false;
+    try { if (typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow) { await CloudSync.forceUploadNow(); _nube = true; } } catch(e2){ console.warn('[v899] confirmación de foto:', e2 && (e2.code || e2.message)); }
+    showToast(_nube ? 'FOTO GUARDADA Y COMPARTIDA' : 'FOTO GUARDADA EN ESTE TELÉFONO · SE COMPARTE AL RECUPERAR SEÑAL', _nube ? 'green' : 'red');
   } catch(err) {
     console.error(err);
     showToast('ERROR AL SUBIR FOTO: ' + (err.code || err.message || 'desconocido'), 'red');
@@ -14904,13 +14934,18 @@ async function _uploadPhotoBlobPush(file, etapaIdx){
   a.photoHashes[etapaIdx].push(hash);
   a.photoPHashes[etapaIdx].push(pHash);
   saveState();
+  if (typeof _fotosPendAdd === 'function') _fotosPendAdd(url); // v899: chip POR COMPARTIR hasta que la nube confirme
 
   if(typeof logActivity === 'function'){
     try { logActivity('update', `Foto agregada: ${l.name} · ${a.name}`, `${p.name} · ${ETAPAS[etapaIdx].name} (foto ${photoIdx+1})`); } catch(e){}
   }
   try { renderPhotosModal(); } catch(e){}
   try { renderAvance(); } catch(e){}
-  showToast('FOTO GUARDADA', 'green');
+  // v899: confirmación REAL del commit en la nube (mismo patrón que los flujos de slots)
+  showToast('CONFIRMANDO EN LA NUBE...', '');
+  let _nube = false;
+  try { if (typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow) { await CloudSync.forceUploadNow(); _nube = true; } } catch(e2){ console.warn('[v899] confirmación de foto:', e2 && (e2.code || e2.message)); }
+  showToast(_nube ? 'FOTO GUARDADA Y COMPARTIDA' : 'FOTO GUARDADA EN ESTE TELÉFONO · SE COMPARTE AL RECUPERAR SEÑAL', _nube ? 'green' : 'red');
 }
 
 /* Visor de fotos mejorado:
