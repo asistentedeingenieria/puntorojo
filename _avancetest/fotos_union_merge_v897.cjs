@@ -53,7 +53,9 @@ if (srcP && mA) {
 ok('hook en applyRemote (mismo bloque v891)', /_mergeFotosProyecto\(_locProj\[rp && rp\.id\], rp\)/.test(html));
 ok('alarma BLINDAJE DE FOTOS', html.indexOf('BLINDAJE DE FOTOS ACTIVADO')>=0);
 ok('el borrado escribe su tombstone', /fotosEliminadas\[oldRef\] = Date\.now\(\)/.test(html));
-ok('APP_SYNC_VERSION subida a 897', /const APP_SYNC_VERSION = 897;/.test(html));
+// v900: la constante SUBE con cada cambio de sync (diseño) — validar >= 897, no el literal
+const _asv897 = (html.match(/const APP_SYNC_VERSION = (\d+);/)||[])[1];
+ok('APP_SYNC_VERSION >= 897', Number(_asv897) >= 897);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
