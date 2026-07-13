@@ -42,7 +42,9 @@ if (src) {
 ok('colgado en el walker de fotos (mismo recorrido por apto)', /_mergeEtapasApto === 'function' && _mergeEtapasApto\(laApto, raApto\)/.test(html));
 ok('los 4 desmarcados sellan stagesTs', (html.match(/\{ if \(a\.stages\[i\]\) a\.stagesTs\[i\] = _nowD; a\.stages\[i\] = false; \}/g)||[]).length >= 4);
 ok('toggleStage fuerza subida al marcar', /function toggleStage\([\s\S]{0,1800}forceUploadNow/.test(html));
-ok('APP_SYNC_VERSION subida a 900', /const APP_SYNC_VERSION = 900;/.test(html));
+// v902: la constante SUBE con cada cambio de sync (diseño) — validar >= 900, no el literal
+const _asv900 = (html.match(/const APP_SYNC_VERSION = (\d+);/)||[])[1];
+ok('APP_SYNC_VERSION >= 900', Number(_asv900) >= 900);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

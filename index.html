@@ -3041,7 +3041,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v901</span>
+    <span style="opacity:.5;font-size:9px">v902</span>
   </footer>
 
 </div>
@@ -8533,7 +8533,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 900;
+const APP_SYNC_VERSION = 902;
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -8658,9 +8658,11 @@ const CloudSync = {
     if (this.uploadingNow || this._asistUploading) return;   // todavía sube otra cosa
     try { clearTimeout(this._syncChipTimer); } catch(e){} this._syncChipTimer = null;
     this._retryDelay = 0; // v896: subida OK → el backoff arranca de cero la próxima vez
-    // v898: sincronizó bien → borrar el error reportado en users/{uid} (UNA sola vez, solo si
-    // antes se reportó uno fatal). Así el forense muestra únicamente problemas VIVOS, no historial.
-    if (this._lastSyncErrorReported) {
+    // v898: sincronizó bien → borrar el error reportado en users/{uid}. v902: también UNA vez
+    // por sesión aunque el error venga de una sesión ANTERIOR (los del 06-jul quedaron pegados
+    // porque solo se limpiaba lo reportado en la misma sesión).
+    if (this._lastSyncErrorReported || !this._lastSyncErrorPurgado) {
+      this._lastSyncErrorPurgado = true;
       this._lastSyncErrorReported = false;
       try {
         const u = firebase.auth().currentUser;
@@ -8883,6 +8885,15 @@ const CloudSync = {
      de golpe, o el update parcial falla (red de seguridad). Bonus: el update parcial NO pisa los
      días que otro dispositivo cambió en paralelo. Comparte _asistHash/_asistDayHashes con la
      siembra de applyRemote. */
+  /* v896: diff por día (~15 KB por marca en vez de ~360 KB). v902 (incidente 09-jul: "marqué
+     en la mañana y más tarde aparece desmarcada"): TRANSACCIONAL — el update de v896 escribía
+     la FOTO COMPLETA del día y dos teléfonos marcando a la vez se pisaban en la nube (el
+     pisado se curaba solo al re-sincronizar → esa era la ventana sin marcas). Ahora la subida
+     LEE la nube dentro de una transacción, UNE local∪nube con _mergeAsistencia (regla v647:
+     imposible perder una marca) y escribe SOLO los días que difieren de lo recién leído. Si
+     dos transacciones chocan, el SDK reintenta con lectura fresca → unión de nuevo → ninguna
+     marca se pierde en NINGÚN orden de subidas. Sin conexión la transacción falla rápido
+     (unavailable) → el chip REINTENTANDO (v896) se encarga. */
   async _asistUploadSmart(db, stamp){
     const _asistPayload = (state.asistenciaGlobal && typeof state.asistenciaGlobal==='object') ? state.asistenciaGlobal : {};
     if (!this._asistHash) this._asistHash = '';
@@ -8890,21 +8901,33 @@ const CloudSync = {
     if (_asistJson.length > 900000 && !this._asistSizeWarned) { this._asistSizeWarned = true; try { showToast('AVISO: la asistencia pesa '+Math.round(_asistJson.length/1024)+' KB (límite 1 MB). Archivá días viejos.','red'); } catch(e){} } else if (_asistJson.length < 800000) { this._asistSizeWarned = false; } // v649: telemetría de tamaño
     if (this._asistHash === _asistJson) return;   // sin cambios → no escribir
     const ref = db.collection('appState').doc('asistencia');
-    const diff = _asistDiffDays(this._asistDayHashes || null, _asistPayload);
-    const nCambios = diff.changed.length + diff.removed.length;
-    if (this._asistDayHashes && nCambios > 0 && nCambios <= 8) {
-      const args = [];
-      diff.changed.forEach(f => { args.push(new firebase.firestore.FieldPath('asistencia', f), _asistPayload[f]); });
-      diff.removed.forEach(f => { args.push(new firebase.firestore.FieldPath('asistencia', f), firebase.firestore.FieldValue.delete()); });
-      args.push(new firebase.firestore.FieldPath('_lastUpdate'), stamp);
-      try {
-        await ref.update.apply(ref, args);
-        this._asistHash = _asistJson; this._asistDayHashes = diff.dayJson;
-        return;
-      } catch(e){ console.warn('[v896] update parcial de asistencia falló ('+(e && e.code)+') — va set completo'); }
-    }
-    await ref.set({ asistencia: _asistPayload, _lastUpdate: stamp });
-    this._asistHash = _asistJson; this._asistDayHashes = diff.dayJson;
+    const tomb = (typeof _getAsistTomb === 'function') ? _getAsistTomb() : null;
+    let _mergedFinal = _asistPayload;
+    await db.runTransaction(async function(tx){
+      const snap = await tx.get(ref);
+      const cloud = (snap.exists && snap.data() && typeof snap.data().asistencia === 'object') ? snap.data().asistencia : {};
+      let merged = _asistPayload;
+      try { if (typeof _mergeAsistencia === 'function') merged = _mergeAsistencia(_asistPayload, cloud, tomb).asistencia; } catch(e){ console.warn('[v902] merge en subida:', e); }
+      _mergedFinal = merged;
+      if (!snap.exists) { tx.set(ref, { asistencia: merged, _lastUpdate: stamp }); return; }
+      const cloudDayJson = {}; Object.keys(cloud).forEach(function(f){ cloudDayJson[f] = JSON.stringify(cloud[f]); });
+      const diff = _asistDiffDays(cloudDayJson, merged);
+      const nCambios = diff.changed.length + diff.removed.length;
+      if (nCambios === 0) return;                 // la nube ya lo tiene todo (otro lo subió)
+      if (nCambios <= 8) {
+        const args = [ref];
+        diff.changed.forEach(function(f){ args.push(new firebase.firestore.FieldPath('asistencia', f), merged[f]); });
+        diff.removed.forEach(function(f){ args.push(new firebase.firestore.FieldPath('asistencia', f), firebase.firestore.FieldValue.delete()); });
+        args.push(new firebase.firestore.FieldPath('_lastUpdate'), stamp);
+        tx.update.apply(tx, args);
+      } else {
+        tx.set(ref, { asistencia: merged, _lastUpdate: stamp });
+      }
+    });
+    // sembrar hashes con lo que QUEDÓ en la nube (la unión); si la nube traía marcas que el
+    // local aún no tiene, el próximo snapshot las trae vía applyRemote (la unión local las respeta)
+    const _dj = {}; Object.keys(_mergedFinal).forEach(function(f){ _dj[f] = JSON.stringify(_mergedFinal[f]); });
+    this._asistHash = JSON.stringify(_mergedFinal); this._asistDayHashes = _dj;
   },
 
   /* v649: debounce del guardado liviano de asistencia (espeja scheduleSave pero solo asistencia). */

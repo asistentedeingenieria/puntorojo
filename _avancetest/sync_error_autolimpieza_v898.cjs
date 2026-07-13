@@ -28,9 +28,14 @@ if (srcDone) {
   ok('resetea flag, error local y backoff', s1._lastSyncErrorReported===false && s1._lastSyncError===null && s1._retryDelay===0);
   const t1b = mk(s1); t1b.run();
   ok('segunda subida OK: NO vuelve a escribir users', t1b.cap.length===0);
+  // v902: la PRIMERA subida OK de la sesión purga también errores de sesiones ANTERIORES
+  // (los del 06-jul quedaron pegados); después de esa purga única, ya no toca users.
   const s2 = { uploadingNow:false, _asistUploading:false, _lastSyncErrorReported:false, _lastSyncError:null };
   const t2 = mk(s2); t2.run();
-  ok('sin reporte previo: no toca users', t2.cap.length===0);
+  ok('v902: primera subida de la sesión purga errores viejos', t2.cap.length===1 && t2.cap[0].data.lastSyncError==='__DELETE__' && s2._lastSyncErrorPurgado===true);
+  const s2b = { uploadingNow:false, _asistUploading:false, _lastSyncErrorReported:false, _lastSyncErrorPurgado:true };
+  const t2b = mk(s2b); t2b.run();
+  ok('ya purgado en la sesión: no repite', t2b.cap.length===0);
   const s3 = { uploadingNow:true, _asistUploading:false, _lastSyncErrorReported:true };
   const t3 = mk(s3); t3.run();
   ok('con otra subida en curso: espera (early return)', t3.cap.length===0 && s3._lastSyncErrorReported===true);
