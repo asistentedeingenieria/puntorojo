@@ -3041,7 +3041,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v904</span>
+    <span style="opacity:.5;font-size:9px">v905</span>
   </footer>
 
 </div>
@@ -26236,6 +26236,80 @@ function parseRecetaPorApto(sheets, towers){
   });
   return { recetaV2, avisos };
 }
+/* v905: FORMATO ESTÁNDAR de receta (el Excel de Antonio — VLA en adelante, para TODOS los
+   proyectos): una hoja por nivel (SOTANOS, N01..N17), fila de encabezado
+   [MATERIAL | NOMBRE REAL (COMPRA) | U | ambientes/aptos... | TOTAL NIVEL], y las etapas como
+   filas de sección ("1RA ETAPA", "2NDA ETAPA", ...) en la columna MATERIAL. Además del nombre
+   corto guarda el NOMBRE REAL DE COMPRA (item.nc) para que pedidos/OC salgan con el nombre
+   exacto del proveedor. Reglas: filas "referencia, no se compra" NO se importan (sus
+   componentes "• X" sí, sin la viñeta); "(PENDIENTE...)" se salta; RESUMEN se ignora;
+   encabezados tipo "201 - A1'" matchean por el número inicial (APARTAMENTO 201). */
+function parseRecetaEstandar(sheets, towers){
+  const ETAPAS = ['1RA ETAPA','2DA ETAPA','3RA ETAPA','4TA ETAPA'];
+  const recetaV2 = { version:3, formato:'estandar', etapas:ETAPAS.slice(), niveles:{} };
+  const avisos = [];
+  const etapaIdxDe = txt => { const s=String(txt||'').toUpperCase().replace(/\s+/g,' ').trim();
+    if(/^1\s*RA/.test(s))return 0; if(/^2\s*(DA|NDA)/.test(s))return 1; if(/^3\s*(RA|ERA)/.test(s))return 2; if(/^4\s*TA/.test(s))return 3; return -1; };
+  const nivelDeHoja = raw => {
+    const s = _aptoNorm(raw);
+    let out = null;
+    (towers||[]).forEach(t => (t.levels||[]).forEach(l => {
+      if (out) return;
+      const ln = _aptoNorm(l.name);
+      if (/^SOTANOS?$/.test(s) && /SOTANO/.test(ln)) { out = l; return; }
+      const mm = s.match(/^N\s*0*(\d+)$/);
+      if (mm){ const num = parseInt(mm[1],10); const x = ln.match(/(\d+)/); if (x && parseInt(x[1],10)===num && /NIVEL/.test(ln)) out = l; }
+    }));
+    return out;
+  };
+  Object.keys(sheets||{}).forEach(name => {
+    const raw = String(name).trim();
+    if (/^RESUMEN/i.test(raw)) return;
+    const level = nivelDeHoja(raw);
+    if (!level){ avisos.push('Hoja "'+raw+'": nivel no encontrado en el proyecto.'); return; }
+    const aoa = sheets[name] || [];
+    let hIdx = -1, cMat = -1, cNc = -1, cU = -1;
+    for (let i=0; i<Math.min(aoa.length,8); i++){
+      const row = aoa[i]||[];
+      const jm = row.findIndex(v => _aptoNorm(v)==='MATERIAL');
+      const jn = row.findIndex(v => /NOMBRE REAL/.test(_aptoNorm(v)));
+      if (jm>=0 && jn>=0){ hIdx=i; cMat=jm; cNc=jn; cU=row.findIndex((v,j)=> j>jn && _aptoNorm(v)==='U'); break; }
+    }
+    if (hIdx<0){ avisos.push('Hoja "'+raw+'": sin fila de encabezado (MATERIAL / NOMBRE REAL).'); return; }
+    const header = aoa[hIdx];
+    const aptoCols = [];
+    header.forEach((h,c) => {
+      if (c <= Math.max(cMat,cNc,cU)) return;
+      const hs = String(h||'').trim(); if (!hs) return;
+      if (/TOTAL/.test(_aptoNorm(hs))) return;
+      const lead = hs.match(/^(\d{2,4})\b/);
+      const aid = resolveAptoId(level, lead ? lead[1] : hs);
+      if (aid) aptoCols.push({ col:c, aptoId:aid });
+      else avisos.push(raw+': "'+hs+'" sin equivalente en el nivel.');
+    });
+    const lid = level.id;
+    if (!recetaV2.niveles[lid]) recetaV2.niveles[lid] = {0:[],1:[],2:[],3:[]};
+    let eIdx = -1;
+    for (let i=hIdx+1; i<aoa.length; i++){
+      const row = aoa[i]||[];
+      const celMat = String(row[cMat]||'').trim();
+      if (!celMat) continue;
+      const ei = etapaIdxDe(celMat);
+      if (ei>=0){ eIdx = ei; continue; }
+      if (eIdx<0) continue;
+      const nc = String(row[cNc]||'').trim();
+      if (/referencia, no se compra/i.test(celMat) || /PENDIENTE/i.test(nc)) continue;
+      const material = celMat.replace(/^\s*[•·]\s*/,'').trim();
+      const unidad = String(row[cU]||'U').trim() || 'U';
+      const aptos = {};
+      aptoCols.forEach(ac => { const v=Number(row[ac.col]); if (v>0) aptos[ac.aptoId]=v; });
+      const item = { m:material, u:unidad, aptos };
+      if (nc) item.nc = nc;
+      recetaV2.niveles[lid][eIdx].push(item);
+    }
+  });
+  return { recetaV2, avisos };
+}
 function _resumenNum(v){
   if (typeof v === 'number') return v;
   const n = parseFloat(String(v==null?'':v).replace(/[^\d.\-]/g,''));
@@ -27031,6 +27105,45 @@ function _recetaV2LegacyEls(){
   if (pedir){ const pc = pedir.closest('.card'); if (pc) els.push(pc); }
   return els.filter(Boolean);
 }
+/* v905: postes a MEDIDA ESPECIAL por proyecto (decisión del user 13-jul: la medida se define
+   UNA vez por proyecto). p.materiales.postesMedida = { modo:'especial', metros:N }; ausente =
+   ESTÁNDAR de fábrica (10'). Solo cambia el NOMBRE DE COMPRA de los POSTES en pedidos/OC —
+   las cantidades siguen viniendo de la receta. Conversión m→pies: ×3.28084, 2 decimales. */
+function _postesMedidaDe(p){
+  const pm = p && p.materiales && p.materiales.postesMedida;
+  return (pm && pm.modo === 'especial' && Number(pm.metros) > 0) ? { modo:'especial', metros:Number(pm.metros) } : { modo:'estandar' };
+}
+function _metrosAPies(m){ return Math.round(Number(m) * 3.28084 * 100) / 100; }
+function _nombreCompraConMedida(nc, p){
+  const pm = _postesMedidaDe(p);
+  if (pm.modo !== 'especial' || !/^POSTE/i.test(String(nc||''))) return nc;
+  const pies = _metrosAPies(pm.metros);
+  let out = String(nc).replace(/X\s*10\s*'/i, 'X ' + pies + "'");
+  if (out === String(nc)) out = nc + ' · ' + pies + "'";
+  return out + ' (MEDIDA ESPECIAL ' + pm.metros + ' m)';
+}
+window.configurarPostesMedida = async function(){
+  const p = activeProj();
+  if (!(can('receta.edit') || can('users.manage'))) return showToast('SIN PERMISO','red');
+  const pm = _postesMedidaDe(p);
+  window._postesMTmp = pm.modo === 'especial' ? String(pm.metros) : '';
+  const body = '<div style="font-size:12px;line-height:1.7;color:#1F2937">'
+    + '<div>Largo al que se mandan a hacer los POSTES de este proyecto.</div>'
+    + '<label style="display:flex;gap:8px;align-items:center;margin-top:10px">Medida especial (m): '
+    + '<input type="number" step="0.01" min="0" style="width:100px;padding:4px 6px;border:1px solid #D1D5DB;border-radius:6px" value="'+(pm.modo==='especial'?pm.metros:'')+'" oninput="window._postesMTmp=this.value"></label>'
+    + '<div style="margin-top:8px;color:#6B7280;font-size:11px">Vacío o 0 = ESTÁNDAR de fábrica (10\'). La conversión a pies es automática y sale en el nombre de compra de los pedidos.</div></div>';
+  const ok = await window.prConfirm({ title:'POSTES: MEDIDA DEL PROYECTO', bodyHTML:body, okText:'GUARDAR', cancelText:'CANCELAR' });
+  if (!ok) return;
+  const p2 = activeProj(); // re-leer del state vivo tras el await del modal (regla v769)
+  const metros = parseFloat(window._postesMTmp);
+  if (metros > 0) p2.materiales.postesMedida = { modo:'especial', metros: Math.round(metros*100)/100 };
+  else delete p2.materiales.postesMedida;
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  try { logActivity('update', 'Medida de postes: ' + (metros>0 ? metros+' m' : 'estándar 10\''), p2.name); } catch(e){}
+  showToast(metros > 0 ? ('POSTES A MEDIDA: ' + metros + ' m = ' + _metrosAPies(metros) + "'") : "POSTES ESTÁNDAR (10')", 'green');
+  if (typeof renderRecetaV2 === 'function') renderRecetaV2();
+};
 window.renderRecetaV2 = function(){
   const p = activeProj();
   const wrap = document.getElementById('recetaV2Wrap');
@@ -27078,6 +27191,12 @@ window.renderRecetaV2 = function(){
   const esTotal = recetaV2AptoSel==='TOTAL';
   const puedeEditar = can('receta.edit') || can('users.manage');
   const precios = p.materiales.precios || {};
+  // v905: medida de postes del proyecto (estándar 10' o especial en metros → pies)
+  const _pm = _postesMedidaDe(p);
+  html += '<div style="display:flex;align-items:center;gap:8px;margin:2px 0 8px;font-size:11px;color:#374151">'
+    + '<span>POSTES: ' + (_pm.modo === 'especial' ? '<strong>MEDIDA ESPECIAL ' + _pm.metros + ' m = ' + _metrosAPies(_pm.metros) + '\'</strong>' : 'ESTÁNDAR (10\')') + '</span>'
+    + (puedeEditar ? '<button class="btn ghost sm" style="font-size:10px;padding:2px 8px" onclick="configurarPostesMedida()">CAMBIAR</button>' : '')
+    + '</div>';
   const fills = ['#FDE9E7','#E7F0FD','#E9F7E9','#FBF4E1'];
   let totalNivel = 0;
   etapas.forEach((lineas, ei) => {
@@ -27099,7 +27218,7 @@ window.renderRecetaV2 = function(){
       const matArg = esc(l.m).replace(/'/g,"\\'");
       const accion = puedeEditar ? 'recetaV2Op' : 'recetaV2Solicitar';
       html += '<tr style="border-top:1px solid #F1F5F9">'
-        + '<td style="padding:6px 12px">'+esc(l.m)+'</td>'
+        + '<td style="padding:6px 12px">'+esc(l.m)+(l.nc ? '<div style="font-size:9px;color:#9CA3AF;margin-top:1px">'+esc(_nombreCompraConMedida(l.nc, p))+'</div>' : '')+'</td>'
         + '<td style="text-align:center;color:#6B7280">'+esc(l.u)+'</td>'
         + '<td style="text-align:right;font-variant-numeric:tabular-nums">'+qty.toLocaleString('es-GT')+'</td>'
         + '<td style="text-align:right;color:'+(tienePrecio?'#374151':'#D1D5DB')+'">'+puCell+'</td>'
@@ -27381,11 +27500,17 @@ window.importarRecetaExcel = async function(ev){
     const sheets = {};
     wb.SheetNames.forEach(sn => { sheets[sn] = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header:1, defval:'', raw:true, blankrows:false }); });
     const _lids = new Set(); (p.towers||[]).forEach(t => (t.levels||[]).forEach(l => _lids.add(String(l.id||'').trim().toLowerCase())));
+    // v905: FORMATO ESTÁNDAR (VLA en adelante): hojas SOTANOS / N01..N17 con la columna
+    // NOMBRE REAL (COMPRA). Si no calza, cae al formato viejo (hojas T#-N# o id de nivel).
+    const esEstandar = wb.SheetNames.some(n => /^(N\d{1,2}|SOTANOS?)$/i.test(String(n).trim()));
     const tieneApto = wb.SheetNames.some(n => /^T\d+-N\d+$/i.test(String(n).trim()) || _lids.has(String(n).trim().toLowerCase()));
-    if (!tieneApto) {
-      return window.prAlert({ title:'ARCHIVO NO VÁLIDO', body:'El archivo no parece la plantilla por apto (faltan hojas T#-N#).' });
+    if (!esEstandar && !tieneApto) {
+      return window.prAlert({ title:'ARCHIVO NO VÁLIDO', body:'El archivo no parece receta: faltan hojas por nivel (N01, N02... / SOTANOS) o por apto (T#-N#).' });
     }
-    const { recetaV2, avisos } = parseRecetaPorApto(sheets, p.towers || []);
+    const { recetaV2, avisos } = esEstandar ? parseRecetaEstandar(sheets, p.towers || []) : parseRecetaPorApto(sheets, p.towers || []);
+    if (esEstandar && !Object.keys(recetaV2.niveles).length) {
+      return window.prAlert({ title:'SIN NIVELES', body:'Ninguna hoja del Excel calzó con los niveles del proyecto.'+(avisos.length ? ('<br><br>'+avisos.slice(0,8).map(a=>a.replace(/[&<>]/g,'')).join('<br>')) : '') });
+    }
     const nNiv = Object.keys(recetaV2.niveles).length;
     let nLineas = 0; Object.values(recetaV2.niveles).forEach(et => _etapas(et).forEach(l => nLineas += l.length));
     let body = '<div style="font-size:12px;line-height:1.6;color:#1F2937">'
