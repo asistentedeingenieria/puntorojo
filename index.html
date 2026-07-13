@@ -3041,7 +3041,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v908</span>
+    <span style="opacity:.5;font-size:9px">v909</span>
   </footer>
 
 </div>
@@ -12717,6 +12717,38 @@ function _recetaV2EtapaNivel(p, levelId, etapaIdx){
   });
   return any ? out : null;
 }
+// v909: cantidades de UN apartamento (la columna del apto en el Excel estándar).
+// Claves = NOMBRE REAL DE COMPRA (nc) igual que _recetaV2EtapaNivel. PURA.
+function _recetaV2EtapaNivelPorApto(p, levelId, etapaIdx, aptoId){
+  var rv = p && p.materiales && p.materiales.recetaV2;
+  if (!rv || rv.formato !== 'estandar' || !rv.niveles || !levelId || !aptoId) return null;
+  var niv = rv.niveles[levelId]; if (!niv) return null;
+  var lineas = niv[etapaIdx] || [];
+  var out = {}, any = false;
+  lineas.forEach(function(item){
+    var q = Number(((item && item.aptos) || {})[aptoId]) || 0;
+    if (q <= 0) return;
+    var key = String((item.nc || item.m || '')).trim(); if (!key) return;
+    out[key] = (out[key] || 0) + q; any = true;
+  });
+  return any ? out : null;
+}
+// v909: cobertura de los pedidos POR APARTAMENTO de una etapa/nivel. Por clave ORIGINAL:
+// { total: qty pedida entre todos los aptos, porApto: {aptoId: true} }. Los pedidos de
+// NIVEL no entran acá (esos cierran la clave vía _itemsYaPedidosEtapa). PURA.
+function _coberturaAptosEtapa(pedidos, levelId, stageIdx){
+  var cob = {};
+  (pedidos||[]).forEach(function(pd){
+    if (!(pd && pd.esDeReceta && pd.recetaAptoId && pd.recetaLevelId===levelId && pd.recetaEtapaIdx===stageIdx)) return;
+    var qtys = pd.recetaQty || {};
+    Object.keys(qtys).forEach(function(k){
+      if (!cob[k]) cob[k] = { total: 0, porApto: {} };
+      cob[k].total += Number(qtys[k]) || 0;
+      cob[k].porApto[pd.recetaAptoId] = true;
+    });
+  });
+  return cob;
+}
 function _recetaEtapaResuelta(p, t, l, stageIdx){
   // v906: PRIORIDAD 1 — recetaV2 FORMATO ESTÁNDAR: totales por nivel, claves = NOMBRE REAL DE COMPRA.
   var rv2 = _recetaV2EtapaNivel(p, l && l.id, stageIdx);
@@ -12739,6 +12771,9 @@ function _itemsYaPedidosEtapa(pedidos, levelId, stageIdx){
   var keys={};
   (pedidos||[]).forEach(function(pd){
     if(pd && pd.esDeReceta && pd.recetaLevelId===levelId && pd.recetaEtapaIdx===stageIdx){
+      // v909: los pedidos POR APARTAMENTO no cierran la clave a escala de nivel;
+      // su cobertura se resta con _coberturaAptosEtapa.
+      if (pd.recetaAptoId) return;
       Object.keys(pd.items||{}).forEach(function(k){ keys[k]=true; });
       // v906: claves ORIGINALES de receta (los POSTES se guardan renombrados con su medida)
       (pd.recetaKeys||[]).forEach(function(k){ keys[k]=true; });
@@ -12748,12 +12783,18 @@ function _itemsYaPedidosEtapa(pedidos, levelId, stageIdx){
 }
 // Items DISPONIBLES para pedir de una etapa/nivel: receta resuelta − metal-ya-a-medida − ya-pedidos.
 // Devuelve [{key, name, qtyFinal}]. Centraliza la lógica del pedido para el selector.
-function _etapaItemsParaPedir(p, t, l, stageIdx){
+function _etapaItemsParaPedir(p, t, l, stageIdx, aptoId){
   var R=_recetaEtapaResuelta(p, t, l, stageIdx), etapaReceta=R.src, usarTotalesPDF=R.usarTotalesPDF;
+  // v909: modo POR APARTAMENTO (solo receta estándar) — cantidades de la columna del apto
+  if (aptoId){
+    etapaReceta = _recetaV2EtapaNivelPorApto(p, l && l.id, stageIdx, aptoId) || {};
+    usarTotalesPDF = true;
+  }
   var numAptos=((l&&l.aptos)||[]).length;
   var metalKeywords=['POSTE','CANAL','CANALETA','CANALILLO','ANGULAR'];
   var yaMetal = stageIdx===0 && p.materiales && p.materiales.metalMedidaPedida && Array.isArray(p.materiales.metalMedidaPedida[l.id]) && p.materiales.metalMedidaPedida[l.id].length>0;
   var ya=_itemsYaPedidosEtapa(p.materiales&&p.materiales.pedidos, l.id, stageIdx);
+  var cob=_coberturaAptosEtapa(p.materiales&&p.materiales.pedidos, l.id, stageIdx); // v909
   var out=[];
   Object.keys(etapaReceta).forEach(function(key){
     var itemName=(key.split('::')[1]||key).toUpperCase();
@@ -12761,7 +12802,17 @@ function _etapaItemsParaPedir(p, t, l, stageIdx){
     if(ya[key]) return;
     var qtyBase=etapaReceta[key];
     var name=(key.split('::').length>1)?key.split('::').slice(1).join('::'):key;
-    out.push({ key:key, name:name, qtyFinal:Math.ceil(usarTotalesPDF?qtyBase:qtyBase*numAptos) });
+    if (aptoId){
+      // v909: lo ya pedido para ESTE apto se bloquea
+      if (cob[key] && cob[key].porApto && cob[key].porApto[aptoId]) return;
+      out.push({ key:key, name:name, qtyFinal:Math.ceil(qtyBase) });
+    } else {
+      var qtyFinal=Math.ceil(usarTotalesPDF?qtyBase:qtyBase*numAptos);
+      // v909: el NIVEL resta lo ya pedido por apto — el total del nivel cierra con el Excel
+      if (cob[key] && cob[key].total > 0) qtyFinal -= cob[key].total;
+      if (qtyFinal <= 0) return;
+      out.push({ key:key, name:name, qtyFinal:qtyFinal });
+    }
   });
   return out;
 }
@@ -17842,6 +17893,12 @@ function _pedidoKeyParts(key){
   return { cat: s.slice(0, i), name: s.slice(i + 2) };
 }
 
+// v909: detecta un poste a medida por el sufijo "(MEDIDA ESPECIAL N m)" y devuelve los metros.
+function _ocMedidaEspecialMetros(name){
+  const m = String(name == null ? '' : name).match(/\(MEDIDA ESPECIAL\s+([\d.]+)\s*m\)/i);
+  return m ? Number(m[1]) : null;
+}
+
 function buildPedidoOcItems(pd){
   const arr = [];
   const specs = pd.specs || {};
@@ -17864,6 +17921,8 @@ function buildPedidoOcItems(pd){
 }
 
 function autoAssignOcProviders(){
+  const _p = activeProj();
+  const _memPostes = (_p && _p.materiales && _p.materiales.postesPrecioMedida) || {};
   ocWorkingItems.forEach(it => {
     const best = findBestProviderForItem(it.name);
     if (best) {
@@ -17873,6 +17932,17 @@ function autoAssignOcProviders(){
     }
     // v_pcat: marcar como EVENTUAL los items sin match en el catálogo de precios
     it.eventual = !best;
+    // v909: postes a medida = fabricación → precio manual; pre-llenar el último precio
+    // usado para esa medida (siempre editable).
+    const _mts = _ocMedidaEspecialMetros(it.name);
+    if (!best && _mts != null) {
+      it.aMedida = true;
+      const _prev = Number(_memPostes[String(_mts)]) || 0;
+      if (_prev > 0 && !(Number(it.precio) > 0)) {
+        it.precio = _prev;
+        it.precioRecordado = true;
+      }
+    }
   });
 }
 
@@ -17984,7 +18054,7 @@ function renderOcItems(){
 
   html += ocWorkingItems.map((it, idx) => `
     <div class="oc-item-row multi${!it.proveedorId ? ' oc-row-warn' : ''}">
-      <div class="oc-name">${it.name}${it.eventual ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#FEF3C7;color:#92400E;margin-left:6px">EVENTUAL</span><button type="button" onclick="_promoverEventual(' + idx + ')" style="background:none;border:none;color:var(--cafe);font-size:9px;font-weight:700;letter-spacing:.3px;cursor:pointer;text-decoration:underline;padding:0;margin-left:6px">PROMOVER AL CATÁLOGO</button>' : ''}${it.autoAssigned ? '<div style="font-size:8px;color:var(--red-dark);letter-spacing:1px;margin-top:2px">ASIGNADO POR CATÁLOGO</div>' : ''}</div>
+      <div class="oc-name">${it.name}${it.aMedida ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#DBEAFE;color:#1D4ED8;margin-left:6px">A MEDIDA · PRECIO MANUAL</span>' + (it.precioRecordado ? '<div style="font-size:8px;color:var(--mute);letter-spacing:.5px;margin-top:2px">ÚLTIMO PRECIO USADO — VERIFICALO</div>' : '') : (it.eventual ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#FEF3C7;color:#92400E;margin-left:6px">EVENTUAL</span><button type="button" onclick="_promoverEventual(' + idx + ')" style="background:none;border:none;color:var(--cafe);font-size:9px;font-weight:700;letter-spacing:.3px;cursor:pointer;text-decoration:underline;padding:0;margin-left:6px">PROMOVER AL CATÁLOGO</button>' : '')}${it.autoAssigned ? '<div style="font-size:8px;color:var(--red-dark);letter-spacing:1px;margin-top:2px">ASIGNADO POR CATÁLOGO</div>' : ''}</div>
       <div class="oc-qty">${it.qty}</div>
       <div><select class="oc-provider-select" onchange="updateOcItemProveedor(${idx}, this.value)">${buildOcProviderOptions(it.proveedorId)}</select></div>
       <div><input type="number" step="0.01" min="0" value="${it.precio || ''}" placeholder="0.00" oninput="updateOcPrecio(${idx}, this.value)"></div>
@@ -18352,6 +18422,16 @@ async function generarOrdenCompra(){
   });
 
   if (created.length === 0) return showToast('NO SE PUDO GENERAR NINGUNA ORDEN', 'red');
+
+  // v909: recordar el último precio digitado de postes a medida (por medida en metros)
+  // para pre-llenarlo en la siguiente OC del proyecto.
+  ocWorkingItems.forEach(it => {
+    const _mts = _ocMedidaEspecialMetros(it.name);
+    if (_mts != null && Number(it.precio) > 0) {
+      if (!p.materiales.postesPrecioMedida) p.materiales.postesPrecioMedida = {};
+      p.materiales.postesPrecioMedida[String(_mts)] = Number(it.precio);
+    }
+  });
 
   if (pd.status === 'SOLICITADO') {
     pd.status = 'APROBADO';
@@ -27952,6 +28032,95 @@ function _selItemPedir(towerId, levelId, stageIdx){
   pedirEtapaCompleta(towerId, levelId, stageIdx, keys);
 }
 window._abrirSelectorItemsEtapa=_abrirSelectorItemsEtapa; window._cerrarSelectorItems=_cerrarSelectorItems; window._selItemTodos=_selItemTodos; window._selItemPedir=_selItemPedir;
+// ── v909: MENÚ DE MODOS DE PEDIDO (solo receta FORMATO ESTÁNDAR; el resto va directo al selector) ──
+function _abrirMenuPedirEtapa(towerId, levelId, stageIdx){
+  if(!can('pedidos.create')) return showToast('SIN PERMISO PARA CREAR PEDIDOS','red');
+  var p=(typeof activeProj==='function')?activeProj():null; if(!p) return;
+  var rv=p.materiales&&p.materiales.recetaV2;
+  var esEstandar=!!(rv&&rv.formato==='estandar'&&rv.niveles&&rv.niveles[levelId]);
+  if(!esEstandar) return _abrirSelectorItemsEtapa(towerId, levelId, stageIdx);
+  if(document.getElementById('_menuPedirModal')) return;
+  var t=(p.towers||[]).find(function(x){return x.id===towerId;}); var l=t&&(t.levels||[]).find(function(x){return x.id===levelId;});
+  if(!t||!l) return;
+  var items=_etapaItemsParaPedir(p, t, l, stageIdx);
+  if(!items.length){ showToast('YA SE PIDIÓ TODO LO DISPONIBLE DE ESTA ETAPA',''); return; }
+  var postes=items.filter(function(it){ return /^POSTE/i.test(it.key); });
+  var pm=(typeof _postesMedidaDe==='function')?_postesMedidaDe(p, levelId):{modo:'estandar'};
+  var pmLbl=pm.modo==='especial'?('MEDIDA ESPECIAL '+pm.metros+' m = '+_metrosAPies(pm.metros)+'\''):'MEDIDA ESTÁNDAR 10\'';
+  var esc=function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(m){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]);}); };
+  var args="'"+escapeAttr(towerId)+"','"+escapeAttr(levelId)+"',"+stageIdx;
+  var opt=function(onclick, titulo, detalle){
+    return '<button onclick="'+onclick+'" style="display:block;width:100%;text-align:left;padding:13px 16px;margin-bottom:9px;background:var(--paper,#FAFAF9);border:1px solid rgba(0,0,0,.12);border-radius:10px;cursor:pointer;font-family:inherit">'
+      +'<div style="font-size:12.5px;font-weight:700;letter-spacing:.5px;color:var(--ink,#1C1917)">'+titulo+'</div>'
+      +'<div style="font-size:10.5px;color:var(--mute,#78716C);margin-top:3px;line-height:1.45">'+detalle+'</div></button>';
+  };
+  var body='';
+  body+=opt('_menuPedirCerrar();pedirEtapaCompleta('+args+')','PEDIR NIVEL COMPLETO','Los '+items.length+' materiales disponibles con el TOTAL del nivel. Cantidades fijas de la receta.');
+  body+=opt('_menuPedirCerrar();_abrirSelectorItemsEtapa('+args+')','ELEGIR MATERIALES DEL NIVEL','Marcá qué materiales pedir; la cantidad del nivel no se puede tocar.');
+  body+=opt('_menuPedirCerrar();_abrirSelectorAptoEtapa('+args+')','PEDIR POR APARTAMENTO','La etapa de UN apartamento: todo o materiales elegidos, con las cantidades de ese apto.');
+  if(postes.length) body+=opt('_menuPedirCerrar();pedirEtapaCompleta('+args+',null,{soloPostes:true})','SOLO POSTES A MEDIDA','Mandar a fabricar únicamente los postes ('+postes.length+' tipo'+(postes.length!==1?'s':'')+') · '+esc(pmLbl)+'.');
+  var html='<div id="_menuPedirModal" style="position:fixed;inset:0;z-index:100080;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)_menuPedirCerrar()">'
+    +'<div style="background:var(--card,#fff);color:var(--ink,#1C1917);border-radius:14px;max-width:460px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden" onclick="event.stopPropagation()">'
+    +'<div style="padding:16px 18px;border-bottom:1px solid rgba(0,0,0,.08)"><b style="font-size:13px;letter-spacing:.5px">PEDIR ETAPA '+(stageIdx+1)+' · '+esc(t.name)+' · '+esc(l.name)+'</b><div style="font-size:11px;color:var(--mute);margin-top:4px">¿Cómo querés hacer el pedido? Las cantidades salen de la receta y no se pueden modificar.</div></div>'
+    +'<div style="padding:14px 16px;overflow:auto;flex:1">'+body+'</div>'
+    +'<div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;justify-content:flex-end"><button class="btn ghost" onclick="_menuPedirCerrar()">CANCELAR</button></div>'
+    +'</div></div>';
+  var w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);
+  if(window._prLockScroll) window._prLockScroll();
+}
+function _menuPedirCerrar(){ var m=document.getElementById('_menuPedirModal'); if(m) m.remove(); if(window._prUnlockScroll) window._prUnlockScroll(); }
+// ── v909: SELECTOR POR APARTAMENTO (cantidades de la columna del apto, fijas) ──
+function _abrirSelectorAptoEtapa(towerId, levelId, stageIdx){
+  if(!can('pedidos.create')) return showToast('SIN PERMISO PARA CREAR PEDIDOS','red');
+  if(document.getElementById('_selAptoModal')) return;
+  var p=(typeof activeProj==='function')?activeProj():null; if(!p) return;
+  var t=(p.towers||[]).find(function(x){return x.id===towerId;}); var l=t&&(t.levels||[]).find(function(x){return x.id===levelId;});
+  if(!t||!l) return;
+  var aptos=l.aptos||[];
+  if(!aptos.length) return showToast('EL NIVEL NO TIENE APARTAMENTOS','red');
+  var esc=function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(m){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]);}); };
+  // select NATIVO: los combobox custom se recortan dentro de modales (regla v795-797)
+  var opts=aptos.map(function(a){ return '<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>'; }).join('');
+  var refr="_selAptoRefresh('"+escapeAttr(towerId)+"','"+escapeAttr(levelId)+"',"+stageIdx+")";
+  var html='<div id="_selAptoModal" style="position:fixed;inset:0;z-index:100080;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)_cerrarSelectorApto()">'
+    +'<div style="background:var(--card,#fff);color:var(--ink,#1C1917);border-radius:14px;max-width:520px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden" onclick="event.stopPropagation()">'
+    +'<div style="padding:16px 18px;border-bottom:1px solid rgba(0,0,0,.08)"><b style="font-size:13px;letter-spacing:.5px">PEDIR POR APARTAMENTO · ETAPA '+(stageIdx+1)+' · '+esc(l.name)+'</b><div style="font-size:11px;color:var(--mute);margin-top:4px">Elegí el apartamento y marcá qué materiales pedir. Cantidades de la receta, no se pueden tocar.</div></div>'
+    +'<div style="padding:10px 18px;border-bottom:1px solid rgba(0,0,0,.06)"><select id="_selAptoSel" onchange="'+refr+'" style="width:100%;padding:8px 10px;font-size:13px;border:1px solid #D1D5DB;border-radius:8px;background:#fff">'+opts+'</select></div>'
+    +'<div id="_selAptoRows" style="padding:6px 14px;overflow:auto;flex:1"></div>'
+    +'<div style="padding:14px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;justify-content:flex-end"><button class="btn ghost" onclick="_cerrarSelectorApto()">CANCELAR</button><button class="btn primary" onclick="_selAptoPedir(\''+escapeAttr(towerId)+'\',\''+escapeAttr(levelId)+'\','+stageIdx+')">PEDIR SELECCIONADOS</button></div>'
+    +'</div></div>';
+  var w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);
+  if(window._prLockScroll) window._prLockScroll();
+  _selAptoRefresh(towerId, levelId, stageIdx);
+}
+function _selAptoRefresh(towerId, levelId, stageIdx){
+  var cont=document.getElementById('_selAptoRows'); var sel=document.getElementById('_selAptoSel');
+  if(!cont||!sel) return;
+  var p=(typeof activeProj==='function')?activeProj():null; if(!p) return;
+  var t=(p.towers||[]).find(function(x){return x.id===towerId;}); var l=t&&(t.levels||[]).find(function(x){return x.id===levelId;});
+  if(!t||!l) return;
+  var items=_etapaItemsParaPedir(p, t, l, stageIdx, sel.value);
+  if(!items.length){ cont.innerHTML='<div style="padding:18px;text-align:center;color:var(--mute);font-size:12px">NADA DISPONIBLE PARA ESTE APARTAMENTO EN ESTA ETAPA</div>'; return; }
+  var esc=function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(m){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]);}); };
+  cont.innerHTML=items.map(function(it){
+    return '<label style="display:flex;align-items:center;gap:10px;padding:9px 6px;border-bottom:1px solid rgba(0,0,0,.06);font-size:13px;cursor:pointer">'
+      +'<input type="checkbox" class="_selAptoChk" data-key="'+esc(it.key)+'" checked style="width:17px;height:17px;flex:0 0 auto">'
+      +'<span style="flex:1;min-width:0">'+esc(it.name)+'</span>'
+      +'<span style="color:var(--mute);font-size:11px;font-weight:700;white-space:nowrap">'+it.qtyFinal+'</span></label>';
+  }).join('');
+}
+function _cerrarSelectorApto(){ var m=document.getElementById('_selAptoModal'); if(m) m.remove(); if(window._prUnlockScroll) window._prUnlockScroll(); }
+function _selAptoPedir(towerId, levelId, stageIdx){
+  var sel=document.getElementById('_selAptoSel'); var aptoId=sel?sel.value:'';
+  var keys=[]; document.querySelectorAll('._selAptoChk').forEach(function(c){ if(c.checked) keys.push(c.getAttribute('data-key')); });
+  if(!aptoId) return showToast('ELEGÍ UN APARTAMENTO','red');
+  if(!keys.length) return showToast('SELECCIONÁ AL MENOS UN ÍTEM','red');
+  _cerrarSelectorApto();
+  pedirEtapaCompleta(towerId, levelId, stageIdx, keys, { aptoId: aptoId });
+}
+window._abrirMenuPedirEtapa=_abrirMenuPedirEtapa; window._menuPedirCerrar=_menuPedirCerrar;
+window._abrirSelectorAptoEtapa=_abrirSelectorAptoEtapa; window._selAptoRefresh=_selAptoRefresh;
+window._cerrarSelectorApto=_cerrarSelectorApto; window._selAptoPedir=_selAptoPedir;
 function renderRecetaPedir(){
   const p = activeProj();
   const cont = document.getElementById('recetaPedirContent');
@@ -27963,9 +28132,12 @@ function renderRecetaPedir(){
     return;
   }
 
-  // Cantidad de etapas a mostrar: las del PDF importado (4 o 5) o default 4.
-  // Las recetas de material nunca tienen 6 etapas (cap duro a 5).
-  const labelsCount = (Array.isArray(p.materiales.recetaEtapaLabels) && p.materiales.recetaEtapaLabels.length > 0)
+  // Cantidad de etapas a mostrar: receta estándar (v909) → sus etapas;
+  // luego las del PDF importado (4 o 5) o default 4. Cap duro a 5.
+  const _rvStd = (p.materiales.recetaV2 && p.materiales.recetaV2.formato === 'estandar') ? p.materiales.recetaV2 : null;
+  const labelsCount = (_rvStd && Array.isArray(_rvStd.etapas) && _rvStd.etapas.length > 0)
+    ? _rvStd.etapas.length
+    : (Array.isArray(p.materiales.recetaEtapaLabels) && p.materiales.recetaEtapaLabels.length > 0)
     ? p.materiales.recetaEtapaLabels.length
     : 4;
   const recetaEtapasCount = Math.min(5, labelsCount);
@@ -28012,8 +28184,10 @@ function renderRecetaPedir(){
 
       // Un botón por etapa (4 o 5 según receta)
       for (let i = 0; i < recetaEtapasCount; i++) {
-        const etapa = p.materiales.receta[i] || {};
-        const hasReceta = Object.keys(etapa).length > 0;
+        // v909 BUGFIX: el gate usaba SOLO la receta clásica (p.materiales.receta) — en
+        // proyectos con receta estándar (VLA) todo salía "SIN RECETA". Ahora usa la
+        // receta RESUELTA del nivel (estándar > PDF per-nivel > clásica).
+        const hasReceta = _recetaEtapaItemKeys(p, t, l, i).length > 0;
         const yaPedida = pedidas[i];
 
         let btnClass = '', btnText = `ETAPA ${i+1}`, action = '';
@@ -28027,7 +28201,7 @@ function renderRecetaPedir(){
           action = `title="Definir la receta primero" disabled`;
         } else {
           btnText = `PEDIR ET. ${i+1}`;
-          action = `onclick="_abrirSelectorItemsEtapa('${escapeAttr(t.id)}','${escapeAttr(l.id)}',${i})"`;
+          action = `onclick="_abrirMenuPedirEtapa('${escapeAttr(t.id)}','${escapeAttr(l.id)}',${i})"`;
         }
         html += `<button class="rpr-stage-btn ${btnClass}" ${action}>${btnText}</button>`;
       }
@@ -28120,7 +28294,8 @@ function showConfirmarPedidoModal(data){
   });
 }
 
-async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys){
+async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts){
+  opts = opts || {}; // v909: { aptoId, aptoName, soloPostes }
   if (!can('pedidos.create')) return showToast('SIN PERMISO PARA CREAR PEDIDOS', 'red');
 
   const p = activeProj();
@@ -28134,8 +28309,17 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys){
   // 1) recetaV2 FORMATO ESTÁNDAR (totales por nivel, claves = NOMBRE REAL DE COMPRA),
   // 2) PDF per-nivel, 3) receta clásica × # aptos.
   const _R = _recetaEtapaResuelta(p, t, l, stageIdx);
-  const usarTotalesPDF = _R.usarTotalesPDF;
-  const etapaReceta = _R.src;
+  let usarTotalesPDF = _R.usarTotalesPDF;
+  let etapaReceta = _R.src;
+  // v909: modo POR APARTAMENTO — cantidades de la columna del apto (solo receta estándar)
+  const _apto = opts.aptoId ? (l.aptos || []).find(a => a.id === opts.aptoId) : null;
+  if (opts.aptoId) {
+    if (!_R.deRecetaV2) return showToast('EL PEDIDO POR APARTAMENTO SOLO APLICA A LA RECETA FORMATO ESTÁNDAR', 'red');
+    if (!_apto) return showToast('APARTAMENTO NO ENCONTRADO', 'red');
+    etapaReceta = _recetaV2EtapaNivelPorApto(p, levelId, stageIdx, opts.aptoId) || {};
+    usarTotalesPDF = true;
+    if (Object.keys(etapaReceta).length === 0) return showToast('ESTE APARTAMENTO NO TIENE CANTIDADES EN ESTA ETAPA', 'red');
+  }
   if (Object.keys(etapaReceta).length === 0) return showToast('ESTA ETAPA NO TIENE RECETA DEFINIDA', 'red');
   if (!usarTotalesPDF && numAptos === 0) return showToast('EL NIVEL NO TIENE APTOS', 'red');
 
@@ -28177,13 +28361,35 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys){
 
   // v699b: dedup — sacar items YA pedidos antes; y si vienen selectedKeys (del selector), sólo esos.
   const _yaPedidos = _itemsYaPedidosEtapa(p.materiales.pedidos, levelId, stageIdx);
+  const _cobAptos = _coberturaAptosEtapa(p.materiales.pedidos, levelId, stageIdx); // v909
   const _selSet = Array.isArray(selectedKeys) ? new Set(selectedKeys) : null;
   const recetaDisponible = {};
   Object.keys(recetaFiltrada).forEach(key => {
-    if (_yaPedidos[key]) return;                      // ya pedido en otro pedido
+    if (_yaPedidos[key]) return;                      // ya pedido en otro pedido (a escala de NIVEL)
     if (_selSet && !_selSet.has(key)) return;         // no seleccionado en el selector
-    recetaDisponible[key] = recetaFiltrada[key];
+    if (opts.aptoId) {
+      // v909: lo ya pedido para ESTE apto se bloquea
+      if (_cobAptos[key] && _cobAptos[key].porApto && _cobAptos[key].porApto[opts.aptoId]) return;
+      recetaDisponible[key] = recetaFiltrada[key];
+    } else {
+      let q = recetaFiltrada[key];
+      // v909: el NIVEL resta lo ya pedido por apto — el total del nivel cierra con el Excel
+      if (_R.deRecetaV2 && _cobAptos[key] && _cobAptos[key].total > 0) {
+        q = q - _cobAptos[key].total;
+        if (q <= 0) return;
+      }
+      recetaDisponible[key] = q;
+    }
   });
+  // v909: SOLO POSTES A MEDIDA — mandar a fabricar únicamente los postes de la etapa
+  if (opts.soloPostes) {
+    Object.keys(recetaDisponible).forEach(k => {
+      if (!/^POSTE/i.test(k.split('::')[1] || k)) delete recetaDisponible[k];
+    });
+    if (Object.keys(recetaDisponible).length === 0) {
+      return showToast('NO HAY POSTES DISPONIBLES PARA PEDIR EN ESTA ETAPA', 'red');
+    }
+  }
   if (Object.keys(recetaDisponible).length === 0) {
     return showToast(_selSet ? 'NO SELECCIONASTE NINGÚN ÍTEM DISPONIBLE' : 'YA SE PIDIÓ TODO LO DISPONIBLE DE ESTA ETAPA', 'red');
   }
@@ -28221,11 +28427,14 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys){
   // Items: si vienen del PDF como totales del nivel → tal cual.
   // Si vienen de receta clásica → multiplicados por # aptos.
   const items = {};
+  const recetaQty = {}; // v909: cantidades por clave ORIGINAL (aritmética nivel − aptos)
   Object.entries(recetaDisponible).forEach(([key, qtyBase]) => {
     // v906/v907: los POSTES salen con la medida DEL NIVEL en el nombre (queda CONGELADA en este
     // pedido; si la medida cambia después, los pedidos viejos no se tocan)
     const finalKey = (typeof _nombreCompraConMedida === 'function') ? _nombreCompraConMedida(key, p, levelId) : key;
-    items[finalKey] = Math.ceil(usarTotalesPDF ? qtyBase : qtyBase * numAptos);
+    const q = Math.ceil(usarTotalesPDF ? qtyBase : qtyBase * numAptos);
+    items[finalKey] = q;
+    recetaQty[key] = q;
   });
 
   const pedido = {
@@ -28237,14 +28446,17 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys){
     solicitante,
     solicitanteUsername: (u.username || '').toLowerCase(),
     nivel: `${t.name} · ${l.name}`,
-    apto: '',
+    apto: _apto ? _apto.name : '',
     ordenCambio: '',
-    observaciones: `PEDIDO AUTOMÁTICO DESDE RECETA · ETAPA ${stageIdx + 1} · ${etapaLabel}${usarTotalesPDF ? ' · TOTALES PDF' : ' · ' + numAptos + ' APTOS'}`,
+    observaciones: `PEDIDO AUTOMÁTICO DESDE RECETA · ETAPA ${stageIdx + 1} · ${etapaLabel}${_apto ? ' · ' + _apto.name : (usarTotalesPDF ? ' · TOTALES PDF' : ' · ' + numAptos + ' APTOS')}${opts.soloPostes ? ' · SOLO POSTES A MEDIDA' : ''}`,
     items,
     specs: {},
     extras: [],
     metalMedida: [],
     recetaKeys: Object.keys(recetaDisponible), // v906: claves originales (dedup aunque los postes se renombren)
+    recetaQty, // v909: qty por clave original — permite restar cobertura por apto
+    recetaAptoId: opts.aptoId || '', // v909: pedido POR APARTAMENTO (no cierra la etapa a nivel)
+    recetaAptoName: _apto ? _apto.name : '',
     esDeReceta: true,
     recetaEtapaIdx: stageIdx,
     recetaLevelId: levelId,
@@ -28258,7 +28470,11 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys){
   // Marcar la etapa como PEDIDA sólo si ya no queda NINGÚN ítem de la etapa por pedir.
   if (!p.materiales.etapasPedidas) p.materiales.etapasPedidas = {};
   if (!p.materiales.etapasPedidas[levelId]) p.materiales.etapasPedidas[levelId] = [false,false,false,false,false,false];
-  const _todoPedido = Object.keys(recetaFiltrada).every(k => _yaPedidos[k] || recetaDisponible[k] != null); // v906: items puede venir renombrado (postes)
+  // v909: para la receta estándar la etapa queda PEDIDA solo cuando no queda NADA disponible
+  // a escala de nivel (cuenta pedidos por apto y su cobertura). Para lo demás, la regla v906.
+  const _todoPedido = _R.deRecetaV2
+    ? _etapaItemsParaPedir(p, t, l, stageIdx).length === 0
+    : Object.keys(recetaFiltrada).every(k => _yaPedidos[k] || recetaDisponible[k] != null); // v906: items puede venir renombrado (postes)
   p.materiales.etapasPedidas[levelId][stageIdx] = _todoPedido;
 
   logActivity('create', `Pedido ${numero} generado desde receta`, `${p.name} · ${t.name} ${l.name} · Etapa ${stageIdx+1}`);
