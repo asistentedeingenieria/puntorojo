@@ -3041,7 +3041,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v906</span>
+    <span style="opacity:.5;font-size:9px">v907</span>
   </footer>
 
 </div>
@@ -12708,8 +12708,9 @@ function _recetaV2EtapaNivel(p, levelId, etapaIdx){
   var lineas = niv[etapaIdx] || [];
   var out = {}, any = false;
   lineas.forEach(function(item){
-    var tot = 0, ap = (item && item.aptos) || {};
-    for (var k in ap) tot += Number(ap[k]) || 0;
+    // v907: preferir el TOTAL NIVEL del Excel (redondeo único) sobre la suma de celdas redondeadas
+    var tot = Number(item && item.tn) > 0 ? Number(item.tn) : 0;
+    if (!(tot > 0)) { var ap = (item && item.aptos) || {}; for (var k in ap) tot += Number(ap[k]) || 0; }
     if (tot <= 0) return;
     var key = String((item.nc || item.m || '')).trim(); if (!key) return;
     out[key] = (out[key] || 0) + tot; any = true;
@@ -26171,7 +26172,10 @@ function aplicarOperacionReceta(recetaV2, precios, op){
     const line = lista.find(l => l.m === material);
     if (!line) return { ok:false, error:'MATERIAL NO ESTÁ EN LA ETAPA' };
     if (!line.aptos) line.aptos = {};
+    const _prev = Number(line.aptos[op.aptoId]) || 0;
     line.aptos[op.aptoId] = Number(op.cantidadNueva)||0;
+    // v907: mantener el TOTAL NIVEL del Excel consistente con la edición (ajuste por delta)
+    if (Number(line.tn) > 0) line.tn = Math.max(0, Number(line.tn) + ((Number(op.cantidadNueva)||0) - _prev));
     return { ok:true };
   }
   if (op.tipo === 'agregar'){
@@ -26217,7 +26221,9 @@ function resolveAptoId(level, label){
 }
 function _etapas(x){ return [0,1,2,3].map(i => (x && x[i]) || []); }
 function totalMaterialNivel(item){
-  if (!item || !item.aptos) return 0;
+  if (!item) return 0;
+  if (Number(item.tn) > 0) return Number(item.tn); // v907: TOTAL NIVEL del Excel (redondeo único)
+  if (!item.aptos) return 0;
   let s = 0; for (const k in item.aptos) s += Number(item.aptos[k])||0; return s;
 }
 function parseRecetaPorApto(sheets, towers){
@@ -26303,6 +26309,9 @@ function parseRecetaEstandar(sheets, towers){
     }
     if (hIdx<0){ avisos.push('Hoja "'+raw+'": sin fila de encabezado (MATERIAL / NOMBRE REAL).'); return; }
     const header = aoa[hIdx];
+    // v907: columna TOTAL NIVEL — trae el redondeo ÚNICO del Excel (ceil sobre la suma cruda);
+    // las columnas por apto vienen redondeadas c/u, así que sumarlas da MÁS que el total real.
+    const cTot = header.findIndex((v,j) => j > Math.max(cMat,cNc,cU) && /TOTAL/.test(_aptoNorm(v)));
     const aptoCols = [];
     header.forEach((h,c) => {
       if (c <= Math.max(cMat,cNc,cU)) return;
@@ -26331,6 +26340,8 @@ function parseRecetaEstandar(sheets, towers){
       aptoCols.forEach(ac => { const v=Number(row[ac.col]); if (v>0) aptos[ac.aptoId]=v; });
       const item = { m:material, u:unidad, aptos };
       if (nc) item.nc = nc;
+      const tnv = cTot >= 0 ? Number(row[cTot]) : NaN;
+      if (Number.isFinite(tnv) && tnv > 0) item.tn = tnv; // v907: total real de compra del Excel
       recetaV2.niveles[lid][eIdx].push(item);
     }
   });
@@ -27135,39 +27146,53 @@ function _recetaV2LegacyEls(){
    UNA vez por proyecto). p.materiales.postesMedida = { modo:'especial', metros:N }; ausente =
    ESTÁNDAR de fábrica (10'). Solo cambia el NOMBRE DE COMPRA de los POSTES en pedidos/OC —
    las cantidades siguen viniendo de la receta. Conversión m→pies: ×3.28084, 2 decimales. */
-function _postesMedidaDe(p){
-  const pm = p && p.materiales && p.materiales.postesMedida;
+function _postesMedidaDe(p, levelId){
+  const mat = p && p.materiales;
+  // v907: medida POR NIVEL (p.materiales.postesMedidaNivel[levelId]) > default del proyecto > estándar (10')
+  if (mat && levelId && mat.postesMedidaNivel && Number(mat.postesMedidaNivel[levelId]) > 0)
+    return { modo:'especial', metros: Number(mat.postesMedidaNivel[levelId]), esDelNivel: true };
+  const pm = mat && mat.postesMedida;
   return (pm && pm.modo === 'especial' && Number(pm.metros) > 0) ? { modo:'especial', metros:Number(pm.metros) } : { modo:'estandar' };
 }
 function _metrosAPies(m){ return Math.round(Number(m) * 3.28084 * 100) / 100; }
-function _nombreCompraConMedida(nc, p){
-  const pm = _postesMedidaDe(p);
+function _nombreCompraConMedida(nc, p, levelId){
+  const pm = _postesMedidaDe(p, levelId);
   if (pm.modo !== 'especial' || !/^POSTE/i.test(String(nc||''))) return nc;
   const pies = _metrosAPies(pm.metros);
   let out = String(nc).replace(/X\s*10\s*'/i, 'X ' + pies + "'");
   if (out === String(nc)) out = nc + ' · ' + pies + "'";
   return out + ' (MEDIDA ESPECIAL ' + pm.metros + ' m)';
 }
-window.configurarPostesMedida = async function(){
+window.configurarPostesMedida = async function(levelId, levelName){
   const p = activeProj();
   if (!(can('receta.edit') || can('users.manage'))) return showToast('SIN PERMISO','red');
-  const pm = _postesMedidaDe(p);
+  const pm = _postesMedidaDe(p, levelId);
   window._postesMTmp = pm.modo === 'especial' ? String(pm.metros) : '';
+  window._postesTodosTmp = false;
   const body = '<div style="font-size:12px;line-height:1.7;color:#1F2937">'
-    + '<div>Largo al que se mandan a hacer los POSTES de este proyecto.</div>'
+    + '<div>Largo al que se mandan a hacer los POSTES' + (levelName ? ' de <strong>' + levelName + '</strong>' : '') + '.</div>'
     + '<label style="display:flex;gap:8px;align-items:center;margin-top:10px">Medida especial (m): '
     + '<input type="number" step="0.01" min="0" style="width:100px;padding:4px 6px;border:1px solid #D1D5DB;border-radius:6px" value="'+(pm.modo==='especial'?pm.metros:'')+'" oninput="window._postesMTmp=this.value"></label>'
-    + '<div style="margin-top:8px;color:#6B7280;font-size:11px">Vacío o 0 = ESTÁNDAR de fábrica (10\'). La conversión a pies es automática y sale en el nombre de compra de los pedidos.</div></div>';
-  const ok = await window.prConfirm({ title:'POSTES: MEDIDA DEL PROYECTO', bodyHTML:body, okText:'GUARDAR', cancelText:'CANCELAR' });
+    + '<label style="display:flex;gap:8px;align-items:center;margin-top:8px;font-size:11px;color:#374151"><input type="checkbox" onchange="window._postesTodosTmp=this.checked"> Aplicar a TODOS los niveles del proyecto (borra las medidas por nivel)</label>'
+    + '<div style="margin-top:8px;color:#6B7280;font-size:11px">Vacío o 0 = quitar la medida de este nivel (queda el default del proyecto o el estándar de fábrica 10\'). La conversión a pies es automática y sale en el nombre de compra de los pedidos.</div></div>';
+  const ok = await window.prConfirm({ title:'POSTES: MEDIDA' + (levelName ? ' · ' + levelName : ' DEL PROYECTO'), bodyHTML:body, okText:'GUARDAR', cancelText:'CANCELAR' });
   if (!ok) return;
   const p2 = activeProj(); // re-leer del state vivo tras el await del modal (regla v769)
   const metros = parseFloat(window._postesMTmp);
-  if (metros > 0) p2.materiales.postesMedida = { modo:'especial', metros: Math.round(metros*100)/100 };
-  else delete p2.materiales.postesMedida;
+  const aTodos = !!window._postesTodosTmp || !levelId;
+  if (aTodos) {
+    if (metros > 0) p2.materiales.postesMedida = { modo:'especial', metros: Math.round(metros*100)/100 };
+    else delete p2.materiales.postesMedida;
+    delete p2.materiales.postesMedidaNivel; // v907: aplicar a todos limpia los overrides por nivel
+  } else {
+    if (!p2.materiales.postesMedidaNivel) p2.materiales.postesMedidaNivel = {};
+    if (metros > 0) p2.materiales.postesMedidaNivel[levelId] = Math.round(metros*100)/100;
+    else delete p2.materiales.postesMedidaNivel[levelId];
+  }
   saveState();
   try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
-  try { logActivity('update', 'Medida de postes: ' + (metros>0 ? metros+' m' : 'estándar 10\''), p2.name); } catch(e){}
-  showToast(metros > 0 ? ('POSTES A MEDIDA: ' + metros + ' m = ' + _metrosAPies(metros) + "'") : "POSTES ESTÁNDAR (10')", 'green');
+  try { logActivity('update', 'Medida de postes' + (aTodos ? ' (todos los niveles)' : ' · ' + (levelName || levelId)) + ': ' + (metros>0 ? metros+' m' : 'sin medida especial'), p2.name); } catch(e){}
+  showToast(metros > 0 ? ('POSTES A MEDIDA' + (aTodos ? '' : ' · ' + (levelName||'')) + ': ' + metros + ' m = ' + _metrosAPies(metros) + "'") : 'MEDIDA ESPECIAL QUITADA', 'green');
   if (typeof renderRecetaV2 === 'function') renderRecetaV2();
 };
 window.renderRecetaV2 = function(){
@@ -27217,11 +27242,14 @@ window.renderRecetaV2 = function(){
   const esTotal = recetaV2AptoSel==='TOTAL';
   const puedeEditar = can('receta.edit') || can('users.manage');
   const precios = p.materiales.precios || {};
-  // v905: medida de postes del proyecto (estándar 10' o especial en metros → pies)
-  const _pm = _postesMedidaDe(p);
+  // v905/v907: medida de postes DEL NIVEL seleccionado (override por nivel > default del proyecto)
+  const _pm = _postesMedidaDe(p, recetaV2NivelSel);
+  const _pmNivelLbl = level ? level.name : 'NIVEL';
   html += '<div style="display:flex;align-items:center;gap:8px;margin:2px 0 8px;font-size:11px;color:#374151">'
-    + '<span>POSTES: ' + (_pm.modo === 'especial' ? '<strong>MEDIDA ESPECIAL ' + _pm.metros + ' m = ' + _metrosAPies(_pm.metros) + '\'</strong>' : 'ESTÁNDAR (10\')') + '</span>'
-    + (puedeEditar ? '<button class="btn ghost sm" style="font-size:10px;padding:2px 8px" onclick="configurarPostesMedida()">CAMBIAR</button>' : '')
+    + '<span>POSTES (' + esc(_pmNivelLbl) + '): ' + (_pm.modo === 'especial'
+        ? '<strong>MEDIDA ESPECIAL ' + _pm.metros + ' m = ' + _metrosAPies(_pm.metros) + '\'</strong>' + (_pm.esDelNivel ? '' : ' <span style="color:#9CA3AF">(default del proyecto)</span>')
+        : 'ESTÁNDAR (10\')') + '</span>'
+    + (puedeEditar ? '<button class="btn ghost sm" style="font-size:10px;padding:2px 8px" onclick="configurarPostesMedida(\'' + recetaV2NivelSel + '\',\'' + esc(_pmNivelLbl) + '\')">CAMBIAR</button>' : '')
     + '</div>';
   const fills = ['#FDE9E7','#E7F0FD','#E9F7E9','#FBF4E1'];
   let totalNivel = 0;
@@ -27244,7 +27272,7 @@ window.renderRecetaV2 = function(){
       const matArg = esc(l.m).replace(/'/g,"\\'");
       const accion = puedeEditar ? 'recetaV2Op' : 'recetaV2Solicitar';
       html += '<tr style="border-top:1px solid #F1F5F9">'
-        + '<td style="padding:6px 12px">'+esc(l.m)+(l.nc ? '<div style="font-size:9px;color:#9CA3AF;margin-top:1px">'+esc(_nombreCompraConMedida(l.nc, p))+'</div>' : '')+'</td>'
+        + '<td style="padding:6px 12px">'+esc(l.m)+(l.nc ? '<div style="font-size:9px;color:#9CA3AF;margin-top:1px">'+esc(_nombreCompraConMedida(l.nc, p, recetaV2NivelSel))+'</div>' : '')+'</td>'
         + '<td style="text-align:center;color:#6B7280">'+esc(l.u)+'</td>'
         + '<td style="text-align:right;font-variant-numeric:tabular-nums">'+qty.toLocaleString('es-GT')+'</td>'
         + '<td style="text-align:right;color:'+(tienePrecio?'#374151':'#D1D5DB')+'">'+puCell+'</td>'
@@ -28154,8 +28182,8 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys){
       materiales: Object.entries(recetaDisponible).map(([key, qtyBase]) => {
         const parts = key.split('::');
         let name = parts.length > 1 ? parts.slice(1).join('::') : key;
-        // v906: mostrar en el modal la medida de postes que quedará en el pedido
-        if (typeof _nombreCompraConMedida === 'function') name = _nombreCompraConMedida(name, p);
+        // v906/v907: mostrar en el modal la medida de postes DEL NIVEL que quedará en el pedido
+        if (typeof _nombreCompraConMedida === 'function') name = _nombreCompraConMedida(name, p, levelId);
         const qtyFinal = usarTotalesPDF ? qtyBase : qtyBase * numAptos;
         return { name, qtyBase, qtyFinal };
       })
@@ -28176,9 +28204,9 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys){
   // Si vienen de receta clásica → multiplicados por # aptos.
   const items = {};
   Object.entries(recetaDisponible).forEach(([key, qtyBase]) => {
-    // v906: los POSTES salen con la medida del proyecto en el nombre (queda CONGELADA en este
+    // v906/v907: los POSTES salen con la medida DEL NIVEL en el nombre (queda CONGELADA en este
     // pedido; si la medida cambia después, los pedidos viejos no se tocan)
-    const finalKey = (typeof _nombreCompraConMedida === 'function') ? _nombreCompraConMedida(key, p) : key;
+    const finalKey = (typeof _nombreCompraConMedida === 'function') ? _nombreCompraConMedida(key, p, levelId) : key;
     items[finalKey] = Math.ceil(usarTotalesPDF ? qtyBase : qtyBase * numAptos);
   });
 

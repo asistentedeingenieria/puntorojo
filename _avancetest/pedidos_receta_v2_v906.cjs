@@ -75,7 +75,7 @@ if (srcYa) {
 // ── 4. cableado en pedirEtapaCompleta ──
 const srcPedir = extractFn('pedirEtapaCompleta');
 ok('pedirEtapaCompleta resuelve con _recetaEtapaResuelta', /_recetaEtapaResuelta\(p, t, l, stageIdx\)/.test(srcPedir));
-ok('items del pedido con medida de postes aplicada', /_nombreCompraConMedida\(key, p\)/.test(srcPedir));
+ok('items del pedido con medida de postes aplicada', /_nombreCompraConMedida\(key, p, levelId\)/.test(srcPedir)); // v907: medida por NIVEL
 ok('el pedido guarda recetaKeys', /recetaKeys: Object\.keys\(recetaDisponible\)/.test(srcPedir));
 ok('_todoPedido revisa recetaDisponible (no items renombrados)', /recetaDisponible\[k\] != null/.test(srcPedir));
 
