@@ -3041,7 +3041,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v907</span>
+    <span style="opacity:.5;font-size:9px">v908</span>
   </footer>
 
 </div>
@@ -17695,7 +17695,7 @@ function openPedidoDetalle(id){
   const byCat = {};
   const specs = pd.specs || {};
   Object.entries(pd.items || {}).forEach(([key, qty]) => {
-    const [cat, name] = key.split('::');
+    const { cat, name } = _pedidoKeyParts(key);
     if (!byCat[cat]) byCat[cat] = [];
     byCat[cat].push({ name, qty, spec: specs[key] || null });
   });
@@ -17833,11 +17833,20 @@ function buildOcProviderOptions(selected){
   ).join('');
 }
 
+// v908: las claves de pedidos de receta estándar son el NOMBRE REAL DE COMPRA sin 'CAT::';
+// partir a ciegas por '::' dejaba name=undefined (la OC salía con items "undefined").
+function _pedidoKeyParts(key){
+  const s = String(key == null ? '' : key);
+  const i = s.indexOf('::');
+  if (i < 0) return { cat: 'RECETA', name: s };
+  return { cat: s.slice(0, i), name: s.slice(i + 2) };
+}
+
 function buildPedidoOcItems(pd){
   const arr = [];
   const specs = pd.specs || {};
   Object.entries(pd.items || {}).forEach(([key, qty]) => {
-    const [cat, name] = key.split('::');
+    const { cat, name } = _pedidoKeyParts(key);
     const spec = specs[key] || '';
     const fullName = name + (spec ? ` [${spec}]` : '');
     arr.push({ sourceKey:key, cat, name: fullName, qty: Number(qty) || 0, precio: 0, proveedorId: '', autoAssigned:false });
@@ -18936,7 +18945,7 @@ function printPedido(){
   const byCat = {};
   const specs = pd.specs || {};
   Object.entries(pd.items || {}).forEach(([key, qty]) => {
-    const [cat, name] = key.split('::');
+    const { cat, name } = _pedidoKeyParts(key);
     if (!byCat[cat]) byCat[cat] = [];
     byCat[cat].push({ name, qty, spec: specs[key] || null });
   });
@@ -26195,13 +26204,22 @@ function aplicarOperacionReceta(recetaV2, precios, op){
   return { ok:false, error:'TIPO DESCONOCIDO' };
 }
 function matchKeyProducto(nombre){ return normProducto(nombre).trim().toUpperCase(); }
-function precioDeProductoReceta(proveedores, materialNombre){
-  const key = matchKeyProducto(materialNombre);
+function precioDeProductoReceta(proveedores, materialNombre, nombreCompra){
+  // v908: el catálogo de proveedores suele tener el NOMBRE REAL DE COMPRA (item.nc de la
+  // receta estándar); si el nombre corto no matchea, se intenta con el nombre de compra.
   const provs = proveedores || [];
-  for (const prv of provs){
-    for (const prod of (prv.productos||[])){
-      if (matchKeyProducto(prod.nombre) === key)
-        return { proveedorId: prv.id, proveedor: prv.nombre, precio: Number(prod.precio)||0, unidad: prod.unidad||'', rendimiento: Number(prod.rendimiento)||1 };
+  const keys = [matchKeyProducto(materialNombre)];
+  if (nombreCompra){
+    const k2 = matchKeyProducto(nombreCompra);
+    if (k2 && keys.indexOf(k2) < 0) keys.push(k2);
+  }
+  for (const key of keys){
+    if (!key) continue;
+    for (const prv of provs){
+      for (const prod of (prv.productos||[])){
+        if (matchKeyProducto(prod.nombre) === key)
+          return { proveedorId: prv.id, proveedor: prv.nombre, precio: Number(prod.precio)||0, unidad: prod.unidad||'', rendimiento: Number(prod.rendimiento)||1 };
+      }
     }
   }
   return null;
@@ -27263,7 +27281,7 @@ window.renderRecetaV2 = function(){
     if (!lineas.length) html += '<tr><td colspan="6" style="padding:10px 12px;color:#9CA3AF">— sin materiales —</td></tr>';
     lineas.forEach(l => {
       const qty = esTotal ? totalMaterialNivel(l) : (Number((l.aptos||{})[recetaV2AptoSel])||0);
-      const info = precioDeProductoReceta(_getProveedores(), l.m);
+      const info = precioDeProductoReceta(_getProveedores(), l.m, l.nc);
       const rend = info && info.rendimiento ? info.rendimiento : 1;
       const tienePrecio = info && info.precio>0;
       const sub = tienePrecio ? (qty / rend) * info.precio : 0;
@@ -27440,15 +27458,15 @@ window.verCatalogoPreciosReceta = async function(){
   const set = new Map();
   Object.values(rv.niveles).forEach(etapas => _etapas(etapas).forEach(lineas => lineas.forEach(l => {
     const key = matchKeyProducto(l.m);
-    if (!set.has(key)) set.set(key, { nombre: normProducto(l.m), unidad: l.u||'' });
+    if (!set.has(key)) set.set(key, { nombre: normProducto(l.m), unidad: l.u||'', nc: l.nc||'' });
   })));
   const prods = [...set.values()].sort((a,b)=>a.nombre.localeCompare(b.nombre));
-  const sinPrecio = prods.filter(x => !precioDeProductoReceta(_getProveedores(), x.nombre)).length;
+  const sinPrecio = prods.filter(x => !precioDeProductoReceta(_getProveedores(), x.nombre, x.nc)).length;
   let body = '<div style="font-size:11.5px;color:#475569;margin-bottom:10px">Los precios salen del <strong>catálogo de proveedores</strong>. '+(sinPrecio?('<span style="color:#B45309">'+sinPrecio+' sin precio.</span>'):'Todos con precio.')+'</div>';
   if (esAdmin && !provs.length) body += '<div style="margin-bottom:10px;padding:10px;background:#FFFBEB;border:1px solid #FCD34D;border-radius:6px;color:#92400E;font-size:11px">No hay proveedores. Creá uno en el catálogo para poder asignar precios.</div>';
   body += '<div style="max-height:55vh;overflow:auto;border:1px solid #E5E7EB;border-radius:8px"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="position:sticky;top:0;background:#374151;color:#fff;font-size:10px"><th style="text-align:left;padding:6px 8px">PRODUCTO</th><th style="padding:6px 4px">PROVEEDOR</th><th style="text-align:right;padding:6px 8px">PRECIO Q</th><th style="padding:6px 4px">RINDE</th></tr></thead><tbody>';
   prods.forEach(x => {
-    const info = precioDeProductoReceta(_getProveedores(), x.nombre);
+    const info = precioDeProductoReceta(_getProveedores(), x.nombre, x.nc);
     const pn = esc(x.nombre).replace(/'/g,"\\'");
     const un = esc(x.unidad).replace(/'/g,"\\'");
     let provCell, precioCell;

@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v907-total-nivel-excel-y-postes-por-nivel';
+const CACHE_VERSION = 'v908-precios-nombre-real-y-fix-oc-undefined';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar
