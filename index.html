@@ -3041,7 +3041,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v905</span>
+    <span style="opacity:.5;font-size:9px">v906</span>
   </footer>
 
 </div>
@@ -12695,7 +12695,31 @@ function _avDesparejosHTML(res){
 }
 window._avDesparejosHTML=_avDesparejosHTML;
 // Resuelve la fuente de items de una etapa/nivel: PDF per-nivel (totales) o receta clásica.
+/* v906: totales por nivel de la recetaV2 FORMATO ESTÁNDAR (importador v905) para el flujo de
+   pedidos. Devuelve { <NOMBRE REAL DE COMPRA o nombre corto>: totalNivel } — los duplicados se
+   SUMAN (p.ej. plancha de TABIQUES y de ENCHAPES comparten nombre de compra) — o null si el
+   proyecto no tiene recetaV2 estándar o el nivel/etapa no trae nada. SOLO formato:'estandar':
+   cambiarle las claves a proyectos viejos (VDC) rompería la dedup contra pedidos históricos.
+   Claves SIN medida de postes — la medida se aplica al GENERAR el pedido (queda congelada). */
+function _recetaV2EtapaNivel(p, levelId, etapaIdx){
+  var rv = p && p.materiales && p.materiales.recetaV2;
+  if (!rv || rv.formato !== 'estandar' || !rv.niveles || !levelId) return null;
+  var niv = rv.niveles[levelId]; if (!niv) return null;
+  var lineas = niv[etapaIdx] || [];
+  var out = {}, any = false;
+  lineas.forEach(function(item){
+    var tot = 0, ap = (item && item.aptos) || {};
+    for (var k in ap) tot += Number(ap[k]) || 0;
+    if (tot <= 0) return;
+    var key = String((item.nc || item.m || '')).trim(); if (!key) return;
+    out[key] = (out[key] || 0) + tot; any = true;
+  });
+  return any ? out : null;
+}
 function _recetaEtapaResuelta(p, t, l, stageIdx){
+  // v906: PRIORIDAD 1 — recetaV2 FORMATO ESTÁNDAR: totales por nivel, claves = NOMBRE REAL DE COMPRA.
+  var rv2 = _recetaV2EtapaNivel(p, l && l.id, stageIdx);
+  if (rv2) return { src: rv2, usarTotalesPDF: true, deRecetaV2: true };
   var data = p && p.materiales && p.materiales.recetaPorTorreYNivel, per=null;
   if(data && t && l){
     var norm=function(s){return String(s||'').toUpperCase().trim();};
@@ -12715,6 +12739,8 @@ function _itemsYaPedidosEtapa(pedidos, levelId, stageIdx){
   (pedidos||[]).forEach(function(pd){
     if(pd && pd.esDeReceta && pd.recetaLevelId===levelId && pd.recetaEtapaIdx===stageIdx){
       Object.keys(pd.items||{}).forEach(function(k){ keys[k]=true; });
+      // v906: claves ORIGINALES de receta (los POSTES se guardan renombrados con su medida)
+      (pd.recetaKeys||[]).forEach(function(k){ keys[k]=true; });
     }
   });
   return keys;
@@ -28058,37 +28084,22 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys){
 
   const numAptos = (l.aptos || []).length;
 
-  // ── Buscar datos PER-NIVEL del PDF importado ──
-  // Si existen, los usamos como TOTALES directos del nivel (sin multiplicar
-  // por # aptos). Si no existen, fallback a la receta agregada × # aptos.
-  const _findPerNivelData = (towerName, levelName, idx) => {
-    const data = p.materiales && p.materiales.recetaPorTorreYNivel;
-    if (!data) return null;
-    const norm = s => String(s || '').toUpperCase().trim();
-    const num = s => { const m = String(s || '').match(/\d+/); return m ? parseInt(m[0]) : null; };
-    const tNorm = norm(towerName), tNum = num(towerName);
-    const lNorm = norm(levelName), lNum = num(levelName);
-    let torreKey = Object.keys(data).find(k => norm(k) === tNorm);
-    if (!torreKey && tNum != null) torreKey = Object.keys(data).find(k => num(k) === tNum);
-    if (!torreKey) return null;
-    const torreData = data[torreKey] || {};
-    let levelKey = Object.keys(torreData).find(k => norm(k) === lNorm);
-    if (!levelKey && lNum != null) levelKey = Object.keys(torreData).find(k => num(k) === lNum);
-    if (!levelKey) return null;
-    return (torreData[levelKey] && torreData[levelKey][idx]) || null;
-  };
-  const perNivelData = _findPerNivelData(t.name, l.name, stageIdx);
-  const usarTotalesPDF = !!perNivelData && Object.keys(perNivelData).length > 0;
-
-  const etapaReceta = usarTotalesPDF ? perNivelData : (p.materiales.receta[stageIdx] || {});
+  // v906: fuente de receta unificada con el selector (_recetaEtapaResuelta):
+  // 1) recetaV2 FORMATO ESTÁNDAR (totales por nivel, claves = NOMBRE REAL DE COMPRA),
+  // 2) PDF per-nivel, 3) receta clásica × # aptos.
+  const _R = _recetaEtapaResuelta(p, t, l, stageIdx);
+  const usarTotalesPDF = _R.usarTotalesPDF;
+  const etapaReceta = _R.src;
   if (Object.keys(etapaReceta).length === 0) return showToast('ESTA ETAPA NO TIENE RECETA DEFINIDA', 'red');
   if (!usarTotalesPDF && numAptos === 0) return showToast('EL NIVEL NO TIENE APTOS', 'red');
 
   // v699b: ya NO se bloquea la etapa completa. La dedup es por ÍTEM (se pueden pedir
   // los items que falten en otro pedido). Ver recetaDisponible más abajo.
 
-  // Etapa display name: usar labels del PDF si existen, sino fallback a ETAPAS_INFO
-  const etapaLabel = (Array.isArray(p.materiales.recetaEtapaLabels) && p.materiales.recetaEtapaLabels[stageIdx])
+  // Etapa display name: recetaV2 estándar → sus etapas; luego labels del PDF; luego ETAPAS_INFO
+  const etapaLabel = (_R.deRecetaV2 && p.materiales.recetaV2 && Array.isArray(p.materiales.recetaV2.etapas) && p.materiales.recetaV2.etapas[stageIdx])
+    ? p.materiales.recetaV2.etapas[stageIdx]
+    : (Array.isArray(p.materiales.recetaEtapaLabels) && p.materiales.recetaEtapaLabels[stageIdx])
     ? p.materiales.recetaEtapaLabels[stageIdx]
     : ((typeof ETAPAS_INFO !== 'undefined' && ETAPAS_INFO[stageIdx]) ? ETAPAS_INFO[stageIdx].name : `ETAPA ${stageIdx + 1}`);
   const etapaInfo = (typeof ETAPAS_INFO !== 'undefined' && ETAPAS_INFO[stageIdx]) ? ETAPAS_INFO[stageIdx] : { name: etapaLabel, pct: 0 };
@@ -28142,7 +28153,9 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys){
       itemsExcluidos,
       materiales: Object.entries(recetaDisponible).map(([key, qtyBase]) => {
         const parts = key.split('::');
-        const name = parts.length > 1 ? parts.slice(1).join('::') : key;
+        let name = parts.length > 1 ? parts.slice(1).join('::') : key;
+        // v906: mostrar en el modal la medida de postes que quedará en el pedido
+        if (typeof _nombreCompraConMedida === 'function') name = _nombreCompraConMedida(name, p);
         const qtyFinal = usarTotalesPDF ? qtyBase : qtyBase * numAptos;
         return { name, qtyBase, qtyFinal };
       })
@@ -28163,7 +28176,10 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys){
   // Si vienen de receta clásica → multiplicados por # aptos.
   const items = {};
   Object.entries(recetaDisponible).forEach(([key, qtyBase]) => {
-    items[key] = Math.ceil(usarTotalesPDF ? qtyBase : qtyBase * numAptos);
+    // v906: los POSTES salen con la medida del proyecto en el nombre (queda CONGELADA en este
+    // pedido; si la medida cambia después, los pedidos viejos no se tocan)
+    const finalKey = (typeof _nombreCompraConMedida === 'function') ? _nombreCompraConMedida(key, p) : key;
+    items[finalKey] = Math.ceil(usarTotalesPDF ? qtyBase : qtyBase * numAptos);
   });
 
   const pedido = {
@@ -28182,6 +28198,7 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys){
     specs: {},
     extras: [],
     metalMedida: [],
+    recetaKeys: Object.keys(recetaDisponible), // v906: claves originales (dedup aunque los postes se renombren)
     esDeReceta: true,
     recetaEtapaIdx: stageIdx,
     recetaLevelId: levelId,
@@ -28195,7 +28212,7 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys){
   // Marcar la etapa como PEDIDA sólo si ya no queda NINGÚN ítem de la etapa por pedir.
   if (!p.materiales.etapasPedidas) p.materiales.etapasPedidas = {};
   if (!p.materiales.etapasPedidas[levelId]) p.materiales.etapasPedidas[levelId] = [false,false,false,false,false,false];
-  const _todoPedido = Object.keys(recetaFiltrada).every(k => _yaPedidos[k] || items[k] != null);
+  const _todoPedido = Object.keys(recetaFiltrada).every(k => _yaPedidos[k] || recetaDisponible[k] != null); // v906: items puede venir renombrado (postes)
   p.materiales.etapasPedidas[levelId][stageIdx] = _todoPedido;
 
   logActivity('create', `Pedido ${numero} generado desde receta`, `${p.name} · ${t.name} ${l.name} · Etapa ${stageIdx+1}`);
