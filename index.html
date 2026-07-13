@@ -3041,7 +3041,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v903</span>
+    <span style="opacity:.5;font-size:9px">v904</span>
   </footer>
 
 </div>
@@ -13679,21 +13679,23 @@ function openPhotosModal(towerId, levelId, aptoId){
 }
 
 /* v903: AVANCE POR FOTOS — 2 fotos válidas en la etapa = cuadrito marcado SOLO (pedido del
-   user 13-jul: "que ya solo se tengan que subir las fotos"). Marca ÚNICAMENTE esa etapa (sin
-   cascada — desde v863 las fotos van en cualquier orden) y sella stagesTs (merge v900).
-   Devuelve: 'marcada' | 'falta1' (1 foto, pedir la 2ª) | 'ya' (ya estaba) | 'sin'. */
+   user 13-jul: "que ya solo se tengan que subir las fotos"). Sella stagesTs (merge v900).
+   v904: CASCADA HACIA ABAJO — cualquier foto (≥1) en la etapa N marca automáticamente las
+   etapas ANTERIORES sin marcar (evidencia de la superior ⇒ las de abajo ya se hicieron;
+   se acabaron los huecos tipo 1,2,4 marcadas y 3 no). NUNCA marca hacia arriba.
+   Devuelve { actual: 'marcada'|'falta1'|'ya'|'sin', inferiores: n }. */
 function _autoMarcarEtapaPorFotos(a, etapaIdx){
-  if (!a) return 'sin';
+  if (!a) return { actual:'sin', inferiores:0 };
   const fotos = (a.photos && Array.isArray(a.photos[etapaIdx])) ? a.photos[etapaIdx].filter(Boolean).length : 0;
   if (!Array.isArray(a.stages)) a.stages = [false,false,false,false,false,false];
-  if (a.stages[etapaIdx]) return 'ya';
-  if (fotos >= 2){
-    if (!Array.isArray(a.stagesTs)) a.stagesTs = [];
-    a.stagesTs[etapaIdx] = Date.now();
-    a.stages[etapaIdx] = true;
-    return 'marcada';
-  }
-  return fotos === 1 ? 'falta1' : 'sin';
+  const _sella = function(i){ if (!Array.isArray(a.stagesTs)) a.stagesTs = []; a.stagesTs[i] = Date.now(); a.stages[i] = true; };
+  let inferiores = 0;
+  if (fotos >= 1){ for (let i = 0; i < etapaIdx; i++){ if (!a.stages[i]){ _sella(i); inferiores++; } } }
+  let actual = 'sin';
+  if (a.stages[etapaIdx]) actual = 'ya';
+  else if (fotos >= 2){ _sella(etapaIdx); actual = 'marcada'; }
+  else if (fotos === 1) actual = 'falta1';
+  return { actual: actual, inferiores: inferiores };
 }
 /* v899: FOTOS "POR COMPARTIR" — marcador LOCAL por dispositivo (localStorage, NO se sincroniza:
    significa "este teléfono aún no confirmó que la nube recibió la referencia de la foto").
@@ -13753,7 +13755,7 @@ function renderPhotosModal(){
     else prevDone = _etapaLista(idx - 1);
     // v863: DESBLOQUEO TEMPORAL — el user pidió tomar fotos en CUALQUIER etapa sin el candado
     // secuencial. Mientras esté libre, prevDone=true para todas. Re-bloquear: window._PR_ETAPAS_LIBRES=false.
-    if (_fotosEtapasLibres()) prevDone = true;
+    if (_fotosEtapasLibres() && !_proyectoEtapasEnOrden(p)) prevDone = true; // v904: proyectos "en orden" respetan el candado secuencial
 
     const fotosValidas = photos.filter(Boolean);
     const minToComplete = 2;
@@ -13947,7 +13949,8 @@ async function openCameraModal(etapaIdx, slotIdx){
       else if(etapaIdx === 2) _prevDone = _ecS(0) && _ecS(1);
       else _prevDone = _ecS(etapaIdx - 1);
       // v863: el desbloqueo temporal (_fotosEtapasLibres) deja tomar fotos en cualquier etapa.
-      if (!_prevDone && !_fotosEtapasLibres()) return showToast('PRIMERO TERMINAR LAS ETAPAS PREVIAS (MÍNIMO 2 FOTOS C/U)', 'red');
+      // v904: salvo que el proyecto exija ORDEN (p.etapasEnOrden) — ahí manda el candado secuencial.
+      if (!_prevDone && !(_fotosEtapasLibres() && !_proyectoEtapasEnOrden(activeProj()))) return showToast('PRIMERO TERMINAR LAS ETAPAS PREVIAS (MÍNIMO 2 FOTOS C/U)', 'red');
     }
   } catch(e) {}
 
@@ -14644,8 +14647,8 @@ async function _uploadPhotoBlob(blob, etapaIdx, slotIdx){
     a.photoTs[etapaIdx][slotIdx] = Date.now(); // para reportes semanales
     a.photoHashes[etapaIdx][slotIdx] = hash;
     a.photoPHashes[etapaIdx][slotIdx] = pHash;
-    const _auto = (typeof _autoMarcarEtapaPorFotos === 'function') ? _autoMarcarEtapaPorFotos(a, etapaIdx) : 'sin'; // v903: 2 fotos = cuadrito solo
-    if (_auto === 'marcada') { try { logActivity('update', `Etapa marcada por fotos: ${l.name} · ${a.name}`, `${p.name} · ${ETAPAS[etapaIdx].name}`); } catch(e){} }
+    const _auto = (typeof _autoMarcarEtapaPorFotos === 'function') ? _autoMarcarEtapaPorFotos(a, etapaIdx) : { actual:'sin', inferiores:0 }; // v903/v904: fotos marcan + cascada hacia abajo
+    if (_auto.actual === 'marcada' || _auto.inferiores) { try { logActivity('update', `Etapa(s) marcada(s) por fotos: ${l.name} · ${a.name}`, `${p.name} · ${ETAPAS[etapaIdx].name}${_auto.inferiores ? ' (+' + _auto.inferiores + ' anteriores)' : ''}`); } catch(e){} }
     saveState();
     if (typeof _fotosPendAdd === 'function') _fotosPendAdd(url); // v899: chip POR COMPARTIR hasta que la nube confirme
 
@@ -14659,9 +14662,10 @@ async function _uploadPhotoBlob(blob, etapaIdx, slotIdx){
     let _nube = false;
     try { if (typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow) { await CloudSync.forceUploadNow(); _nube = true; } } catch(e2){ console.warn('[v899] confirmación de foto:', e2 && (e2.code || e2.message)); }
     let _msgOk = 'FOTO GUARDADA Y COMPARTIDA';
-    if (_auto === 'marcada') _msgOk = 'FOTO GUARDADA · ETAPA MARCADA AUTOMÁTICAMENTE'; // v903
-    else if (_auto === 'falta1') _msgOk = 'FOTO GUARDADA · FALTA LA 2ª FOTO PARA MARCAR LA ETAPA'; // v903
-    showToast(_nube ? _msgOk : 'FOTO GUARDADA EN ESTE TELÉFONO · SE COMPARTE AL RECUPERAR SEÑAL', _nube ? (_auto === 'falta1' ? 'amber' : 'green') : 'red');
+    if (_auto.actual === 'marcada') _msgOk = 'FOTO GUARDADA · ETAPA MARCADA AUTOMÁTICAMENTE' + (_auto.inferiores ? ' (Y LAS ANTERIORES)' : ''); // v903/v904
+    else if (_auto.actual === 'falta1') _msgOk = 'FOTO GUARDADA · ' + (_auto.inferiores ? 'ETAPAS ANTERIORES MARCADAS · ' : '') + 'FALTA LA 2ª FOTO PARA MARCAR LA ETAPA'; // v903/v904
+    else if (_auto.inferiores) _msgOk = 'FOTO GUARDADA · ETAPAS ANTERIORES MARCADAS AUTOMÁTICAMENTE'; // v904
+    showToast(_nube ? _msgOk : 'FOTO GUARDADA EN ESTE TELÉFONO · SE COMPARTE AL RECUPERAR SEÑAL', _nube ? (_auto.actual === 'falta1' ? 'amber' : 'green') : 'red');
   } catch(err) {
     console.error('Error subiendo foto:', err);
     showToast('ERROR AL SUBIR FOTO: ' + (err.code || err.message || 'desconocido'), 'red');
@@ -14701,8 +14705,8 @@ async function uploadPhoto(event, etapaIdx, slotIdx){
     if (!a.photoTs[etapaIdx]) a.photoTs[etapaIdx] = [null, null];
     a.photos[etapaIdx][slotIdx] = url;
     a.photoTs[etapaIdx][slotIdx] = Date.now(); // para reportes semanales
-    const _auto = (typeof _autoMarcarEtapaPorFotos === 'function') ? _autoMarcarEtapaPorFotos(a, etapaIdx) : 'sin'; // v903: 2 fotos = cuadrito solo
-    if (_auto === 'marcada') { try { logActivity('update', `Etapa marcada por fotos: ${l.name} · ${a.name}`, `${p.name} · ${ETAPAS[etapaIdx].name}`); } catch(e){} }
+    const _auto = (typeof _autoMarcarEtapaPorFotos === 'function') ? _autoMarcarEtapaPorFotos(a, etapaIdx) : { actual:'sin', inferiores:0 }; // v903/v904: fotos marcan + cascada hacia abajo
+    if (_auto.actual === 'marcada' || _auto.inferiores) { try { logActivity('update', `Etapa(s) marcada(s) por fotos: ${l.name} · ${a.name}`, `${p.name} · ${ETAPAS[etapaIdx].name}${_auto.inferiores ? ' (+' + _auto.inferiores + ' anteriores)' : ''}`); } catch(e){} }
     saveState();
     if (typeof _fotosPendAdd === 'function') _fotosPendAdd(url); // v899: chip POR COMPARTIR hasta que la nube confirme
 
@@ -14714,9 +14718,10 @@ async function uploadPhoto(event, etapaIdx, slotIdx){
     let _nube = false;
     try { if (typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow) { await CloudSync.forceUploadNow(); _nube = true; } } catch(e2){ console.warn('[v899] confirmación de foto:', e2 && (e2.code || e2.message)); }
     let _msgOk = 'FOTO GUARDADA Y COMPARTIDA';
-    if (_auto === 'marcada') _msgOk = 'FOTO GUARDADA · ETAPA MARCADA AUTOMÁTICAMENTE'; // v903
-    else if (_auto === 'falta1') _msgOk = 'FOTO GUARDADA · FALTA LA 2ª FOTO PARA MARCAR LA ETAPA'; // v903
-    showToast(_nube ? _msgOk : 'FOTO GUARDADA EN ESTE TELÉFONO · SE COMPARTE AL RECUPERAR SEÑAL', _nube ? (_auto === 'falta1' ? 'amber' : 'green') : 'red');
+    if (_auto.actual === 'marcada') _msgOk = 'FOTO GUARDADA · ETAPA MARCADA AUTOMÁTICAMENTE' + (_auto.inferiores ? ' (Y LAS ANTERIORES)' : ''); // v903/v904
+    else if (_auto.actual === 'falta1') _msgOk = 'FOTO GUARDADA · ' + (_auto.inferiores ? 'ETAPAS ANTERIORES MARCADAS · ' : '') + 'FALTA LA 2ª FOTO PARA MARCAR LA ETAPA'; // v903/v904
+    else if (_auto.inferiores) _msgOk = 'FOTO GUARDADA · ETAPAS ANTERIORES MARCADAS AUTOMÁTICAMENTE'; // v904
+    showToast(_nube ? _msgOk : 'FOTO GUARDADA EN ESTE TELÉFONO · SE COMPARTE AL RECUPERAR SEÑAL', _nube ? (_auto.actual === 'falta1' ? 'amber' : 'green') : 'red');
   } catch(err) {
     console.error(err);
     showToast('ERROR AL SUBIR FOTO: ' + (err.code || err.message || 'desconocido'), 'red');
@@ -14784,6 +14789,11 @@ async function deletePhoto(etapaIdx, slotIdx){
 // Default ON (libre). Para volver al candado secuencial: en consola window._PR_ETAPAS_LIBRES = false
 // (por dispositivo) o revertir las líneas marcadas "v863" (re-bloqueo global). NO afecta el marcado
 // de etapas como completas, solo la toma de fotos.
+// v904: candado SECUENCIAL por proyecto (pedido 13-jul, proyectos nuevos tipo VLA): con
+// p.etapasEnOrden === true las fotos respetan el orden v291 (etapas 1-2 libres, 3+ bloqueadas
+// hasta completar las anteriores). Los proyectos existentes siguen libres (v863). Los
+// proyectos NUEVOS nacen con etapasEnOrden:true; activar en uno existente = consola.
+function _proyectoEtapasEnOrden(p){ return !!(p && p.etapasEnOrden === true); }
 function _fotosEtapasLibres(){
   try { return (typeof window === 'undefined') || window._PR_ETAPAS_LIBRES !== false; }
   catch(e){ return true; }
@@ -14809,7 +14819,8 @@ window.tomarFotoAvance = async function(etapaIdx){
   else if(etapaIdx === 2) _prevDone = _ecS(0) && _ecS(1);
   else _prevDone = _ecS(etapaIdx - 1);
   // v863: el desbloqueo temporal (_fotosEtapasLibres) deja tomar fotos en cualquier etapa.
-  if (!_prevDone && !_fotosEtapasLibres()) return showToast('PRIMERO TERMINAR LAS ETAPAS PREVIAS (MÍNIMO 2 FOTOS C/U)', 'red');
+  // v904: salvo que el proyecto exija ORDEN (p.etapasEnOrden) — ahí manda el candado secuencial.
+  if (!_prevDone && !(_fotosEtapasLibres() && !_proyectoEtapasEnOrden(activeProj()))) return showToast('PRIMERO TERMINAR LAS ETAPAS PREVIAS (MÍNIMO 2 FOTOS C/U)', 'red');
 
   let input = document.getElementById('prNativeCameraInput');
   if(input) input.remove();
@@ -14995,8 +15006,8 @@ async function _uploadPhotoBlobPush(file, etapaIdx){
   a.photoTs[etapaIdx].push(Date.now());
   a.photoHashes[etapaIdx].push(hash);
   a.photoPHashes[etapaIdx].push(pHash);
-  const _auto = (typeof _autoMarcarEtapaPorFotos === 'function') ? _autoMarcarEtapaPorFotos(a, etapaIdx) : 'sin'; // v903: 2 fotos = cuadrito solo
-  if (_auto === 'marcada') { try { logActivity('update', `Etapa marcada por fotos: ${l.name} · ${a.name}`, `${p.name} · ${ETAPAS[etapaIdx].name}`); } catch(e){} }
+  const _auto = (typeof _autoMarcarEtapaPorFotos === 'function') ? _autoMarcarEtapaPorFotos(a, etapaIdx) : { actual:'sin', inferiores:0 }; // v903/v904: fotos marcan + cascada hacia abajo
+  if (_auto.actual === 'marcada' || _auto.inferiores) { try { logActivity('update', `Etapa(s) marcada(s) por fotos: ${l.name} · ${a.name}`, `${p.name} · ${ETAPAS[etapaIdx].name}${_auto.inferiores ? ' (+' + _auto.inferiores + ' anteriores)' : ''}`); } catch(e){} }
   saveState();
   if (typeof _fotosPendAdd === 'function') _fotosPendAdd(url); // v899: chip POR COMPARTIR hasta que la nube confirme
 
@@ -15010,9 +15021,10 @@ async function _uploadPhotoBlobPush(file, etapaIdx){
   let _nube = false;
   try { if (typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow) { await CloudSync.forceUploadNow(); _nube = true; } } catch(e2){ console.warn('[v899] confirmación de foto:', e2 && (e2.code || e2.message)); }
   let _msgOk = 'FOTO GUARDADA Y COMPARTIDA';
-  if (_auto === 'marcada') _msgOk = 'FOTO GUARDADA · ETAPA MARCADA AUTOMÁTICAMENTE'; // v903
-  else if (_auto === 'falta1') _msgOk = 'FOTO GUARDADA · FALTA LA 2ª FOTO PARA MARCAR LA ETAPA'; // v903
-  showToast(_nube ? _msgOk : 'FOTO GUARDADA EN ESTE TELÉFONO · SE COMPARTE AL RECUPERAR SEÑAL', _nube ? (_auto === 'falta1' ? 'amber' : 'green') : 'red');
+  if (_auto.actual === 'marcada') _msgOk = 'FOTO GUARDADA · ETAPA MARCADA AUTOMÁTICAMENTE' + (_auto.inferiores ? ' (Y LAS ANTERIORES)' : ''); // v903/v904
+  else if (_auto.actual === 'falta1') _msgOk = 'FOTO GUARDADA · ' + (_auto.inferiores ? 'ETAPAS ANTERIORES MARCADAS · ' : '') + 'FALTA LA 2ª FOTO PARA MARCAR LA ETAPA'; // v903/v904
+  else if (_auto.inferiores) _msgOk = 'FOTO GUARDADA · ETAPAS ANTERIORES MARCADAS AUTOMÁTICAMENTE'; // v904
+  showToast(_nube ? _msgOk : 'FOTO GUARDADA EN ESTE TELÉFONO · SE COMPARTE AL RECUPERAR SEÑAL', _nube ? (_auto.actual === 'falta1' ? 'amber' : 'green') : 'red');
 }
 
 /* Visor de fotos mejorado:
@@ -22970,6 +22982,7 @@ function createProject(){
     ivaPct: iva, anticipoPct: antic, amortPct: amort, retencionPct: ret, descuentoAutorizado: descuento, diasPagoFactura: diasPago,
     totalSinIva: totalSI, totalConIva: totalCI, totalAmount: totalCI,
     towers: [],
+    etapasEnOrden: true, // v904: los proyectos nuevos nacen con el avance físico EN ORDEN
     cobro: { rows: totalSI > 0 ? [{id:uid(),f:'',d:'ANTICIPO '+Math.round(antic*100)+'%',vp_si:totalSI*antic,sf:'EMITIDA',sc:'PENDIENTE',fp:'',isAnticipo:true}] : [] },
     materiales: { items: [], pedidos: [], pedidoCounter: 0, ordenes: [], ordenCounter: 0, proveedores: [], direccionesEntrega: [], receta: [{},{},{},{},{},{}], etapasPedidas: {} },
     personal: { colaboradores: [], asistencia: {} }

@@ -26,9 +26,10 @@ if (src) {
   ok('flag ausente → libre por defecto (true)', fnUndef() === true);
 }
 
-// ── estructural: los DOS candados de fotos respetan el desbloqueo ──
-ok('render fuerza prevDone cuando está libre', html.indexOf('if (_fotosEtapasLibres()) prevDone = true;') >= 0);
-ok('tomarFotoAvance respeta el desbloqueo', html.indexOf('!_prevDone && !_fotosEtapasLibres()') >= 0);
+// ── estructural: los candados de fotos respetan el desbloqueo ──
+// v904: el desbloqueo libre sigue vivo, pero condicionado a que el proyecto NO exija orden (p.etapasEnOrden)
+ok('render fuerza prevDone cuando está libre (y el proyecto no exige orden)', html.indexOf('if (_fotosEtapasLibres() && !_proyectoEtapasEnOrden(p)) prevDone = true;') >= 0);
+ok('tomarFotoAvance respeta el desbloqueo (y el orden por proyecto)', html.indexOf('!_prevDone && !(_fotosEtapasLibres() && !_proyectoEtapasEnOrden(activeProj()))') >= 0);
 
 // ── seguridad de alcance: NO se tocó el guard de 2 fotos para tomarFotoAvance (sigue existiendo
 //    la verificación; solo se condiciona al candado secuencial, no se elimina) ──
