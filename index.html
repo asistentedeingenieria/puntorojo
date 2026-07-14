@@ -3032,7 +3032,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v921</span>
+    <span style="opacity:.5;font-size:9px">v922</span>
   </footer>
 
 </div>
@@ -18113,7 +18113,7 @@ function renderOcItems(){
     const key = it.proveedorId || OC_NO_PROVIDER;
     if (!groups[key]) groups[key] = { count:0, total:0, nombre: key === OC_NO_PROVIDER ? 'SIN PROVEEDOR' : (key === '_bodega' ? 'BODEGA CENTRAL (DESPACHO)' : ((proveedores.find(pv => pv.id === key)||{}).nombre || 'PROVEEDOR')) };
     groups[key].count += 1;
-    groups[key].total += (Number(it.qty)||0) * (Number(it.precio)||0) * 1.12;
+    groups[key].total += (Number(it.qty)||0) * (Number(it.precio)||0); // v922: precios con IVA incluido
   });
 
   let html = `<div class="oc-multi-summary">
@@ -18187,14 +18187,21 @@ async function _promoverEventual(idx){
   showToast('SOLICITUD DE ALTA ENVIADA','green');
 }
 
+// v922: los precios YA INCLUYEN IVA (decisión de Antonio) — el total es la suma directa
+// qty×precio; el desglose es informativo: base = total/1.12, IVA = total − base. PURA.
+function _ocTotalesIvaIncluido(items){
+  const total = (items || []).reduce((s, it) => s + ((Number(it.qty) || 0) * (Number(it.precio) || 0)), 0);
+  const subtotal = total / 1.12;
+  return { total, subtotal, ivaMonto: total - subtotal };
+}
+
 function updateOcTotal(){
-  const subtotal = ocWorkingItems.reduce((s,it) => s + (it.qty * (it.precio || 0)), 0);
-  const iva = subtotal * 0.12;
-  const total = subtotal + iva;
+  // v922: precios CON IVA — el 12% ya viene adentro, no se suma encima
+  const { total } = _ocTotalesIvaIncluido(ocWorkingItems);
   const totalEl = document.getElementById('ocTotalVal');
   const letrasEl = document.getElementById('ocTotalLetras');
   if (totalEl) totalEl.textContent = 'Q ' + fmtQ(total);
-  if (letrasEl) letrasEl.textContent = total > 0 ? 'TOTAL EN LETRAS: ' + numeroALetras(total).toUpperCase() : '';
+  if (letrasEl) letrasEl.textContent = total > 0 ? 'TOTAL EN LETRAS: ' + numeroALetras(total).toUpperCase() + ' · IVA INCLUIDO' : '';
 }
 
 /* Convierte número a letras en español (hasta 999 millones) */
@@ -18467,9 +18474,8 @@ async function generarOrdenCompra(){
     const prov = esBodega ? { id: '_bodega', nombre: 'BODEGA CENTRAL' } : _getProveedores().find(x => x.id === provId);
     if (!prov) return;
     const items = groups[provId];
-    const subtotal = items.reduce((s,it) => s + ((Number(it.qty)||0) * (Number(it.precio)||0)), 0);
-    const ivaMonto = subtotal * 0.12;
-    const total = subtotal + ivaMonto;
+    // v922: precios CON IVA — total = suma directa; el desglose (base/IVA) es informativo
+    const { total, subtotal, ivaMonto } = _ocTotalesIvaIncluido(items);
 
     p.materiales.ordenCounter = (p.materiales.ordenCounter || 0) + 1;
     const folio = p.materiales.ordenCounter;
@@ -18495,6 +18501,7 @@ async function generarOrdenCompra(){
       items: items.map(it => ({ name: it.name, qty: it.qty, precio: it.precio || 0, sourceKey: it.sourceKey || '', cat: it.cat || '', eventual: it.eventual || false })),
       subtotal,
       ivaPct: 0.12,
+      ivaIncluido: true, // v922: el total es suma directa (los precios ya traen el IVA)
       ivaMonto,
       total,
       totalLetras: numeroALetras(total).toUpperCase(),
@@ -18878,11 +18885,11 @@ ${!showDraft ? '<button class="btn-print no-print" onclick="window.print()">IMPR
     <tbody>
       ${itemsHtml}
       ${esDespacho ? '' : `<tr class="oc-iva-tr">
-        <td style="border:1px solid #888;text-align:right;padding:8px 14px" colspan="3">SUBTOTAL</td>
+        <td style="border:1px solid #888;text-align:right;padding:8px 14px" colspan="3">SUBTOTAL${oc.ivaIncluido ? ' (SIN IVA)' : ''}</td>
         <td style="border:1px solid #888;text-align:right;padding:8px 14px;white-space:nowrap">Q ${fmtQ(oc.subtotal || (oc.total / 1.12))}</td>
       </tr>
       <tr class="oc-iva-tr">
-        <td style="border:1px solid #888;text-align:right;padding:8px 14px" colspan="3">IVA 12%</td>
+        <td style="border:1px solid #888;text-align:right;padding:8px 14px" colspan="3">IVA 12%${oc.ivaIncluido ? ' (INCLUIDO)' : ''}</td>
         <td style="border:1px solid #888;text-align:right;padding:8px 14px;white-space:nowrap">Q ${fmtQ(oc.ivaMonto || (oc.total - (oc.total / 1.12)))}</td>
       </tr>
       <tr class="oc-total-tr">
