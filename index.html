@@ -2714,7 +2714,7 @@ table{max-width:100%}
       <div class="mat-tabs">
         <button class="mat-tab active" data-mattab="receta" onclick="setMatTab('receta')">RECETA DE MATERIAL</button>
         <button class="mat-tab" data-mattab="pedidos" onclick="setMatTab('pedidos')">PEDIDOS DE MATERIAL</button>
-        <button class="mat-tab" data-mattab="ordenes" onclick="setMatTab('ordenes')" data-perm="compras.autorizar">ÓRDENES DE COMPRA<span id="tabBadge-ordenes"></span></button>
+        <button class="mat-tab" data-mattab="ordenes" onclick="setMatTab('ordenes')" data-perm="compras.autorizar|compras.revisar">ÓRDENES DE COMPRA<span id="tabBadge-ordenes"></span></button>
         <button class="mat-tab" data-mattab="inventario" onclick="setMatTab('inventario')">INVENTARIOS</button>
         <button class="mat-tab" data-mattab="avanceapto" onclick="setMatTab('avanceapto')">AVANCE POR APARTAMENTO</button>
       </div>
@@ -3031,7 +3031,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v918</span>
+    <span style="opacity:.5;font-size:9px">v919</span>
   </footer>
 
 </div>
@@ -4587,7 +4587,8 @@ const PERMS_DISPONIBLES = [
   { key: 'pedidos.advance',  label: 'Aprobar/procesar pedidos (oficina)', group: 'EDICIÓN MATERIALES' },
   { key: 'pedidos.receive',  label: 'Confirmar recibido (supervisor)',    group: 'EDICIÓN MATERIALES' },
   { key: 'receta.edit',      label: 'Editar receta de materiales por etapa',  group: 'EDICIÓN MATERIALES' },
-  { key: 'compras.autorizar',label: 'Autorizar Órdenes de Compra (Finanzas)',  group: 'EDICIÓN MATERIALES' },
+  { key: 'compras.autorizar',label: 'Generar y gestionar Órdenes de Compra (Compras)',  group: 'EDICIÓN MATERIALES' },
+  { key: 'compras.revisar',  label: 'Revisar y autorizar OC (visto bueno + firma digital)', group: 'EDICIÓN MATERIALES' },
   { key: 'precios.autorizar', label: 'Autorizar cambios de precio del catálogo', group: 'EDICIÓN MATERIALES' },
   { key: 'precios.proponer', label: 'Ver catálogo de precios y proponer cambios', group: 'EDICIÓN MATERIALES' },
   { key: 'personal.add',     label: 'Agregar nuevos colaboradores', group: 'EDICIÓN PERSONAL' },
@@ -5564,7 +5565,8 @@ function applyPermissions(){
   // comportamiento legacy de .locked + disabled.
   document.querySelectorAll('[data-perm]').forEach(el => {
     const p = el.getAttribute('data-perm');
-    const allowed = can(p);
+    // v919: data-perm="a|b" = visible con CUALQUIERA de los permisos
+    const allowed = String(p || '').split('|').some(x => can(x.trim()));
     const keepVisible = el.getAttribute('data-perm-keep') === '1';
     if (keepVisible) {
       el.disabled = !allowed;
@@ -18466,7 +18468,9 @@ async function generarOrdenCompra(){
       ivaMonto,
       total,
       totalLetras: numeroALetras(total).toUpperCase(),
-      generadoPor: 'SUSANA MONROY',
+      // v919: quién generó de verdad (separación de funciones: no puede autorizar la suya)
+      generadoPor: String((getCurrentUser() || {}).displayName || (getCurrentUser() || {}).username || 'COMPRAS').toUpperCase(),
+      generadoPorUsername: String((getCurrentUser() || {}).username || '').toLowerCase(),
       generadoTs: Date.now(),
       autorizadoPor: '',
       autorizadoTs: null,
@@ -18498,6 +18502,16 @@ async function generarOrdenCompra(){
       p.materiales.ocProvPorItem[_ocItemMemKey(it.name)] = it.proveedorId;
     });
   }
+
+  // v919: avisar al REVISOR que hay OC(s) pendientes de visto bueno y firma
+  try {
+    if (typeof window.prAddNotif === 'function') window.prAddNotif({
+      toPerms: ['compras.revisar'],
+      title: `OC${created.length !== 1 ? 's' : ''} PENDIENTE${created.length !== 1 ? 'S' : ''} DE AUTORIZAR`,
+      body: created.map(o => o.numero).join(' · ') + ` — ${p.name}. Revisá, dá el visto bueno y firmá para que compras pueda enviarla al proveedor.`,
+      type: 'oc.porAutorizar'
+    });
+  } catch (e) {}
 
   if (pd.status === 'SOLICITADO') {
     pd.status = 'APROBADO';
@@ -18853,15 +18867,17 @@ ${!showDraft ? '<button class="btn-print no-print" onclick="window.print()">IMPR
 
   <div class="oc-firmas">
     <div class="oc-firma">
-      <div class="firma-script">Susana Monroy</div>
-      <div class="nombre">SUSANA MONROY</div>
-      <div class="cargo">DEPTO. DE COMPRAS</div>
+      <!-- v919: firma de quien GENERÓ la OC (usuario real, ya no hardcodeada) -->
+      <div class="firma-script">${oc.generadoPor || 'Depto. de Compras'}</div>
+      <div class="nombre">${String(oc.generadoPor || 'DEPTO. DE COMPRAS').toUpperCase()}</div>
+      <div class="cargo">GENERADO POR — DEPTO. DE COMPRAS</div>
     </div>
     <div class="oc-firma" style="position:relative">
       ${oc.autorizadoPor ? `
-        <div class="firma-script">${oc.firmaDigital || 'Erlin Karina Trigueros'}</div>
-        <div class="nombre">ERLIN KARINA TRIGUEROS</div>
-        <div class="cargo">AUTORIZADO POR — DEPTO. FINANZAS</div>
+        <div class="firma-script">${oc.firmaDigital || oc.autorizadoPor}</div>
+        <div class="nombre">${String(oc.autorizadoPor).toUpperCase()}</div>
+        <div class="cargo">AUTORIZADO POR — REVISIÓN Y VISTO BUENO</div>
+        ${oc.selloDigital ? `<div style="font-size:8px;color:#555;margin-top:3px;letter-spacing:.5px">${oc.selloDigital}</div>` : ''}
         <div class="oc-auth-seal-bottom">
           <div class="seal-check">✓</div>
           <div class="seal-lbl">AUTORIZADO</div>
@@ -18870,7 +18886,7 @@ ${!showDraft ? '<button class="btn-print no-print" onclick="window.print()">IMPR
       ` : `
         <div style="height:28px"></div>
         <div class="nombre" style="color:#999">_______________________________</div>
-        <div class="cargo">PENDIENTE DE AUTORIZACIÓN — DEPTO. FINANZAS</div>
+        <div class="cargo">PENDIENTE DE AUTORIZACIÓN — REVISIÓN Y VISTO BUENO</div>
       `}
     </div>
   </div>
@@ -18914,11 +18930,13 @@ function renderOrdenesList(){
     return;
   }
 
-  // OC: TODO gateado por 'compras.autorizar' (o admin). Quien no tiene este
-  // permiso ni siquiera ve la pestaña — esta lista solo se renderiza si llegó
-  // hasta acá, así que ya cumple el permiso.
+  // v919: separación de funciones — COMPRAS (compras.autorizar) genera, gestiona y
+  // envía al proveedor; el REVISOR (compras.revisar) da el visto bueno y firma.
+  // La pestaña la ven ambos (data-perm con |). Admin puede todo.
   const canDelete = can('compras.autorizar') || can('users.manage');
-  const canAuthorize = can('compras.autorizar') || can('users.manage');
+  const canAuthorize = can('compras.revisar') || can('users.manage');
+  const _esAdminOC = can('users.manage');
+  const _userOC = String(((typeof getCurrentUser === 'function' && getCurrentUser()) || {}).username || '').toLowerCase();
 
   cont.innerHTML = ordenes.map(oc => {
     const st = oc.status || 'AUTORIZADA'; // fallback para OCs antiguas
@@ -18940,9 +18958,13 @@ function renderOrdenesList(){
       ? `<button class="btn sm" onclick="printOrdenCompra('${oc.id}')" title="Imprimir orden autorizada">IMPRIMIR</button>`
       : `<button class="btn ghost sm" disabled title="Necesita autorización de finanzas" style="opacity:.5;cursor:not-allowed">IMPRIMIR</button>`;
 
-    const authBtn = (isPending && canAuthorize)
-      ? `<button class="btn sm" onclick="autorizarOrden('${oc.id}')" style="background:var(--red-dark);border-color:var(--red-dark)" title="Autorizar como Finanzas">AUTORIZAR</button>`
-      : '';
+    // v919: quien generó la OC no puede autorizarla (control interno); admin exento
+    const _ocPropia = !_esAdminOC && oc.generadoPorUsername && oc.generadoPorUsername === _userOC;
+    const authBtn = (isPending && canAuthorize && !_ocPropia)
+      ? `<button class="btn sm" onclick="autorizarOrden('${oc.id}')" style="background:var(--red-dark);border-color:var(--red-dark)" title="Revisar, dar visto bueno y firmar digitalmente">AUTORIZAR</button>`
+      : (isPending && canAuthorize && _ocPropia
+        ? `<button class="btn ghost sm" disabled style="opacity:.5;cursor:not-allowed" title="Esta OC la generaste vos — la debe autorizar otra persona">AUTORIZAR</button>`
+        : '');
 
     const viewBtn = isPending
       ? `<button class="btn ghost sm" onclick="previewOrden('${oc.id}')" title="Ver borrador">VER BORRADOR</button>`
@@ -18977,12 +18999,21 @@ function renderOrdenesList(){
 }
 
 async function autorizarOrden(id){
-  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SIN PERMISO DE FINANZAS', 'red');
+  // v919: autoriza el REVISOR (compras.revisar) — compras genera pero no autoriza
+  if (!can('compras.revisar') && !can('users.manage')) return showToast('SOLO EL REVISOR AUTORIZADO PUEDE DAR EL VISTO BUENO Y FIRMAR', 'red');
   const p = activeProj();
   const oc = (p.materiales.ordenes || []).find(x => x.id === id);
   if (!oc) return;
 
   if (oc.status === 'AUTORIZADA') return showToast('YA ESTÁ AUTORIZADA', 'amber');
+
+  // v919: quien generó la OC no puede autorizarla (control interno). Admin exento.
+  if (!can('users.manage')) {
+    const _uSep = String(((typeof getCurrentUser === 'function' && getCurrentUser()) || {}).username || '').toLowerCase();
+    if (oc.generadoPorUsername && oc.generadoPorUsername === _uSep) {
+      return showToast('ESTA OC LA GENERASTE VOS — LA DEBE AUTORIZAR OTRA PERSONA', 'red');
+    }
+  }
 
   // v314: nombre del autorizador real (admin o Erlin), no hardcoded.
   const _u = (typeof getCurrentUser === 'function') ? getCurrentUser() : null;
@@ -19002,28 +19033,21 @@ async function autorizarOrden(id){
         <div style="padding-top:6px;border-top:1px solid #E5E5E5;color:#666">Autorizada por</div>
         <div style="padding-top:6px;border-top:1px solid #E5E5E5;font-weight:700;color:#1a1a1a">${escOc(_autorizadorDefault)}</div>
        </div>
-       <div style="margin-top:12px;font-size:11.5px;color:#7C5800;background:#FFF8E1;padding:10px 12px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.5">Al autorizar, la orden queda lista para <strong>imprimir y enviar al proveedor</strong>.</div>`,
-    okText: 'AUTORIZAR',
+       <div style="margin-top:12px;font-size:11.5px;color:#7C5800;background:#FFF8E1;padding:10px 12px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.5">Al autorizar queda estampado tu <strong>sello digital</strong> (nombre + fecha y hora) y <strong>compras recibe el aviso</strong> para imprimirla y enviarla al proveedor.</div>`,
+    okText: 'FIRMAR Y AUTORIZAR',
     cancelText: 'CANCELAR'
   });
   if (!_okAutOc) return;
 
-  // Firma digital — se sugiere el nombre real del autorizador
-  const _firma = await window.prPrompt({
-    title: 'FIRMA DIGITAL',
-    body: 'Texto que aparecerá como firma en la orden impresa.',
-    defaultValue: _firmaDefault,
-    placeholder: _firmaDefault,
-    okText: 'FIRMAR Y AUTORIZAR',
-    cancelText: 'CANCELAR',
-    required: false
-  });
-  if (_firma === null) return;
+  // v919: SELLO DIGITAL automático — nombre + fecha y hora quedan estampados en la OC
+  const _ahora = new Date();
+  const _selloHora = `${String(_ahora.getDate()).padStart(2,'0')}/${String(_ahora.getMonth()+1).padStart(2,'0')}/${_ahora.getFullYear()} ${String(_ahora.getHours()).padStart(2,'0')}:${String(_ahora.getMinutes()).padStart(2,'0')}`;
 
   oc.status = 'AUTORIZADA';
   oc.autorizadoPor = _autorizadorDefault;
   oc.autorizadoTs = Date.now();
-  oc.firmaDigital = String(_firma || _firmaDefault).trim() || _firmaDefault;
+  oc.firmaDigital = _firmaDefault;
+  oc.selloDigital = `AUTORIZADO DIGITALMENTE POR ${_autorizadorDefault} · ${_selloHora}`;
 
   // Notificar al solicitante del pedido original. Si todas las OC están autorizadas, ya puede marcar recibido.
   if (oc.pedidoId) {
@@ -19043,6 +19067,16 @@ async function autorizarOrden(id){
       });
     }
   }
+
+  // v919: avisar a COMPRAS que la OC quedó autorizada y ya puede pasarla al proveedor
+  try {
+    if (typeof window.prAddNotif === 'function') window.prAddNotif({
+      toPerms: ['compras.autorizar'],
+      title: `OC ${oc.numero} AUTORIZADA`,
+      body: `${_autorizadorDefault} dio el visto bueno y firmó digitalmente. Ya se puede imprimir y enviar al proveedor (${oc.proveedorNombre || '—'}).`,
+      type: 'oc.autorizada'
+    });
+  } catch (e) {}
 
   logActivity('auth', `OC No. ${oc.numero} AUTORIZADA por Finanzas`, `${p.name} · ${oc.proveedorNombre} · Q ${fmtQ(oc.total)} · ${oc.autorizadoPor}`);
   saveState();
