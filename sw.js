@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v915-fecha-entrega-obligatoria-en-pedidos';
+const CACHE_VERSION = 'v916-proveedor-recordado-en-oc-de-receta';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

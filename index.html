@@ -3031,7 +3031,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v915</span>
+    <span style="opacity:.5;font-size:9px">v916</span>
   </footer>
 
 </div>
@@ -17900,6 +17900,14 @@ function _ocMedidaEspecialMetros(name){
   return m ? Number(m[1]) : null;
 }
 
+// v916: clave de memoria proveedor-por-material — ignora el sufijo de medida especial
+// (y el largo en pies que la medida reescribe) para sobrevivir cambios de medida.
+function _ocItemMemKey(name){
+  return normOcName(String(name == null ? '' : name)
+    .replace(/\s*\(MEDIDA ESPECIAL[^)]*\)/i, '')
+    .replace(/X\s*[\d.]+\s*'/i, "X 10'"));
+}
+
 function buildPedidoOcItems(pd){
   const arr = [];
   const specs = pd.specs || {};
@@ -17921,9 +17929,12 @@ function buildPedidoOcItems(pd){
   return arr;
 }
 
-function autoAssignOcProviders(){
+function autoAssignOcProviders(pd){
   const _p = activeProj();
   const _memPostes = (_p && _p.materiales && _p.materiales.postesPrecioMedida) || {};
+  // v916: memoria proveedor-por-material (solo pedidos DE RECETA — la primera OC enseña)
+  const _memProv = (_p && _p.materiales && _p.materiales.ocProvPorItem) || {};
+  const _esReceta = !!(pd && pd.esDeReceta);
   ocWorkingItems.forEach(it => {
     const best = findBestProviderForItem(it.name);
     if (best) {
@@ -17933,6 +17944,23 @@ function autoAssignOcProviders(){
     }
     // v_pcat: marcar como EVENTUAL los items sin match en el catálogo de precios
     it.eventual = !best;
+    // v916: sin match de catálogo, en pedidos de receta pre-seleccionar el proveedor
+    // que se usó la última vez para ESTE material (precio del catálogo de ese
+    // proveedor si existe; si no, queda para digitación como siempre).
+    if (!best && _esReceta) {
+      const _provId = _memProv[_ocItemMemKey(it.name)];
+      const _prov = _provId ? _getProveedores().find(x => x.id === _provId) : null;
+      if (_prov) {
+        it.proveedorId = _prov.id;
+        it.eventual = false;
+        it.provRecordado = true;
+        const _prod = findCatalogProductForProvider(it.name, _prov);
+        if (_prod && Number(_prod.precio) > 0 && !(Number(it.precio) > 0)) {
+          it.precio = Number(_prod.precio);
+          it.autoAssigned = true;
+        }
+      }
+    }
     // v909: postes a medida = fabricación → precio manual; pre-llenar el último precio
     // usado para esa medida (siempre editable).
     const _mts = _ocMedidaEspecialMetros(it.name);
@@ -18008,7 +18036,7 @@ async function openOrdenCompra(){
   }
 
   ocWorkingItems = buildPedidoOcItems(pd);
-  autoAssignOcProviders();
+  autoAssignOcProviders(pd); // v916: pedidos de receta traen su proveedor recordado
   renderOcItems();
   document.getElementById('ocFormaPago').selectedIndex = 0;
 
@@ -18055,7 +18083,7 @@ function renderOcItems(){
 
   html += ocWorkingItems.map((it, idx) => `
     <div class="oc-item-row multi${!it.proveedorId ? ' oc-row-warn' : ''}">
-      <div class="oc-name">${it.name}${it.aMedida ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#DBEAFE;color:#1D4ED8;margin-left:6px">A MEDIDA · PRECIO MANUAL</span>' + (it.precioRecordado ? '<div style="font-size:8px;color:var(--mute);letter-spacing:.5px;margin-top:2px">ÚLTIMO PRECIO USADO — VERIFICALO</div>' : '') : (it.eventual ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#FEF3C7;color:#92400E;margin-left:6px">EVENTUAL</span><button type="button" onclick="_promoverEventual(' + idx + ')" style="background:none;border:none;color:var(--cafe);font-size:9px;font-weight:700;letter-spacing:.3px;cursor:pointer;text-decoration:underline;padding:0;margin-left:6px">PROMOVER AL CATÁLOGO</button>' : '')}${it.autoAssigned ? '<div style="font-size:8px;color:var(--red-dark);letter-spacing:1px;margin-top:2px">ASIGNADO POR CATÁLOGO</div>' : ''}</div>
+      <div class="oc-name">${it.name}${it.aMedida ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#DBEAFE;color:#1D4ED8;margin-left:6px">A MEDIDA · PRECIO MANUAL</span>' + (it.precioRecordado ? '<div style="font-size:8px;color:var(--mute);letter-spacing:.5px;margin-top:2px">ÚLTIMO PRECIO USADO — VERIFICALO</div>' : '') : (it.eventual ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#FEF3C7;color:#92400E;margin-left:6px">EVENTUAL</span><button type="button" onclick="_promoverEventual(' + idx + ')" style="background:none;border:none;color:var(--cafe);font-size:9px;font-weight:700;letter-spacing:.3px;cursor:pointer;text-decoration:underline;padding:0;margin-left:6px">PROMOVER AL CATÁLOGO</button>' : '')}${it.autoAssigned ? '<div style="font-size:8px;color:var(--red-dark);letter-spacing:1px;margin-top:2px">ASIGNADO POR CATÁLOGO</div>' : ''}${it.provRecordado ? '<div style="font-size:8px;color:var(--mute);letter-spacing:1px;margin-top:2px">PROVEEDOR RECORDADO DEL ÚLTIMO PEDIDO</div>' : ''}</div>
       <div class="oc-qty">${it.qty}</div>
       <div><select class="oc-provider-select" onchange="updateOcItemProveedor(${idx}, this.value)">${buildOcProviderOptions(it.proveedorId)}</select></div>
       <div><input type="number" step="0.01" min="0" value="${it.precio || ''}" placeholder="0.00" oninput="updateOcPrecio(${idx}, this.value)"></div>
@@ -18433,6 +18461,16 @@ async function generarOrdenCompra(){
       p.materiales.postesPrecioMedida[String(_mts)] = Number(it.precio);
     }
   });
+
+  // v916: recordar el proveedor elegido por material en pedidos DE RECETA — la próxima
+  // OC de receta lo pre-selecciona automáticamente.
+  if (pd.esDeReceta) {
+    ocWorkingItems.forEach(it => {
+      if (!it.proveedorId) return;
+      if (!p.materiales.ocProvPorItem) p.materiales.ocProvPorItem = {};
+      p.materiales.ocProvPorItem[_ocItemMemKey(it.name)] = it.proveedorId;
+    });
+  }
 
   if (pd.status === 'SOLICITADO') {
     pd.status = 'APROBADO';
