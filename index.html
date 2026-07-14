@@ -2759,6 +2759,7 @@ table{max-width:100%}
                 <select id="pfProyectoTipo" onchange="togglePedidoProyectoManual()">
                   <option value="ACTIVO">PROYECTO ACTIVO</option>
                   <option value="MANUAL">PROYECTO PEQUEÑO / REPARACIÓN</option>
+                  <option value="OFICINA">OFICINA CENTRAL — ABASTECIMIENTO</option>
                 </select>
                 <input id="pfProyectoManual" placeholder="ESCRIBIR PROYECTO O CLIENTE — EJ: REPARACIÓN CLIENTE X" style="display:none;margin-top:6px">
               </div>
@@ -3031,7 +3032,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v920</span>
+    <span style="opacity:.5;font-size:9px">v921</span>
   </footer>
 
 </div>
@@ -17026,15 +17027,17 @@ function togglePedidoProyectoManual(){
   const input = document.getElementById('pfProyectoManual');
   if (!sel || !input) return;
   const isManual = sel.value === 'MANUAL';
+  const isOficina = sel.value === 'OFICINA'; // v921: compra al por mayor para la bodega central
   input.style.display = isManual ? 'block' : 'none';
   if (!isManual) input.value = '';
 
   // v312: en MANUAL ocultar TORRE/NIVEL y mostrar APTO/CASA como texto libre.
+  // v921: en OFICINA también se ocultan (el material va a la bodega, no a un apto).
   const nivelWrap = document.getElementById('pfNivelWrap');
   const aptoSelect = document.getElementById('pfApto');
   const aptoManualInput = document.getElementById('pfAptoManual');
-  if (nivelWrap) nivelWrap.style.display = isManual ? 'none' : '';
-  if (aptoSelect) aptoSelect.style.display = isManual ? 'none' : '';
+  if (nivelWrap) nivelWrap.style.display = (isManual || isOficina) ? 'none' : '';
+  if (aptoSelect) aptoSelect.style.display = (isManual || isOficina) ? 'none' : '';
   if (aptoManualInput) {
     aptoManualInput.style.display = isManual ? 'block' : 'none';
     if (!isManual) aptoManualInput.value = '';
@@ -17543,10 +17546,12 @@ async function submitPedido(){
   const proyectoTipo = document.getElementById('pfProyectoTipo')?.value || 'ACTIVO';
   const proyectoManualTxt = (document.getElementById('pfProyectoManual')?.value || '').trim().toUpperCase();
   if (proyectoTipo === 'MANUAL' && !proyectoManualTxt) return showToast('ESCRIBIR EL PROYECTO O CLIENTE', 'red');
-  const proyectoPedido = proyectoTipo === 'MANUAL' ? proyectoManualTxt : p.name.toUpperCase();
+  const proyectoPedido = proyectoTipo === 'MANUAL' ? proyectoManualTxt
+    : (proyectoTipo === 'OFICINA' ? 'OFICINA CENTRAL — ABASTECIMIENTO' : p.name.toUpperCase()); // v921
 
   // v312: en MANUAL no se valida torre/nivel — el pedido es de un proyecto pequeno.
-  const isManualProyecto = (proyectoTipo === 'MANUAL');
+  // v921: en OFICINA tampoco (el material va a la bodega central, sin torre/nivel/apto).
+  const isManualProyecto = (proyectoTipo === 'MANUAL' || proyectoTipo === 'OFICINA');
   let nivelLabel = '';
   if (!isManualProyecto) {
     const nivelVal = document.getElementById('pfNivel').value;
@@ -17884,7 +17889,11 @@ function pedidoOcsResumen(pdId){
 function buildOcProviderOptions(selected){
   const p = activeProj();
   const proveedores = _getProveedores();
-  return '<option value="">— ASIGNAR —</option>' + proveedores.map(pr =>
+  // v921: BODEGA CENTRAL = origen interno reservado ('_bodega', no vive en el catálogo);
+  // lo asignado ahí sale como ORDEN DE DESPACHO en vez de OC.
+  return '<option value="">— ASIGNAR —</option>'
+    + `<option value="_bodega"${selected === '_bodega' ? ' selected' : ''}>BODEGA CENTRAL (DESPACHO)</option>`
+    + proveedores.map(pr =>
     `<option value="${pr.id}"${pr.id === selected ? ' selected' : ''}>${pr.nombre}</option>`
   ).join('');
 }
@@ -17968,7 +17977,13 @@ function autoAssignOcProviders(pd){
     if (!best && _esReceta) {
       const _memKey = _ocItemMemKey(it.name);
       const _provId = _memProv[_memKey] || _provHistoricoPorItem(_p, _memKey);
-      const _prov = _provId ? _getProveedores().find(x => x.id === _provId) : null;
+      // v921: BODEGA CENTRAL recordada — origen interno, sin proveedor del catálogo
+      if (_provId === '_bodega') {
+        it.proveedorId = '_bodega';
+        it.eventual = false;
+        it.provRecordado = true;
+      }
+      const _prov = (_provId && _provId !== '_bodega') ? _getProveedores().find(x => x.id === _provId) : null;
       if (_prov) {
         it.proveedorId = _prov.id;
         it.eventual = false;
@@ -18050,7 +18065,10 @@ async function openOrdenCompra(){
   const _dirs = p.materiales.direccionesEntrega || [];
   const _obraNombre = String(pd.proyectoPedido || p.name || '').toUpperCase();
   const _normDir = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-  const _dirObra = _dirs.find(d => _normDir(d.label).includes(_normDir(_obraNombre)) || _normDir(d.direccion).includes(_normDir(_obraNombre)));
+  // v921: pedido de abastecimiento → la entrega es en la OFICINA (matchea "OFICINA" en las direcciones)
+  const _esOficina = /^OFICINA CENTRAL/.test(_obraNombre);
+  const _dirObra = _dirs.find(d => _normDir(d.label).includes(_normDir(_obraNombre)) || _normDir(d.direccion).includes(_normDir(_obraNombre)))
+    || (_esOficina ? _dirs.find(d => _normDir(d.label).includes('OFICINA')) : null);
   const dirSel = document.getElementById('ocDireccionSel');
   dirSel.innerHTML = (_dirObra ? '' : `<option value="_obra">OBRA — ${_obraNombre}</option>`)
     + _dirs.map(d => `<option value="${d.id}">${d.label}</option>`).join('')
@@ -18093,7 +18111,7 @@ function renderOcItems(){
   const groups = {};
   ocWorkingItems.forEach(it => {
     const key = it.proveedorId || OC_NO_PROVIDER;
-    if (!groups[key]) groups[key] = { count:0, total:0, nombre: key === OC_NO_PROVIDER ? 'SIN PROVEEDOR' : ((proveedores.find(pv => pv.id === key)||{}).nombre || 'PROVEEDOR') };
+    if (!groups[key]) groups[key] = { count:0, total:0, nombre: key === OC_NO_PROVIDER ? 'SIN PROVEEDOR' : (key === '_bodega' ? 'BODEGA CENTRAL (DESPACHO)' : ((proveedores.find(pv => pv.id === key)||{}).nombre || 'PROVEEDOR')) };
     groups[key].count += 1;
     groups[key].total += (Number(it.qty)||0) * (Number(it.precio)||0) * 1.12;
   });
@@ -18218,6 +18236,15 @@ function numeroALetras(num){
 }
 
 function applyOcProveedor(provId){
+  // v921: BODEGA CENTRAL — despacho interno, sin catálogo de precios
+  if (provId === '_bodega') {
+    ocWorkingItems.forEach(it => { it.proveedorId = '_bodega'; it.autoAssigned = false; it.eventual = false; });
+    renderOcItems();
+    const noteB = document.getElementById('ocCatalogNote');
+    if (noteB) noteB.innerHTML = '<span style="color:var(--red-dark);font-weight:700">BODEGA CENTRAL ASIGNADA A TODOS</span> · SALDRÁ COMO ORDEN DE DESPACHO';
+    showToast(`BODEGA CENTRAL ASIGNADA A ${ocWorkingItems.length} MATERIAL${ocWorkingItems.length !== 1 ? 'ES' : ''}`, 'green');
+    return;
+  }
   const p = activeProj();
   const prv = _getProveedores().find(x => x.id === provId);
   if (!prv) return;
@@ -18397,7 +18424,8 @@ async function generarOrdenCompra(){
     return showToast(`ASIGNAR PROVEEDOR A ${sinProveedor.length} MATERIAL${sinProveedor.length!==1?'ES':''}`, 'red');
   }
 
-  const sinPrecio = ocWorkingItems.filter(it => !(Number(it.precio) > 0));
+  // v921: lo que sale de BODEGA CENTRAL es despacho interno — no exige precio
+  const sinPrecio = ocWorkingItems.filter(it => it.proveedorId !== '_bodega' && !(Number(it.precio) > 0));
   if (sinPrecio.length > 0) {
     // v314: modal elegante en vez del confirm() nativo.
     const _okSinPrec = await window.prConfirm({
@@ -18434,7 +18462,9 @@ async function generarOrdenCompra(){
   const created = [];
 
   providerIds.forEach((provId, idx) => {
-    const prov = _getProveedores().find(x => x.id === provId);
+    // v921: '_bodega' = ORDEN DE DESPACHO desde la bodega central (proveedor sintético)
+    const esBodega = provId === '_bodega';
+    const prov = esBodega ? { id: '_bodega', nombre: 'BODEGA CENTRAL' } : _getProveedores().find(x => x.id === provId);
     if (!prov) return;
     const items = groups[provId];
     const subtotal = items.reduce((s,it) => s + ((Number(it.qty)||0) * (Number(it.precio)||0)), 0);
@@ -18444,7 +18474,7 @@ async function generarOrdenCompra(){
     p.materiales.ordenCounter = (p.materiales.ordenCounter || 0) + 1;
     const folio = p.materiales.ordenCounter;
     const seq = existingForPedido + created.length + 1;
-    const numero = `${pd.numero} - OC${String(seq).padStart(2,'0')}`;
+    const numero = `${pd.numero} - ${esBodega ? 'DESP' : 'OC'}${String(seq).padStart(2,'0')}`;
 
     const oc = {
       id: 'oc-' + uid(),
@@ -18475,6 +18505,7 @@ async function generarOrdenCompra(){
       autorizadoPor: '',
       autorizadoTs: null,
       impreso: false,
+      esDespacho: esBodega, // v921: sale de BODEGA CENTRAL (orden de despacho, no compra)
       status: 'PENDIENTE_AUTORIZACION'
     };
     p.materiales.ordenes.push(oc);
@@ -18599,12 +18630,14 @@ function printOrdenCompra(ocId, isDraft){
   const fechaLarga = formatFechaLarga(oc.fecha);
   const entregaLarga = formatFechaLarga(oc.fechaEntrega, true);
 
+  // v921: ORDEN DE DESPACHO (bodega central) — solo producto y cantidad, sin dinero
+  const esDespacho = !!oc.esDespacho;
   const itemsHtml = oc.items.map(it => `
     <tr>
       <td style="padding:6px 10px;border:1px solid #888">${it.name}</td>
       <td style="padding:6px 10px;border:1px solid #888;text-align:center">${it.qty}</td>
-      <td style="padding:6px 10px;border:1px solid #888;text-align:right;white-space:nowrap">Q${fmtQ(it.precio)}</td>
-      <td style="padding:6px 10px;border:1px solid #888;text-align:right;white-space:nowrap">Q ${fmtQ(it.qty * it.precio)}</td>
+      ${esDespacho ? '' : `<td style="padding:6px 10px;border:1px solid #888;text-align:right;white-space:nowrap">Q${fmtQ(it.precio)}</td>
+      <td style="padding:6px 10px;border:1px solid #888;text-align:right;white-space:nowrap">Q ${fmtQ(it.qty * it.precio)}</td>`}
     </tr>
   `).join('');
 
@@ -18804,7 +18837,8 @@ ${!showDraft ? '<button class="btn-print no-print" onclick="window.print()">IMPR
     <!-- v920: logo en la columna izquierda (200px) del encabezado -->
     <div><img src="${_LOGO_PR}" style="height:48px;max-width:190px;object-fit:contain" alt="PUNTO ROJO"></div>
     <div class="oc-title-col">
-      <div class="oc-title">ORDEN DE COMPRA</div>
+      <div class="oc-title">${esDespacho ? 'ORDEN DE DESPACHO' : 'ORDEN DE COMPRA'}</div>
+      ${esDespacho ? '<div style="font-size:10px;color:#555;letter-spacing:2px;margin-top:4px;font-weight:700">BODEGA CENTRAL → OBRA</div>' : ''}
       ${showDraft ? '<div style="font-size:10px;color:var(--red-dark);letter-spacing:3px;margin-top:4px;font-weight:700">BORRADOR · PENDIENTE DE AUTORIZACIÓN</div>' : ''}
     </div>
     <div class="oc-num-col" style="position:relative">
@@ -18837,13 +18871,13 @@ ${!showDraft ? '<button class="btn-print no-print" onclick="window.print()">IMPR
       <tr>
         <th style="width:auto">PRODUCTO</th>
         <th style="width:90px">CANTIDAD</th>
-        <th style="width:90px">PRECIO U</th>
-        <th style="width:110px">TOTAL</th>
+        ${esDespacho ? '' : `<th style="width:90px">PRECIO U</th>
+        <th style="width:110px">TOTAL</th>`}
       </tr>
     </thead>
     <tbody>
       ${itemsHtml}
-      <tr class="oc-iva-tr">
+      ${esDespacho ? '' : `<tr class="oc-iva-tr">
         <td style="border:1px solid #888;text-align:right;padding:8px 14px" colspan="3">SUBTOTAL</td>
         <td style="border:1px solid #888;text-align:right;padding:8px 14px;white-space:nowrap">Q ${fmtQ(oc.subtotal || (oc.total / 1.12))}</td>
       </tr>
@@ -18854,16 +18888,16 @@ ${!showDraft ? '<button class="btn-print no-print" onclick="window.print()">IMPR
       <tr class="oc-total-tr">
         <td style="border:1px solid #888;text-align:right;padding:8px 14px" colspan="3">TOTAL</td>
         <td style="border:1px solid #888;text-align:right;padding:8px 14px;white-space:nowrap">Q ${fmtQ(oc.total)}</td>
-      </tr>
+      </tr>`}
     </tbody>
   </table>
 
-  <div class="oc-letras" style="text-transform:uppercase;font-weight:700">TOTAL EN LETRAS: ${String(oc.totalLetras || '').toUpperCase()}</div>
+  ${esDespacho ? '' : `<div class="oc-letras" style="text-transform:uppercase;font-weight:700">TOTAL EN LETRAS: ${String(oc.totalLetras || '').toUpperCase()}</div>
 
   <div class="oc-pago">
     <div class="oc-pago-title">* Forma de pago:</div>
     <div>${oc.formaPago}</div>
-  </div>
+  </div>`}
 
   <div class="oc-entregar">
     <div class="oc-entregar-title">*ENTREGAR A:</div>
