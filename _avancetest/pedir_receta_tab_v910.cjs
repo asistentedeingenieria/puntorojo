@@ -12,23 +12,17 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 function extractFn(name){ let m=html.indexOf('function '+name+'('); if(m<0) return ''; let i=html.indexOf('{',m),d=0; for(;i<html.length;i++){ if(html[i]==='{')d++; else if(html[i]==='}'){ d--; if(d===0) return html.slice(m,i+1); } } return ''; }
 let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
-// ── 1. la tarjeta vive en mat-pedidos (no en mat-receta) ──
-const iPed = html.indexOf('id="mat-pedidos"');
-const iOrd = html.indexOf('id="mat-ordenes"');
-const iRec = html.indexOf('id="mat-receta"');
+// ── 1. la entrada vive en PEDIDOS DE MATERIAL (v913: abre modal; el panel estático murió) ──
 const iCont = html.indexOf('id="recetaPedirContent"');
-ok('recetaPedirContent existe una sola vez en el HTML', iCont > 0 && html.indexOf('id="recetaPedirContent"', iCont + 1) === -1);
-ok('la tarjeta está DENTRO de mat-pedidos', iPed > 0 && iOrd > iPed && iCont > iPed && iCont < iOrd);
-ok('mat-receta ya no tiene la tarjeta', iRec > 0 && !(iCont > iRec));
+ok('recetaPedirContent existe una sola vez (dentro del modal)', iCont > 0 && html.indexOf('id="recetaPedirContent"', iCont + 1) === -1);
+ok('mat-receta ya no tiene la tarjeta', !/<h3>PEDIR ETAPA COMPLETA POR NIVEL<\/h3>/.test(html));
 ok('sub-pestaña PEDIR DE RECETA con gate pedidos.create',
   /data-pedtab="receta"[^>]*data-perm="pedidos\.create"[^>]*>PEDIR DE RECETA</.test(html)
   || /data-pedtab="receta"[^>]*>PEDIR DE RECETA</.test(html) && /data-pedtab="receta"[^>]*data-perm="pedidos\.create"/.test(html));
-ok('contenedor #pedido-receta existe', /id="pedido-receta"/.test(html));
 
-// ── 2. setPedidoTab maneja la sub-pestaña nueva ──
+// ── 2. setPedidoTab maneja la sub-pestaña nueva (v913: abre el modal) ──
 const srcTab = extractFn('setPedidoTab');
-ok('setPedidoTab muestra/oculta pedido-receta', /pedido-receta/.test(srcTab));
-ok("setPedidoTab('receta') renderiza la grilla", /tab === 'receta'[\s\S]{0,120}renderRecetaPedir\(\)/.test(srcTab));
+ok("setPedidoTab('receta') abre el flujo de pedir de receta", /tab === 'receta'[\s\S]{0,120}_abrirModalPedirReceta\(\)/.test(srcTab));
 
 // ── 3. la sección METAL A MEDIDA del formulario se eliminó ──
 ok('sin card METAL A MEDIDA · FABRICACIÓN ESPECIAL en el form', !/<h3>METAL A MEDIDA · FABRICACIÓN ESPECIAL<\/h3>/.test(html));
