@@ -29,6 +29,7 @@ ok('solo aplica a pedidos DE RECETA', /esDeReceta/.test(srcAuto));
 if (srcAuto) {
   const env = deps
     + extractFn('_ocMedidaEspecialMetros') + '\n'
+    + extractFn('_provHistoricoPorItem') + '\n' // v918: fallback histórico usado por autoAssign
     + extractFn('findCatalogProductForProvider') + '\n'
     + extractFn('findBestProviderForItem') + '\n'
     + 'var PROVS=[{id:"pr1",nombre:"SISTEGUA",productos:[]}];\n'

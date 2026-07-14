@@ -3031,7 +3031,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v917</span>
+    <span style="opacity:.5;font-size:9px">v918</span>
   </footer>
 
 </div>
@@ -3390,7 +3390,8 @@ table{max-width:100%}
       <div class="oc-grid-2">
         <div class="field">
           <label>FECHA</label>
-          <input id="ocFecha" type="date">
+          <!-- v918: la fecha de la OC es SIEMPRE el día en que se genera — no editable -->
+          <input id="ocFecha" type="date" disabled style="background:var(--cream);cursor:not-allowed;color:var(--ink)">
         </div>
         <div class="field">
           <label>FECHA DE ENTREGA</label>
@@ -3401,11 +3402,12 @@ table{max-width:100%}
       <div class="oc-grid-2">
         <div class="field">
           <label>PROYECTO</label>
-          <input id="ocProyecto" type="text">
+          <!-- v918: proyecto y área vienen del pedido — no editables -->
+          <input id="ocProyecto" type="text" readonly style="background:var(--cream);cursor:not-allowed">
         </div>
         <div class="field">
           <label>ÁREA / NIVEL — ETAPA</label>
-          <input id="ocArea" type="text" placeholder="EJ: NIVEL 3, 4 ETAPA 1">
+          <input id="ocArea" type="text" readonly style="background:var(--cream);cursor:not-allowed">
         </div>
       </div>
 
@@ -17908,6 +17910,19 @@ function _ocItemMemKey(name){
     .replace(/X\s*[\d.]+\s*'/i, "X 10'"));
 }
 
+// v918: fallback histórico — buscar en las OCs YA GENERADAS del proyecto (la más
+// reciente primero) con qué proveedor se compró ESTE material. Así la app "ya sabe"
+// el proveedor aunque la memoria v916 todavía no tenga la entrada.
+function _provHistoricoPorItem(p, memKey){
+  const ords = (p && p.materiales && p.materiales.ordenes) || [];
+  for (let i = ords.length - 1; i >= 0; i--) {
+    const oc = ords[i];
+    if (!oc || !oc.proveedorId || !Array.isArray(oc.items)) continue;
+    if (oc.items.some(it => _ocItemMemKey(it && it.name) === memKey)) return oc.proveedorId;
+  }
+  return '';
+}
+
 function buildPedidoOcItems(pd){
   const arr = [];
   const specs = pd.specs || {};
@@ -17947,8 +17962,10 @@ function autoAssignOcProviders(pd){
     // v916: sin match de catálogo, en pedidos de receta pre-seleccionar el proveedor
     // que se usó la última vez para ESTE material (precio del catálogo de ese
     // proveedor si existe; si no, queda para digitación como siempre).
+    // v918: si la memoria no tiene la entrada, buscar en las OCs ya generadas.
     if (!best && _esReceta) {
-      const _provId = _memProv[_ocItemMemKey(it.name)];
+      const _memKey = _ocItemMemKey(it.name);
+      const _provId = _memProv[_memKey] || _provHistoricoPorItem(_p, _memKey);
       const _prov = _provId ? _getProveedores().find(x => x.id === _provId) : null;
       if (_prov) {
         it.proveedorId = _prov.id;
@@ -18025,15 +18042,24 @@ async function openOrdenCompra(){
     `<option value="${pr.id}">${pr.nombre}</option>`
   ).join('');
 
+  // v918: ENTREGAR A = la OBRA del pedido, automática. Si hay una dirección guardada
+  // cuyo nombre coincide con el proyecto se selecciona esa; si no, se propone la obra
+  // (el texto de abajo queda editable para dirección/contacto).
+  const _dirs = p.materiales.direccionesEntrega || [];
+  const _obraNombre = String(pd.proyectoPedido || p.name || '').toUpperCase();
+  const _normDir = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const _dirObra = _dirs.find(d => _normDir(d.label).includes(_normDir(_obraNombre)) || _normDir(d.direccion).includes(_normDir(_obraNombre)));
   const dirSel = document.getElementById('ocDireccionSel');
-  dirSel.innerHTML = (p.materiales.direccionesEntrega || []).map(d =>
-    `<option value="${d.id}">${d.label}</option>`
-  ).join('') || '<option value="">— SIN DIRECCIONES —</option>';
+  dirSel.innerHTML = (_dirObra ? '' : `<option value="_obra">OBRA — ${_obraNombre}</option>`)
+    + _dirs.map(d => `<option value="${d.id}">${d.label}</option>`).join('')
+    + ((_dirs.length || !_dirObra) ? '' : '<option value="">— SIN DIRECCIONES —</option>');
 
-  if ((p.materiales.direccionesEntrega || []).length > 0) {
-    applyOcDireccion(p.materiales.direccionesEntrega[0].id);
+  if (_dirObra) {
+    dirSel.value = _dirObra.id;
+    applyOcDireccion(_dirObra.id);
   } else {
-    document.getElementById('ocEntregarA').value = '';
+    dirSel.value = '_obra';
+    document.getElementById('ocEntregarA').value = 'OBRA ' + _obraNombre;
   }
 
   ocWorkingItems = buildPedidoOcItems(pd);
