@@ -3032,7 +3032,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v922</span>
+    <span style="opacity:.5;font-size:9px">v923</span>
   </footer>
 
 </div>
@@ -18133,7 +18133,9 @@ function renderOcItems(){
       <div class="oc-name">${it.name}${it.aMedida ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#DBEAFE;color:#1D4ED8;margin-left:6px">A MEDIDA · PRECIO MANUAL</span>' + (it.precioRecordado ? '<div style="font-size:8px;color:var(--mute);letter-spacing:.5px;margin-top:2px">ÚLTIMO PRECIO USADO — VERIFICALO</div>' : '') : (it.eventual ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#FEF3C7;color:#92400E;margin-left:6px">EVENTUAL</span><button type="button" onclick="_promoverEventual(' + idx + ')" style="background:none;border:none;color:var(--cafe);font-size:9px;font-weight:700;letter-spacing:.3px;cursor:pointer;text-decoration:underline;padding:0;margin-left:6px">PROMOVER AL CATÁLOGO</button>' : '')}${it.autoAssigned ? '<div style="font-size:8px;color:var(--red-dark);letter-spacing:1px;margin-top:2px">ASIGNADO POR CATÁLOGO</div>' : ''}${it.provRecordado ? '<div style="font-size:8px;color:var(--mute);letter-spacing:1px;margin-top:2px">PROVEEDOR RECORDADO DEL ÚLTIMO PEDIDO</div>' : ''}</div>
       <div class="oc-qty">${it.qty}</div>
       <div><select class="oc-provider-select" onchange="updateOcItemProveedor(${idx}, this.value)">${buildOcProviderOptions(it.proveedorId)}</select></div>
-      <div><input type="number" step="0.01" min="0" value="${it.precio || ''}" placeholder="0.00" oninput="updateOcPrecio(${idx}, this.value)"></div>
+      <div>${it.aMedida
+        ? `<input type="number" step="0.01" min="0" value="${it.precio || ''}" placeholder="0.00" oninput="updateOcPrecio(${idx}, this.value)" title="Poste a medida: precio de fabricación digitable">`
+        : `<input type="number" value="${it.precio || ''}" placeholder="—" disabled style="background:var(--cream);cursor:not-allowed" title="El precio viene del catálogo de precios — para cambiarlo enviá una solicitud">`}</div>
       <div class="oc-subtotal" id="ocSubtotal-${idx}">Q ${fmtQ(it.qty * (it.precio || 0))}</div>
     </div>
   `).join('');
@@ -18168,6 +18170,12 @@ function updateOcItemProveedor(idx, provId){
 
 function updateOcPrecio(idx, val){
   if (!ocWorkingItems[idx]) return;
+  // v923: los precios viven SOLO en el catálogo; el único digitable es el poste a
+  // medida (fabricación). Cambios de precio → solicitud del catálogo.
+  if (!ocWorkingItems[idx].aMedida) {
+    showToast('EL PRECIO VIENE DEL CATÁLOGO — PEDÍ EL CAMBIO POR SOLICITUD', 'red');
+    return;
+  }
   ocWorkingItems[idx].precio = Number(val) || 0;
   ocWorkingItems[idx].autoAssigned = false;
   const sub = document.getElementById('ocSubtotal-'+idx);
@@ -18179,11 +18187,15 @@ async function _promoverEventual(idx){
   const items = ocWorkingItems;
   const it = items && items[idx]; if(!it){ return; }
   const defProv = it.proveedorNombre || '';
-  const nom = await prPrompt({ title:'PROMOVER AL CATÁLOGO', body:'¿Bajo qué proveedor registrar "'+(it.name||'')+'" a Q'+(Number(it.precio)||0).toFixed(2)+'?', placeholder:'Nombre del proveedor', defaultValue:defProv, required:true });
+  const nom = await prPrompt({ title:'PROMOVER AL CATÁLOGO', body:'¿Bajo qué proveedor registrar "'+(it.name||'')+'"?', placeholder:'Nombre del proveedor', defaultValue:defProv, required:true });
   if(nom===null) return;
+  // v923: el precio ya no se digita en la OC — se PROPONE acá y viaja en la solicitud
+  // (queda en el catálogo solo cuando quien autoriza precios la aprueba).
+  const _precioProp = await prPrompt({ title:'PRECIO PROPUESTO', body:'Precio unitario (IVA incluido) de "'+(it.name||'')+'" para el catálogo.', placeholder:'0.00', defaultValue:'', required:true });
+  if(_precioProp===null) return;
   const k=normOcName(nom);
   const existing=_getProveedores().find(p=>normOcName(p.nombre)===k);
-  _crearSolicitudPrecio('ALTA', existing?existing.id:'', it.name, it.unidad||it.unit||'', null, Number(it.precio)||0, 'Promoción de compra eventual', String(nom).toUpperCase());
+  _crearSolicitudPrecio('ALTA', existing?existing.id:'', it.name, it.unidad||it.unit||'', null, Number(_precioProp)||0, 'Promoción de compra eventual', String(nom).toUpperCase());
   showToast('SOLICITUD DE ALTA ENVIADA','green');
 }
 
