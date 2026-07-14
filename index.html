@@ -3032,7 +3032,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v924</span>
+    <span style="opacity:.5;font-size:9px">v925</span>
   </footer>
 
 </div>
@@ -3377,7 +3377,8 @@ table{max-width:100%}
         <div class="field">
           <label>PROVEEDOR RÁPIDO PARA ASIGNAR A TODOS</label>
           <div style="display:grid;grid-template-columns:1fr auto;gap:6px">
-            <select id="ocProveedor" onchange="applyOcProveedor(this.value)"></select>
+            <!-- v925: picker buscable (panel a nivel body — los combos custom se recortan en modales) -->
+            <button type="button" id="ocProveedorBtn" onclick="_abrirPickerProveedorTodos(this)" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--white);font-family:inherit;font-size:12px;cursor:pointer;text-align:left"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">— NO APLICAR A TODOS —</span><span style="color:var(--mute)">▾</span></button>
             <button class="btn ghost sm" onclick="openAddProveedor()" title="Agregar nuevo proveedor">+</button>
           </div>
           <div id="ocCatalogNote" style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--mute);font-weight:600;margin-top:6px;min-height:12px"></div>
@@ -3390,7 +3391,7 @@ table{max-width:100%}
 
       <div class="oc-grid-2">
         <div class="field">
-          <label>FECHA</label>
+          <label>FECHA DE PEDIDO</label>
           <!-- v918: la fecha de la OC es SIEMPRE el día en que se genera — no editable -->
           <input id="ocFecha" type="date" disabled style="background:var(--cream);cursor:not-allowed;color:var(--ink)">
         </div>
@@ -18054,10 +18055,9 @@ async function openOrdenCompra(){
   document.getElementById('ocProyecto').value = (pd.proyectoPedido || p.name).toUpperCase();
   document.getElementById('ocArea').value = (pd.nivel || '') + (pd.apto ? ' · ' + pd.apto : '');
 
-  const provSel = document.getElementById('ocProveedor');
-  provSel.innerHTML = '<option value="">— NO APLICAR A TODOS —</option>' + _getProveedores().map(pr =>
-    `<option value="${pr.id}">${pr.nombre}</option>`
-  ).join('');
+  // v925: el selector rápido ahora es un picker buscable — solo se resetea la etiqueta
+  const provBtn = document.getElementById('ocProveedorBtn');
+  if (provBtn) { const _sp = provBtn.querySelector('span'); if (_sp) _sp.textContent = '— NO APLICAR A TODOS —'; }
 
   // v918: ENTREGAR A = la OBRA del pedido, automática. Si hay una dirección guardada
   // cuyo nombre coincide con el proyecto se selecciona esa; si no, se propone la obra
@@ -18098,6 +18098,79 @@ async function openOrdenCompra(){
   closeModal('pedidoDetalle');
   document.getElementById('modalOrdenCompra').classList.add('show');
 }
+// ── v925: PICKER BUSCABLE genérico — el panel se cuelga del BODY con position:fixed
+// (los combos custom dentro de modales se recortan por el overflow — regla v795/lección v913).
+function _abrirPicker(anchorEl, opts){
+  _cerrarPicker();
+  const r = anchorEl.getBoundingClientRect();
+  const w = Math.max(r.width, 260);
+  const panel = document.createElement('div');
+  panel.id = '_prPickerPanel';
+  panel.style.cssText = 'position:fixed;z-index:100300;background:#fff;border:1px solid #D1D5DB;border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.18);width:' + w + 'px;max-height:320px;display:flex;flex-direction:column;overflow:hidden';
+  panel.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + 'px';
+  if (window.innerHeight - r.bottom > 330 || r.top < 330) panel.style.top = (r.bottom + 4) + 'px';
+  else panel.style.bottom = (window.innerHeight - r.top + 4) + 'px';
+  panel.innerHTML = '<div style="padding:8px;border-bottom:1px solid #F3F4F6"><input id="_prPickerBusca" placeholder="BUSCAR…" autocomplete="off" style="width:100%;padding:8px 10px;border:1px solid #E5E7EB;border-radius:8px;font-family:inherit;font-size:12px;box-sizing:border-box;text-transform:uppercase;letter-spacing:.3px"></div><div id="_prPickerList" style="overflow:auto;flex:1;padding:6px"></div>';
+  document.body.appendChild(panel);
+  const pinta = (f) => {
+    const list = panel.querySelector('#_prPickerList');
+    const its = (opts.items || []).filter(x => !f || String(x.label).toUpperCase().includes(f));
+    list.innerHTML = its.map(x =>
+      '<div class="_prPickerIt" data-id="' + String(x.id) + '" style="padding:8px 10px;border-radius:6px;cursor:pointer;font-size:12px;letter-spacing:.3px;' + (x.id === opts.selectedId ? 'background:#FEF2F2;color:#B91C1C;font-weight:700' : 'color:#374151') + '">' + x.label + '</div>'
+    ).join('') || '<div style="padding:14px;text-align:center;color:#9CA3AF;font-size:11px">SIN RESULTADOS</div>';
+    list.querySelectorAll('._prPickerIt').forEach(el => {
+      el.onmouseenter = () => { el.style.background = '#F9FAFB'; };
+      el.onmouseleave = () => { el.style.background = el.dataset.id === String(opts.selectedId) ? '#FEF2F2' : ''; };
+      el.onclick = () => { _cerrarPicker(); opts.onPick(el.dataset.id); };
+    });
+  };
+  pinta('');
+  const inp = panel.querySelector('#_prPickerBusca');
+  inp.oninput = () => pinta(inp.value.trim().toUpperCase());
+  try { inp.focus(); } catch(e) {}
+  window._pickerOpen = panel;
+  setTimeout(() => {
+    document.addEventListener('mousedown', _pickerOutside, true);
+    window.addEventListener('scroll', _cerrarPicker, true); // el panel es fixed: al hacer scroll se cierra
+  }, 0);
+}
+function _pickerOutside(ev){ const p = window._pickerOpen; if (p && !p.contains(ev.target)) _cerrarPicker(); }
+function _cerrarPicker(){
+  const p = window._pickerOpen;
+  if (!p) return;
+  p.remove(); window._pickerOpen = null;
+  document.removeEventListener('mousedown', _pickerOutside, true);
+  window.removeEventListener('scroll', _cerrarPicker, true);
+}
+window._abrirPicker = _abrirPicker; window._cerrarPicker = _cerrarPicker;
+
+// v925: opciones del picker de proveedores (incluye BODEGA CENTRAL, que al selector
+// rápido le faltaba desde v921).
+function _provPickerItems(primeraOpcion){
+  return [{ id: '', label: primeraOpcion }, { id: '_bodega', label: 'BODEGA CENTRAL (DESPACHO)' }]
+    .concat(_getProveedores().map(pr => ({ id: pr.id, label: pr.nombre })));
+}
+function _abrirPickerProveedor(btn, idx){
+  const it = ocWorkingItems[idx]; if (!it) return;
+  _abrirPicker(btn, {
+    items: _provPickerItems('— ASIGNAR —'),
+    selectedId: it.proveedorId || '',
+    onPick: function(id){ updateOcItemProveedor(idx, id); }
+  });
+}
+function _abrirPickerProveedorTodos(btn){
+  _abrirPicker(btn, {
+    items: _provPickerItems('— NO APLICAR A TODOS —'),
+    selectedId: '',
+    onPick: function(id){
+      const sp = btn.querySelector('span');
+      if (sp) sp.textContent = (_provPickerItems('— NO APLICAR A TODOS —').find(x => x.id === id) || {}).label || '— NO APLICAR A TODOS —';
+      if (id) applyOcProveedor(id);
+    }
+  });
+}
+window._abrirPickerProveedor = _abrirPickerProveedor; window._abrirPickerProveedorTodos = _abrirPickerProveedorTodos;
+
 function renderOcItems(){
   const cont = document.getElementById('ocItemsList');
   const p = activeProj();
@@ -18132,7 +18205,7 @@ function renderOcItems(){
     <div class="oc-item-row multi${!it.proveedorId ? ' oc-row-warn' : ''}">
       <div class="oc-name">${it.name}${it.aMedida ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#DBEAFE;color:#1D4ED8;margin-left:6px">A MEDIDA · PRECIO MANUAL</span>' + (it.precioRecordado ? '<div style="font-size:8px;color:var(--mute);letter-spacing:.5px;margin-top:2px">ÚLTIMO PRECIO USADO — VERIFICALO</div>' : '') : (it.eventual ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#FEF3C7;color:#92400E;margin-left:6px">EVENTUAL</span><button type="button" onclick="_promoverEventual(' + idx + ')" style="background:none;border:none;color:var(--cafe);font-size:9px;font-weight:700;letter-spacing:.3px;cursor:pointer;text-decoration:underline;padding:0;margin-left:6px">PROMOVER AL CATÁLOGO</button>' : '')}${it.autoAssigned ? '<div style="font-size:8px;color:var(--red-dark);letter-spacing:1px;margin-top:2px">ASIGNADO POR CATÁLOGO</div>' : ''}${it.provRecordado ? '<div style="font-size:8px;color:var(--mute);letter-spacing:1px;margin-top:2px">PROVEEDOR RECORDADO DEL ÚLTIMO PEDIDO</div>' : ''}</div>
       <div class="oc-qty">${it.qty}</div>
-      <div><select class="oc-provider-select" onchange="updateOcItemProveedor(${idx}, this.value)">${buildOcProviderOptions(it.proveedorId)}</select></div>
+      <div><button type="button" onclick="_abrirPickerProveedor(this, ${idx})" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 10px;border:1px solid ${it.proveedorId ? '#D1D5DB' : '#FCA5A5'};border-radius:8px;background:#fff;font-family:inherit;font-size:11px;cursor:pointer;text-align:left"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${it.proveedorId === '_bodega' ? 'BODEGA CENTRAL (DESPACHO)' : ((proveedores.find(pv => pv.id === it.proveedorId)||{}).nombre || '— ASIGNAR —')}</span><span style="color:#9CA3AF">▾</span></button></div>
       <div>${it.aMedida
         ? `<input type="number" step="0.01" min="0" value="${it.precio || ''}" placeholder="0.00" oninput="updateOcPrecio(${idx}, this.value)" title="Poste a medida: precio de fabricación digitable">`
         : `<input type="number" value="${it.precio || ''}" placeholder="—" disabled style="background:var(--cream);cursor:not-allowed" title="El precio viene del catálogo de precios — para cambiarlo enviá una solicitud">`}</div>
