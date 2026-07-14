@@ -85,7 +85,7 @@ function fin(){
   // ── cableado ──
   ok('la subida usa runTransaction', /_asistUploadSmart[\s\S]{0,2500}runTransaction/.test(html));
   ok('une con la regla v647', /_mergeAsistencia\(_asistPayload, cloud/.test(html));
-  ok('APP_SYNC_VERSION subida a 902', /const APP_SYNC_VERSION = 902;/.test(html));
+  ok('APP_SYNC_VERSION subida a 902 o más', (() => { const m = html.match(/const APP_SYNC_VERSION = (\d+);/); return !!m && Number(m[1]) >= 902; })()); // v930: sin pinear el literal — cada cambio de sync la sube
   console.log('PASS=' + pass + ' FAIL=' + fail);
   process.exit(fail ? 1 : 0);
 }

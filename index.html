@@ -3037,7 +3037,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v929</span>
+    <span style="opacity:.5;font-size:9px">v930</span>
   </footer>
 
 </div>
@@ -8543,7 +8543,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 902;
+const APP_SYNC_VERSION = 903;
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -8828,6 +8828,31 @@ const CloudSync = {
     if (!this._asistHash) this._asistHash = '';                 // v649: hash del doc de asistencia
     const _asistJson = JSON.stringify(_asistPayload);
     if (_asistJson.length > 900000 && !this._asistSizeWarned) { this._asistSizeWarned = true; try { showToast('AVISO: la asistencia pesa '+Math.round(_asistJson.length/1024)+' KB (límite 1 MB). Archivá días viejos.','red'); } catch(e){} } else if (_asistJson.length < 800000) { this._asistSizeWarned = false; } // v649: telemetría de tamaño
+    // ── v930: la RECETA de cada proyecto vive en su propio doc appState/receta_<id> (patrón
+    // caras/asistencia; aviso ESSENZA 880KB — la receta era 154KB del proj_). Orden SEGURO:
+    // primero se CONFIRMA el doc de receta en la nube y solo entonces se quita la copia del
+    // clon del proyecto; si la escritura falla (reglas/red), la receta viaja embebida como
+    // siempre y nadie la pierde. El strip ocurre ANTES del hash del proj_ → el doc adelgaza
+    // y una edición de receta ya no re-sube el proyecto entero (solo su doc de receta).
+    if (!this._recetaHashes) this._recetaHashes = {};
+    for (let _ri = 0; _ri < projects.length; _ri++) {
+      const _rp = projects[_ri];
+      if (!_rp || !_rp.id || !_rp.materiales || !('recetaV2' in _rp.materiales)) continue;
+      const _rv = _rp.materiales.recetaV2;
+      if (_rv) {
+        const _rjson = JSON.stringify(_rv);
+        if (_rjson.length > 900000) console.warn('[SIZE] receta de "'+(_rp.name||_rp.id)+'": '+Math.round(_rjson.length/1024)+' KB (límite Firestore 1 MB)');
+        if (this._recetaHashes[_rp.id] !== _rjson) {
+          try { await db.collection('appState').doc('receta_' + _rp.id).set({ recetaV2: _rv, _lastUpdate: stamp }); this._recetaHashes[_rp.id] = _rjson; }
+          catch(e){ console.warn('Doc de receta no se subió (viaja embebida esta vez):', e && e.message); continue; }
+        }
+      } else if (this._recetaHashes[_rp.id]) {
+        // la receta local quedó en null pero su doc existe → borrarlo para que no resucite
+        try { await db.collection('appState').doc('receta_' + _rp.id).delete(); delete this._recetaHashes[_rp.id]; }
+        catch(e){ console.warn('Doc de receta no se pudo borrar:', e && e.message); }
+      }
+      projects[_ri] = _projSinReceta(_rp);   // confirmado (o null): el proj_ sube SIN la clave recetaV2
+    }
     const seen = {};
     projects.forEach(p => {
       if (!p || !p.id) return;
@@ -8846,6 +8871,11 @@ const CloudSync = {
     });
     Object.keys(this._projHashes).forEach(id => {               // borrar docs de proyectos eliminados
       if (!seen[id]) ops.push({ kind: 'del', ref: db.collection('appState').doc('proj_' + id), _delId: id });
+    });
+    Object.keys(this._recetaHashes).forEach(id => {             // v930: borrar docs de receta de proyectos eliminados
+      if (seen[id]) return;
+      const _cs = this;
+      db.collection('appState').doc('receta_' + id).delete().then(() => { delete _cs._recetaHashes[id]; }).catch(()=>{});
     });
     const CHUNK = 450;
     for (let i = 0; i < ops.length; i += CHUNK) {
@@ -8956,11 +8986,12 @@ const CloudSync = {
   /* v491: reensambla el state (forma del doc unico viejo) desde core + proj_*. */
   _assembleFromSnap(snap){
     if (!snap) return null;
-    let core = null, facesData = null, asistData = null; const projById = {};
+    let core = null, facesData = null, asistData = null; const projById = {}; const recetaById = {}; // v930
     snap.forEach(doc => {
       if (doc.id === 'core') core = doc.data();
       else if (doc.id === 'faces') { const d = doc.data(); facesData = (d && d.faces && typeof d.faces==='object') ? d.faces : null; }
       else if (doc.id === 'asistencia') { const d = doc.data(); asistData = (d && d.asistencia && typeof d.asistencia==='object') ? d.asistencia : null; } // v649
+      else if (doc.id.indexOf('receta_') === 0) { const d = doc.data(); if (d && d.recetaV2 && typeof d.recetaV2==='object') recetaById[doc.id.slice(7)] = d.recetaV2; } // v930
       else if (doc.id.indexOf('proj_') === 0) { const d = doc.data(); if (d && d.p) projById[doc.id.slice(5)] = d.p; }
     });
     if (!core) return null;
@@ -8976,6 +9007,22 @@ const CloudSync = {
     const data = Object.assign({}, core);
     delete data._projectIds; delete data._lastUpdate; delete data._migratedFrom;
     data.projects = projects;
+    // v930: re-adjuntar la receta desde su doc appState/receta_<id>. El doc MANDA sobre una
+    // copia embebida vieja del proj_ (transición). _recetaDocOnly = lo que vino DE LOS DOCS
+    // (siembra los hashes en applyRemote, patrón asistencia v649); _recetaEmbebidaIds =
+    // proyectos cuyo proj_ aún trae la receta adentro → applyRemote los saca del hash-skip
+    // para que la próxima subida los adelgace (migración automática).
+    {
+      const _embIds = [];
+      data.projects.forEach(p => {
+        if (!p || !p.id) return;
+        if (p.materiales && p.materiales.recetaV2) _embIds.push(p.id);
+        const _rd = recetaById[p.id];
+        if (_rd) { if (!p.materiales) p.materiales = {}; p.materiales.recetaV2 = _rd; }
+      });
+      data._recetaDocOnly = recetaById;
+      data._recetaEmbebidaIds = _embIds;
+    }
     // v633: re-adjuntar las caras desde el doc appState/faces a cada persona (el core ya no las trae).
     if (facesData && Array.isArray(data.personalGlobal)) {
       data.personalGlobal = data.personalGlobal.map(p => (p && p.id && facesData[p.id]) ? Object.assign({}, p, { face: facesData[p.id] }) : p);
@@ -9106,6 +9153,11 @@ const CloudSync = {
     // v896: sembrar también los hashes POR DÍA — el diff del upload parcial compara contra esto
     try { const _dob = merged._asistDocOnly || {}; const _dh = {}; Object.keys(_dob).forEach(f => { _dh[f] = JSON.stringify(_dob[f]); }); this._asistDayHashes = _dh; } catch(e){ this._asistDayHashes = null; }
     try { delete merged._asistDocOnly; } catch(e){}
+    // v930: sembrar los hashes de receta con lo BAJADO DE LOS DOCS (no lo embebido en proj_):
+    // lo recién bajado no se re-sube; una receta que solo vino embebida queda FUERA del hash
+    // → la próxima subida la MIGRA a su doc appState/receta_<id> (mismo patrón que asistencia).
+    try { const _rdo = merged._recetaDocOnly || {}; const _rh = {}; Object.keys(_rdo).forEach(id => { if (_rdo[id]) _rh[id] = JSON.stringify(_rdo[id]); }); this._recetaHashes = _rh; } catch(e){ this._recetaHashes = {}; }
+    try { delete merged._recetaDocOnly; } catch(e){}
     try {
       if (typeof _mergeAsistencia === 'function') {
         // v666: unir los tombstones de ausencia (local ∪ remoto, conservando el _ts más nuevo por llave)
@@ -9285,7 +9337,12 @@ const CloudSync = {
     // nunca borra un proyecto que sigue existiendo (cierra el bug v491 y su residual del slot
     // global, que podia divergir si flushPendingRender aplicaba datos viejos). Se derivan de
     // remoteData.projects (pre-ensureDataV9) para que needsResync siga resubiendo el limpio.
-    { const _nh = {}; (remoteData.projects || []).forEach(pp => { if (pp && pp.id) _nh[pp.id] = JSON.stringify(pp); }); this._projHashes = _nh; }
+    // v930: el hash es del proyecto SIN la clave recetaV2 (forma canónica del doc proj_ — la
+    // receta vive en su doc aparte y acá viene RE-ADJUNTADA en memoria; hashearla crearía
+    // re-escrituras eternas). Los proj_ que AÚN traen la receta embebida (_recetaEmbebidaIds)
+    // quedan fuera del hash-skip a propósito: la próxima subida los reescribe adelgazados.
+    { const _nh = {}; (remoteData.projects || []).forEach(pp => { if (pp && pp.id) _nh[pp.id] = JSON.stringify(_projSinReceta(pp)); }); (merged._recetaEmbebidaIds || []).forEach(id => { delete _nh[id]; }); this._projHashes = _nh; }
+    try { delete merged._recetaEmbebidaIds; } catch(e){}
     // v235: restaurar el proyecto activo LOCAL del usuario (no compartir entre sesiones).
     if (localActivePID && (state.projects||[]).some(pp => pp.id === localActivePID)) {
       state.activeProjectId = localActivePID;
@@ -27402,6 +27459,18 @@ function _mergeLibEtapasIntoMerged(merged, localState){
 // para aligerar/archivar ANTES de que un proyecto rompa el guardado al crecer. Histéresis (se limpia
 // <800KB) para no parpadear el aviso.
 function _docSizeAlarm(bytes){ return (bytes > 900000) ? 'warn' : ((bytes < 800000) ? 'clear' : 'hold'); }
+
+/* v930: proyecto SIN la clave recetaV2 — forma canónica del doc proj_ (la receta vive en su
+   propio doc appState/receta_<id>). Se usa para el doc subido Y para el hash-skip en AMBOS
+   lados (uploadCurrent y applyRemote); si un lado hashea con receta y el otro sin, cada
+   snapshot dispararía re-escrituras eternas del proj_. No muta el objeto recibido. */
+function _projSinReceta(p){
+  if (!p || !p.materiales || !('recetaV2' in p.materiales)) return p;
+  const c = Object.assign({}, p);
+  c.materiales = Object.assign({}, p.materiales);
+  delete c.materiales.recetaV2;
+  return c;
+}
 
 function _resyncFingerprint(merged){
   try {
