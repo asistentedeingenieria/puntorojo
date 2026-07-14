@@ -36,7 +36,8 @@ const srcGen = extractFn('generarOrdenCompra');
 ok('generarOrdenCompra usa el helper', /_ocTotalesIvaIncluido/.test(srcGen) && !/subtotal \* 0\.12/.test(srcGen));
 ok('la OC nueva queda marcada ivaIncluido', /ivaIncluido: true/.test(srcGen));
 const srcPrint = extractFn('printOrdenCompra');
-ok('PDF: desglose etiquetado como IVA incluido en OCs nuevas', /INCLUIDO/.test(srcPrint) && /ivaIncluido/.test(srcPrint));
+// v927: las etiquetas cambiaron a SUBTOTAL SIN IVA / IVA 12% / GRAN TOTAL (CON IVA)
+ok('PDF: desglose etiquetado para OCs con IVA incluido', /GRAN TOTAL \(CON IVA\)/.test(srcPrint) && /ivaIncluido/.test(srcPrint));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

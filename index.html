@@ -3032,7 +3032,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v926</span>
+    <span style="opacity:.5;font-size:9px">v927</span>
   </footer>
 
 </div>
@@ -17812,8 +17812,10 @@ function openPedidoDetalle(id){
   // Generar OC requiere el permiso "Autorizar Órdenes de Compra (compras.autorizar)"
   // o ser admin. Si el usuario solo crea pedidos (Rony p.ej.), no ve el botón ni la pestaña.
   const canOC = can('compras.autorizar') || can('users.manage');
+  // v927: un pedido que YA tiene sus OC generadas no genera más (si se eliminan, vuelve)
+  const _yaTieneOcs = getPedidoOrdenes(pd.id).length > 0;
   const ocBtn = document.getElementById('pedDetalleOCBtn');
-  if (ocBtn) ocBtn.style.display = canOC ? '' : 'none';
+  if (ocBtn) ocBtn.style.display = (canOC && !_yaTieneOcs) ? '' : 'none';
 }
 
 function deleteFromDetalle(){
@@ -18022,15 +18024,9 @@ async function openOrdenCompra(){
 
   const existingOcs = getPedidoOrdenes(pd.id);
   if (existingOcs.length > 0) {
-    // v314: modal elegante en vez del confirm() nativo.
-    const _okOcAdd = await window.prConfirm({
-      title: 'PEDIDO YA TIENE ÓRDENES DE COMPRA',
-      bodyHTML: `<div>Este pedido ya tiene <strong>${existingOcs.length}</strong> orden${existingOcs.length===1?'':'es'} de compra.</div>
-                 <div style="margin-top:12px;color:#7C5800;background:#FFF8E1;padding:10px 12px;border-radius:4px;border-left:3px solid #F4D040;line-height:1.5">Si generás nuevas órdenes, quedarán como <strong>OC adicionales</strong> vinculadas al mismo pedido.</div>`,
-      okText: 'CONTINUAR',
-      cancelText: 'CANCELAR'
-    });
-    if (!_okOcAdd) return;
+    // v927: un pedido con sus OC generadas NO genera más (antes se permitían "adicionales").
+    // Si hace falta rehacerlas, se eliminan las OC y el botón vuelve a aparecer.
+    return showToast('ESTE PEDIDO YA TIENE SUS ÓRDENES GENERADAS', 'red');
   }
 
   // Mostrar rango estimado de OCs; el número final se asigna por proveedor al generar.
@@ -18755,6 +18751,12 @@ function _pedirFirmaSiFalta(){
 window._abrirFirmaModal = _abrirFirmaModal; window._firmaLimpiar = _firmaLimpiar;
 window._cerrarFirmaModal = _cerrarFirmaModal; window._firmaGuardar = _firmaGuardar;
 
+// v927: fecha corta del sello REVISADO (d-m-yy, como el sello físico de la empresa). PURA.
+function _fechaSelloCorta(ts){
+  const d = ts ? new Date(ts) : new Date();
+  return d.getDate() + '-' + (d.getMonth() + 1) + '-' + String(d.getFullYear()).slice(2);
+}
+
 // v926: partes del número de la OC para mostrarlas ordenadas (proyecto / pedido / OC). PURA.
 function _ocNumeroPartes(oc){
   const full = String((oc && oc.numero) || '');
@@ -19044,15 +19046,15 @@ ${!showDraft ? '<button class="btn-print no-print" onclick="window.print()">IMPR
     <tbody>
       ${itemsHtml}
       ${esDespacho ? '' : `<tr class="oc-iva-tr">
-        <td style="border:1px solid #888;text-align:right;padding:8px 14px" colspan="3">SUBTOTAL${oc.ivaIncluido ? ' (SIN IVA)' : ''}</td>
+        <td style="border:1px solid #888;text-align:right;padding:8px 14px" colspan="3">SUBTOTAL${oc.ivaIncluido ? ' SIN IVA' : ''}</td>
         <td style="border:1px solid #888;text-align:right;padding:8px 14px;white-space:nowrap">Q ${fmtQ(oc.subtotal || (oc.total / 1.12))}</td>
       </tr>
       <tr class="oc-iva-tr">
-        <td style="border:1px solid #888;text-align:right;padding:8px 14px" colspan="3">IVA 12%${oc.ivaIncluido ? ' (INCLUIDO)' : ''}</td>
+        <td style="border:1px solid #888;text-align:right;padding:8px 14px" colspan="3">IVA 12%</td>
         <td style="border:1px solid #888;text-align:right;padding:8px 14px;white-space:nowrap">Q ${fmtQ(oc.ivaMonto || (oc.total - (oc.total / 1.12)))}</td>
       </tr>
       <tr class="oc-total-tr">
-        <td style="border:1px solid #888;text-align:right;padding:8px 14px" colspan="3">TOTAL</td>
+        <td style="border:1px solid #888;text-align:right;padding:8px 14px" colspan="3">${oc.ivaIncluido ? 'GRAN TOTAL (CON IVA)' : 'TOTAL'}</td>
         <td style="border:1px solid #888;text-align:right;padding:8px 14px;white-space:nowrap">Q ${fmtQ(oc.total)}</td>
       </tr>`}
     </tbody>
@@ -19079,15 +19081,15 @@ ${!showDraft ? '<button class="btn-print no-print" onclick="window.print()">IMPR
     </div>
     <div class="oc-firma" style="position:relative">
       ${oc.autorizadoPor ? `
+        <!-- v927: sello rojo REVISADO con fecha, como el sello físico de la empresa -->
+        <div style="display:inline-block;border:2px solid #D0151C;border-radius:4px;padding:5px 16px;margin-bottom:4px;transform:rotate(-1.5deg);background:rgba(208,21,28,.03)">
+          <div style="color:#D0151C;font-weight:900;letter-spacing:2px;font-size:13px;text-align:center">REVISADO</div>
+          <div style="color:#D0151C;font-size:10px;font-weight:700;margin-top:2px">Fecha: <span style="display:inline-block;min-width:70px;border-bottom:1.5px solid #D0151C;text-align:center;font-weight:800">${_fechaSelloCorta(oc.autorizadoTs)}</span></div>
+        </div>
         ${_miFirmaImg(oc.autorizadoPorUsername) ? `<img src="${_miFirmaImg(oc.autorizadoPorUsername)}" style="height:50px;max-width:230px;object-fit:contain;display:block;margin:0 auto">` : `<div class="firma-script">${oc.firmaDigital || oc.autorizadoPor}</div>`}
         <div class="nombre">${String(oc.autorizadoPor).toUpperCase()}</div>
         <div class="cargo">AUTORIZADO POR — REVISIÓN Y VISTO BUENO</div>
         ${oc.selloDigital ? `<div style="font-size:8px;color:#555;margin-top:3px;letter-spacing:.5px">${oc.selloDigital}</div>` : ''}
-        <div class="oc-auth-seal-bottom">
-          <div class="seal-check">✓</div>
-          <div class="seal-lbl">AUTORIZADO</div>
-          <div class="seal-date">${oc.autorizadoTs ? new Date(oc.autorizadoTs).toLocaleDateString('es-GT', {day:'2-digit',month:'2-digit',year:'numeric'}) : ''}</div>
-        </div>
       ` : `
         <div style="height:28px"></div>
         <div class="nombre" style="color:#999">_______________________________</div>
