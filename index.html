@@ -3049,7 +3049,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v936</span>
+    <span style="opacity:.5;font-size:9px">v937</span>
   </footer>
 
 </div>
@@ -49251,6 +49251,37 @@ async function _anulAnularReal(){
       +'<input id="antAutMotivo" placeholder="MOTIVO DEL RECHAZO" style="'+_antInp+';text-transform:uppercase">'
       +'<button class="btn ghost" onclick="window.rechazarSolicitudAnticipoFlujo(\''+esc(sol.id)+'\')" style="width:100%;border-color:#C62828;color:#C62828;padding:9px;font-size:12px;font-weight:700;margin-top:8px">RECHAZAR SOLICITUD</button></div>');
   };
+  // v937: COMENTARIO DE COMPRAS — para avisar "no existe / no está el producto" sin
+  // rechazar la solicitud. Notifica a quien PIDIÓ (email) y a gerencia (campanita +
+  // push en tiempo real, ambos sistemas vía _antSolicNotif). Sella s._ts (union merge).
+  window._antAbrirComentar = function(solId){
+    if(!_antSolicPerm('anticipos.cotizar') && !_antEsGerente()){ showT('SOLO COMPRAS O GERENTE','red'); return; }
+    const sol = _antSolics().find(s=>s.id===solId); if(!sol){ return; }
+    _antModalWrap('antComModal','COMENTARIO DE COMPRAS',
+      '<div style="background:#FAFAFA;border:1px solid #EEE;border-radius:8px;padding:12px;margin-bottom:14px;font-size:12.5px;line-height:1.6">'
+      +'<div style="font-weight:800">'+esc(sol.colaboradorNombre||'—')+'</div>'
+      +'<div style="color:#555">'+esc(_subtipoLabelAnt(sol.subtipo))+' · '+esc(sol.descripcion||'')+'</div>'
+      +'<div style="color:#888;font-size:11px;margin-top:4px">Pidió: '+esc(sol.solicitadoPorNombre||sol.solicitadoPor||'—')+' · se le notificará el comentario</div>'
+      +'</div>'
+      +'<label style="display:block;margin-bottom:14px"><span style="'+_antLbl+'">Comentario (p. ej. "EL PRODUCTO NO EXISTE / NO HAY EN TALLA 39")</span>'
+      +'<textarea id="antComTexto" rows="3" style="'+_antInp+';resize:vertical;text-transform:uppercase" placeholder="ESCRIBÍ EL COMENTARIO…"></textarea></label>'
+      +'<button class="btn" onclick="window.comentarSolicitudAnticipo(\''+esc(sol.id)+'\')" style="width:100%;background:#B45309;border-color:#B45309;color:#fff;padding:11px;font-size:12.5px;font-weight:700">GUARDAR Y NOTIFICAR</button>');
+  };
+  window.comentarSolicitudAnticipo = function(solId){
+    if(!_antSolicPerm('anticipos.cotizar') && !_antEsGerente()){ showT('SOLO COMPRAS O GERENTE','red'); return; }
+    const sol = _antSolics().find(s=>s.id===solId); if(!sol){ showT('SOLICITUD NO DISPONIBLE','red'); return; }
+    const texto = String((document.getElementById('antComTexto')||{}).value||'').trim().toUpperCase();
+    if(!texto){ showT('ESCRIBÍ EL COMENTARIO','red'); return; }
+    const n = new Date();
+    const cuandoStr = String(n.getDate()).padStart(2,'0')+'/'+String(n.getMonth()+1).padStart(2,'0')+'/'+n.getFullYear()+' '+String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0');
+    if(!Array.isArray(sol.comentarios)) sol.comentarios = [];
+    sol.comentarios.push({ ts: Date.now(), por: (typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):''), cuando: cuandoStr, texto: texto });
+    sol._ts = Date.now(); // regla v891: la mutación sella _ts para ganar en el union merge
+    _antSolicNotif(['planilla.authorize','users.manage'], [sol.solicitadoPor], 'COMENTARIO DE COMPRAS EN SOLICITUD', 'Solicitud de '+(sol.colaboradorNombre||'—')+': '+texto);
+    var m=document.getElementById('antComModal'); if(m) m.remove();
+    _antSolicSave();
+    showT('COMENTARIO GUARDADO Y NOTIFICADO','green');
+  };
   // Render de la vista SOLICITUDES
   function _antSolicRender(cont){
     const all = _antSolics().slice().sort((a,b)=>(Number(b._ts)||0)-(Number(a._ts)||0));
@@ -49308,17 +49339,25 @@ async function _anulAnularReal(){
         if(s.facturaUrl) _b.push('FACTURA: <a href="'+esc(s.facturaUrl)+'" target="_blank" style="color:#15803D;text-decoration:underline">ver</a>');
         docsVer = '<div style="font-size:11px;color:#15803D;margin-top:3px">'+_b.join(' · ')+'</div>';
       }
+      // v937: COMENTAR (compras/gerente) en estados activos — "no existe / no está el producto"
+      if((s.estado==='pendiente_cotizacion'||s.estado==='pendiente_autorizacion'||s.estado==='autorizada') && (puedeCotizar||esGer)) acciones += '<button class="btn ghost sm" onclick="window._antAbrirComentar(\''+esc(s.id)+'\')" style="border-color:#B45309;color:#B45309;padding:6px 14px;font-size:11px">COMENTAR</button>';
       if((s.estado==='pendiente_cotizacion'||s.estado==='pendiente_autorizacion') && (esCreador||esGer)) acciones += '<button class="btn ghost sm" onclick="window.cancelarSolicitudAnticipo(\''+esc(s.id)+'\')" style="border-color:#C62828;color:#C62828;padding:6px 14px;font-size:11px">CANCELAR</button>';
       if(s.estado==='cancelada' && _antEsAdmin()) acciones += '<button class="btn ghost sm" onclick="window.eliminarSolicitudAnticipo(\''+esc(s.id)+'\')" style="border-color:#B91C1C;color:#B91C1C;padding:6px 14px;font-size:11px">ELIMINAR</button>'; // v844: admin borra canceladas (con tombstone)
       const _cu = (Number(s.cuotas)>0) ? Number(s.cuotas) : ((s.cotMonto && typeof window._v416CuotasPorMonto==='function') ? window._v416CuotasPorMonto(Number(s.cotMonto)||0) : 0); // v822: cuántas cuotas (sol.cuotas o regla v416 por monto)
       const cot = (s.cotProveedor||s.cotMonto) ? ('<div style="font-size:11px;color:#1565C0;margin-top:3px">Cotización: '+esc(s.cotProveedor||'—')+' · '+_money(Number(s.cotMonto)||0)+(s.cotArchivoUrl?(' · <a href="'+esc(s.cotArchivoUrl)+'" target="_blank" style="color:#1565C0;text-decoration:underline">ver</a>'):'')+(_cu>0?(' · '+_cu+' cuota'+(_cu===1?'':'s')):'')+'</div>') : '';
       const mot = s.motivoRechazo ? ('<div style="font-size:11px;color:#B91C1C;margin-top:3px">Motivo: '+esc(s.motivoRechazo)+'</div>') : '';
+      // v937: comentarios de compras visibles en la tarjeta
+      const coms = (Array.isArray(s.comentarios) && s.comentarios.length)
+        ? '<div style="margin-top:6px;border-left:3px solid #F59E0B;background:#FFFBEB;border-radius:0 6px 6px 0;padding:5px 9px">'
+          + s.comentarios.map(function(c){ return '<div style="font-size:11px;color:#92400E;margin:2px 0">COMPRAS: '+esc(c.texto||'')+' <span style="color:#B45309;font-size:9.5px">· '+esc(c.por||'')+' · '+esc(c.cuando||'')+'</span></div>'; }).join('')
+          + '</div>'
+        : '';
       const refFoto = s.refFotoUrl ? ('<div style="font-size:11px;color:#1565C0;margin-top:3px"><a href="'+esc(s.refFotoUrl)+'" target="_blank" style="color:#1565C0;text-decoration:underline">VER FOTO DE REFERENCIA</a></div>') : ''; // v842: foto de referencia de la solicitud
       html += '<div style="border:1px solid #E5E7EB;border-radius:8px;padding:12px;background:#FAFAFA;text-transform:uppercase">' // v820: tarjeta de solicitud TODO en mayúsculas
         + '<div style="display:flex;justify-content:space-between;align-items:start;gap:8px;flex-wrap:wrap">'
         +   '<div><div style="font-size:13px;font-weight:800;color:#1a1a1a">'+esc(s.colaboradorNombre||'—')+'</div>'
         +     '<div style="font-size:11.5px;color:#555;margin-top:2px">'+esc(_subtipoLabelAnt(s.subtipo))+' · '+esc(s.descripcion||'')+'</div>'
-        +     cot + mot + refFoto + docsVer
+        +     cot + mot + coms + refFoto + docsVer
         +     '<div style="font-size:10.5px;color:#888;margin-top:3px">'+esc(s.projectName||'')+' · pidió '+esc(s.solicitadoPorNombre||s.solicitadoPor||'—')+' · '+esc(s.solicitadoEn||'')+'</div>'
         +   '</div>'
         +   '<span style="font-size:9.5px;font-weight:800;letter-spacing:.5px;padding:4px 9px;border-radius:20px;white-space:nowrap;color:'+meta.c+';background:'+meta.bg+'">'+meta.t+'</span>'
