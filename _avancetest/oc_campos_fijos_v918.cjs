@@ -15,7 +15,7 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 ok('FECHA de la OC bloqueada (disabled)', /<input id="ocFecha" type="date"[^>]*disabled/.test(html));
 ok('PROYECTO bloqueado (readonly)', /<input id="ocProyecto" type="text"[^>]*readonly/.test(html));
 ok('ÁREA/NIVEL bloqueado (readonly)', /<input id="ocArea" type="text"[^>]*readonly/.test(html));
-ok('FECHA DE ENTREGA sigue editable (compras puede cambiarla)', /<input id="ocFechaEntrega" type="text"(?![^>]*readonly)(?![^>]*disabled)/.test(html));
+ok('FECHA DE ENTREGA sigue editable (compras puede cambiarla; v932 la volvió calendario)', /<input id="ocFechaEntrega" (?![^>]*readonly)(?![^>]*disabled)/.test(html));
 
 // ── 2: proveedor histórico por material ──
 const deps = extractFn('normOcName') + '\n' + extractFn('_ocItemMemKey') + '\n';

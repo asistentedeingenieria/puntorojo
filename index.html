@@ -3037,7 +3037,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v931</span>
+    <span style="opacity:.5;font-size:9px">v932</span>
   </footer>
 
 </div>
@@ -3402,7 +3402,7 @@ table{max-width:100%}
         </div>
         <div class="field">
           <label>FECHA DE ENTREGA</label>
-          <input id="ocFechaEntrega" type="text" inputmode="numeric" placeholder="DD/MM/AAAA" maxlength="10" oninput="prFormatDateInput(this)" autocomplete="off">
+          <input id="ocFechaEntrega" type="date" autocomplete="off">
         </div>
       </div>
 
@@ -18163,16 +18163,20 @@ async function openOrdenCompra(){
   const now = new Date();
   document.getElementById('ocFecha').value = _hoyInputISO();
 
-  // Input es text DD/MM/AAAA. Si pd.fechaEntrega ya viene en ese formato, usarlo directo
-  // (desde v915 es la fecha DESEADA que puso el supervisor; compras puede cambiarla acá).
-  let entregaDate;
+  // v932: input type=date (CALENDARIO nativo — pedido de Antonio). pd.fechaEntrega viene en
+  // DD/MM/YYYY (desde v915 es la fecha DESEADA del supervisor; compras puede cambiarla acá)
+  // → convertir a ISO para el calendario. Sin fecha del pedido: mañana (hora LOCAL, v917).
+  let entregaISO;
   if (pd.fechaEntrega && /^\d{2}\/\d{2}\/\d{4}$/.test(pd.fechaEntrega)) {
-    entregaDate = pd.fechaEntrega;
+    const _pf = pd.fechaEntrega.split('/');
+    entregaISO = _pf[2] + '-' + _pf[1] + '-' + _pf[0];
   } else {
     const tmrw = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-    entregaDate = `${String(tmrw.getDate()).padStart(2,'0')}/${String(tmrw.getMonth()+1).padStart(2,'0')}/${tmrw.getFullYear()}`;
+    entregaISO = `${tmrw.getFullYear()}-${String(tmrw.getMonth()+1).padStart(2,'0')}-${String(tmrw.getDate()).padStart(2,'0')}`;
   }
-  document.getElementById('ocFechaEntrega').value = entregaDate;
+  const _feInp = document.getElementById('ocFechaEntrega');
+  _feInp.value = entregaISO;
+  _feInp.min = _hoyInputISO();
 
   document.getElementById('ocProyecto').value = (pd.proyectoPedido || p.name).toUpperCase();
   document.getElementById('ocArea').value = (pd.nivel || '') + (pd.apto ? ' · ' + pd.apto : '');
@@ -18249,20 +18253,29 @@ function _abrirPicker(anchorEl, opts){
   pinta('');
   const inp = panel.querySelector('#_prPickerBusca');
   inp.oninput = () => pinta(inp.value.trim().toUpperCase());
-  try { inp.focus(); } catch(e) {}
+  // v932: el anti-autofill (v487) endurece este input (readonly-hasta-foco) DESPUÉS de que
+  // el focus() síncrono ya corrió → el desbloqueo-al-enfocar nunca dispara y BUSCAR queda
+  // muerto. Antídoto v695 (kiosko): esperar al observer, quitar el candado y re-enfocar.
+  setTimeout(function(){ try { inp.removeAttribute('readonly'); inp.removeAttribute('data-naf-ro'); } catch(e){} try { inp.focus(); } catch(e){} }, 120);
   window._pickerOpen = panel;
   setTimeout(() => {
     document.addEventListener('mousedown', _pickerOutside, true);
-    window.addEventListener('scroll', _cerrarPicker, true); // el panel es fixed: al hacer scroll se cierra
+    window.addEventListener('scroll', _pickerScroll, true); // el panel es fixed: scroll de la PÁGINA lo cierra (v932: el de su propia lista NO)
   }, 0);
 }
 function _pickerOutside(ev){ const p = window._pickerOpen; if (p && !p.contains(ev.target)) _cerrarPicker(); }
+// v932: la captura en window también ve el scroll de la lista interna del panel — eso NO debe cerrarlo.
+function _pickerScroll(ev){
+  const p = window._pickerOpen;
+  if (p && ev && ev.target && ev.target.nodeType === 1 && p.contains(ev.target)) return;
+  _cerrarPicker();
+}
 function _cerrarPicker(){
   const p = window._pickerOpen;
   if (!p) return;
   p.remove(); window._pickerOpen = null;
   document.removeEventListener('mousedown', _pickerOutside, true);
-  window.removeEventListener('scroll', _cerrarPicker, true);
+  window.removeEventListener('scroll', _pickerScroll, true);
 }
 window._abrirPicker = _abrirPicker; window._cerrarPicker = _cerrarPicker;
 
@@ -18653,10 +18666,10 @@ async function generarOrdenCompra(){
   }
 
   const fechaOc = inputToDate(document.getElementById('ocFecha').value);
-  // ocFechaEntrega ya esta en DD/MM/AAAA (text input con mascara)
-  const fechaEntregaNueva = prValidateDDMMYYYY(document.getElementById('ocFechaEntrega').value);
+  // v932: ocFechaEntrega es type=date (ISO) → el resto del flujo sigue en DD/MM/YYYY
+  const fechaEntregaNueva = _fechaInputALatam(document.getElementById('ocFechaEntrega').value);
   if (!fechaEntregaNueva) {
-    return showToast('FECHA DE ENTREGA INVALIDA · USAR DD/MM/AAAA', 'red');
+    return showToast('ELEGÍ LA FECHA DE ENTREGA EN EL CALENDARIO', 'red');
   }
   const proyectoOc = document.getElementById('ocProyecto').value.trim().toUpperCase();
   const areaOc = document.getElementById('ocArea').value.trim().toUpperCase();
