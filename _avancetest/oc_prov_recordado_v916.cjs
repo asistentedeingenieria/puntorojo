@@ -35,7 +35,8 @@ if (srcAuto) {
     + 'var PROVS=[{id:"pr1",nombre:"SISTEGUA",productos:[]}];\n'
     + 'function _getProveedores(){ return PROVS; }\n'
     + 'var P={materiales:{ocProvPorItem:{},postesPrecioMedida:{}}};\n'
-    + 'function activeProj(){ return P; }\n';
+    + 'function activeProj(){ return P; }\n'
+    + 'function _esItemBodega(){ return false; }\n'; // v936: lista de bodega vacía en estos escenarios
   const run = new Function(env + srcAuto
     + '\nreturn function(items, pd, mem){ P.materiales.ocProvPorItem = mem || {}; ocWorkingItems = items; autoAssignOcProviders(pd); return items; };\nvar ocWorkingItems;')();
   const key = new Function(deps + 'return _ocItemMemKey;')()("POSTE DE 2½\" X 9.19' (0.35) CAL. 26 (MEDIDA ESPECIAL 2.8 m)");

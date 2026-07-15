@@ -2750,6 +2750,7 @@ table{max-width:100%}
           <button class="mat-tab active" data-pedtab="lista" onclick="setPedidoTab('lista')" style="color:var(--cafe);border-bottom-color:var(--cafe)">LISTA DE PEDIDOS</button>
           <button class="mat-tab" data-pedtab="nuevo" onclick="setPedidoTab('nuevo')" data-perm="pedidos.create">+ NUEVO PEDIDO</button>
           <button class="mat-tab" data-pedtab="receta" onclick="setPedidoTab('receta')" data-perm="pedidos.create">PEDIR DE RECETA</button>
+          <button class="btn ghost sm" data-perm="compras.autorizar|users.manage" onclick="_abrirModalBodega()" style="margin-left:auto;align-self:center" title="Marcar los materiales DE BODEGA y comprar stock para la bodega central desde la receta">ABASTECER BODEGA</button>
         </div>
 
         <!-- LISTA DE PEDIDOS -->
@@ -3048,7 +3049,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v935</span>
+    <span style="opacity:.5;font-size:9px">v936</span>
   </footer>
 
 </div>
@@ -18103,7 +18104,20 @@ function autoAssignOcProviders(pd){
   // v916: memoria proveedor-por-material (solo pedidos DE RECETA — la primera OC enseña)
   const _memProv = (_p && _p.materiales && _p.materiales.ocProvPorItem) || {};
   const _esReceta = !!(pd && pd.esDeReceta);
+  // v936: en pedidos de ABASTECIMIENTO compras le está COMPRANDO al proveedor los
+  // materiales de bodega para reponer stock — ahí la lista NO debe auto-asignar despacho.
+  const _esAbasto = !!(pd && (pd.esAbastecimiento || String(pd.proyectoPedido || '').indexOf('OFICINA CENTRAL') > -1));
   ocWorkingItems.forEach(it => {
+    // v936: material en la LISTA DE BODEGA → DESPACHO automático desde la bodega central.
+    // Va ANTES del catálogo de precios: estos materiales SÍ tienen precio de catálogo
+    // (para que la receta muestre costos) y por eso antes se iban al proveedor del
+    // catálogo en vez de salir de bodega ("no quedó bien" — reporte de Antonio).
+    if (!_esAbasto && _esItemBodega(it.name)) {
+      it.proveedorId = '_bodega';
+      it.eventual = false;
+      it.esBodega = true;
+      return;
+    }
     const best = findBestProviderForItem(it.name);
     if (best) {
       it.proveedorId = best.proveedor.id;
@@ -18150,6 +18164,141 @@ function autoAssignOcProviders(pd){
     }
   });
 }
+
+/* ── v936: LISTA GLOBAL DE MATERIALES DE BODEGA + ABASTECER BODEGA ──
+   El supervisor pide su etapa completa SIN saber qué materiales se manejan en oficina
+   (solo compras lo sabe). Los materiales marcados en la lista salen pre-asignados a
+   BODEGA CENTRAL (despacho) al generar las OC. La lista es GLOBAL — la bodega central
+   sirve a todas las obras (decisión de Antonio). Key normalizada con _ocItemMemKey. */
+function _esItemBodega(name){
+  const k = _ocItemMemKey(name);
+  return !!(((state || {}).bodegaItemsGlobal) || {})[k];
+}
+function _toggleItemBodega(name){
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN ADMINISTRAN LA LISTA DE BODEGA', 'red');
+  const k = _ocItemMemKey(name);
+  if (!state.bodegaItemsGlobal || typeof state.bodegaItemsGlobal !== 'object') state.bodegaItemsGlobal = {};
+  if (state.bodegaItemsGlobal[k]) delete state.bodegaItemsGlobal[k];
+  else state.bodegaItemsGlobal[k] = 1;
+  saveState();
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
+}
+
+/* v936: productos ÚNICOS de la receta del proyecto activo con su total sugerido
+   (tn manda; sin tn se suman las columnas por apto — misma regla v907). */
+function _bodegaProductosDeReceta(p){
+  const rv = p && p.materiales && p.materiales.recetaV2;
+  const out = {};
+  if (!rv || !rv.niveles) return [];
+  Object.keys(rv.niveles).forEach(lid => {
+    const nv = rv.niveles[lid] || {};
+    [0, 1, 2, 3].forEach(si => {
+      (nv[si] || []).forEach(it => {
+        if (!it || !it.m) return;
+        const name = it.nc || it.m;
+        const k = _ocItemMemKey(name);
+        if (!out[k]) out[k] = { key: k, name: name, u: it.u || '', total: 0 };
+        const t = (typeof it.tn === 'number') ? it.tn : Object.values(it.aptos || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+        out[k].total += Number(t) || 0;
+      });
+    });
+  });
+  return Object.values(out).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+}
+
+/* v936: modal a nivel BODY (regla v913). Los nombres reales traen comillas (1") —
+   NADA de nombres en atributos onclick (trampa escapeAttr v740): se cablea por índice. */
+function _abrirModalBodega(){
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
+  if (document.getElementById('_bodegaModal')) return;
+  const p = activeProj();
+  const prods = _bodegaProductosDeReceta(p);
+  const filas = prods.map((x, i) => `
+    <div style="display:grid;grid-template-columns:34px minmax(0,1fr) 110px 110px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
+      <input type="checkbox" data-bi="${i}" ${_esItemBodega(x.name) ? 'checked' : ''} style="width:16px;height:16px;accent-color:#D0151C" title="DE BODEGA: sale como DESPACHO automático en las OC de obra">
+      <div style="font-size:11.5px;letter-spacing:.2px">${x.name}<span style="color:#9CA3AF;font-size:10px">${x.u ? ' · ' + x.u : ''}</span></div>
+      <div data-bsug="${i}" style="text-align:right;font-size:11.5px;color:#78716C;cursor:pointer;text-decoration:underline dotted" title="Usar el total de la receta como cantidad">${x.total}</div>
+      <input type="number" data-bqty="${i}" min="0" step="any" placeholder="—" style="width:100%;padding:6px 8px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:12px;text-align:right;box-sizing:border-box">
+    </div>`).join('') || '<div style="padding:24px;text-align:center;color:#9CA3AF;font-size:11px">ESTE PROYECTO NO TIENE RECETA CARGADA</div>';
+  const wrap = document.createElement('div');
+  wrap.id = '_bodegaModal';
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:100070;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+  wrap.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:760px;width:100%;max-height:88vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid rgba(0,0,0,.08)">
+      <b style="font-size:13px;letter-spacing:.5px">ABASTECER BODEGA CENTRAL</b>
+      <div style="font-size:11px;color:#78716C;margin-top:4px;line-height:1.5">Marcá con el check los materiales <b>DE BODEGA</b> (cuando un supervisor pida su etapa, esos saldrán solos como ORDEN DE DESPACHO). Ponele cantidad a los que le querás comprar al proveedor para stock — tocá el total de la receta para usarlo de sugerido.</div>
+    </div>
+    <div style="display:grid;grid-template-columns:34px minmax(0,1fr) 110px 110px;gap:10px;padding:10px 18px 4px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700"><span>BOD.</span><span>MATERIAL</span><span style="text-align:right">TOTAL RECETA</span><span style="text-align:right">CANTIDAD</span></div>
+    <div style="overflow:auto;flex:1;padding:0 18px 8px">${filas}</div>
+    <div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;align-items:end">
+      <label style="font-size:8.5px;letter-spacing:1.5px;color:#78716C;font-weight:700">ENTREGA<br><input type="date" id="_bodegaFecha" style="margin-top:3px;padding:6px 8px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:12px"></label>
+      <div style="flex:1"></div>
+      <button class="btn ghost" onclick="_cerrarModalBodega()">CERRAR</button>
+      <button class="btn primary" onclick="_bodegaGenerarPedido()">GENERAR PEDIDO DE ABASTECIMIENTO</button>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap);
+  const _f = document.getElementById('_bodegaFecha'); if (_f) _f.min = _hoyInputISO();
+  window._bodegaProds = prods;
+  wrap.querySelectorAll('input[data-bi]').forEach(chk => chk.addEventListener('change', () => _toggleItemBodega(window._bodegaProds[Number(chk.dataset.bi)].name)));
+  wrap.querySelectorAll('[data-bsug]').forEach(el => el.addEventListener('click', () => {
+    const q = wrap.querySelector('input[data-bqty="' + el.dataset.bsug + '"]');
+    if (q) q.value = window._bodegaProds[Number(el.dataset.bsug)].total;
+  }));
+}
+function _cerrarModalBodega(){ const m = document.getElementById('_bodegaModal'); if (m) m.remove(); window._bodegaProds = null; }
+
+/* v936: crea el pedido de ABASTECIMIENTO (compras compra stock para la bodega central).
+   No toca etapasPedidas ni la cobertura del supervisor: sin recetaKeys ni recetaQty. */
+function _bodegaGenerarPedido(){
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
+  const m = document.getElementById('_bodegaModal'); if (!m) return;
+  const prods = window._bodegaProds || [];
+  const items = {};
+  let n = 0;
+  m.querySelectorAll('input[data-bqty]').forEach(inp => {
+    const q = Number(inp.value);
+    if (!(q > 0)) return;
+    const x = prods[Number(inp.dataset.bqty)];
+    if (!x) return;
+    items[x.name] = q; n++;
+  });
+  if (!n) return showToast('PONÉ CANTIDAD A AL MENOS UN MATERIAL', 'red');
+  const fIso = (document.getElementById('_bodegaFecha') || {}).value;
+  if (!fIso) return showToast('ELEGÍ LA FECHA DE ENTREGA', 'red');
+  const fechaEntrega = _fechaInputALatam(fIso);
+  const u = getCurrentUser(); if (!u) return;
+  const p = activeProj();
+  p.materiales.pedidoCounter = (p.materiales.pedidoCounter || 0) + 1;
+  const numero = nextPedidoCode(p);
+  const hoy = new Date();
+  const pedido = {
+    id: 'pd-' + uid(),
+    numero,
+    ts: Date.now(),
+    fecha: `${String(hoy.getDate()).padStart(2,'0')}/${String(hoy.getMonth()+1).padStart(2,'0')}/${hoy.getFullYear()}`,
+    fechaEntrega,
+    solicitante: (u.displayName || u.username || '').toUpperCase(),
+    solicitanteUsername: (u.username || '').toLowerCase(),
+    proyectoPedido: 'OFICINA CENTRAL — ABASTECIMIENTO',
+    proyectoManual: false,
+    nivel: '', apto: 'BODEGA CENTRAL',
+    ordenCambio: '', observaciones: 'ABASTECIMIENTO DE BODEGA — SELECCIONADO DESDE LA RECETA',
+    items, specs: {}, extras: [], metalMedida: [],
+    esDeReceta: true,        // la OC aprende proveedor/precio del catálogo (v916) como los de receta
+    esAbastecimiento: true,  // v936: acá compras COMPRA — la lista de bodega no auto-asigna despacho
+    status: 'SOLICITADO',
+    history: [{ ts: Date.now(), from: null, to: 'SOLICITADO', role: (u.username || 'unknown') }]
+  };
+  p.materiales.pedidos.push(pedido);
+  saveState();
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
+  _cerrarModalBodega();
+  try { if (typeof setPedidoTab === 'function') setPedidoTab('lista'); } catch (e) {}
+  showToast('PEDIDO ' + numero + ' GENERADO — ABRILO EN LA LISTA PARA GENERAR SUS OC', 'green');
+}
+window._abrirModalBodega = _abrirModalBodega; window._cerrarModalBodega = _cerrarModalBodega;
+window._bodegaGenerarPedido = _bodegaGenerarPedido; window._toggleItemBodega = _toggleItemBodega;
 
 async function openOrdenCompra(){
   // Solo quien tiene 'compras.autorizar' o es admin puede generar OCs
