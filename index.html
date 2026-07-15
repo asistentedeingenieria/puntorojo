@@ -3037,7 +3037,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v933</span>
+    <span style="opacity:.5;font-size:9px">v934</span>
   </footer>
 
 </div>
@@ -3455,7 +3455,7 @@ table{max-width:100%}
 
     <div class="modal-actions">
       <button class="btn ghost" onclick="closeModal('ordenCompra')">CANCELAR</button>
-      <button class="btn ghost" onclick="_abrirFirmaModal()" title="Dibujar o cambiar tu firma digital para las OCs">MI FIRMA DIGITAL</button>
+      <button class="btn ghost" onclick="_abrirFirmaModal()" title="Registrar tu firma digital para las OCs (foto o PDF, una única vez)">MI FIRMA DIGITAL</button>
       <button class="btn primary" onclick="generarOrdenCompra()">GENERAR OC POR PROVEEDOR</button>
     </div>
   </div>
@@ -6425,7 +6425,7 @@ function renderUsersList(){
       <div class="u-actions">
         ${u._isPending
           ? `<button class="btn-icon danger" onclick="cancelPendingPhoneUser('${u.pendingPhoneId}')" title="CANCELAR INVITACIÓN">✕</button>`
-          : `<button class="btn ghost sm" onclick="openEditUser('${u.uid}')">EDITAR</button>${!isSelf && !u.isFounder ? `<button class="btn-icon danger" onclick="deleteUser('${u.uid}')" title="ELIMINAR USUARIO">✕</button>` : ''}`}
+          : `${(((state||{}).firmasUsuarios||{})[String(u.username||u.email||'').toLowerCase()]) ? `<button class="btn ghost sm" onclick="_adminBorrarFirma('${String(u.username||u.email||'').toLowerCase()}')" title="Borrar la firma digital registrada para que la vuelva a subir (v934: se registra una única vez)">BORRAR FIRMA</button>` : ''}<button class="btn ghost sm" onclick="openEditUser('${u.uid}')">EDITAR</button>${!isSelf && !u.isFounder ? `<button class="btn-icon danger" onclick="deleteUser('${u.uid}')" title="ELIMINAR USUARIO">✕</button>` : ''}`}
       </div>
     </div>`;
   }).join('');
@@ -18842,42 +18842,142 @@ function _miFirmaImg(username){
   const k = String(username || ((getCurrentUser() || {}).username) || '').toLowerCase();
   return ((state && state.firmasUsuarios) || {})[k] || '';
 }
+/* v934: la firma se REGISTRA UNA ÚNICA VEZ subiendo una FOTO o un PDF (decisión de
+   Antonio — se eliminó el canvas de dibujo v926). El archivo se recorta al trazo, se
+   escala y se comprime a JPEG (firmasUsuarios viaja en el CORE — lección v880: nada de
+   dataURLs gordos). Registrada, solo un admin puede borrarla desde USUARIOS. */
 function _abrirFirmaModal(onSaved){
   if (document.getElementById('_firmaModal')) return;
   const u = getCurrentUser(); if (!u) return;
+  const yaTiene = _miFirmaImg();
+  const cuerpo = yaTiene
+    ? '<div style="padding:16px 18px">'
+      + '<div style="font-size:11.5px;color:#374151;letter-spacing:.3px;line-height:1.5;margin-bottom:12px">TU FIRMA YA ESTÁ REGISTRADA. Se registra una única vez; si necesitás cambiarla, pedile a un administrador que la borre en USUARIOS y volvés a subirla.</div>'
+      + '<img src="' + yaTiene + '" style="height:64px;max-width:100%;object-fit:contain;display:block;margin:0 auto;border:1px dashed #E5E7EB;border-radius:8px;padding:8px;background:#fff">'
+      + '</div>'
+      + '<div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;justify-content:flex-end"><button class="btn primary" onclick="_cerrarFirmaModal()">CERRAR</button></div>'
+    : '<div style="padding:16px 18px">'
+      + '<label class="btn ghost" style="cursor:pointer;display:block;text-align:center;margin:0 0 12px">ELEGIR FOTO O PDF DE MI FIRMA<input type="file" id="_firmaArchivo" accept="image/*,application/pdf" style="display:none" onchange="_firmaArchivoElegido(this)"></label>'
+      + '<div id="_firmaPreviewWrap" style="display:none;margin-bottom:12px"><img id="_firmaPreview" style="height:70px;max-width:100%;object-fit:contain;display:block;margin:0 auto;border:1px dashed #D1D5DB;border-radius:8px;padding:8px;background:#fff"></div>'
+      + '<div style="font-size:11px;color:#78716C;line-height:1.5">Subí una FOTO clara de tu firma sobre papel blanco, o un PDF (se toma la primera página). Se recorta y ajusta automáticamente. <b>Se registra UNA sola vez</b> — después solo un administrador puede cambiarla.</div>'
+      + '</div>'
+      + '<div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;justify-content:flex-end"><button class="btn ghost" onclick="_cerrarFirmaModal()">CANCELAR</button><button class="btn primary" id="_firmaGuardarBtn" onclick="_firmaGuardar()" disabled style="opacity:.5">GUARDAR FIRMA</button></div>';
   const html = '<div id="_firmaModal" style="position:fixed;inset:0;z-index:100400;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px">'
     + '<div style="background:#fff;border-radius:14px;max-width:560px;width:100%;overflow:hidden">'
-    + '<div style="padding:14px 18px;border-bottom:1px solid rgba(0,0,0,.08)"><b style="font-size:13px;letter-spacing:.5px">MI FIRMA DIGITAL</b><div style="font-size:11px;color:#78716C;margin-top:4px">Dibujá tu firma con el mouse o el dedo. Se estampará en las órdenes de compra que generés o autorices.</div></div>'
-    + '<div style="padding:14px 18px"><canvas id="_firmaCanvas" width="500" height="160" style="width:100%;border:1px dashed #D1D5DB;border-radius:8px;background:#fff;touch-action:none;display:block"></canvas></div>'
-    + '<div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;justify-content:flex-end"><button class="btn ghost" onclick="_firmaLimpiar()">LIMPIAR</button><button class="btn ghost" onclick="_cerrarFirmaModal()">CANCELAR</button><button class="btn primary" onclick="_firmaGuardar()">GUARDAR FIRMA</button></div>'
-    + '</div></div>';
+    + '<div style="padding:14px 18px;border-bottom:1px solid rgba(0,0,0,.08)"><b style="font-size:13px;letter-spacing:.5px">MI FIRMA DIGITAL</b><div style="font-size:11px;color:#78716C;margin-top:4px">Se estampará en las órdenes de compra que generés o autorices.</div></div>'
+    + cuerpo + '</div></div>';
   const w = document.createElement('div'); w.innerHTML = html; document.body.appendChild(w.firstElementChild);
-  const cv = document.getElementById('_firmaCanvas');
-  const ctx = cv.getContext('2d');
-  ctx.lineWidth = 2.4; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#1a1a8c';
-  let dibujando = false; window._firmaTrazo = false;
-  const pos = ev => { const r = cv.getBoundingClientRect(); const t = ev.touches ? ev.touches[0] : ev; return { x: (t.clientX - r.left) * (cv.width / r.width), y: (t.clientY - r.top) * (cv.height / r.height) }; };
-  const abajo = ev => { dibujando = true; window._firmaTrazo = true; const p = pos(ev); ctx.beginPath(); ctx.moveTo(p.x, p.y); ev.preventDefault(); };
-  const mueve = ev => { if (!dibujando) return; const p = pos(ev); ctx.lineTo(p.x, p.y); ctx.stroke(); ev.preventDefault(); };
-  const suelta = () => { dibujando = false; };
-  cv.addEventListener('mousedown', abajo); cv.addEventListener('mousemove', mueve); document.addEventListener('mouseup', suelta);
-  cv.addEventListener('touchstart', abajo, { passive: false }); cv.addEventListener('touchmove', mueve, { passive: false }); cv.addEventListener('touchend', suelta);
+  window._firmaDataLista = null;
   window._firmaOnSaved = onSaved || null;
 }
-function _firmaLimpiar(){ const cv = document.getElementById('_firmaCanvas'); if (cv) { cv.getContext('2d').clearRect(0, 0, cv.width, cv.height); window._firmaTrazo = false; } }
-function _cerrarFirmaModal(){ const m = document.getElementById('_firmaModal'); if (m) m.remove(); }
+async function _firmaArchivoElegido(inp){
+  const f = inp && inp.files && inp.files[0]; if (!f) return;
+  try {
+    const data = await _firmaProcesarArchivo(f);
+    window._firmaDataLista = data;
+    const wrap = document.getElementById('_firmaPreviewWrap'), img = document.getElementById('_firmaPreview');
+    if (wrap && img) { img.src = data; wrap.style.display = ''; }
+    const btn = document.getElementById('_firmaGuardarBtn');
+    if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+  } catch (e) {
+    window._firmaDataLista = null;
+    showToast('NO SE PUDO PROCESAR EL ARCHIVO: ' + ((e && e.message) || 'inválido').toUpperCase(), 'red');
+  }
+}
+/* Foto o PDF (primera página) → canvas → recorte del blanco → escala → JPEG compacto. */
+async function _firmaProcesarArchivo(f){
+  let cv;
+  if ((f.type || '').indexOf('pdf') > -1 || /\.pdf$/i.test(f.name || '')) {
+    const L = await _cargarPdfJs();
+    const buf = await f.arrayBuffer();
+    const pdf = await L.getDocument({ data: buf }).promise;
+    const page = await pdf.getPage(1);
+    const vp = page.getViewport({ scale: 2 });
+    cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+    const cx = cv.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, cv.width, cv.height);
+    await page.render({ canvasContext: cx, viewport: vp }).promise;
+  } else {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('la imagen no se pudo leer')); i.src = URL.createObjectURL(f); });
+    // pre-encoger fotos gigantes de celular antes de escanear píxeles
+    const pre = _firmaEscala(img.naturalWidth || img.width, img.naturalHeight || img.height, 1600, 1600);
+    cv = document.createElement('canvas'); cv.width = pre.w; cv.height = pre.h;
+    const cx = cv.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, pre.w, pre.h);
+    cx.drawImage(img, 0, 0, pre.w, pre.h);
+    try { URL.revokeObjectURL(img.src); } catch (e) {}
+  }
+  const rec = _firmaRecortarBlanco(cv);
+  const dim = _firmaEscala(rec.width, rec.height, 700, 220);
+  const out = document.createElement('canvas'); out.width = dim.w; out.height = dim.h;
+  const ox = out.getContext('2d'); ox.fillStyle = '#fff'; ox.fillRect(0, 0, dim.w, dim.h);
+  ox.drawImage(rec, 0, 0, dim.w, dim.h);
+  const data = out.toDataURL('image/jpeg', 0.85);
+  if (data.length > 200000) throw new Error('la imagen quedó muy pesada — probá una foto más cercana de la firma');
+  return data;
+}
+/* Recorta el margen blanco alrededor del trazo (una foto de página entera dejaría la
+   firma en miniatura). Busca el rectángulo de píxeles "oscuros" + un margen. */
+function _firmaRecortarBlanco(cv){
+  const cx = cv.getContext('2d');
+  const d = cx.getImageData(0, 0, cv.width, cv.height).data;
+  let minX = cv.width, minY = cv.height, maxX = -1, maxY = -1;
+  for (let y = 0; y < cv.height; y++) {
+    for (let x = 0; x < cv.width; x++) {
+      const i = (y * cv.width + x) * 4;
+      const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      if (d[i + 3] > 60 && lum < 200) {
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) throw new Error('no se distingue una firma en el archivo');
+  const pad = 12;
+  minX = Math.max(0, minX - pad); minY = Math.max(0, minY - pad);
+  maxX = Math.min(cv.width - 1, maxX + pad); maxY = Math.min(cv.height - 1, maxY + pad);
+  const out = document.createElement('canvas');
+  out.width = maxX - minX + 1; out.height = maxY - minY + 1;
+  out.getContext('2d').drawImage(cv, minX, minY, out.width, out.height, 0, 0, out.width, out.height);
+  return out;
+}
+/* Ajuste con aspecto SIN agrandar. PURA. */
+function _firmaEscala(bw, bh, maxW, maxH){
+  const k = Math.min(maxW / bw, maxH / bh, 1);
+  return { w: Math.max(1, Math.round(bw * k)), h: Math.max(1, Math.round(bh * k)) };
+}
+function _cerrarFirmaModal(){ const m = document.getElementById('_firmaModal'); if (m) m.remove(); window._firmaDataLista = null; }
 function _firmaGuardar(){
-  const cv = document.getElementById('_firmaCanvas'); if (!cv) return;
-  if (!window._firmaTrazo) return showToast('DIBUJÁ TU FIRMA PRIMERO', 'red');
   const u = getCurrentUser(); if (!u) return;
-  const data = cv.toDataURL('image/png');
+  const k = String(u.username || '').toLowerCase();
+  if (((state && state.firmasUsuarios) || {})[k]) return showToast('TU FIRMA YA ESTÁ REGISTRADA — SOLO UN ADMINISTRADOR PUEDE BORRARLA', 'red'); // v934: única vez
+  const data = window._firmaDataLista;
+  if (!data) return showToast('ELEGÍ PRIMERO EL ARCHIVO DE TU FIRMA', 'red');
   if (!state.firmasUsuarios) state.firmasUsuarios = {};
-  state.firmasUsuarios[String(u.username || '').toLowerCase()] = data;
+  state.firmasUsuarios[k] = data;
+  window._firmaDataLista = null;
   saveState();
   try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
   _cerrarFirmaModal();
-  showToast('FIRMA DIGITAL GUARDADA', 'green');
+  showToast('FIRMA DIGITAL REGISTRADA', 'green');
   if (typeof window._firmaOnSaved === 'function') { const cb = window._firmaOnSaved; window._firmaOnSaved = null; cb(data); }
+}
+/* v934: solo un admin borra una firma registrada (desde USUARIOS) para que el usuario
+   pueda subir una nueva. Re-imprimir una orden vieja usará la firma nueva (o el texto
+   cursivo mientras no haya). */
+async function _adminBorrarFirma(key){
+  if (!can('users.manage')) return showToast('SOLO ADMINISTRADOR', 'red');
+  const k = String(key || '').toLowerCase();
+  if (!(((state && state.firmasUsuarios) || {})[k])) return showToast('ESE USUARIO NO TIENE FIRMA REGISTRADA', 'red');
+  const okB = await window.prConfirm({
+    title: 'BORRAR FIRMA DIGITAL',
+    bodyHTML: '<div style="font-size:12px;line-height:1.6">Se borra la firma registrada de <b>' + k + '</b> para que pueda subir una nueva.<br>Las órdenes que se vuelvan a imprimir usarán la firma nueva.</div>',
+    okText: 'BORRAR', cancelText: 'CANCELAR', danger: true
+  });
+  if (!okB) return;
+  delete state.firmasUsuarios[k];
+  saveState();
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
+  showToast('FIRMA BORRADA — EL USUARIO PUEDE REGISTRAR UNA NUEVA', 'green');
+  try { renderUsersList(); } catch (e) {}
 }
 // Ofrecer registrar la firma si falta; si el usuario cierra sin guardar, se sigue con
 // el fallback de texto (la firma es "la opción", no un bloqueo).
@@ -18888,8 +18988,9 @@ function _pedirFirmaSiFalta(){
     const chk = setInterval(() => { if (!document.getElementById('_firmaModal')) { clearInterval(chk); resolve(false); } }, 250);
   });
 }
-window._abrirFirmaModal = _abrirFirmaModal; window._firmaLimpiar = _firmaLimpiar;
+window._abrirFirmaModal = _abrirFirmaModal; window._firmaArchivoElegido = _firmaArchivoElegido;
 window._cerrarFirmaModal = _cerrarFirmaModal; window._firmaGuardar = _firmaGuardar;
+window._adminBorrarFirma = _adminBorrarFirma;
 
 // v927: fecha corta del sello REVISADO (d-m-yy, como el sello físico de la empresa). PURA.
 function _fechaSelloCorta(ts){
@@ -19216,7 +19317,7 @@ ${!showDraft ? '<button class="btn-print no-print" onclick="window.print()">IMPR
   <div class="oc-firmas">
     <div class="oc-firma">
       <!-- v919/v926/v929: firma de quien GENERÓ, chiquita y justo arriba de su línea -->
-      ${_miFirmaImg(oc.generadoPorUsername) ? `<img src="${_miFirmaImg(oc.generadoPorUsername)}" style="height:38px;max-width:200px;object-fit:contain;display:block;margin:0 auto">` : `<div class="firma-script">${oc.generadoPor || 'Depto. de Compras'}</div>`}
+      ${_miFirmaImg(oc.generadoPorUsername) ? `<img src="${_miFirmaImg(oc.generadoPorUsername)}" style="height:52px;max-width:240px;object-fit:contain;display:block;margin:0 auto">` : `<div class="firma-script">${oc.generadoPor || 'Depto. de Compras'}</div>`}
       <div class="firma-linea"></div>
       <div class="nombre">${String(oc.generadoPor || 'DEPTO. DE COMPRAS').toUpperCase()}</div>
       <div class="cargo">GENERADO POR — DEPTO. DE COMPRAS</div>
@@ -19228,7 +19329,7 @@ ${!showDraft ? '<button class="btn-print no-print" onclick="window.print()">IMPR
           <div style="color:#D0151C;font-weight:900;letter-spacing:2px;font-size:13px;text-align:center">REVISADO</div>
           <div style="color:#D0151C;font-size:10px;font-weight:700;margin-top:2px">Fecha: <span style="display:inline-block;min-width:70px;border-bottom:1.5px solid #D0151C;text-align:center;font-weight:800">${_fechaSelloCorta(oc.autorizadoTs)}</span></div>
         </div>
-        ${_miFirmaImg(oc.autorizadoPorUsername) ? `<img src="${_miFirmaImg(oc.autorizadoPorUsername)}" style="height:38px;max-width:200px;object-fit:contain;display:block;margin:0 auto">` : `<div class="firma-script">${oc.firmaDigital || oc.autorizadoPor}</div>`}
+        ${_miFirmaImg(oc.autorizadoPorUsername) ? `<img src="${_miFirmaImg(oc.autorizadoPorUsername)}" style="height:52px;max-width:240px;object-fit:contain;display:block;margin:0 auto">` : `<div class="firma-script">${oc.firmaDigital || oc.autorizadoPor}</div>`}
         <div class="firma-linea"></div>
         <div class="nombre">${String(oc.autorizadoPor).toUpperCase()}</div>
         <div class="cargo">AUTORIZADO POR — REVISIÓN Y VISTO BUENO</div>

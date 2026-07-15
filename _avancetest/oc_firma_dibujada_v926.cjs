@@ -34,9 +34,9 @@ ok('el PDF usa las 3 líneas ordenadas', /_ocNumeroPartes\(oc\)/.test(srcPrint) 
 
 // ── 4: firma dibujada ──
 const srcModal = extractFn('_abrirFirmaModal');
-ok('modal de firma con canvas y soporte touch', /_firmaCanvas/.test(srcModal) && /touchstart/.test(srcModal));
+ok('modal de firma permite registrarla (v934: subiendo foto o PDF, ya sin canvas)', /accept="image\/\*,application\/pdf"/.test(srcModal));
 const srcGuardar = extractFn('_firmaGuardar');
-ok('la firma se guarda por usuario y sube a la nube', /firmasUsuarios/.test(srcGuardar) && /toDataURL/.test(srcGuardar) && /forceUploadNow/.test(srcGuardar));
+ok('la firma se guarda por usuario y sube a la nube', /firmasUsuarios/.test(srcGuardar) && /forceUploadNow/.test(srcGuardar));
 const srcMi = extractFn('_miFirmaImg');
 ok('_miFirmaImg existe', !!srcMi);
 if (srcMi) {

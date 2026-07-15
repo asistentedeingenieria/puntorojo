@@ -22,7 +22,7 @@ ok('.oc-firmas ancladas abajo (margin-top:auto)', /\.oc-firmas\{[^}]*margin-top:
 ok('la línea es elemento propio (.firma-linea)', /\.firma-linea\{border-top:1px solid #222/.test(src));
 ok('.oc-firma ya no dibuja la línea arriba', !/\.oc-firma\{[^}]*border-top/.test(src));
 ok('cursiva reducida (19px, sin flotar -42px)', /firma-script\{[^}]*font-size:19px/.test(src) && !/margin-top:-42px/.test(src));
-ok('firma dibujada a 38px', (src.match(/height:38px;max-width:2\d\dpx;object-fit:contain/g) || []).length >= 2);
+ok('firma a tamaño fijo sobre su línea (v929: 38px; v934 la subió a 52px)', (src.match(/height:52px;max-width:2\d\dpx;object-fit:contain/g) || []).length >= 2);
 ok('las dos columnas ponen la línea bajo la firma', (src.match(/<div class="firma-linea"><\/div>/g) || []).length >= 3);
 
 // ── 3. registro accesible ──
