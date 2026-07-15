@@ -26,8 +26,10 @@ if (srcPred) {
 // ── 2. helper puro _projSinPagosCongelados (forma canónica del proj_) ──
 const srcHelper = extractFn('_projSinPagosCongelados');
 ok('_projSinPagosCongelados existe', !!srcHelper);
+const srcCtx = extractFn('_pagoCongCtx'); // v933: el helper ahora construye contexto (y usa la constante de días)
+const mkCtx = srcCtx ? new Function('_PAGOS_CONG_DIAS', 'return ' + srcCtx)(60) : (() => ({ cerradas: {}, corte: 0 }));
 if (srcHelper && srcPred) {
-  const fn = new Function('_pagoCongelado', 'return ' + srcHelper)(pred);
+  const fn = new Function('_pagoCongelado', '_pagoCongCtx', 'return ' + srcHelper)(pred, mkCtx);
   const p = { id:'e', planilla:{ pagos:[ {id:'r1',bruto:10}, {id:'p1',_preApp:true} ], pagosEliminados:{}, planillasArmadas:[1] }, towers:[] };
   const s = fn(p);
   ok('filtra los congelados', s.planilla.pagos.length===1 && s.planilla.pagos[0].id==='r1');
@@ -42,7 +44,7 @@ const up = extractMethod('async uploadCurrent(){');
 ok('uploadCurrent escribe appState/pagosarch_<id>', up.indexOf("doc('pagosarch_' + _gp.id).set({ pagos:") > -1);
 ok('hash-skip propio (_pagosArchHashes)', /_pagosArchHashes/.test(up));
 ok('fallo de escritura ⇒ viajan embebidos esta vez', /viajan embebidos/.test(up));
-const iSet = up.indexOf("doc('pagosarch_' + _gp.id).set"), iStrip = up.indexOf('_projSinPagosCongelados(_gp)');
+const iSet = up.indexOf("doc('pagosarch_' + _gp.id).set"), iStrip = up.indexOf('_projSinPagosCongelados(_gp'); // v933 le agregó el ctx compartido
 ok('orden seguro: set del doc ANTES del strip del proj_', iSet > -1 && iStrip > iSet);
 const iHashLoop = up.indexOf('const json = JSON.stringify(p);');
 ok('strip ANTES del hash del proyecto', iStrip > -1 && iHashLoop > iStrip);
@@ -53,7 +55,7 @@ const asm = extractMethod('_assembleFromSnap(snap){');
 ok("reconoce doc.id 'pagosarch_*'", asm.indexOf("doc.id.indexOf('pagosarch_') === 0") > -1);
 ok('expone _pagosArchDocOnly y _pagosArchEmbebidaIds', /_pagosArchDocOnly/.test(asm) && /_pagosArchEmbebidaIds/.test(asm));
 if (asm && pred) {
-  const fn = new Function('_pagoCongelado', 'return function ' + asm)(pred);
+  const fn = new Function('_pagoCongelado', '_pagoCongCtx', 'return function ' + asm)(pred, mkCtx);
   const mkSnap = docs => ({ forEach(cb){ docs.forEach(d => cb({ id:d.id, data:()=>d.data })); } });
   const core = { id:'core', data:{ _projectIds:['e','v'], personalGlobal:[] } };
   const out = fn(mkSnap([ core,
@@ -82,7 +84,8 @@ ok('proj_ sin migrar quedan FUERA del hash-skip', /\(merged\._pagosArchEmbebidaI
 ok('llaves transitorias no llegan al cache', /delete merged\._pagosArchDocOnly/.test(ap) && /delete merged\._pagosArchEmbebidaIds/.test(ap));
 
 // ── 6. ritual de sync ──
-ok('APP_SYNC_VERSION subió a 904', /const APP_SYNC_VERSION = 904/.test(html));
+const _asv = (html.match(/const APP_SYNC_VERSION = (\d+)/) || [])[1];
+ok('APP_SYNC_VERSION >= 904 (v931 subió a 904; versiones posteriores no rompen este test)', Number(_asv) >= 904);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

@@ -42,8 +42,8 @@ const asm = extractMethod('_assembleFromSnap(snap){');
 ok("reconoce doc.id 'receta_*'", asm.indexOf("doc.id.indexOf('receta_') === 0") > -1);
 ok('expone _recetaDocOnly y _recetaEmbebidaIds', /_recetaDocOnly/.test(asm) && /_recetaEmbebidaIds/.test(asm));
 if (asm) {
-  // v931 agregó _pagoCongelado dentro de _assembleFromSnap — el arnés lo inyecta (lección v916)
-  const fn = new Function('_pagoCongelado', 'return function ' + asm)(pg => !!(pg && pg._preApp === true));
+  // v931/v933 agregaron _pagoCongelado/_pagoCongCtx dentro de _assembleFromSnap — el arnés los inyecta (lección v916)
+  const fn = new Function('_pagoCongelado', '_pagoCongCtx', 'return function ' + asm)(pg => !!(pg && pg._preApp === true), () => ({ cerradas: {}, corte: 0 }));
   const mkSnap = docs => ({ forEach(cb){ docs.forEach(d => cb({ id:d.id, data:()=>d.data })); } });
   const core = { id:'core', data:{ _projectIds:['e','v'], personalGlobal:[] } };
   // e: proj_ con receta EMBEBIDA y ADEMÁS doc receta_ (el doc manda) · v: solo embebida (sin migrar)
