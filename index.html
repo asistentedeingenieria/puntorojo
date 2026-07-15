@@ -3037,7 +3037,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v930</span>
+    <span style="opacity:.5;font-size:9px">v931</span>
   </footer>
 
 </div>
@@ -8543,7 +8543,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 903;
+const APP_SYNC_VERSION = 904;
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -8853,6 +8853,31 @@ const CloudSync = {
       }
       projects[_ri] = _projSinReceta(_rp);   // confirmado (o null): el proj_ sube SIN la clave recetaV2
     }
+    // ── v931: los pagos CONGELADOS (marcadores PRE-APP, inmutables — en ESSENZA 610 marcas
+    // = 297 KB del proj_) viven en su propio doc appState/pagosarch_<id>. Mismo orden SEGURO
+    // que la receta v930: el doc se CONFIRMA en la nube antes de quitar los congelados del
+    // clon; si falla (reglas/red), viajan embebidos como siempre y nadie pierde nada. En
+    // memoria la app SIEMPRE ve todos los pagos (caliente ∪ congelado, re-unidos en
+    // _assembleFromSnap) — ningún lector cambia (candado, anti-doble-pago, cuadritos, KPIs).
+    if (!this._pagosArchHashes) this._pagosArchHashes = {};
+    for (let _gi = 0; _gi < projects.length; _gi++) {
+      const _gp = projects[_gi];
+      if (!_gp || !_gp.id || !_gp.planilla || !Array.isArray(_gp.planilla.pagos)) continue;
+      const _cong = _gp.planilla.pagos.filter(_pagoCongelado);
+      if (_cong.length) {
+        const _gjson = JSON.stringify(_cong);
+        if (_gjson.length > 900000) console.warn('[SIZE] pagos congelados de "'+(_gp.name||_gp.id)+'": '+Math.round(_gjson.length/1024)+' KB (límite Firestore 1 MB)');
+        if (this._pagosArchHashes[_gp.id] !== _gjson) {
+          try { await db.collection('appState').doc('pagosarch_' + _gp.id).set({ pagos: _cong, _lastUpdate: stamp }); this._pagosArchHashes[_gp.id] = _gjson; }
+          catch(e){ console.warn('Doc de pagos congelados no se subió (viajan embebidos esta vez):', e && e.message); continue; }
+        }
+      } else if (this._pagosArchHashes[_gp.id]) {
+        // ya no queda ningún congelado (p. ej. anulados con tombstone) → borrar el doc para que no resuciten
+        try { await db.collection('appState').doc('pagosarch_' + _gp.id).delete(); delete this._pagosArchHashes[_gp.id]; }
+        catch(e){ console.warn('Doc de pagos congelados no se pudo borrar:', e && e.message); }
+      }
+      projects[_gi] = _projSinPagosCongelados(_gp); // confirmado: el proj_ sube SOLO los pagos calientes
+    }
     const seen = {};
     projects.forEach(p => {
       if (!p || !p.id) return;
@@ -8876,6 +8901,11 @@ const CloudSync = {
       if (seen[id]) return;
       const _cs = this;
       db.collection('appState').doc('receta_' + id).delete().then(() => { delete _cs._recetaHashes[id]; }).catch(()=>{});
+    });
+    Object.keys(this._pagosArchHashes).forEach(id => {          // v931: borrar docs de pagos congelados de proyectos eliminados
+      if (seen[id]) return;
+      const _cs = this;
+      db.collection('appState').doc('pagosarch_' + id).delete().then(() => { delete _cs._pagosArchHashes[id]; }).catch(()=>{});
     });
     const CHUNK = 450;
     for (let i = 0; i < ops.length; i += CHUNK) {
@@ -8987,11 +9017,13 @@ const CloudSync = {
   _assembleFromSnap(snap){
     if (!snap) return null;
     let core = null, facesData = null, asistData = null; const projById = {}; const recetaById = {}; // v930
+    const pagosArchById = {}; // v931
     snap.forEach(doc => {
       if (doc.id === 'core') core = doc.data();
       else if (doc.id === 'faces') { const d = doc.data(); facesData = (d && d.faces && typeof d.faces==='object') ? d.faces : null; }
       else if (doc.id === 'asistencia') { const d = doc.data(); asistData = (d && d.asistencia && typeof d.asistencia==='object') ? d.asistencia : null; } // v649
       else if (doc.id.indexOf('receta_') === 0) { const d = doc.data(); if (d && d.recetaV2 && typeof d.recetaV2==='object') recetaById[doc.id.slice(7)] = d.recetaV2; } // v930
+      else if (doc.id.indexOf('pagosarch_') === 0) { const d = doc.data(); if (d && Array.isArray(d.pagos)) pagosArchById[doc.id.slice(10)] = d.pagos; } // v931
       else if (doc.id.indexOf('proj_') === 0) { const d = doc.data(); if (d && d.p) projById[doc.id.slice(5)] = d.p; }
     });
     if (!core) return null;
@@ -9022,6 +9054,31 @@ const CloudSync = {
       });
       data._recetaDocOnly = recetaById;
       data._recetaEmbebidaIds = _embIds;
+    }
+    // v931: re-unir los pagos CONGELADOS desde su doc appState/pagosarch_<id> al array vivo.
+    // El caliente MANDA en duplicados por id (si una reparación tocó un pago, la versión viva
+    // gana) y los tombstones (pagosEliminados) también filtran lo congelado — un pago anulado
+    // no resucita desde el doc. _pagosArchDocOnly siembra los hashes en applyRemote;
+    // _pagosArchEmbebidaIds = proj_ que aún traen congelados adentro → applyRemote los saca
+    // del hash-skip y la próxima subida los migra (automático, sin comandos).
+    {
+      const _gEmbIds = [];
+      data.projects.forEach(p => {
+        if (!p || !p.id) return;
+        const _pla = p.planilla;
+        const _hot = (_pla && Array.isArray(_pla.pagos)) ? _pla.pagos : [];
+        if (_hot.some(_pagoCongelado)) _gEmbIds.push(p.id);
+        const _arch = pagosArchById[p.id];
+        if (!_arch || !_arch.length) return;
+        const _hotIds = {}; _hot.forEach(pg => { if (pg && pg.id) _hotIds[pg.id] = 1; });
+        const _tomb = (_pla && _pla.pagosEliminados && typeof _pla.pagosEliminados === 'object') ? _pla.pagosEliminados : {};
+        const _add = _arch.filter(pg => pg && pg.id && !_hotIds[pg.id] && !_tomb[pg.id]);
+        if (!_add.length) return;
+        if (!p.planilla) p.planilla = {};
+        p.planilla.pagos = _hot.concat(_add);
+      });
+      data._pagosArchDocOnly = pagosArchById;
+      data._pagosArchEmbebidaIds = _gEmbIds;
     }
     // v633: re-adjuntar las caras desde el doc appState/faces a cada persona (el core ya no las trae).
     if (facesData && Array.isArray(data.personalGlobal)) {
@@ -9158,6 +9215,11 @@ const CloudSync = {
     // → la próxima subida la MIGRA a su doc appState/receta_<id> (mismo patrón que asistencia).
     try { const _rdo = merged._recetaDocOnly || {}; const _rh = {}; Object.keys(_rdo).forEach(id => { if (_rdo[id]) _rh[id] = JSON.stringify(_rdo[id]); }); this._recetaHashes = _rh; } catch(e){ this._recetaHashes = {}; }
     try { delete merged._recetaDocOnly; } catch(e){}
+    // v931: sembrar los hashes de pagos congelados con lo BAJADO DE LOS DOCS (no lo embebido):
+    // congelados que solo vinieron dentro del proj_ quedan FUERA del hash → la próxima subida
+    // los migra a su doc pagosarch_ (mismo patrón de migración que receta v930 / asistencia v649).
+    try { const _gdo = merged._pagosArchDocOnly || {}; const _gh = {}; Object.keys(_gdo).forEach(id => { if (_gdo[id]) _gh[id] = JSON.stringify(_gdo[id]); }); this._pagosArchHashes = _gh; } catch(e){ this._pagosArchHashes = {}; }
+    try { delete merged._pagosArchDocOnly; } catch(e){}
     try {
       if (typeof _mergeAsistencia === 'function') {
         // v666: unir los tombstones de ausencia (local ∪ remoto, conservando el _ts más nuevo por llave)
@@ -9341,8 +9403,9 @@ const CloudSync = {
     // receta vive en su doc aparte y acá viene RE-ADJUNTADA en memoria; hashearla crearía
     // re-escrituras eternas). Los proj_ que AÚN traen la receta embebida (_recetaEmbebidaIds)
     // quedan fuera del hash-skip a propósito: la próxima subida los reescribe adelgazados.
-    { const _nh = {}; (remoteData.projects || []).forEach(pp => { if (pp && pp.id) _nh[pp.id] = JSON.stringify(_projSinReceta(pp)); }); (merged._recetaEmbebidaIds || []).forEach(id => { delete _nh[id]; }); this._projHashes = _nh; }
+    { const _nh = {}; (remoteData.projects || []).forEach(pp => { if (pp && pp.id) _nh[pp.id] = JSON.stringify(_projSinPagosCongelados(_projSinReceta(pp))); }); (merged._recetaEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._pagosArchEmbebidaIds || []).forEach(id => { delete _nh[id]; }); this._projHashes = _nh; }
     try { delete merged._recetaEmbebidaIds; } catch(e){}
+    try { delete merged._pagosArchEmbebidaIds; } catch(e){}
     // v235: restaurar el proyecto activo LOCAL del usuario (no compartir entre sesiones).
     if (localActivePID && (state.projects||[]).some(pp => pp.id === localActivePID)) {
       state.activeProjectId = localActivePID;
@@ -27469,6 +27532,25 @@ function _projSinReceta(p){
   const c = Object.assign({}, p);
   c.materiales = Object.assign({}, p.materiales);
   delete c.materiales.recetaV2;
+  return c;
+}
+
+/* v931: criterio de pago CONGELADO — ÚNICO lugar del criterio. Hoy: solo los marcadores
+   PRE-APP ("pagado antes de usar la app", monto 0, autorizado), inmutables por diseño.
+   Fase 2 futura: extender a pagos de planillas archivada+fechaCierre viejas con la
+   retención resuelta. OJO: ampliar el criterio es seguro (migran al doc congelado en la
+   próxima subida); ENCOGERLO exige pensar la vuelta de los pagos al proj_. */
+function _pagoCongelado(pg){ return !!(pg && pg._preApp === true); }
+
+/* v931: proyecto SIN los pagos congelados — forma canónica del doc proj_ (los congelados
+   viven en su propio doc appState/pagosarch_<id> y se re-unen en memoria al ensamblar).
+   Igual que _projSinReceta: se usa en AMBOS lados del hash-skip. No muta el recibido. */
+function _projSinPagosCongelados(p){
+  if (!p || !p.planilla || !Array.isArray(p.planilla.pagos)) return p;
+  if (!p.planilla.pagos.some(_pagoCongelado)) return p;
+  const c = Object.assign({}, p);
+  c.planilla = Object.assign({}, p.planilla);
+  c.planilla.pagos = p.planilla.pagos.filter(pg => !_pagoCongelado(pg));
   return c;
 }
 

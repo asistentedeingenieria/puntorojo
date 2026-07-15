@@ -42,7 +42,8 @@ const asm = extractMethod('_assembleFromSnap(snap){');
 ok("reconoce doc.id 'receta_*'", asm.indexOf("doc.id.indexOf('receta_') === 0") > -1);
 ok('expone _recetaDocOnly y _recetaEmbebidaIds', /_recetaDocOnly/.test(asm) && /_recetaEmbebidaIds/.test(asm));
 if (asm) {
-  const fn = new Function('return function ' + asm)();
+  // v931 agregó _pagoCongelado dentro de _assembleFromSnap — el arnés lo inyecta (lección v916)
+  const fn = new Function('_pagoCongelado', 'return function ' + asm)(pg => !!(pg && pg._preApp === true));
   const mkSnap = docs => ({ forEach(cb){ docs.forEach(d => cb({ id:d.id, data:()=>d.data })); } });
   const core = { id:'core', data:{ _projectIds:['e','v'], personalGlobal:[] } };
   // e: proj_ con receta EMBEBIDA y ADEMÁS doc receta_ (el doc manda) · v: solo embebida (sin migrar)
@@ -61,12 +62,13 @@ if (asm) {
 // ── 4. applyRemote: siembra + hash canónico + migración forzada ──
 const ap = extractMethod('applyRemote(remoteData, opts = {}){');
 ok('siembra _recetaHashes con lo BAJADO DE LOS DOCS', /_recetaDocOnly/.test(ap) && /this\._recetaHashes = /.test(ap));
-ok('hash de proyectos = _projSinReceta(pp) (canónico, sin churn)', ap.indexOf('_nh[pp.id] = JSON.stringify(_projSinReceta(pp))') > -1);
+ok('hash de proyectos usa _projSinReceta (canónico, sin churn; v931 compone encima)', ap.indexOf('_projSinReceta(pp)') > -1 && /_nh\[pp\.id\] = JSON\.stringify\(.*_projSinReceta\(pp\)\)/.test(ap));
 ok('proj_ sin migrar quedan FUERA del hash-skip', /\(merged\._recetaEmbebidaIds \|\| \[\]\)\.forEach/.test(ap));
 ok('llaves transitorias no llegan al cache', /delete merged\._recetaDocOnly/.test(ap) && /delete merged\._recetaEmbebidaIds/.test(ap));
 
 // ── 5. ritual de sync ──
-ok('APP_SYNC_VERSION subió a 903', /const APP_SYNC_VERSION = 903/.test(html));
+const _asv = (html.match(/const APP_SYNC_VERSION = (\d+)/) || [])[1];
+ok('APP_SYNC_VERSION >= 903 (v930 subió a 903; versiones posteriores no rompen este test)', Number(_asv) >= 903);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
