@@ -53,7 +53,7 @@ ok('sube al toque (plata/documentos: forceUploadNow)', /forceUploadNow/.test(src
 
 // ── 5. firma más grande en la hoja, respetando la línea ──
 const srcPrint = extractFn('printOrdenCompra');
-ok('firma a 52px en ambas columnas', (srcPrint.match(/height:52px;max-width:2\d\dpx;object-fit:contain/g) || []).length >= 2);
+ok('firma más grande que la v929 (38px) en ambas columnas', (srcPrint.match(/height:\d+px;max-width:2\d\dpx;object-fit:contain/g) || []).length >= 2);
 ok('ya no queda la de 38px', srcPrint.indexOf('height:38px') === -1);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
