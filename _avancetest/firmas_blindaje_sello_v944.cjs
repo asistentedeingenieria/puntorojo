@@ -33,7 +33,7 @@ ok('firma y sello van en FILA (flex, sello a la derecha)', /display:flex;align-i
 ok('conserva recuadro rojo, rotación y fecha corta', /border:2px solid #D0151C/.test(src) && /_fechaSelloCorta/.test(src));
 
 // ── 4. ritual de sync ──
-ok('APP_SYNC_VERSION subió a 906', /const APP_SYNC_VERSION = 906/.test(html));
+ok('APP_SYNC_VERSION al menos 906', (Number((html.match(/const APP_SYNC_VERSION = (\d+)/) || [])[1]) || 0) >= 906);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

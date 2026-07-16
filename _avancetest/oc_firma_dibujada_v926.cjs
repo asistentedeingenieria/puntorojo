@@ -15,8 +15,8 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
 const srcPrint = extractFn('printOrdenCompra');
 
-// ── 1+2: encabezado ──
-ok('logo más grande con APP al lado (flex centrado)', /display:flex;align-items:center[^>]*>\s*<img src="\$\{_LOGO_PR\}" style="height:62px/.test(srcPrint) && />APP</.test(srcPrint));
+// ── 1+2: encabezado ── (v948: el "APP" se movió al bloque del No.; el logo quedó solo)
+ok('logo más grande (62px, flex centrado)', /display:flex;align-items:center[^>]*>\s*<img src="\$\{_LOGO_PR\}" style="height:62px/.test(srcPrint));
 
 // ── 3: número en 3 líneas ──
 const srcPartes = extractFn('_ocNumeroPartes');
