@@ -3049,7 +3049,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v943</span>
+    <span style="opacity:.5;font-size:9px">v944</span>
   </footer>
 
 </div>
@@ -8555,7 +8555,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 905;
+const APP_SYNC_VERSION = 906;
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9213,6 +9213,34 @@ const CloudSync = {
         });
       }
     } catch(e){ console.warn('blindaje de caras en applyRemote:', e); }
+
+    // v944 BLINDAJE DE FIRMAS (patrón caras v611): firmasUsuarios viaja en el CORE por
+    // LWW puro — otro dispositivo con copia vieja PISABA una firma recién registrada
+    // ("ya no sale la firma de quien autorizó"). El remoto NUNCA borra una firma local
+    // que no trae; el borrado deliberado (admin, v934) es un tombstone firmasEliminadas
+    // que gana SOLO si es más nuevo que el registro (firmasTs) — así re-registrar tras
+    // un borrado no muere por el tombstone viejo. Idempotente (regla v856).
+    try {
+      const _locF = (state && state.firmasUsuarios && typeof state.firmasUsuarios === 'object') ? state.firmasUsuarios : {};
+      const _remF = (merged.firmasUsuarios && typeof merged.firmasUsuarios === 'object') ? merged.firmasUsuarios : {};
+      const _ft = {};
+      const _locFT = (state && state.firmasTs) || {}, _remFT = merged.firmasTs || {};
+      Object.keys(_locFT).forEach(k => { if (typeof _locFT[k] === 'number') _ft[k] = _locFT[k]; });
+      Object.keys(_remFT).forEach(k => { const v = _remFT[k]; if (typeof v === 'number' && (!(k in _ft) || v > _ft[k])) _ft[k] = v; });
+      const _tombF = {};
+      const _locTF = (state && state.firmasEliminadas) || {}, _remTF = merged.firmasEliminadas || {};
+      Object.keys(_locTF).forEach(k => { if (typeof _locTF[k] === 'number') _tombF[k] = _locTF[k]; });
+      Object.keys(_remTF).forEach(k => { const v = _remTF[k]; if (typeof v === 'number' && (!(k in _tombF) || v > _tombF[k])) _tombF[k] = v; });
+      merged.firmasUsuarios = Object.assign({}, _remF);
+      Object.keys(_locF).forEach(k => {
+        if (!merged.firmasUsuarios[k] && _locF[k]) { merged.firmasUsuarios[k] = _locF[k]; needsResync = true; }
+      });
+      Object.keys(_tombF).forEach(k => {
+        if (merged.firmasUsuarios[k] && _tombF[k] > (_ft[k] || 0)) delete merged.firmasUsuarios[k]; // borrado deliberado más nuevo que el registro
+      });
+      merged.firmasTs = _ft;
+      merged.firmasEliminadas = _tombF;
+    } catch(e){ console.warn('blindaje de firmas en applyRemote:', e); }
 
     // v647/v649 MERGE DE ASISTENCIA entre dispositivos: el remoto NO pisa las marcas (last-write-wins);
     // se UNEN local + remoto por (fecha,persona) tomando la de _ts más nuevo (nunca borra una presente).
@@ -19120,6 +19148,11 @@ function _firmaGuardar(){
   if (!data) return showToast('ELEGÍ PRIMERO EL ARCHIVO DE TU FIRMA', 'red');
   if (!state.firmasUsuarios) state.firmasUsuarios = {};
   state.firmasUsuarios[k] = data;
+  // v944: sellar el registro y limpiar un tombstone previo — el blindaje de applyRemote
+  // compara firmasTs vs firmasEliminadas (el más nuevo gana).
+  if (!state.firmasTs || typeof state.firmasTs !== 'object') state.firmasTs = {};
+  state.firmasTs[k] = Date.now();
+  if (state.firmasEliminadas && state.firmasEliminadas[k]) delete state.firmasEliminadas[k];
   window._firmaDataLista = null;
   saveState();
   try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
@@ -19141,6 +19174,10 @@ async function _adminBorrarFirma(key){
   });
   if (!okB) return;
   delete state.firmasUsuarios[k];
+  // v944: tombstone — sin él, el blindaje de applyRemote (o cualquier dispositivo que aún
+  // tenga la firma local) la resucitaría en la próxima vuelta de sync.
+  if (!state.firmasEliminadas || typeof state.firmasEliminadas !== 'object') state.firmasEliminadas = {};
+  state.firmasEliminadas[k] = Date.now();
   saveState();
   try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
   showToast('FIRMA BORRADA — EL USUARIO PUEDE REGISTRAR UNA NUEVA', 'green');
@@ -19490,13 +19527,15 @@ ${!showDraft ? '<button class="btn-print no-print" onclick="window.print()">IMPR
     <div class="oc-firma" style="position:relative">
       ${oc.autorizadoPor ? `
         <!-- v927: sello rojo REVISADO con fecha, como el sello físico de la empresa.
-             v943: ABSOLUTO al costado DERECHO de la firma, un poco abajo — ya no va en el
-             flujo arriba de la firma (la rozaba). -->
-        <div style="position:absolute;right:-18px;bottom:46px;border:2px solid #D0151C;border-radius:4px;padding:5px 16px;transform:rotate(-6deg);background:rgba(208,21,28,.03)">
-          <div style="color:#D0151C;font-weight:900;letter-spacing:2px;font-size:13px;text-align:center">REVISADO</div>
-          <div style="color:#D0151C;font-size:10px;font-weight:700;margin-top:2px">Fecha: <span style="display:inline-block;min-width:70px;border-bottom:1.5px solid #D0151C;text-align:center;font-weight:800">${_fechaSelloCorta(oc.autorizadoTs)}</span></div>
+             v944: va EN FILA al lado DERECHO de la firma (flex, alineado abajo) —
+             geométricamente imposible que la tape, sea imagen o texto cursivo. -->
+        <div style="display:flex;align-items:flex-end;justify-content:center;gap:8px">
+          ${_miFirmaImg(oc.autorizadoPorUsername) ? `<img src="${_miFirmaImg(oc.autorizadoPorUsername)}" style="height:64px;max-width:200px;object-fit:contain;display:block">` : `<div class="firma-script">${oc.firmaDigital || oc.autorizadoPor}</div>`}
+          <div style="border:2px solid #D0151C;border-radius:4px;padding:4px 12px;margin-bottom:4px;transform:rotate(-6deg);background:rgba(208,21,28,.03);white-space:nowrap">
+            <div style="color:#D0151C;font-weight:900;letter-spacing:2px;font-size:12px;text-align:center">REVISADO</div>
+            <div style="color:#D0151C;font-size:9px;font-weight:700;margin-top:2px">Fecha: <span style="display:inline-block;min-width:56px;border-bottom:1.5px solid #D0151C;text-align:center;font-weight:800">${_fechaSelloCorta(oc.autorizadoTs)}</span></div>
+          </div>
         </div>
-        ${_miFirmaImg(oc.autorizadoPorUsername) ? `<img src="${_miFirmaImg(oc.autorizadoPorUsername)}" style="height:64px;max-width:260px;object-fit:contain;display:block;margin:0 auto">` : `<div class="firma-script">${oc.firmaDigital || oc.autorizadoPor}</div>`}
         <div class="firma-linea"></div>
         <div class="nombre">${String(oc.autorizadoPor).toUpperCase()}</div>
         <div class="cargo">AUTORIZADO POR — REVISIÓN Y VISTO BUENO</div>

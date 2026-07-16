@@ -78,7 +78,8 @@ const asm = extractMethod('_assembleFromSnap(snap){');
 ok('_assembleFromSnap detecta embebidos con _pagoCongCtx', asm.indexOf('_pagoCongCtx(') > -1);
 
 // ── 5. ritual de sync ──
-ok('APP_SYNC_VERSION subió a 905', /const APP_SYNC_VERSION = 905/.test(html));
+const _asv = (html.match(/const APP_SYNC_VERSION = (\d+)/) || [])[1];
+ok('APP_SYNC_VERSION >= 905 (v933 subió a 905; versiones posteriores no rompen este test)', Number(_asv) >= 905);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

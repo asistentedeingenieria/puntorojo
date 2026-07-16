@@ -20,10 +20,10 @@ ok('alto de hoja casi completo (272mm)', /\.oc-sheet\{[^}]*min-height:272mm/.tes
 ok('las firmas siguen ancladas abajo (margin-top:auto, v929)', /\.oc-firmas\{[^}]*margin-top:auto/.test(src));
 
 // ── 2. sello REVISADO al costado derecho, sin tapar la firma ──
-// (anclado al ESTILO del sello — el primer "REVISADO" del fuente es un comentario v941)
-const selloStyle = (src.match(/position:absolute;right:-\d+px;bottom:\d+px;[^"]*/) || [''])[0];
-ok('el sello es absoluto, a la derecha y un poco abajo (fuera del flujo, ya no tapa)', !!selloStyle);
-ok('sigue siendo el recuadro rojo del sello físico', /border:2px solid #D0151C/.test(selloStyle) && /rotate\(-\d+deg\)/.test(selloStyle));
+// (v943 lo puso absoluto; v944 lo pasó a FILA junto a la firma — el invariante es que
+// acompañe a la firma SIN taparla, no la técnica exacta)
+ok('el sello ya no va en el flujo ARRIBA de la firma', !/margin-bottom:4px;transform:rotate\(-1\.5deg\)/.test(src));
+ok('sigue siendo el recuadro rojo del sello físico', /border:2px solid #D0151C/.test(src) && /rotate\(-\d+deg\)/.test(src));
 ok('conserva la fecha corta (v927)', /_fechaSelloCorta/.test(src));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
