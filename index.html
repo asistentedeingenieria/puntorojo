@@ -3049,7 +3049,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v939</span>
+    <span style="opacity:.5;font-size:9px">v940</span>
   </footer>
 
 </div>
@@ -9485,7 +9485,7 @@ const CloudSync = {
     // referencia queda huerfana y el cambio (push/Object.assign/splice) no persiste. Esto
     // arregla de raiz toda la familia "await modal -> escribir" (aprobar/rechazar/procesar/
     // anular planilla, editar/eliminar anticipos y polizas, etc.).
-    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal')) return true; // v841-fix: los modales de anticipo (subida de documentos) posponen applyRemote durante la subida a Storage
+    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936) también
     const focused = document.activeElement;
     if (focused && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)) return true;
     return false;
@@ -18804,8 +18804,8 @@ async function generarOrdenCompra(){
   if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO QUIEN AUTORIZA OC PUEDE GENERARLAS', 'red');
   if (!currentPedidoDetalleId) return;
 
-  const p = activeProj();
-  const pd = p.materiales.pedidos.find(x => x.id === currentPedidoDetalleId);
+  let p = activeProj();
+  let pd = p.materiales.pedidos.find(x => x.id === currentPedidoDetalleId);
   if (!pd) return;
 
   const sinProveedor = ocWorkingItems.filter(it => !it.proveedorId);
@@ -18841,6 +18841,13 @@ async function generarOrdenCompra(){
   // v926: si el generador no ha registrado su firma dibujada, ofrecérsela (opcional —
   // si cierra sin firmar, el PDF usa el texto cursivo de siempre).
   await _pedirFirmaSiFalta();
+
+  // v940 (regla v769): al cerrar los modales se aplica el sync pospuesto (state = merged)
+  // — re-leer `p`/`pd` del state vivo y re-validar el bloqueo v927 antes de escribir.
+  p = activeProj();
+  pd = ((p && p.materiales && p.materiales.pedidos) || []).find(x => x.id === currentPedidoDetalleId);
+  if (!pd) return showToast('EL PEDIDO YA NO EXISTE (CAMBIÓ EN OTRO DISPOSITIVO) — RECARGÁ', 'red');
+  if (getPedidoOrdenes(pd.id).length > 0) return showToast('ESTE PEDIDO YA TIENE SUS ÓRDENES GENERADAS', 'red');
 
   const groups = {};
   ocWorkingItems.forEach(it => {
@@ -19619,8 +19626,8 @@ function renderOrdenesList(){
 async function autorizarOrden(id){
   // v919: autoriza el REVISOR (compras.revisar) — compras genera pero no autoriza
   if (!can('compras.revisar') && !can('users.manage')) return showToast('SOLO EL REVISOR AUTORIZADO PUEDE DAR EL VISTO BUENO Y FIRMAR', 'red');
-  const p = activeProj();
-  const oc = (p.materiales.ordenes || []).find(x => x.id === id);
+  let p = activeProj();
+  let oc = (p.materiales.ordenes || []).find(x => x.id === id);
   if (!oc) return;
 
   if (oc.status === 'AUTORIZADA') return showToast('YA ESTÁ AUTORIZADA', 'amber');
@@ -19659,6 +19666,15 @@ async function autorizarOrden(id){
 
   // v926: si el autorizador no ha registrado su firma dibujada, ofrecérsela
   await _pedirFirmaSiFalta();
+
+  // v940 (regla v769): al CERRAR los modales se aplica el sync que isUserBusy pospuso
+  // (state = merged con objetos nuevos) — `p`/`oc` capturados arriba quedarían huérfanos
+  // y la autorización se escribiría en el vacío ("le di FIRMAR Y AUTORIZAR y no generó
+  // nada"). Re-leer del state VIVO y re-validar antes de escribir.
+  p = activeProj();
+  oc = ((p && p.materiales && p.materiales.ordenes) || []).find(x => x.id === id);
+  if (!oc) return showToast('LA OC YA NO EXISTE (CAMBIÓ EN OTRO DISPOSITIVO) — RECARGÁ LA LISTA', 'red');
+  if (oc.status === 'AUTORIZADA') return showToast('YA ESTÁ AUTORIZADA', 'amber');
 
   // v919: SELLO DIGITAL automático — nombre + fecha y hora quedan estampados en la OC
   const _ahora = new Date();
@@ -19702,6 +19718,7 @@ async function autorizarOrden(id){
 
   logActivity('auth', `OC No. ${oc.numero} AUTORIZADA por Finanzas`, `${p.name} · ${oc.proveedorNombre} · Q ${fmtQ(oc.total)} · ${oc.autorizadoPor}`);
   saveState();
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {} // v940: acción de documento — el primer intento debe subir
   renderOrdenesList();
   showToast(`OC No. ${oc.numero} AUTORIZADA — LISTA PARA IMPRIMIR`, 'green');
 }
