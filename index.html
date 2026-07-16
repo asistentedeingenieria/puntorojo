@@ -3049,7 +3049,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v946</span>
+    <span style="opacity:.5;font-size:9px">v947</span>
   </footer>
 
 </div>
@@ -19636,6 +19636,15 @@ function renderOrdenesList(){
       ? `<button class="btn ghost sm" onclick="previewOrden('${oc.id}')" title="Ver borrador">VER BORRADOR</button>`
       : '';
 
+    // v947: FACTURA del proveedor en OCs autorizadas — sin factura sale el botón (compras);
+    // con factura, el link VER en la info + reemplazo solo admin.
+    const facturaBtn = (isAuth && canDelete && !oc.facturaUrl)
+      ? `<button class="btn ghost sm" onclick="_ocAbrirSubirFactura('${oc.id}')" title="Subir la factura que generó el proveedor">SUBIR FACTURA</button>`
+      : '';
+    const facturaInfo = oc.facturaUrl
+      ? `<div style="font-size:10px;color:#15803D;margin-top:4px;font-weight:700">FACTURA: <a href="${oc.facturaUrl}" target="_blank" style="color:#15803D;text-decoration:underline">VER (${oc.facturaNombre || 'archivo'})</a>${_esAdminOC ? ` · <a href="#" onclick="_ocAbrirSubirFactura('${oc.id}');return false" style="color:#B91C1C;font-size:9px;text-decoration:underline">REEMPLAZAR (ADMIN)</a>` : ''}</div>`
+      : '';
+
     // v935: No. en 3 líneas ordenadas (proyecto / PEDIDO n / OC##, como el encabezado
     // de la hoja v926); si el número viejo no se puede partir, sale plano.
     const _np = _ocNumeroPartes(oc);
@@ -19649,6 +19658,7 @@ function renderOrdenesList(){
       <dl class="oc-list-info" style="margin:0">
         <dd class="proveedor">${oc.proveedorNombre || '—'}</dd>
         <div style="margin-top:4px">${statusBadge}${autorizInfo}</div>
+        ${facturaInfo}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px">
           <div><dt>PROYECTO / ÁREA</dt><dd style="font-size:10.5px">${oc.proyecto || '—'}${oc.area ? ' · ' + oc.area : ''}</dd></div>
           <div><dt>PEDIDO ORIGEN</dt><dd style="font-size:10.5px">${oc.pedidoNumero || '—'}</dd></div>
@@ -19665,6 +19675,7 @@ function renderOrdenesList(){
         ${authBtn}
         ${viewBtn}
         ${printBtn}
+        ${facturaBtn}
         ${canDelete ? `<button class="btn-icon danger" onclick="deleteOrden('${oc.id}')" title="Eliminar orden">✕</button>` : ''}
       </div>
     </div>`;
@@ -19775,6 +19786,79 @@ function previewOrden(id){
   // Versión de solo lectura para finanzas antes de autorizar (mismo formato pero con marca BORRADOR)
   printOrdenCompra(id, true);
 }
+
+/* ── v947: FACTURA del proveedor en la OC AUTORIZADA (patrón anticipos v841) ──
+   Archivo a Storage oc-facturas/ — en el state SOLO la URL (lección v880). IRREVERSIBLE:
+   subida una vez, solo un admin la reemplaza. El modal lleva pr-ant-modal para que
+   isUserBusy posponga applyRemote durante la subida (v841) y aun así se RE-LEE el state
+   vivo tras cada await (regla v769/v940). */
+function _ocAbrirSubirFactura(ocId){
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
+  if (document.getElementById('_ocFacturaModal')) return;
+  const p = activeProj();
+  const oc = (p.materiales.ordenes || []).find(x => x.id === ocId);
+  if (!oc) return;
+  if (oc.status !== 'AUTORIZADA') return showToast('LA FACTURA SE SUBE CUANDO LA OC YA ESTÁ AUTORIZADA', 'red');
+  if (oc.facturaUrl && !can('users.manage')) return showToast('YA TIENE FACTURA — SOLO UN ADMIN PUEDE REEMPLAZARLA', 'red');
+  const wrap = document.createElement('div');
+  wrap.id = '_ocFacturaModal';
+  wrap.className = 'pr-ant-modal'; // v841: isUserBusy pospone applyRemote mientras esté abierto
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:100400;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+  wrap.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:520px;width:100%;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid rgba(0,0,0,.08)"><b style="font-size:13px;letter-spacing:.5px">${oc.facturaUrl ? 'REEMPLAZAR FACTURA (ADMIN)' : 'SUBIR FACTURA DEL PROVEEDOR'}</b>
+      <div style="font-size:11px;color:#78716C;margin-top:4px">OC ${oc.numero} · ${oc.proveedorNombre || '—'}</div></div>
+    <div style="padding:16px 18px">
+      <label style="display:block;margin-bottom:12px"><span style="font-size:8.5px;letter-spacing:1.5px;color:#78716C;font-weight:700">ARCHIVO (FOTO O PDF)</span>
+      <input id="_ocFacturaFile" type="file" accept="image/*,application/pdf" style="display:block;margin-top:6px;font-size:12px"></label>
+      <div style="font-size:11px;color:#B45309;background:#FFFBEB;border-left:3px solid #F59E0B;padding:8px 10px;line-height:1.5">Revisá que sea el archivo correcto: una vez subida <b>no se podrá modificar</b> — solo un administrador puede reemplazarla.</div>
+    </div>
+    <div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" onclick="_ocCerrarFacturaModal()">CANCELAR</button>
+      <button class="btn primary" onclick="_ocSubirFactura('${oc.id}')">SUBIR FACTURA</button>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap);
+}
+function _ocCerrarFacturaModal(){ const m = document.getElementById('_ocFacturaModal'); if (m) m.remove(); }
+async function _ocSubirFactura(ocId){
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
+  const inp = document.getElementById('_ocFacturaFile');
+  const file = inp && inp.files && inp.files[0];
+  if (!file) return showToast('ELEGÍ EL ARCHIVO DE LA FACTURA', 'red');
+  if (!(typeof firebase !== 'undefined' && firebase.storage)) return showToast('SIN CONEXIÓN AL ALMACENAMIENTO — INTENTÁ EN LÍNEA', 'red');
+  const esAdmin = can('users.manage');
+  let url = '';
+  try {
+    try { window._prUploadShow && window._prUploadShow('SUBIENDO FACTURA…'); } catch (e) {}
+    const ref = firebase.storage().ref('oc-facturas/' + ocId + '-' + Date.now());
+    await ref.put(file, { contentType: file.type || 'application/octet-stream' });
+    url = await ref.getDownloadURL();
+  } catch (e) {
+    try { window._prUploadHide && window._prUploadHide(); } catch (e2) {}
+    _ocCerrarFacturaModal(); // v841-fix: nunca dejar el modal abierto en un abort (congela el sync)
+    return showToast('NO SE PUDO SUBIR LA FACTURA: ' + ((e && e.message) || 'error').toUpperCase(), 'red');
+  }
+  try { window._prUploadHide && window._prUploadHide(); } catch (e) {}
+  const _borrarMiArchivo = () => { try { firebase.storage().refFromURL(url).delete().catch(() => {}); } catch (e) {} };
+  // regla v769/v940: re-leer del state VIVO tras los awaits (la subida tarda segundos)
+  const p = activeProj();
+  const oc = ((p && p.materiales && p.materiales.ordenes) || []).find(x => x.id === ocId);
+  _ocCerrarFacturaModal();
+  if (!oc) { _borrarMiArchivo(); return showToast('LA OC YA NO EXISTE — RECARGÁ LA LISTA', 'red'); }
+  if (oc.facturaUrl && !esAdmin) { _borrarMiArchivo(); return showToast('OTRA PERSONA YA SUBIÓ LA FACTURA — SE CONSERVA ESA', 'amber'); }
+  const u = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  oc.facturaUrl = url;
+  oc.facturaNombre = file.name || '';
+  oc.facturaSubidaPor = (u.displayName || u.username || '').toUpperCase();
+  oc.facturaSubidaEn = (typeof nowStr === 'function') ? nowStr() : new Date().toISOString();
+  saveState();
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
+  renderOrdenesList();
+  showToast('FACTURA SUBIDA A LA OC ' + oc.numero, 'green');
+}
+window._ocAbrirSubirFactura = _ocAbrirSubirFactura;
+window._ocCerrarFacturaModal = _ocCerrarFacturaModal;
+window._ocSubirFactura = _ocSubirFactura;
 
 function deleteOrden(id){
   // Solo quien autoriza OC (o admin) puede borrar OCs
