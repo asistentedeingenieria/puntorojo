@@ -18,8 +18,8 @@ ok('el bloque .oc-auth-seal salió del markup', src.indexOf('class="oc-auth-seal
 ok('el sello REVISADO de abajo sigue (v927)', /REVISADO/.test(src) && /_fechaSelloCorta/.test(src));
 
 // ── 2. una sola hoja carta ──
-ok('min-height con holgura real (232mm)', /\.oc-sheet\{[^}]*min-height:232mm/.test(src));
-ok('sin padding inferior que empuje a la hoja 2', /\.oc-sheet\{[^}]*padding:10px 0 0[;}]/.test(src));
+ok('min-height con holgura sobre el alto útil (el valor exacto lo pinea la versión vigente)', /\.oc-sheet\{[^}]*min-height:\d+mm/.test(src));
+ok('padding inferior mínimo (no empuja a la hoja 2)', /\.oc-sheet\{[^}]*padding:10(px 0 0|mm 12mm 6mm)[;}]/.test(src));
 ok('firmas siguen ancladas abajo (margin-top:auto, v929)', /\.oc-firmas\{[^}]*margin-top:auto/.test(src));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
