@@ -2873,8 +2873,7 @@ table{max-width:100%}
     <div style="font-size:12px;font-weight:700;letter-spacing:.5px;color:var(--cafe)">RECETA DE MATERIAL</div>
     <div style="display:flex;gap:8px">
       <button class="btn ghost sm" id="btnVerSolReceta" onclick="verSolicitudesReceta()" style="display:none">SOLICITUDES (0)</button>
-      <button class="btn cafe sm" id="btnCargarReceta" data-perm="receta.edit" onclick="document.getElementById('inpRecetaExcel').click()">CARGAR RECETA (EXCEL)</button>
-      <button class="btn ghost sm" id="btnPreciosReceta" onclick="verCatalogoPreciosReceta()">PRECIOS</button>
+      <button class="btn cafe sm" id="btnCargarReceta" data-perm="users.manage" onclick="document.getElementById('inpRecetaExcel').click()">CARGAR RECETA (EXCEL)</button>
     </div>
   </div>
   <input type="file" id="inpRecetaExcel" accept=".xlsx,.xls" style="display:none" onchange="importarRecetaExcel(event)">
@@ -3049,7 +3048,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v948</span>
+    <span style="opacity:.5;font-size:9px">v949</span>
   </footer>
 
 </div>
@@ -4606,7 +4605,8 @@ const PERMS_DISPONIBLES = [
   { key: 'pedidos.create',   label: 'Crear pedidos de material', group: 'EDICIÓN MATERIALES' },
   { key: 'pedidos.advance',  label: 'Aprobar/procesar pedidos (oficina)', group: 'EDICIÓN MATERIALES' },
   { key: 'pedidos.receive',  label: 'Confirmar recibido (supervisor)',    group: 'EDICIÓN MATERIALES' },
-  { key: 'receta.edit',      label: 'Editar receta de materiales por etapa',  group: 'EDICIÓN MATERIALES' },
+  { key: 'receta.edit',      label: 'Proponer cambios a la receta de materiales (los autoriza el admin)',  group: 'EDICIÓN MATERIALES' },
+  { key: 'receta.autorizar', label: 'Autorizar cambios propuestos a la receta de materiales', group: 'EDICIÓN MATERIALES' },
   { key: 'compras.autorizar',label: 'Generar y gestionar Órdenes de Compra (Compras)',  group: 'EDICIÓN MATERIALES' },
   { key: 'compras.revisar',  label: 'Revisar y autorizar OC (visto bueno + firma digital)', group: 'EDICIÓN MATERIALES' },
   { key: 'precios.autorizar', label: 'Autorizar cambios de precio del catálogo', group: 'EDICIÓN MATERIALES' },
@@ -17008,7 +17008,7 @@ function renderPedidoCard(pd, p){
     }
   }
 
-  const canDelete = can('users.manage') || can('pedidos.create') || can('pedidos.advance');
+  const canDelete = can('users.manage'); // v949: eliminar pedidos = solo admin
 
   return `<div class="pedido-card">
     <div class="pedido-hd">
@@ -17972,7 +17972,7 @@ function openPedidoDetalle(id){
   document.getElementById('modalPedidoDetalle').classList.add('show');
 
   // Mostrar/ocultar botón eliminar según permisos
-  const canDel = can('users.manage') || can('pedidos.create') || can('pedidos.advance');
+  const canDel = can('users.manage'); // v949: eliminar pedidos = solo admin
   const delBtn = document.getElementById('pedDetalleDeleteBtn');
   if (delBtn) delBtn.style.display = canDel ? '' : 'none';
 
@@ -19628,7 +19628,8 @@ function renderOrdenesList(){
   // v919: separación de funciones — COMPRAS (compras.autorizar) genera, gestiona y
   // envía al proveedor; el REVISOR (compras.revisar) da el visto bueno y firma.
   // La pestaña la ven ambos (data-perm con |). Admin puede todo.
-  const canDelete = can('compras.autorizar') || can('users.manage');
+  const canFactura = can('compras.autorizar') || can('users.manage'); // v947: compras sube factura
+  const canDeleteOC = can('users.manage'); // v949: eliminar OC = solo admin
   const canAuthorize = can('compras.revisar') || can('users.manage');
   const _esAdminOC = can('users.manage');
   const _userOC = String(((typeof getCurrentUser === 'function' && getCurrentUser()) || {}).username || '').toLowerCase();
@@ -19667,7 +19668,7 @@ function renderOrdenesList(){
 
     // v947: FACTURA del proveedor en OCs autorizadas — sin factura sale el botón (compras);
     // con factura, el link VER en la info + reemplazo solo admin.
-    const facturaBtn = (isAuth && canDelete && !oc.facturaUrl)
+    const facturaBtn = (isAuth && canFactura && !oc.facturaUrl)
       ? `<button class="btn ghost sm" onclick="_ocAbrirSubirFactura('${oc.id}')" title="Subir la factura que generó el proveedor">SUBIR FACTURA</button>`
       : '';
     const facturaInfo = oc.facturaUrl
@@ -19705,7 +19706,7 @@ function renderOrdenesList(){
         ${viewBtn}
         ${printBtn}
         ${facturaBtn}
-        ${canDelete ? `<button class="btn-icon danger" onclick="deleteOrden('${oc.id}')" title="Eliminar orden">✕</button>` : ''}
+        ${canDeleteOC ? `<button class="btn-icon danger" onclick="deleteOrden('${oc.id}')" title="Eliminar orden">✕</button>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -19890,8 +19891,8 @@ window._ocCerrarFacturaModal = _ocCerrarFacturaModal;
 window._ocSubirFactura = _ocSubirFactura;
 
 function deleteOrden(id){
-  // Solo quien autoriza OC (o admin) puede borrar OCs
-  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO QUIEN AUTORIZA OC PUEDE BORRARLAS', 'red');
+  // v949: eliminar órdenes de compra = SOLO el admin
+  if (!can('users.manage')) return showToast('SOLO EL ADMIN PUEDE ELIMINAR ÓRDENES DE COMPRA', 'red');
   const p = activeProj();
   const oc = (p.materiales.ordenes || []).find(x => x.id === id);
   if (!oc) return;
@@ -28342,7 +28343,11 @@ window.renderRecetaV2 = function(){
     + aptosNivel.map(a => chip(a.name.replace(/^APARTAMENTO\s+/i,''), a.id===recetaV2AptoSel, "setRecetaV2Sel('"+recetaV2TorreSel+"','"+recetaV2NivelSel+"','"+a.id+"')")).join(''));
   html += '</div>';
   const esTotal = recetaV2AptoSel==='TOTAL';
-  const puedeEditar = can('receta.edit') || can('users.manage');
+  // v949: el admin APLICA cambios directo; quien tiene receta.edit los PROPONE (los autoriza el admin).
+  const esAdminReceta = can('users.manage');
+  const puedeProponer = can('receta.edit');
+  const puedeVerControles = esAdminReceta || puedeProponer;
+  const accionReceta = esAdminReceta ? 'recetaV2Op' : 'recetaV2Solicitar';
   const precios = p.materiales.precios || {};
   // v905/v907: medida de postes DEL NIVEL seleccionado (override por nivel > default del proyecto)
   const _pm = _postesMedidaDe(p, recetaV2NivelSel);
@@ -28351,7 +28356,7 @@ window.renderRecetaV2 = function(){
     + '<span>POSTES (' + esc(_pmNivelLbl) + '): ' + (_pm.modo === 'especial'
         ? '<strong>MEDIDA ESPECIAL ' + _pm.metros + ' m = ' + _metrosAPies(_pm.metros) + '\'</strong>' + (_pm.esDelNivel ? '' : ' <span style="color:#9CA3AF">(default del proyecto)</span>')
         : 'ESTÁNDAR (10\')') + '</span>'
-    + (puedeEditar ? '<button class="btn ghost sm" style="font-size:10px;padding:2px 8px" onclick="configurarPostesMedida(\'' + recetaV2NivelSel + '\',\'' + esc(_pmNivelLbl) + '\')">CAMBIAR</button>' : '')
+    + (esAdminReceta ? '<button class="btn ghost sm" style="font-size:10px;padding:2px 8px" onclick="configurarPostesMedida(\'' + recetaV2NivelSel + '\',\'' + esc(_pmNivelLbl) + '\')">CAMBIAR</button>' : '')
     + '</div>';
   const fills = ['#FDE9E7','#E7F0FD','#E9F7E9','#FBF4E1'];
   let totalNivel = 0;
@@ -28359,7 +28364,7 @@ window.renderRecetaV2 = function(){
     let totalEtapa = 0;
     html += '<div style="border:1px solid #E5E7EB;border-radius:8px;margin-bottom:12px;overflow:hidden">';
     html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;font-size:11px;font-weight:700;letter-spacing:.5px;background:'+fills[ei]+';color:#374151"><span>'+esc(rv.etapas[ei])+'</span>'
-      + (puedeEditar ? '<button class="btn ghost sm" style="font-size:10px;padding:2px 8px" onclick="'+(puedeEditar?'recetaV2Op':'recetaV2Solicitar')+'(\''+recetaV2NivelSel+'\','+ei+',\'agregar\')">+ AGREGAR</button>' : '')
+      + (puedeVerControles ? '<button class="btn ghost sm" style="font-size:10px;padding:2px 8px" onclick="'+accionReceta+'(\''+recetaV2NivelSel+'\','+ei+',\'agregar\')">+ AGREGAR</button>' : '')
       + '</div>';
     // v924: anchos fijos + título y celda con el MISMO centrado — todo alineado
     html += '<div class="tbl-scroll"><table style="width:100%;min-width:520px;border-collapse:collapse;font-size:11.5px"><thead><tr style="color:#6B7280;font-size:10px"><th style="text-align:left;padding:6px 12px">MATERIAL</th><th style="width:70px;text-align:center;padding:6px 8px">U</th><th style="width:100px;text-align:center;padding:6px 8px">'+(esTotal?'TOTAL':'CANT')+'</th><th style="width:120px;text-align:center;padding:6px 8px">P.U.</th><th style="width:130px;text-align:center;padding:6px 8px">SUBTOTAL</th><th style="width:70px"></th></tr></thead><tbody>';
@@ -28373,7 +28378,7 @@ window.renderRecetaV2 = function(){
       const puCell = tienePrecio ? (money(info.precio)+(rend>1?(' /'+rend):'')) : '—';
       totalEtapa += sub;
       const matArg = esc(l.m).replace(/'/g,"\\'");
-      const accion = puedeEditar ? 'recetaV2Op' : 'recetaV2Solicitar';
+      const accion = accionReceta;
       html += '<tr style="border-top:1px solid #F1F5F9">'
         + '<td style="padding:6px 12px">'+esc(l.m)+(l.nc ? '<div style="font-size:9px;color:#9CA3AF;margin-top:1px">'+esc(_nombreCompraConMedida(l.nc, p, recetaV2NivelSel))+'</div>' : '')+'</td>'
         + '<td style="text-align:center;color:#6B7280;padding:6px 8px">'+esc(l.u)+'</td>'
@@ -28381,8 +28386,10 @@ window.renderRecetaV2 = function(){
         + '<td style="text-align:center;padding:6px 8px;color:'+(tienePrecio?'#374151':'#D1D5DB')+'">'+puCell+'</td>'
         + '<td style="text-align:center;font-variant-numeric:tabular-nums;padding:6px 8px">'+(tienePrecio?money(sub):'—')+'</td>'
         + '<td style="text-align:center;white-space:nowrap;padding:6px 8px">'
-          + (esTotal ? '' : '<button class="btn-icon" title="Editar cantidad del apto" onclick="'+accion+'(\''+recetaV2NivelSel+'\','+ei+',\'cantidad\',\''+matArg+'\',\''+recetaV2AptoSel+'\')">✎</button>')
-          + '<button class="btn-icon danger" title="Quitar material del nivel" onclick="'+accion+'(\''+recetaV2NivelSel+'\','+ei+',\'quitar\',\''+matArg+'\')">✕</button>'
+          + (puedeVerControles ? (
+              (esTotal ? '' : '<button class="btn-icon" title="Editar cantidad del apto" onclick="'+accion+'(\''+recetaV2NivelSel+'\','+ei+',\'cantidad\',\''+matArg+'\',\''+recetaV2AptoSel+'\')">✎</button>')
+              + '<button class="btn-icon danger" title="Quitar material del nivel" onclick="'+accion+'(\''+recetaV2NivelSel+'\','+ei+',\'quitar\',\''+matArg+'\')">✕</button>'
+            ) : '')
         + '</td></tr>';
     });
     html += '</tbody></table></div>'; // v826: cierra el .tbl-scroll de la tabla de receta
@@ -28422,7 +28429,7 @@ window._recetaV2PedirDatos = async function(levelId, etapaIdx, tipo, material, a
   return null;
 };
 window.recetaV2Op = async function(levelId, etapaIdx, tipo, material, aptoId){
-  if (!(can('receta.edit') || can('users.manage'))) return showToast('SIN PERMISO','red');
+  if (!can('users.manage')) return showToast('SIN PERMISO','red'); // v949: aplicar directo = solo admin
   const p = activeProj();
   const datos = await window._recetaV2PedirDatos(levelId, etapaIdx, tipo, material, aptoId);
   if (!datos) return;
@@ -28460,7 +28467,7 @@ window.recetaV2Solicitar = async function(levelId, etapaIdx, tipo, material, apt
   renderRecetaV2();
 };
 window.autorizarReceta = async function(solId){
-  if (!(can('receta.edit') || can('users.manage'))){ showToast('SOLO ADMIN O GERENTE PUEDE AUTORIZAR','red'); return; }
+  if (!(can('receta.autorizar') || can('users.manage'))){ showToast('SOLO ADMIN O GERENTE PUEDE AUTORIZAR','red'); return; }
   const p = activeProj();
   if (!p || !Array.isArray(p.solicitudesReceta)) return;
   const sol = p.solicitudesReceta.find(s => s.id === solId);
@@ -28477,7 +28484,7 @@ window.autorizarReceta = async function(solId){
   if (typeof renderRecetaV2==='function') renderRecetaV2();
 };
 window.rechazarReceta = async function(solId){
-  if (!(can('receta.edit') || can('users.manage'))){ showToast('SOLO ADMIN O GERENTE PUEDE RECHAZAR','red'); return; }
+  if (!(can('receta.autorizar') || can('users.manage'))){ showToast('SOLO ADMIN O GERENTE PUEDE RECHAZAR','red'); return; }
   const p = activeProj();
   if (!p || !Array.isArray(p.solicitudesReceta)) return;
   const sol = p.solicitudesReceta.find(s => s.id === solId);
@@ -28496,7 +28503,7 @@ window.verSolicitudesReceta = async function(){
   const p = activeProj();
   if (!p){ showToast('SIN PROYECTO ACTIVO','red'); return; }
   if (!Array.isArray(p.solicitudesReceta)) p.solicitudesReceta = [];
-  const esGer = can('receta.edit') || can('users.manage');
+  const esGer = can('receta.autorizar') || can('users.manage');
   const esc = s => String(s==null?'':s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
   const fFecha = iso => { try { const d=new Date(iso); return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear(); } catch(e){ return ''; } };
   const sols = p.solicitudesReceta.slice();
@@ -28647,7 +28654,7 @@ window.importarRecetaExcel = async function(ev){
   const file = ev && ev.target && ev.target.files && ev.target.files[0];
   if (ev && ev.target) ev.target.value = '';
   if (!file) return;
-  if (!(can('receta.edit') || can('users.manage'))) return showToast('SIN PERMISO PARA CARGAR RECETA','red');
+  if (!can('users.manage')) return showToast('SIN PERMISO PARA CARGAR RECETA','red'); // v949: solo admin
   if (typeof XLSX === 'undefined' || !XLSX.read) return showToast('NO SE PUDO LEER EL EXCEL (XLSX no disponible)','red');
   const p = activeProj();
   window._prUploadShow('PROCESANDO ARCHIVO…');
