@@ -11,19 +11,19 @@ ok('pestaña del menú dice LIQUIDACIÓN PROVEEDORES (v886: acortada a pedido)',
 ok('ya no existe la pestaña >PLANILLAS<', html.indexOf('>PLANILLAS<') < 0);
 ok('encabezado de sección renombrado', html.indexOf('PAGO DE PLANILLAS') < 0);
 ok('título h1 renombrado', html.indexOf('planillas.</em>') < 0);
-ok('sub-pestaña LIQUIDACIÓN POR PERSONA', html.indexOf('>LIQUIDACIÓN POR PERSONA<') >= 0);
+ok('sub-pestaña LIQUIDACIÓN POR PERSONA eliminada (v952)', html.indexOf('>LIQUIDACIÓN POR PERSONA<') < 0);
 ok('flujo dice LIQUIDACIONES QUINCENALES', html.indexOf('LIQUIDACIONES QUINCENALES · FLUJO') >= 0);
 
 // ── identificadores INTACTOS (esto es lo que no se puede romper) ──
 ok('permiso view.planilla intacto', html.indexOf("'view.planilla'") >= 0 || html.indexOf('"view.planilla"') >= 0);
 ok('permiso planilla.generate intacto', html.indexOf("planilla.generate") >= 0);
 ok('permiso planilla.authorize intacto', html.indexOf("planilla.authorize") >= 0);
-ok('permiso planilla.porPersona intacto', html.indexOf("planilla.porPersona") >= 0);
+ok('generador porPersona sigue dormido (v952)', html.indexOf("renderPlanillaPorPersona") >= 0);
 ok('id planilla-etapas intacto', html.indexOf('planilla-etapas') >= 0);
 ok('campo p.planilla intacto', html.indexOf('p.planilla') >= 0);
 ok('campo planillasArmadas intacto', html.indexOf('planillasArmadas') >= 0);
 ok('función renderPlanilla intacta', html.indexOf('renderPlanilla') >= 0);
-ok('data-plantab planillapersona intacto', html.indexOf('data-plantab="planillapersona"') >= 0);
+ok('data-plantab planillapersona eliminado (v952)', html.indexOf('data-plantab="planillapersona"') < 0);
 ok('data-view planilla intacto', html.indexOf("data-view=\"planilla\"") >= 0 || html.indexOf("data-view='planilla'") >= 0);
 
 // ── textos clave de las olas 2-5 renombrados ──

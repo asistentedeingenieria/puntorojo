@@ -1,37 +1,26 @@
-/* v792: nueva sub-pestaña PLANILLA POR PERSONA — un PDF por persona de la quincena
-   del proyecto activo. Reusa _construirDatos + _v336BuildWorkerBody (rama opts.porPersona). */
+/* v792: sub-pestaña PLANILLA POR PERSONA — un PDF por persona de la quincena.
+   SUPERSEDED por v952 (pedido de Antonio 17-jul): la PESTAÑA ya no existe (botón,
+   panel, switch, hook y permiso eliminados). El GENERADOR queda DORMIDO en el
+   código (rama opts.porPersona + wrappers) por si se recablea; el reporte anónimo
+   v938 se prueba en liquidacion_persona_anonima_v938.cjs. */
 const fs=require('fs'),path=require('path');
 const html=fs.readFileSync(path.join(__dirname,'..','index.html'),'utf8');
 let pass=0,fail=0;const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
-// cableado de la sub-pestaña (4 puntos)
-ok('botón de la sub-pestaña', /data-plantab="planillapersona"[\s\S]{0,80}LIQUIDACIÓN POR PERSONA/.test(html));
-ok('panel planilla-planillapersona', html.indexOf('id="planilla-planillapersona"')>=0);
-ok('clave en el array de display (setPlanillaTab vivo)', /'resumenpersona','planillapersona','anticipos'/.test(html));
-ok('dispatch en renderPlanilla vivo', html.indexOf("currentPlanillaTab === 'planillapersona' && typeof window.renderPlanillaPorPersona === 'function'")>=0);
-// render + wrappers
-ok('renderPlanillaPorPersona existe', html.indexOf('window.renderPlanillaPorPersona = function')>=0);
-ok('wrapper por persona', html.indexOf('window._planillaPdfPorPersona = async function')>=0);
-ok('wrapper descargar todas', html.indexOf('window._planillaPdfTodasPorPersona = async function')>=0);
-ok('selector de quincena (más reciente por numero desc)', /\(b\.numero\|\|0\)-\(a\.numero\|\|0\)/.test(html));
-ok('reusa _construirDatos con planilla: pl', /_construirDatos\(p, pl\.pagosIds[\s\S]{0,200}planilla: pl/.test(html));
-// rama un-PDF-por-persona en el generador, reusando lo existente
+// v952: la pestaña NO existe
+ok('sin botón de la sub-pestaña', !/data-plantab="planillapersona"/.test(html));
+ok('sin panel planilla-planillapersona', html.indexOf('id="planilla-planillapersona"')<0);
+ok('fuera del array de display', !/'planillapersona'/.test((html.match(/\['etapas','receta'[^\]]*\]/)||[''])[0]));
+ok('sin dispatch en renderPlanilla', html.indexOf("currentPlanillaTab === 'planillapersona'")<0);
+ok('permiso planilla.porPersona fuera del catálogo', !/pushPerm\(\{\s*key:'planilla\.porPersona'/.test(html));
+
+// el generador sigue DORMIDO e intacto (para poder recablear + soporte del v938)
+ok('renderPlanillaPorPersona existe (dormido)', html.indexOf('window.renderPlanillaPorPersona = function')>=0);
+ok('wrapper por persona (dormido)', html.indexOf('window._planillaPdfPorPersona = async function')>=0);
+ok('wrapper descargar todas (dormido)', html.indexOf('window._planillaPdfTodasPorPersona = async function')>=0);
 ok('rama opts.porPersona en _generarYDescargarExcel', /if\(opts && opts\.porPersona\)/.test(html));
-ok('la rama reusa _v336BuildWorkerBody', /opts\.porPersona[\s\S]{0,1800}_v336BuildWorkerBody\(c\)/.test(html)); // v895: ventana ampliada (los ternarios de fechaTituloLit alargaron el bloque)
-ok('la rama usa _pdfDescargar (móvil-aware)', /opts\.porPersona[\s\S]{0,2200}_pdfDescargar\(d2/.test(html));
-ok('soloIdx para una sola persona', html.indexOf('opts.soloIdx')>=0);
-// no se rompió la firma del generador
+ok('la rama reusa _v336BuildWorkerBody', /opts\.porPersona[\s\S]{0,1800}_v336BuildWorkerBody\(c\)/.test(html));
 ok('_generarYDescargarExcel acepta opts', html.indexOf('async function _generarYDescargarExcel(data, opts)')>=0);
-// v793: autorización única para ver la pestaña
-ok('permiso planilla.porPersona registrado (EDICIÓN PLANILLAS)', /pushPerm\(\{\s*key:'planilla\.porPersona'[\s\S]{0,120}group:'EDICIÓN LIQUIDACIONES'/.test(html));
-ok('el botón de la sub-pestaña está gateado por data-perm', /data-plantab="planillapersona"[^>]*data-perm="planilla\.porPersona"|data-perm="planilla\.porPersona"[^>]*data-plantab="planillapersona"/.test(html));
-// v794: los nombres se ven COMPLETOS (no truncados con ...)
-const _nameLine = (html.match(/font-weight:700;font-size:12\.5px[^"]*"/)||[''])[0];
-ok('línea del nombre del colab localizada', _nameLine.length>0);
-ok('el nombre NO se trunca (sin white-space:nowrap)', _nameLine.indexOf('white-space:nowrap')<0);
-ok('el nombre NO usa text-overflow:ellipsis', _nameLine.indexOf('text-overflow:ellipsis')<0);
-// v824: el user pidió el nombre COMPLETO en UNA sola fila (en móvil el botón baja) -> clase pp-name
-ok('v824 el nombre va en una sola fila (clase pp-name + fila pp-row)', /class="pp-name"/.test(html) && /class="pp-row"/.test(html));
 
 console.log('PASS='+pass+' FAIL='+fail);
 process.exit(fail?1:0);
