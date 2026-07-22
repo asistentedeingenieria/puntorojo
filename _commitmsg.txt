@@ -1,16 +1,41 @@
-v952: eliminar la sub-pestana LIQUIDACION POR PERSONA (pedido de Antonio)
+v953 CRITICO: blindaje de COBRO — estimaciones/facturas/avance se pisaban entre usuarios
 
-La sub-pestana LIQUIDACION POR PERSONA (v792) ya no existe: se quito el boton,
-el panel #planilla-planillapersona, la clave del switch de pestanas, el hook de
-render en renderPlanilla y el permiso planilla.porPersona del catalogo de
-USUARIOS (quien lo tenga asignado conserva el string, sin efecto).
+INCIDENTE 18-jul (reporte de Antonio): facturas subidas y estimaciones marcadas
+PAGADO desaparecian "al rato"; la estimacion 15 existia en un dispositivo y no en
+otros; DESCARGAR EXCEL bajaba la estimacion 13; el AVANCE POR APARTAMENTO no se
+actualizaba. CUATRO causas confirmadas (3 agentes de investigacion):
 
-El GENERADOR queda DORMIDO en el codigo (renderPlanillaPorPersona, wrappers y la
-rama opts.porPersona del PDF con el anonimato v938): nada lo llama, pero se puede
-recablear si algun dia se quiere de vuelta.
+1. p.cobro (rows + avanceAptos + estimacionExcel) era el ULTIMO dato de dinero en
+   LWW puro: sin _ts, sin tombstones, sin union-merge => cualquier copia vieja
+   re-subia el proj_ entero y pisaba todo en la flota (patron ESSENZA 03-jul).
+2. Los mutadores de cobro solo hacian saveState() (debounce 1200ms) — mala senal
+   o cerrar la PWA rapido perdia el cambio sin subirlo jamas.
+3. La auto-limpieza de ensureDataV9 borraba filas "vacias" en cada carga — la
+   forma exacta de una estimacion recien agregada (se auto-borraba sola).
+4. DESCARGAR EXCEL baja el ULTIMO ARCHIVO SUBIDO con hoja "RESUMEN PR"; los Excel
+   sin esa hoja caian al camino legado que crea filas pero NO guarda el archivo NI
+   lee la hoja "AVANCE PR" — todo en silencio (por eso quedo en la 13 y el avance
+   congelado).
 
-Tests: quitar_liq_persona_v952.cjs (6); planillapersona.cjs reescrito a la nueva
-realidad; rename_liquidaciones.cjs de-pineado (3 asserts). Suite completa 166
-avancetest + 115 recetatest verde; validador blocks=27 errs=1.
+FIX:
+- _mergeCobroProyecto (junto a _mergePlanillaProyecto): union de rows por id+_ts
+  (_mergeById) + tombstones cobro.rowsEliminadas + avanceAptos por sello (sin
+  sellos los DATOS no se pierden, bias v900) + estimacionExcel por ts. PURO e
+  idempotente (v856). Cableado en el forEach de proyectos de applyRemote.
+- Sellos _ts en TODOS los mutadores: uploadFacturaPDF, updateEst, updateEstDate,
+  updateEstVP, updateAnticipoPct, addEstimacion, _doDeleteFacturaPDF,
+  toggleEstNoAmort, autorizarSolicitudAmort, importador (RESUMEN PR y legado).
+- forceUploadNow en las acciones de dinero (factura, PAGADO, fechas, agregar/
+  eliminar estimacion, borrar factura, importar) — sin debounce.
+- delLastEstimacion y las filas reemplazadas/fantasma escriben LAPIDA.
+- La auto-limpieza respeta filas con _ts (las nuevas nacen selladas).
+- Degradaciones AVISAN: Excel sin hoja RESUMEN PR (toast rojo), fallo al guardar
+  en Storage (toast rojo), hoja AVANCE PR ilegible (toast ambar), y la descarga
+  dice la FECHA del archivo guardado.
+
+APP_SYNC_VERSION 908 -> 909 (bloquear clientes viejos que siguen pisando).
+
+Test cobro_blindaje_v953.cjs (34). Suite completa 167 avancetest + 115 recetatest
+verde; validador blocks=27 errs=1.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
