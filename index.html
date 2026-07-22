@@ -3046,7 +3046,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v956</span>
+    <span style="opacity:.5;font-size:9px">v957</span>
   </footer>
 
 </div>
@@ -12712,8 +12712,19 @@ function _avAptoMetric(tipo, p, a, basePcts, ne){
     var pm=Math.round((Number(apm[0]||0)+Number(apm[1]||0)+Number(apm[2]||0)+Number(apm[3]||0))/4);
     return { n:nm.n, green:nm.green, pct: pm, iniciado: pm>0, cuenta:true };
   }
-  // pago
-  var pc=(a.pagoManual&&Array.isArray(a.pagoManual))?a.pagoManual:[0,1,2,3,4].map(function(i){ return i<ne?window.paidPct5(p,a.id,i):0; }); // v846: paidPct5 vive en el IIFE de pagos; se llama por window (antes tiraba ReferenceError en el PDF de pago)
+  // pago — v957: misma unión que la pantalla v956 (max por etapa entre el override del
+  // importador y el pago real). Antes el PDF conservaba el ternario viejo (pagoManual con
+  // prioridad absoluta) y reproducía en papel el bug del apto congelado que v956 arregló
+  // en pantalla; también contaminaba la dimensión LIQUIDACIÓN del análisis de desparejos.
+  var pc;
+  var _win = (typeof window !== 'undefined') ? window : {}; // los .cjs evalúan sin window
+  if (typeof _win._pagoPcts5 === 'function') pc = _win._pagoPcts5(p, a);
+  else {
+    var _manP=(a.pagoManual&&Array.isArray(a.pagoManual))?a.pagoManual:null;
+    var _paidF=(typeof _win.paidPct5 === 'function') ? _win.paidPct5 : function(){ return 0; }; // v846: paidPct5 por window
+    var _vivoP=[0,1,2,3,4].map(function(i){ return i<ne?_paidF(p,a.id,i):0; });
+    pc = _manP ? _vivoP.map(function(v,i){ return Math.max(Number(v)||0, Number(_manP[i])||0); }) : _vivoP;
+  }
   var np=_avanceAptoNivelPago(pc);
   var pp=np.green?100:Math.round(np.n/4*100);
   return { n:np.n, green:np.green, pct: pp, iniciado: pp>0, cuenta:true };
@@ -30459,6 +30470,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       if (v === 0) delete p.cobro.avanceAptos[aptoId].porEstimacion[est.id];
       else p.cobro.avanceAptos[aptoId].porEstimacion[est.id] = v;
     });
+    p.cobro.avanceAptos[aptoId]._ts = Date.now(); // v957: toda mutación sella (regla v891)
     saveState();
     renderCobroAvanceApto();
     showToast('APTO ACTUALIZADO', 'green');
@@ -30469,6 +30481,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     const p = activeProj(); ensureEnhancedData();
     const rec = p.cobro.avanceAptos[aptoId] || {stages:[0,0,0,0,0,0]};
     rec.stages[stageIdx] = Math.max(0, Math.min(100, Number(val)||0));
+    rec._ts = Date.now(); // v957: sello
     p.cobro.avanceAptos[aptoId] = rec;
     saveState();
     renderCobroAvanceApto();
@@ -30483,6 +30496,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     pct = Math.max(0, Math.min(100, pct));
     if (pct === 0) delete p.cobro.avanceAptos[aptoId].porEstimacion[estId];
     else p.cobro.avanceAptos[aptoId].porEstimacion[estId] = pct;
+    p.cobro.avanceAptos[aptoId]._ts = Date.now(); // v957: sello
     saveState();
     renderCobroAvanceApto();
   };
@@ -31709,6 +31723,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
           // Los aptos NO incluidos en este PDF quedan intactos (su Excel se preserva).
           p.cobro.avanceAptos[apto.id].pdfCumulativo = Number(d.pct) || 0;
           p.cobro.avanceAptos[apto.id].porEstimacion = {};
+          p.cobro.avanceAptos[apto.id]._ts = Date.now(); // v957: sello — sin él, el merge v953 revertía el PDF ante cualquier copia sellada
           updatedPDF++;
           const tk = d.torreNum != null ? `T${d.torreNum}` : 'X';
           if (!debugTorres[tk]) debugTorres[tk] = 0;
@@ -31736,6 +31751,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
             torresGuardados++;
           }
         });
+        if (levelsGuardados || torresGuardados) p.cobro.avanceMetaTs = Date.now(); // v957: sello v956 — sin él el merge no defendía los oficiales del PDF
 
         saveState();
         try { renderCobroAvanceApto(); } catch(e){}
@@ -31832,15 +31848,22 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
             // v956: el % OFICIAL por NIVEL y TORRE del Excel (ponderado por costo) se guarda
             // como el valor que muestran los encabezados — antes quedaban congelados con lo
             // que dejó un PDF viejo (el render les da prioridad absoluta, ~L30301).
-            if (_av.niveles && Object.keys(_av.niveles).length){ _pP.cobro.avanceLevels = Object.assign({}, _pP.cobro.avanceLevels || {}, _av.niveles); }
-            if (_av.torres && Object.keys(_av.torres).length){ _pP.cobro.avanceTorres = Object.assign({}, _pP.cobro.avanceTorres || {}, _av.torres); }
-            _pP.cobro.avanceMetaTs = Date.now(); // sello para que el merge propague el juego más nuevo
+            // v957: REEMPLAZO, no mezcla — el Object.assign conservaba "oficiales fantasma"
+            // de PDFs viejos para niveles que el Excel nuevo ya no trae; y el sello solo se
+            // pone cuando el Excel realmente trajo oficiales.
+            const _trajoOficiales = (_av.niveles && Object.keys(_av.niveles).length) || (_av.torres && Object.keys(_av.torres).length);
+            if (_av.niveles && Object.keys(_av.niveles).length){ _pP.cobro.avanceLevels = _av.niveles; }
+            if (_av.torres && Object.keys(_av.torres).length){ _pP.cobro.avanceTorres = _av.torres; }
+            if (_trajoOficiales) _pP.cobro.avanceMetaTs = Date.now(); // sello para que el merge propague el juego más nuevo
             saveState(); // v955: sin subida intermedia
             // v955: los avisos del parser (filas SIN MATCH) ya no se descartan en silencio
             if (_av.avisos && _av.avisos.length){
               console.warn('[AVANCE PR] avisos:', _av.avisos);
               showToast('AVANCE: ' + _av.avisos[0], 'amber');
             }
+            // v957: repintar DESPUÉS de escribir el avance — el renderCobro de arriba corría
+            // antes y la sub-pestaña AVANCE abierta quedaba mostrando datos viejos.
+            try { if (typeof renderCobroAvanceApto === 'function') renderCobroAvanceApto(); } catch(e){}
           } else {
             // v953: antes fallaba EN SILENCIO y el avance por apto quedaba congelado sin que nadie supiera
             showToast('OJO: LA HOJA "AVANCE PR" NO SE PUDO LEER — EL AVANCE POR APARTAMENTO NO SE ACTUALIZÓ', 'amber');
@@ -32089,6 +32112,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
           if (!_firstTouchExcel.has(apto.id)) {
             p.cobro.avanceAptos[apto.id].porEstimacion = {};
             p.cobro.avanceAptos[apto.id].pdfCumulativo = null;
+            p.cobro.avanceAptos[apto.id]._ts = Date.now(); // v957: sello (regla v891 — sin él el merge revertía el import)
             _firstTouchExcel.add(apto.id);
           }
 
@@ -32102,6 +32126,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
             pct = Math.max(0, Math.min(100, +pct.toFixed(2)));
             const rid = idByEstNum[estNum] || ('est_' + estNum);
             p.cobro.avanceAptos[apto.id].porEstimacion[rid] = pct;
+            p.cobro.avanceAptos[apto.id]._ts = Date.now(); // v957: sello
             updated++;
             // (El monto "A CANCELAR" se extrae en el loop independiente posterior, no aquí.)
           });
@@ -32133,6 +32158,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
           // Reset por apto solo la PRIMERA vez (no afectar a otras torres no incluidas en este Excel).
           if (!_firstTouchExcel.has(apto.id)) {
             p.cobro.avanceAptos[apto.id].porEstimacion = {};
+            p.cobro.avanceAptos[apto.id]._ts = Date.now(); // v957: sello
             _firstTouchExcel.add(apto.id);
           }
           interpret.estColumns.forEach(col => {
@@ -32155,6 +32181,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
             }
             const key = rid || col.label;
             p.cobro.avanceAptos[apto.id].porEstimacion[key] = pct;
+            p.cobro.avanceAptos[apto.id]._ts = Date.now(); // v957: sello
             updated++;
           });
         });
@@ -32940,7 +32967,9 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     const p = activeProj(); const pg=(p.planilla.pagos||[]).find(x=>x.id===id); if(!pg) return;
     pg.autorizado = true; pg.autorizadoPor = (getCurrentUser()?.displayName || getCurrentUser()?.username || '').toUpperCase(); pg.autorizadoTs = Date.now(); pg._ts = Date.now();
     logActivity('auth', `Pago liquidación autorizado`, `${p.name} · ${pg.aptoName||pg.tipo} · ${pg.colaborador||''}`);
-    saveState(); renderPlanilla(); showToast('PAGO AUTORIZADO','green');
+    saveState();
+    try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} // v957: acción de dinero sube YA (regla v891)
+    renderPlanilla(); showToast('PAGO AUTORIZADO','green');
 
     // Notificar a contabilidad / admins: el pago ya está autorizado
     // y se puede liquidar al colaborador.
@@ -41029,7 +41058,9 @@ window.addEventListener('load', () => {
     }
 
     logActivity('create',`Pago liquidación generado${pagoSinAcuse ? ' (SIN ACUSE)' : ''}`,`${p.name} · ${a.name} · ETAPA ${stageIdx+1} · ${target}% · ${upper(colab.nombre)} · ${fQ(neto)}${pagoSinAcuse ? ' · FALTA ACUSE' : ''}`);
-    saveState(); renderPlanilla();
+    saveState();
+    try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} // v957: acción de dinero sube YA (regla v891; auditoría 22-jul)
+    renderPlanilla();
     showToast(pagoSinAcuse ? 'PAGO GENERADO · ¡FALTA ACUSE!' : 'PAGO GENERADO · PENDIENTE AUTORIZACIÓN', pagoSinAcuse ? '' : 'green');
   };
 
@@ -41260,6 +41291,7 @@ window.addEventListener('load', () => {
     if (!man) return vivo;
     return vivo.map((v, i) => Math.max(Number(v)||0, Number(man[i])||0));
   }
+  window._pagoPcts5 = _pagoPcts5; // v957: el PDF (_avAptoMetric) usa la MISMA unión que la pantalla
 
   function renderPlanillaAptoSquares5(p, apto){
     // v697: nomenclatura unificada Foto 1 (4 etapas). e1→1, e2&e3→2, e4→3, e5@90→4, e5@100→cheque (PAGADO AL 100%).

@@ -11,7 +11,8 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 ok('paidPct5 expuesto en window', html.indexOf('window.paidPct5 = paidPct5')>=0);
 const src = extractFn('_avAptoMetric');
 ok('_avAptoMetric existe', !!src);
-ok('_avAptoMetric llama window.paidPct5', src.indexOf('window.paidPct5(')>=0);
+// v957: la llamada ahora va vía _win (= window con guard para los .cjs sin window); mismo intent v846
+ok('_avAptoMetric llama paidPct5 vía window/_win', src.indexOf('_win.paidPct5')>=0 || src.indexOf('window.paidPct5(')>=0);
 ok('_avAptoMetric ya NO llama paidPct5 bare', !/[^.]paidPct5\(/.test(src.replace(/window\.paidPct5\(/g,'')));
 
 // funcional: la rama 'pago' NO debe tirar ReferenceError (inyectando window.paidPct5 + _avanceAptoNivelPago)
