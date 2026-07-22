@@ -3046,7 +3046,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v953</span>
+    <span style="opacity:.5;font-size:9px">v954</span>
   </footer>
 
 </div>
@@ -8682,25 +8682,45 @@ const CloudSync = {
   },
 
   /* v305-b: fuerza subida inmediata. Lo usan funciones criticas
-     como enviar planilla, autorizar, rechazar, etc. */
+     como enviar planilla, autorizar, rechazar, etc.
+     v954: COALESCING — el blindaje v953 fuerza subida en cada acción de dinero de
+     COBRO; una ráfaga de clicks generaba N subidas completas encadenadas y el chip
+     vivía en SINCRONIZANDO ("se tarda DEMASIADO"). Ahora: si hay una subida en
+     vuelo, se agenda UNA SOLA de cola (que captura todos los cambios hechos mientras
+     tanto — el hash-skip v665 la hace barata) y todos los llamadores comparten esa
+     promesa. Máximo: 1 en vuelo + 1 en cola. */
   async forceUploadNow(){
     if (!this.enabled || !this.ref) return;
     if (this.pendingWrite) {
       clearTimeout(this.pendingWrite);
       this.pendingWrite = null;
     }
+    if (this._forceInFlight){
+      if (!this._forceQueued){
+        this._forceQueued = this._forceInFlight.catch(()=>{}).then(() => {
+          this._forceQueued = null;
+          return this.forceUploadNow();
+        });
+      }
+      return this._forceQueued;
+    }
     this.uploadingNow = true;
     this._armSyncingChip();
-    try {
-      await this.uploadCurrent();
-      this.uploadingNow = false; this._chipDone();
-      try { if (typeof _fotosPendClear === 'function') _fotosPendClear(); } catch(e2){} // v899: la nube confirmó → chip POR COMPARTIR fuera
-    } catch(e) {
-      this.uploadingNow = false;
-      console.error('CloudSync forceUploadNow error:', e);
-      this._chipError(e);
-      throw e;
-    }
+    this._forceInFlight = (async () => {
+      try {
+        await this.uploadCurrent();
+        this.uploadingNow = false; this._chipDone();
+        try { if (typeof _fotosPendClear === 'function') _fotosPendClear(); } catch(e2){} // v899: la nube confirmó → chip POR COMPARTIR fuera
+      } catch(e) {
+        this.uploadingNow = false;
+        console.error('CloudSync forceUploadNow error:', e);
+        this._chipError(e);
+        throw e;
+      } finally {
+        this._forceInFlight = null;
+      }
+    })();
+    return this._forceInFlight;
   },
 
   /* v334: refresca el state desde la nube ANTES de operaciones de solo lectura

@@ -1,41 +1,17 @@
-v953 CRITICO: blindaje de COBRO — estimaciones/facturas/avance se pisaban entre usuarios
+v954: subida amortiguada — forceUploadNow con coalescing (post-v953 "se tarda DEMASIADO")
 
-INCIDENTE 18-jul (reporte de Antonio): facturas subidas y estimaciones marcadas
-PAGADO desaparecian "al rato"; la estimacion 15 existia en un dispositivo y no en
-otros; DESCARGAR EXCEL bajaba la estimacion 13; el AVANCE POR APARTAMENTO no se
-actualizaba. CUATRO causas confirmadas (3 agentes de investigacion):
+Tras el blindaje v953 cada accion de dinero de COBRO fuerza subida inmediata, pero
+forceUploadNow no amortiguaba: cada llamada arrancaba SU PROPIA subida completa.
+Una rafaga (marcar varios PAGADO, editar fechas) = N subidas encadenadas del doc
+de proyecto y el chip SINCRONIZANDO prendido eterno.
 
-1. p.cobro (rows + avanceAptos + estimacionExcel) era el ULTIMO dato de dinero en
-   LWW puro: sin _ts, sin tombstones, sin union-merge => cualquier copia vieja
-   re-subia el proj_ entero y pisaba todo en la flota (patron ESSENZA 03-jul).
-2. Los mutadores de cobro solo hacian saveState() (debounce 1200ms) — mala senal
-   o cerrar la PWA rapido perdia el cambio sin subirlo jamas.
-3. La auto-limpieza de ensureDataV9 borraba filas "vacias" en cada carga — la
-   forma exacta de una estimacion recien agregada (se auto-borraba sola).
-4. DESCARGAR EXCEL baja el ULTIMO ARCHIVO SUBIDO con hoja "RESUMEN PR"; los Excel
-   sin esa hoja caian al camino legado que crea filas pero NO guarda el archivo NI
-   lee la hoja "AVANCE PR" — todo en silencio (por eso quedo en la 13 y el avance
-   congelado).
+FIX: COALESCING en forceUploadNow — si hay una subida en vuelo, se agenda UNA SOLA
+de cola (captura todos los cambios hechos mientras tanto; el hash-skip v665 la hace
+barata) y todos los llamadores comparten esa promesa. Maximo: 1 en vuelo + 1 en
+cola. Sin cambios de formato ni de merge (APP_SYNC_VERSION queda en 909).
 
-FIX:
-- _mergeCobroProyecto (junto a _mergePlanillaProyecto): union de rows por id+_ts
-  (_mergeById) + tombstones cobro.rowsEliminadas + avanceAptos por sello (sin
-  sellos los DATOS no se pierden, bias v900) + estimacionExcel por ts. PURO e
-  idempotente (v856). Cableado en el forEach de proyectos de applyRemote.
-- Sellos _ts en TODOS los mutadores: uploadFacturaPDF, updateEst, updateEstDate,
-  updateEstVP, updateAnticipoPct, addEstimacion, _doDeleteFacturaPDF,
-  toggleEstNoAmort, autorizarSolicitudAmort, importador (RESUMEN PR y legado).
-- forceUploadNow en las acciones de dinero (factura, PAGADO, fechas, agregar/
-  eliminar estimacion, borrar factura, importar) — sin debounce.
-- delLastEstimacion y las filas reemplazadas/fantasma escriben LAPIDA.
-- La auto-limpieza respeta filas con _ts (las nuevas nacen selladas).
-- Degradaciones AVISAN: Excel sin hoja RESUMEN PR (toast rojo), fallo al guardar
-  en Storage (toast rojo), hoja AVANCE PR ilegible (toast ambar), y la descarga
-  dice la FECHA del archivo guardado.
-
-APP_SYNC_VERSION 908 -> 909 (bloquear clientes viejos que siguen pisando).
-
-Test cobro_blindaje_v953.cjs (34). Suite completa 167 avancetest + 115 recetatest
-verde; validador blocks=27 errs=1.
+Test force_coalescing_v954.cjs (6, incluye prueba de comportamiento: 5 llamadas
+concurrentes => max 2 subidas reales). Suite completa 168 avancetest + 115
+recetatest verde; validador blocks=27 errs=1.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
