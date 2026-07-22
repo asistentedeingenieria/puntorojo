@@ -3046,7 +3046,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v955</span>
+    <span style="opacity:.5;font-size:9px">v956</span>
   </footer>
 
 </div>
@@ -27450,13 +27450,15 @@ function parseAvanceExcel(sheets, towers){
     // letra —"B prima", "OTROS", "E MONTAÑAS"— matcheaba y pisaba el %).
     return (curNivel.aptos||[]).find(a=>{ const an=nrm(a.name); if(an===b) return true; if(bt && an===bt) return true; if(num && new RegExp('\\b'+num[1]+'\\b').test(an)) return true; return bt.length>1 && an.length>1 && (an.indexOf(bt)!==-1||bt.indexOf(an)!==-1); }); };
   const sinMatch = []; // v955: lo que no matchea ya NO se descarta en silencio
+  const niveles = {}, torres = {}; // v956: el % OFICIAL (ponderado por costo) de las filas TORRE/NIVEL del Excel
+  const pctDe = pv => { if (pv===''||pv==null) return null; let x = Number(pv); if (isNaN(x)) return null; if (x<=1.0001) x = x*100; return Math.max(0, Math.min(100, Math.round(x*100)/100)); };
   for (let r=target.headerRow+1; r<aoa.length; r++){
     const row = aoa[r]||[];
     const nm = String(row[nameCol]==null?'':row[nameCol]).trim();
     if (!nm) continue;
     const N = nrm(nm);
-    if (/^TORRE\b/.test(N)){ curTorre=findTorre(nm); curNivel=null; if(!curTorre) sinMatch.push(nm+' (torre)'); continue; }
-    if (/^(NIVEL|SOTANO)\b/.test(N)){ curNivel=findNivel(nm); if(!curNivel && curTorre) sinMatch.push(nm+' ('+(curTorre.name||'')+')'); continue; }
+    if (/^TORRE\b/.test(N)){ curTorre=findTorre(nm); curNivel=null; if(!curTorre) sinMatch.push(nm+' (torre)'); else { const tp=pctDe(row[pctCol]); if(tp!=null) torres[curTorre.id]=tp; } continue; }
+    if (/^(NIVEL|SOTANO)\b/.test(N)){ curNivel=findNivel(nm); if(!curNivel && curTorre) sinMatch.push(nm+' ('+(curTorre.name||'')+')'); else if(curNivel){ const lp=pctDe(row[pctCol]); if(lp!=null) niveles[curNivel.id]=lp; } continue; }
     const pv = row[pctCol];
     if (pv===''||pv==null) continue;
     let pct = Number(pv); if (isNaN(pct)) continue;
@@ -27467,7 +27469,7 @@ function parseAvanceExcel(sheets, towers){
     else if (curNivel) sinMatch.push(nm+' ('+(curNivel.name||'')+')');
   }
   if (sinMatch.length) avisos.push('SIN MATCH en la app: ' + sinMatch.slice(0, 12).join(', ') + (sinMatch.length > 12 ? ' … y ' + (sinMatch.length - 12) + ' más' : ''));
-  return { avance, avisos };
+  return { avance, niveles, torres, avisos };
 }
 function parsePersonalExcel(sheets){
   const nrm = s => String(s==null?'':s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
@@ -28211,6 +28213,15 @@ function _mergeCobroProyecto(lp, rp){
   var lx = lp.cobro.estimacionExcel, rx = rp.cobro.estimacionExcel;
   if (lx && lx.url && (!rx || (Number(lx.ts) || 0) > (Number(rx.ts) || 0))){
     rp.cobro.estimacionExcel = lx; changed = true;
+  }
+  // v956: los % oficiales por NIVEL/TORRE (del Excel) viajan como juego completo — gana
+  // el sello avanceMetaTs más nuevo (sin sello local no se toca lo remoto).
+  var lmt = Number(lp.cobro.avanceMetaTs) || 0, rmt = Number(rp.cobro.avanceMetaTs) || 0;
+  if (lmt > rmt){
+    rp.cobro.avanceLevels = lp.cobro.avanceLevels;
+    rp.cobro.avanceTorres = lp.cobro.avanceTorres;
+    rp.cobro.avanceMetaTs = lmt;
+    changed = true;
   }
   return changed;
 }
@@ -31818,6 +31829,12 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
               _pP.cobro.avanceAptos[aid]._ts = Date.now(); // v953: sello por apto
             });
             _avN = Object.keys(_av.avance).length;
+            // v956: el % OFICIAL por NIVEL y TORRE del Excel (ponderado por costo) se guarda
+            // como el valor que muestran los encabezados — antes quedaban congelados con lo
+            // que dejó un PDF viejo (el render les da prioridad absoluta, ~L30301).
+            if (_av.niveles && Object.keys(_av.niveles).length){ _pP.cobro.avanceLevels = Object.assign({}, _pP.cobro.avanceLevels || {}, _av.niveles); }
+            if (_av.torres && Object.keys(_av.torres).length){ _pP.cobro.avanceTorres = Object.assign({}, _pP.cobro.avanceTorres || {}, _av.torres); }
+            _pP.cobro.avanceMetaTs = Date.now(); // sello para que el merge propague el juego más nuevo
             saveState(); // v955: sin subida intermedia
             // v955: los avisos del parser (filas SIN MATCH) ya no se descartan en silencio
             if (_av.avisos && _av.avisos.length){
@@ -41230,15 +41247,24 @@ window.addEventListener('load', () => {
   };
 
   // Render: cuadritos por apto en planilla — formato unificado con AVANCE DE COBRO POR APTO
+  // v956: % por etapa para las vistas de PAGO — el MAYOR entre el override del importador
+  // (a.pagoManual v704, congelado desde el import) y el pago REAL (paidPct5). El override
+  // tenía prioridad absoluta y NADA lo actualizaba al pagar por el flujo normal: los
+  // cuadritos y el % de nivel/torre quedaban viejos (reporte 22-jul: apto 1202 con etapas
+  // 1-4 pagadas al 100% mostrando UN cuadrito). max() por etapa: los pagos reales ganan
+  // y el histórico importado que va por delante no se pierde.
+  function _pagoPcts5(p, apto){
+    const ne = (getEtapasP(p)||[]).length;
+    const vivo = [0,1,2,3,4].map(i => i < ne ? paidPct5(p, apto.id, i) : 0);
+    const man = (apto.pagoManual && Array.isArray(apto.pagoManual)) ? apto.pagoManual : null;
+    if (!man) return vivo;
+    return vivo.map((v, i) => Math.max(Number(v)||0, Number(man[i])||0));
+  }
+
   function renderPlanillaAptoSquares5(p, apto){
     // v697: nomenclatura unificada Foto 1 (4 etapas). e1→1, e2&e3→2, e4→3, e5@90→4, e5@100→cheque (PAGADO AL 100%).
     const ROJO_DARK = '#2547B0', VACIO = '#FFFFFF', BORDE = '#CBD5E1'; // v730: azul marino
-    const ne = (getEtapasP(p)||[]).length;
-    // v704: si el apto tiene override del importador de pagos (a.pagoManual), lo usamos
-    // SOLO para esta vista; nunca toca los registros reales de planilla.pagos.
-    const pcts = (apto.pagoManual && Array.isArray(apto.pagoManual))
-      ? apto.pagoManual
-      : [0,1,2,3,4].map(i => i < ne ? paidPct5(p, apto.id, i) : 0); // % pagado de cada etapa 1..5
+    const pcts = _pagoPcts5(p, apto); // v956: importado ∪ pagos reales (gana el mayor por etapa)
     const niv = _avanceAptoNivelPago(pcts);
     const aptoNombre = apto.name.replace(/^APARTAMENTO\s+/i, '').replace(/^APTO\s+/i, '').toUpperCase();
 
@@ -41281,10 +41307,9 @@ window.addEventListener('load', () => {
     const checkVerde = `<div style="width:30px;height:30px;background:var(--green-dark);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;font-weight:700;flex-shrink:0;box-shadow:0 1px 2px rgba(0,0,0,.08)">✓</div>`;
     const _lbl = (strong, rest) => `<strong style="color:var(--ink);font-weight:700">${strong}</strong> · ${rest}`;
 
-    // v736: KPIs de pago (override-aware con pagoManual)
-    const _neK = (getEtapasP(p)||[]).length;
+    // v736: KPIs de pago (v956: importado ∪ pagos reales vía _pagoPcts5)
     let _pSin=0,_pProc=0,_pComp=0,_pSum=0,_pN=0;
-    (p.towers||[]).forEach(t=>(t.levels||[]).forEach(l=>(l.aptos||[]).forEach(a=>{ const _pc=(a.pagoManual&&Array.isArray(a.pagoManual))?a.pagoManual:[0,1,2,3,4].map(i=>i<_neK?paidPct5(p,a.id,i):0); const _nv=_avanceAptoNivelPago(_pc); const _pct=_nv.green?100:Math.round(_nv.n/4*100); _pN++; _pSum+=_pct; if(_nv.green) _pComp++; else if(_pct<=0) _pSin++; else _pProc++; })));
+    (p.towers||[]).forEach(t=>(t.levels||[]).forEach(l=>(l.aptos||[]).forEach(a=>{ const _pc=_pagoPcts5(p,a); const _nv=_avanceAptoNivelPago(_pc); const _pct=_nv.green?100:Math.round(_nv.n/4*100); _pN++; _pSum+=_pct; if(_nv.green) _pComp++; else if(_pct<=0) _pSin++; else _pProc++; })));
     const _kpisPago = (typeof _avKpisHtml==='function') ? _avKpisHtml(_pSin,_pProc,_pComp,'PAGADOS',(_pN?Math.round(_pSum/_pN):0)) : '';
 
     let html = `
@@ -41315,10 +41340,9 @@ window.addEventListener('load', () => {
       const totalT = (t.levels||[]).reduce((s, l) => s + (l.aptos||[]).length, 0);
       if (totalT === 0) return;
       const isCollapsed = collapsedSet.has(t.id);
-      // v735: % de la torre (override-aware con pagoManual) — antes el pago no mostraba % de torre.
-      const _neT = (getEtapasP(p)||[]).length;
+      // v735: % de la torre (v956: importado ∪ pagos reales vía _pagoPcts5)
       let _twSum=0, _twN=0;
-      (t.levels||[]).forEach(l=>(l.aptos||[]).forEach(a=>{ const _pc=(a.pagoManual&&Array.isArray(a.pagoManual))?a.pagoManual:[0,1,2,3,4].map(i=>i<_neT?paidPct5(p,a.id,i):0); const _nv=_avanceAptoNivelPago(_pc); _twSum+=_nv.green?100:(_nv.n/4*100); _twN++; }));
+      (t.levels||[]).forEach(l=>(l.aptos||[]).forEach(a=>{ const _pc=_pagoPcts5(p,a); const _nv=_avanceAptoNivelPago(_pc); _twSum+=_nv.green?100:(_nv.n/4*100); _twN++; }));
       const _towerPctPago = _twN?Math.round(_twSum/_twN):0;
 
       html += `<div class="tower-summary">
@@ -41334,8 +41358,8 @@ window.addEventListener('load', () => {
         (t.levels||[]).forEach(l => {
           const aptos = l.aptos || [];
           if (aptos.length === 0) return;
-          const _ne5 = (getEtapasP(p)||[]).length; // v732: % del nivel (no existía en pago)
-          let _nivSum=0; aptos.forEach(a=>{ const _pc=(a.pagoManual&&Array.isArray(a.pagoManual))?a.pagoManual:[0,1,2,3,4].map(i=>i<_ne5?paidPct5(p,a.id,i):0); const _nv=_avanceAptoNivelPago(_pc); _nivSum+=_nv.green?100:(_nv.n/4*100); });
+          // v732: % del nivel (v956: importado ∪ pagos reales vía _pagoPcts5)
+          let _nivSum=0; aptos.forEach(a=>{ const _pc=_pagoPcts5(p,a); const _nv=_avanceAptoNivelPago(_pc); _nivSum+=_nv.green?100:(_nv.n/4*100); });
           const _nivPct5 = aptos.length?Math.round(_nivSum/aptos.length):0;
           html += _avNivelHeader(t.id, l.id, l.name, _nivPct5+'%', ''); // v732: colapsable + %
           if (!_avNivelColapsado(t.id, l.id)) {

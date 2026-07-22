@@ -1,34 +1,32 @@
-v955: import de estimacion RAPIDO + fix matcher de NIVELES del avance por apto
+v956: niveles OFICIALES del Excel en COBRO + pagos VIVOS en el avance de LIQUIDACION
 
-DOS reportes de Antonio tras v953/v954:
+DOS reportes de Antonio (22-jul), mismos sintomas ("los % no se actualizan"), dos
+causas distintas — ambas overrides congelados con prioridad absoluta:
 
-1) "Se sigue tardando demasiado en cargar los archivos" (overlay CARGANDO eterno):
-   la rama RESUMEN PR hacia DENTRO del overlay: subida completa tras las filas
-   (await uploadCurrent #1), otra tras el avance (#2), put del .xlsx a Storage,
-   OTRA subida (#3) y TRES _notifyByPerm esperadas (cada una lee users).
-   uploadFacturaPDF igual: 3 notifs esperadas antes de soltar el overlay.
-   FIX: sin subidas intermedias — UNA sola CloudSync.forceUploadNow (coalesced
-   v954) disparada al final SIN esperar (el chip SINCRONIZANDO informa); notifs
-   fire-and-forget. El overlay se suelta apenas termina el trabajo real.
+1) COBRO - AVANCE POR APARTAMENTO: los cuadritos de los aptos si cambiaban pero el
+   % del NIVEL no. CAUSA: el render usa p.cobro.avanceLevels/avanceTorres (el %
+   "oficial" que dejo una subida de PDF VIEJA) con prioridad absoluta (~L30301), y
+   el import del Excel AVANCE PR solo escribia avanceAptos.
+   FIX: parseAvanceExcel ahora captura tambien el % de las filas TORRE/NIVEL del
+   Excel (ponderado por costo — el numero que Antonio espera ver) y el import los
+   guarda en avanceLevels/avanceTorres con sello avanceMetaTs; _mergeCobroProyecto
+   propaga el juego mas nuevo entre dispositivos. Bonus: se acabo la diferencia
+   "la app promedia parejo vs el Excel pondera por costo".
 
-2) "NO ME CUADRAN LOS AVANCES POR APARTAMENTO" (con el Excel AVANCE PR a la
-   vista: la app tenia T3 N10-13 en 0% y el N1 bajado, cuando el Excel decia
-   96%/45%): BUG del matcher de parseAvanceExcel — findNivel comparaba por
-   SUBSTRING y 'NIVEL 11'.indexOf('NIVEL 1')===0 => los niveles 10-13 del Excel
-   caian en el NIVEL 1 de la app: sus aptos numerados no matcheaban (congelados)
-   y sus filas "Pasillo" PISABAN al pasillo del NIVEL 1.
-   FIX: los niveles se matchean por NUMERO EXACTO (o nombre exacto); substring
-   solo cuando ninguno trae numero (SOTANO). Y las filas sin match ya NO se
-   descartan en silencio: van a avisos y el import las muestra (toast ambar +
-   console.warn con la lista completa).
+2) LIQUIDACION PROVEEDORES - AVANCE POR APARTAMENTO: apto 1202 con etapas 1-4
+   PAGADAS 100% mostraba UN cuadrito. CAUSA: la vista usa a.pagoManual (override
+   que dejo el importador de pagos v703-v733) con prioridad absoluta sobre los
+   pagos reales (paidPct5), y NADA lo actualiza al pagar por el flujo normal.
+   FIX: _pagoPcts5(p, apto) = por etapa, el MAYOR entre lo importado y lo pagado
+   real (los pagos reales ganan; el historico importado que va por delante no se
+   pierde). Las 4 lecturas (cuadritos, KPIs, % torre, % nivel) usan el helper.
+   OJO: hay definiciones MUERTAS duplicadas de renderPlanillaReporte (35017/39523)
+   — la activa es la ultima (41283); solo esa se toco.
 
-Al RE-SUBIR el Excel todo se auto-corrige: los aptos de N10-13 toman su %, el
-pasillo del N1 recupera el suyo, y cualquier nombre que no exista en la app
-queda LISTADO en el aviso.
-
-Tests: import_rapido_v955.cjs (7) + avance_matcher_nivel_v955.cjs (9, simula el
-caso ESSENZA exacto); avance_excel_import.cjs actualizado (el aviso SIN MATCH es
-el comportamiento nuevo). Suite completa 170 avancetest + 115 recetatest verde;
-validador blocks=27 errs=1. Sin cambios de merge (APP_SYNC queda en 909).
+Tests: avance_niveles_oficial_v956.cjs (10) + pago_manual_vivo_v956.cjs (8).
+Suite completa 172 avancetest + 115 recetatest verde; validador blocks=27 errs=1.
+_mergeCobroProyecto extendido de forma aditiva y auto-curativa (APP_SYNC queda en
+909: clientes v953-v955 adoptan los valores nuevos via su propio state=merged y
+el merge v956 re-propaga si un rezagado sube un juego viejo).
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
