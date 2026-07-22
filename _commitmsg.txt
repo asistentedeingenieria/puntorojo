@@ -1,17 +1,34 @@
-v954: subida amortiguada — forceUploadNow con coalescing (post-v953 "se tarda DEMASIADO")
+v955: import de estimacion RAPIDO + fix matcher de NIVELES del avance por apto
 
-Tras el blindaje v953 cada accion de dinero de COBRO fuerza subida inmediata, pero
-forceUploadNow no amortiguaba: cada llamada arrancaba SU PROPIA subida completa.
-Una rafaga (marcar varios PAGADO, editar fechas) = N subidas encadenadas del doc
-de proyecto y el chip SINCRONIZANDO prendido eterno.
+DOS reportes de Antonio tras v953/v954:
 
-FIX: COALESCING en forceUploadNow — si hay una subida en vuelo, se agenda UNA SOLA
-de cola (captura todos los cambios hechos mientras tanto; el hash-skip v665 la hace
-barata) y todos los llamadores comparten esa promesa. Maximo: 1 en vuelo + 1 en
-cola. Sin cambios de formato ni de merge (APP_SYNC_VERSION queda en 909).
+1) "Se sigue tardando demasiado en cargar los archivos" (overlay CARGANDO eterno):
+   la rama RESUMEN PR hacia DENTRO del overlay: subida completa tras las filas
+   (await uploadCurrent #1), otra tras el avance (#2), put del .xlsx a Storage,
+   OTRA subida (#3) y TRES _notifyByPerm esperadas (cada una lee users).
+   uploadFacturaPDF igual: 3 notifs esperadas antes de soltar el overlay.
+   FIX: sin subidas intermedias — UNA sola CloudSync.forceUploadNow (coalesced
+   v954) disparada al final SIN esperar (el chip SINCRONIZANDO informa); notifs
+   fire-and-forget. El overlay se suelta apenas termina el trabajo real.
 
-Test force_coalescing_v954.cjs (6, incluye prueba de comportamiento: 5 llamadas
-concurrentes => max 2 subidas reales). Suite completa 168 avancetest + 115
-recetatest verde; validador blocks=27 errs=1.
+2) "NO ME CUADRAN LOS AVANCES POR APARTAMENTO" (con el Excel AVANCE PR a la
+   vista: la app tenia T3 N10-13 en 0% y el N1 bajado, cuando el Excel decia
+   96%/45%): BUG del matcher de parseAvanceExcel — findNivel comparaba por
+   SUBSTRING y 'NIVEL 11'.indexOf('NIVEL 1')===0 => los niveles 10-13 del Excel
+   caian en el NIVEL 1 de la app: sus aptos numerados no matcheaban (congelados)
+   y sus filas "Pasillo" PISABAN al pasillo del NIVEL 1.
+   FIX: los niveles se matchean por NUMERO EXACTO (o nombre exacto); substring
+   solo cuando ninguno trae numero (SOTANO). Y las filas sin match ya NO se
+   descartan en silencio: van a avisos y el import las muestra (toast ambar +
+   console.warn con la lista completa).
+
+Al RE-SUBIR el Excel todo se auto-corrige: los aptos de N10-13 toman su %, el
+pasillo del N1 recupera el suyo, y cualquier nombre que no exista en la app
+queda LISTADO en el aviso.
+
+Tests: import_rapido_v955.cjs (7) + avance_matcher_nivel_v955.cjs (9, simula el
+caso ESSENZA exacto); avance_excel_import.cjs actualizado (el aviso SIN MATCH es
+el comportamiento nuevo). Suite completa 170 avancetest + 115 recetatest verde;
+validador blocks=27 errs=1. Sin cambios de merge (APP_SYNC queda en 909).
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>

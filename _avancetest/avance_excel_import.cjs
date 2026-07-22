@@ -32,7 +32,9 @@ if(body){
     ['Apartamento 305', 0.75]                       // numérico sigue andando
   ];
   const res=fn({'AVANCE PR':aoa}, towers);
-  ok('sin avisos (encontró el header de %)', Array.isArray(res.avisos) && res.avisos.length===0);
+  // v955: las filas que no matchean ya se REPORTAN (antes se descartaban en silencio).
+  // Acá 'Campamento en obra' y 'B prima' son no-match INTENCIONALES => un aviso SIN MATCH.
+  ok('reporta las filas sin match (v955) y sin aviso de header', Array.isArray(res.avisos) && res.avisos.length===1 && /SIN MATCH/.test(res.avisos[0]) && /CAMPAMENTO|B PRIMA/i.test(res.avisos[0]));
   ok('NIVEL 2 B = 25', res.avance['b']===25);
   ok('NIVEL 2 C = 25', res.avance['c']===25);
   ok('NIVEL 9 A = 50 (no contaminado)', res.avance['a9']===50);
