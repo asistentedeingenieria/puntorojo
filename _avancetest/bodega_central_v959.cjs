@@ -133,9 +133,11 @@ ok('botón BODEGA CENTRAL abre el panel', /_abrirPanelBodega\(\)/.test(html) && 
 // v960: el botón suelto de ABASTECER se quitó (un solo botón) — ahora vive DENTRO del panel
 ok('ABASTECER accesible desde el panel y gateado', /_abrirModalBodega\(\)/.test(extractFrom('function _abrirPanelBodega(')) && /_puedeGestionarBodega\(\)/.test(extractFrom('function _abrirModalBodega(')));
 
-// ── 12. modales nuevos registrados en isUserBusy (regla v769/v940) ──
+// ── 12. isUserBusy (regla v769/v940) — v961: la VISTA de bodega ya NO pospone (espacio
+// de trabajo largo, congelaría el sync); el modal corto de RECIBIDO sí sigue.
 const zBusy = extractFrom('isUserBusy(){');
-ok('panel y recibido posponen applyRemote', /_bodegaPanelModal/.test(zBusy) && /_ocRecibidoModal/.test(zBusy));
+const qsBusy = (zBusy.match(/querySelector\('#prConfirmModal[^']*'\)/) || [''])[0]; // la LISTA de modales (no el .modal-bg.show ni el comentario)
+ok('RECIBIDO pospone applyRemote; la vista de bodega no', /_ocRecibidoModal/.test(qsBusy) && !/_bodegaPanelModal/.test(qsBusy));
 
 // ── 13. oficina genera OC SOLO de pedidos de abastecimiento ──
 const zOpen = extractFrom('async function openOrdenCompra(');

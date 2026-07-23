@@ -3083,7 +3083,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v960</span>
+    <span style="opacity:.5;font-size:9px">v961</span>
   </footer>
 
 </div>
@@ -9566,7 +9566,7 @@ const CloudSync = {
     // referencia queda huerfana y el cambio (push/Object.assign/splice) no persiste. Esto
     // arregla de raiz toda la familia "await modal -> escribir" (aprobar/rechazar/procesar/
     // anular planilla, editar/eliminar anticipos y polizas, etc.).
-    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_bodegaPanelModal, #_ocRecibidoModal')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: panel de existencias y MARCAR RECIBIDO
+    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo.
     const focused = document.activeElement;
     if (focused && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)) return true;
     return false;
@@ -11040,6 +11040,18 @@ function renderProjectSelect(){
         <span class="pr-proj-check" aria-hidden="true">✓</span>
       </div>`;
     }).join('');
+    // v961 (idea de Antonio): la BODEGA CENTRAL vive en PROYECTOS — entrada especial al
+    // final del desplegable (solo quien puede gestionarla). Abre la vista completa SIN
+    // cambiar el proyecto activo real.
+    try {
+      if (typeof _puedeGestionarBodega === 'function' && _puedeGestionarBodega()) {
+        list.innerHTML += `<div class="pr-proj-item" role="option" style="border-top:1px solid rgba(0,0,0,.08);margin-top:4px" onclick="window.prToggleProjDropdown(); window._abrirPanelBodega()">
+          <span class="pr-proj-dot" aria-hidden="true" style="background:#166534"></span>
+          <span>BODEGA CENTRAL</span>
+          <span aria-hidden="true" style="margin-left:auto;font-size:10px;color:#166534">■</span>
+        </div>`;
+      }
+    } catch(e){}
   }
 }
 
@@ -11081,6 +11093,7 @@ document.addEventListener('keydown', (ev) => {
 
 function setActiveProject(id){
   state.activeProjectId = id;
+  window._projGateEligioProyecto = true; // v961: ya hay un proyecto elegido a conciencia
   // v648: al cambiar de proyecto, reiniciar el filtro de obra de asistencia a TODAS LAS OBRAS.
   // Evita que un filtro viejo (p.ej. otra obra) oculte los marcados del proyecto nuevo y parezca
   // que "no marcó nadie". El encargado lo vuelve a fijar a su obra en renderPersonal.
@@ -11096,6 +11109,64 @@ function setActiveProject(id){
   saveState();
   renderAll();
 }
+
+/* ══════════ v961: GATE DE PROYECTO AL ABRIR ══════════
+   Pedido de Antonio (23-jul): SIEMPRE que se abre la app no hay proyecto seleccionado —
+   un overlay OPACO bloquea todo hasta elegir con cuál se va a trabajar. Aplica a todos
+   los usuarios, en cada carga de página. NO se registra en isUserBusy: el sync inicial
+   corre detrás mientras el usuario decide (por eso el reintento cuando los proyectos
+   aún no llegaron en un dispositivo nuevo). */
+window._projGateAplica = function(user, projects){
+  // el encargado con obra asignada VÁLIDA se lo salta: su obra se fuerza sola (v631)
+  const obra = user && user.obraAsignada;
+  if (obra && (projects || []).some(p => p && p.id === obra)) return false;
+  return true;
+};
+function _abrirGateProyecto(){
+  if (window._projGateHecho) return;
+  if (!window._projGateAplica(currentUser, (state && state.projects) || [])) {
+    window._projGateHecho = true;
+    window._projGateEligioProyecto = true; // su obra se fuerza sola — cuenta como elegido
+    return;
+  }
+  if (document.getElementById('_projGateModal')) return;
+  const wrap = document.createElement('div');
+  wrap.id = '_projGateModal';
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:99000;background:var(--paper);display:flex;align-items:center;justify-content:center;padding:20px;overflow:auto';
+  const pinta = () => {
+    if (!document.getElementById('_projGateModal')) return; // ya eligió (o logout)
+    const projs = (state && state.projects) || [];
+    const botones = projs.map(p => `
+      <button class="btn" data-pgid="${p.id}" style="display:block;width:100%;padding:15px 18px;margin-top:10px;font-size:13px;font-weight:700;letter-spacing:.8px;text-align:left;border-radius:10px;text-transform:uppercase">${p.name}</button>`).join('');
+    wrap.innerHTML = `<div style="max-width:440px;width:100%">
+      <div style="font-size:10px;letter-spacing:2px;color:var(--mute);font-weight:700">PARA EMPEZAR</div>
+      <h2 style="margin:6px 0 2px;font-size:20px;letter-spacing:.5px">SELECCIONÁ EL PROYECTO.</h2>
+      <div style="font-size:11.5px;color:var(--mute);line-height:1.5">Ningún proyecto está abierto. Elegí con cuál vas a trabajar — podés cambiarlo después desde el botón PROYECTO de arriba.</div>
+      ${botones || '<div style="margin-top:16px;padding:18px;text-align:center;color:var(--mute);font-size:11px;letter-spacing:1px">CARGANDO PROYECTOS…</div>'}
+      ${(typeof _puedeGestionarBodega === 'function' && _puedeGestionarBodega()) ? `
+      <button class="btn ghost" id="_pgBodegaBtn" style="display:block;width:100%;padding:13px 18px;margin-top:16px;font-size:12px;letter-spacing:.8px;text-align:left;border-radius:10px;color:#166534;border-color:#166534">■ ENTRAR A LA BODEGA CENTRAL</button>` : ''}
+    </div>`;
+    wrap.querySelectorAll('[data-pgid]').forEach(b => {
+      b.onclick = () => {
+        window._projGateHecho = true;
+        wrap.remove();
+        try { setActiveProject(b.dataset.pgid); } catch (e) {}
+      };
+    });
+    const _bg = wrap.querySelector('#_pgBodegaBtn');
+    if (_bg) _bg.onclick = () => {
+      // v961: entrar directo a la bodega SIN elegir proyecto — al salir de la bodega,
+      // si sigue sin proyecto elegido, el gate vuelve a aparecer.
+      window._projGateHecho = true;
+      wrap.remove();
+      try { _abrirPanelBodega(); } catch (e) {}
+    };
+    if (!projs.length) setTimeout(pinta, 800); // primer arranque: el sync trae los proyectos detrás
+  };
+  pinta();
+  document.body.appendChild(wrap);
+}
+window._abrirGateProyecto = _abrirGateProyecto;
 
 /* ─────────────── DASHBOARD ─────────────── */
 function renderDashboard(){
@@ -18369,7 +18440,7 @@ function _abrirModalBodega(){
     <div style="display:grid;grid-template-columns:34px minmax(0,1fr) 110px 110px;gap:10px;padding:10px 18px 4px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700"><span>BOD.</span><span>MATERIAL</span><span style="text-align:right">TOTAL RECETA</span><span style="text-align:right">CANTIDAD</span></div>
     <div style="overflow:auto;flex:1;padding:0 18px 8px">${filas}</div>
     <div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;align-items:end">
-      <label style="font-size:8.5px;letter-spacing:1.5px;color:#78716C;font-weight:700">ENTREGA<br><input type="date" id="_bodegaFecha" style="margin-top:3px;padding:6px 8px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:12px"></label>
+      <label style="font-size:8.5px;letter-spacing:1.5px;color:#78716C;font-weight:700" title="La fecha que heredan las OC al proveedor">¿PARA CUÁNDO LO NECESITÁS EN BODEGA?<br><input type="date" id="_bodegaFecha" class="pr-buscador" style="margin-top:3px"></label>
       <div style="flex:1"></div>
       <button class="btn ghost" onclick="_cerrarModalBodega()">CERRAR</button>
       <button class="btn primary" onclick="_bodegaGenerarPedido()">GENERAR PEDIDO DE ABASTECIMIENTO</button>
@@ -18606,6 +18677,8 @@ function _ocConfirmarRecibido(id){
   saveState();
   try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
   try { renderOrdenesList(); } catch (e) {}
+  // v961: si la vista de BODEGA CENTRAL está abierta detrás, re-pintarla con el saldo nuevo.
+  try { if (document.getElementById('_bodegaPanelModal')) { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } } catch (e) {}
   showToast('RECEPCIÓN REGISTRADA — EXISTENCIAS ACTUALIZADAS', 'green');
 }
 
@@ -18657,7 +18730,7 @@ function _abrirPanelBodega(){
   const lista = Object.values(rows).sort((a, b) => a.name.localeCompare(b.name, 'es'));
   window._bodegaPanelRows = lista;
   const filas = lista.map((x, i) => `
-    <div style="display:grid;grid-template-columns:minmax(0,1fr) 56px 84px 84px 100px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
+    <div data-bfila data-bname="${String(x.name).toLowerCase().replace(/"/g, '&quot;')}" style="display:grid;grid-template-columns:minmax(0,1fr) 56px 84px 84px 100px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
       <div style="font-size:11.5px;letter-spacing:.2px">${x.name}</div>
       <div style="text-align:center;font-size:10px;color:#6B7280">${x.u || ''}</div>
       <div style="text-align:right;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;color:${x.saldo < 0 ? '#C62828' : '#111827'}">${x.saldo}</div>
@@ -18670,7 +18743,7 @@ function _abrirPanelBodega(){
   const porRecibirHTML = porRecibir.map(oc => `
     <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid #F9FAFB">
       <div style="font-size:11px"><b>${oc.numero}</b> <span style="color:#78716C">· ${oc.proveedorNombre || ''}${oc.fechaEntrega ? ' · ENTREGA ' + oc.fechaEntrega : ''}</span></div>
-      <button class="btn sm" style="background:#166534;border-color:#166534;color:#fff;font-size:10px" onclick="_cerrarPanelBodega(); _ocAbrirRecibido('${oc.id}')">MARCAR RECIBIDO</button>
+      <button class="btn sm" style="background:#166534;border-color:#166534;color:#fff;font-size:10px" onclick="_ocAbrirRecibido('${oc.id}')">MARCAR RECIBIDO</button>
     </div>`).join('');
   const ult = (Array.isArray(state.bodegaMovs) ? state.bodegaMovs.slice() : []).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 40);
   const histo = ult.map(mv => {
@@ -18686,34 +18759,60 @@ function _abrirPanelBodega(){
       <span style="text-align:right;font-variant-numeric:tabular-nums;font-weight:700;color:${col}">${qtx}</span>
     </div>`;
   }).join('') || '<div style="padding:12px;text-align:center;color:#9CA3AF;font-size:10.5px">SIN MOVIMIENTOS</div>';
+  // v961: VISTA COMPLETA a pantalla entera (idea de Antonio: "la bodega vive en
+  // PROYECTOS") — fondo paper, no modal oscuro. z 98000: por debajo del gate (99000)
+  // y de los modales body-level (100070), que se abren encima.
   const wrap = document.createElement('div');
   wrap.id = '_bodegaPanelModal';
-  wrap.style.cssText = 'position:fixed;inset:0;z-index:100070;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
-  wrap.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:860px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
-    <div style="padding:14px 18px;border-bottom:1px solid rgba(0,0,0,.08)">
-      <b style="font-size:13px;letter-spacing:.5px">BODEGA CENTRAL · EXISTENCIAS</b>
-      <div style="font-size:11px;color:#78716C;margin-top:4px;line-height:1.5">EXISTENCIA en <b style="color:#C62828">rojo</b> = faltante (hay que comprar). EN CAMINO = OCs de abastecimiento autorizadas que aún no se marcan recibidas. Para el conteo inicial o correcciones poné el AJUSTE (±) y el motivo.</div>
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:98000;background:var(--paper);overflow:auto;padding:18px 16px 40px';
+  wrap.innerHTML = `<div style="max-width:1000px;margin:0 auto">
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:4px">
+      <div>
+        <div style="font-size:10px;letter-spacing:2px;color:#166534;font-weight:700">■ ALMACÉN GENERAL · TODOS LOS PROYECTOS</div>
+        <h2 style="margin:2px 0 0;font-size:20px;letter-spacing:.5px">BODEGA CENTRAL.</h2>
+      </div>
+      <div style="flex:1"></div>
+      <button class="btn ghost" onclick="_cerrarPanelBodega()">← VOLVER A PROYECTOS</button>
+      <button class="btn primary" onclick="_abrirModalBodega()" title="Generar pedido de abastecimiento (los faltantes van pre-llenados)">ABASTECER</button>
     </div>
-    <div style="display:grid;grid-template-columns:minmax(0,1fr) 56px 84px 84px 100px;gap:10px;padding:10px 18px 4px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700"><span>MATERIAL</span><span style="text-align:center">U</span><span style="text-align:right">EXISTENCIA</span><span style="text-align:right">EN CAMINO</span><span style="text-align:right">AJUSTE ±</span></div>
-    <div style="overflow:auto;flex:1;padding:0 18px 8px">${filas}</div>
-    ${porRecibir.length ? `<div style="padding:10px 18px;border-top:1px solid rgba(0,0,0,.06);max-height:150px;overflow:auto;background:#F0FDF4">
+    <div style="font-size:11px;color:#78716C;margin:6px 0 12px;line-height:1.5">EXISTENCIA en <b style="color:#C62828">rojo</b> = faltante (hay que comprar). EN CAMINO = OCs de abastecimiento autorizadas que aún no se marcan recibidas. Para el conteo inicial o correcciones poné el AJUSTE (±) y el motivo.</div>
+    <input id="_bodegaViewFiltro" class="pr-buscador" placeholder="BUSCAR MATERIAL EN LA BODEGA…" oninput="window._bodegaViewFiltrar(this.value)" style="width:100%;margin-bottom:10px">
+    <div class="card" style="padding:4px 18px 8px">
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 56px 84px 84px 100px;gap:10px;padding:10px 0 4px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700"><span>MATERIAL</span><span style="text-align:center">U</span><span style="text-align:right">EXISTENCIA</span><span style="text-align:right">EN CAMINO</span><span style="text-align:right">AJUSTE ±</span></div>
+      ${filas}
+      <div style="padding:12px 0 6px;display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+        <label style="flex:1;min-width:200px;font-size:8.5px;letter-spacing:1.5px;color:#78716C;font-weight:700">MOTIVO DEL AJUSTE<br><input type="text" id="_bodegaAjMotivo" class="pr-buscador" placeholder="EJ: CONTEO INICIAL" style="margin-top:3px;width:100%"></label>
+        <button class="btn primary" onclick="_bodegaAplicarAjustes()">APLICAR AJUSTES</button>
+      </div>
+    </div>
+    ${porRecibir.length ? `<div class="card" style="padding:12px 18px;margin-top:12px;background:#F0FDF4">
       <div style="font-size:8.5px;letter-spacing:1.5px;color:#166534;font-weight:700;margin-bottom:6px">POR RECIBIR (${porRecibir.length})</div>
       ${porRecibirHTML}
     </div>` : ''}
-    <div style="padding:10px 18px;border-top:1px solid rgba(0,0,0,.06);max-height:180px;overflow:auto">
+    <div class="card" style="padding:12px 18px;margin-top:12px">
       <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:6px">ÚLTIMOS MOVIMIENTOS</div>
       ${histo}
-    </div>
-    <div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;align-items:end;flex-wrap:wrap">
-      <label style="flex:1;min-width:200px;font-size:8.5px;letter-spacing:1.5px;color:#78716C;font-weight:700">MOTIVO DEL AJUSTE<br><input type="text" id="_bodegaAjMotivo" placeholder="EJ: CONTEO INICIAL" style="margin-top:3px;width:100%;padding:6px 8px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:12px;box-sizing:border-box"></label>
-      <button class="btn ghost" onclick="_cerrarPanelBodega()">CERRAR</button>
-      <button class="btn ghost" onclick="_cerrarPanelBodega(); _abrirModalBodega()" title="Generar pedido de abastecimiento (los faltantes van pre-llenados)">ABASTECER</button>
-      <button class="btn primary" onclick="_bodegaAplicarAjustes()">APLICAR AJUSTES</button>
     </div>
   </div>`;
   document.body.appendChild(wrap);
 }
-function _cerrarPanelBodega(){ const m = document.getElementById('_bodegaPanelModal'); if (m) m.remove(); window._bodegaPanelRows = null; }
+// filtro en vivo de la tabla de existencias (por nombre, sin re-render)
+window._bodegaViewFiltrar = function(q){
+  const m = document.getElementById('_bodegaPanelModal'); if (!m) return;
+  const f = String(q || '').toLowerCase().trim();
+  m.querySelectorAll('[data-bfila]').forEach(el => {
+    el.style.display = (!f || (el.dataset.bname || '').includes(f)) ? '' : 'none';
+  });
+};
+function _cerrarPanelBodegaDom(){ const m = document.getElementById('_bodegaPanelModal'); if (m) m.remove(); window._bodegaPanelRows = null; }
+function _cerrarPanelBodega(){
+  _cerrarPanelBodegaDom();
+  // v961: si entró directo por el gate y todavía no eligió proyecto real, el gate vuelve.
+  if (currentUser && !window._projGateEligioProyecto) {
+    window._projGateHecho = false;
+    try { _abrirGateProyecto(); } catch (e) {}
+  }
+}
 function _bodegaAplicarAjustes(){
   if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN', 'red');
   const m = document.getElementById('_bodegaPanelModal'); if (!m) return;
@@ -18728,12 +18827,13 @@ function _bodegaAplicarAjustes(){
   if (!cambios.length) return showToast('PONÉ CANTIDAD (±) A AL MENOS UN MATERIAL', 'red');
   const motivo = String((document.getElementById('_bodegaAjMotivo') || {}).value || '').trim();
   if (!motivo) return showToast('ESCRIBÍ EL MOTIVO DEL AJUSTE (EJ: CONTEO INICIAL)', 'red');
-  _cerrarPanelBodega();
-  // regla v769/v940: tras cerrar el modal se escribe contra el state VIVO.
+  // v961: la vista ya NO pospone applyRemote — escribimos contra el state vivo y re-pintamos.
   cambios.forEach(c => _bodegaMovsList().push(_bodegaMov('AJUSTE', c.name, c.q, { motivo })));
   try { logActivity('update', 'BODEGA CENTRAL', 'Ajuste de existencias (' + cambios.length + ' materiales) — ' + motivo); } catch (e) {}
   saveState();
   try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
+  _cerrarPanelBodegaDom();
+  try { _abrirPanelBodega(); } catch (e) {}
   showToast('AJUSTE REGISTRADO', 'green');
 }
 window._abrirPanelBodega = _abrirPanelBodega; window._cerrarPanelBodega = _cerrarPanelBodega;
@@ -39392,6 +39492,9 @@ function initAuthListener(){
   function _showLoginScreenNow(){
     currentUser = null;
     cachedUsers = [];
+    // v961: al salir se resetea el gate de proyecto — el próximo login vuelve a elegir.
+    window._projGateHecho = false;
+    try { const _pg = document.getElementById('_projGateModal'); if (_pg) _pg.remove(); } catch(e){}
     try { _stopPresence(); } catch(e){}
     try { unsubscribeFromMyNotifications(); } catch(e){}
     try { saveNotifications([]); } catch(e){}
@@ -39531,7 +39634,10 @@ function applyAuthSession(fbUser, profileData){
   // forzamos el cambio de clave ANTES de que pueda usar la app.
   if (profileData.mustChangePassword === true) {
     setTimeout(() => showForcedPasswordChange(), 100);
+    // v961: acá NO va el gate de proyecto — el modal de cambio de clave es z100 y quedaría tapado.
   } else {
+    // v961: cada apertura arranca SIN proyecto — gate obligatorio que bloquea todo hasta elegir.
+    setTimeout(() => { try { _abrirGateProyecto(); } catch (e) {} }, 60);
     // v630: empujar a activar notificaciones (push) si aún no están.
     setTimeout(() => { try{ _refreshNotifActivarBanner(); }catch(e){} }, 1500);
   }
