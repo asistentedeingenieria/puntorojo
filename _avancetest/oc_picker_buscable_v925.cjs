@@ -26,7 +26,8 @@ ok('_provPickerItems existe con BODEGA CENTRAL', /_bodega/.test(srcItems) && /BO
 if (srcItems) {
   const f = new Function('function _getProveedores(){ return [{id:"p1",nombre:"SISTEGUA"},{id:"p2",nombre:"NOVEX"}]; }\n' + srcItems + '\nreturn _provPickerItems;')();
   const items = f('— ASIGNAR —');
-  ok('primera opción + bodega + proveedores', items[0].label === '— ASIGNAR —' && items[1].id === '_bodega' && items.length === 4 && items[3].label === 'NOVEX');
+  // v960: proveedores ORDENADOS A-Z (NOVEX antes que SISTEGUA); vacía y bodega siguen encabezando
+  ok('primera opción + bodega + proveedores A-Z', items[0].label === '— ASIGNAR —' && items[1].id === '_bodega' && items.length === 4 && items[2].label === 'NOVEX' && items[3].label === 'SISTEGUA');
 }
 
 // ── 4. cableado: por material y el rápido ──

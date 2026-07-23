@@ -130,7 +130,8 @@ ok('APP_SYNC_VERSION >= 910', !!mVer && Number(mVer[1]) >= 910);
 // ── 11. UI: sub-pestaña ÓRDENES visible para oficina; botón del panel nuevo ──
 ok('subtab ÓRDENES admite materiales.bodega', /data-mattab="ordenes"[^>]*data-perm="[^"]*materiales\.bodega/.test(html));
 ok('botón BODEGA CENTRAL abre el panel', /_abrirPanelBodega\(\)/.test(html) && /data-perm="[^"]*materiales\.bodega[^"]*"[^>]*onclick="_abrirPanelBodega\(\)"|onclick="_abrirPanelBodega\(\)"[^>]*data-perm="[^"]*materiales\.bodega/.test(html));
-ok('ABASTECER BODEGA admite materiales.bodega', /data-perm="[^"]*materiales\.bodega[^"]*"[^>]*onclick="_abrirModalBodega\(\)"|onclick="_abrirModalBodega\(\)"[^>]*data-perm="[^"]*materiales\.bodega/.test(html));
+// v960: el botón suelto de ABASTECER se quitó (un solo botón) — ahora vive DENTRO del panel
+ok('ABASTECER accesible desde el panel y gateado', /_abrirModalBodega\(\)/.test(extractFrom('function _abrirPanelBodega(')) && /_puedeGestionarBodega\(\)/.test(extractFrom('function _abrirModalBodega(')));
 
 // ── 12. modales nuevos registrados en isUserBusy (regla v769/v940) ──
 const zBusy = extractFrom('isUserBusy(){');
