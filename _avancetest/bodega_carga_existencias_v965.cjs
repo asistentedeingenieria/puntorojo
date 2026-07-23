@@ -51,6 +51,11 @@ const zConf = extractFrom('function _bodegaConfirmarCarga(');
 ok('confirmar usa el constructor puro y sube al toque', /_bodegaMovsDeCarga/.test(zConf) && /forceUploadNow/.test(zConf));
 ok('botón CARGAR EXISTENCIAS en la vista', /CARGAR EXISTENCIAS/.test(extractFrom('function _abrirPanelBodega(')) && /_abrirCargaExistencias\(\)/.test(html));
 
+// ── 2b. v966 (observación de Antonio): con la tabla vacía el AJUSTE no pinta nada ──
+const zVista = extractFrom('function _abrirPanelBodega(');
+ok('el bloque de AJUSTE solo sale con materiales', /lista\.length \? `<div[^`]*MOTIVO DEL AJUSTE/.test(zVista.replace(/\n/g, ' ')));
+ok('el vacío manda a CARGAR EXISTENCIAS (no al ajuste)', /SIN MATERIALES TODAVÍA[^']*CARGAR EXISTENCIAS/.test(zVista));
+
 // ── 3. el modal pospone applyRemote (captura corta, regla v769/v940) ──
 const zBusy = extractFrom('isUserBusy(){');
 const qsBusy = (zBusy.match(/querySelector\('#prConfirmModal[^']*'\)/) || [''])[0];
