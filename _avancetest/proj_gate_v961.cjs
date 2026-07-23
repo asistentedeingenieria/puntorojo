@@ -31,6 +31,10 @@ ok('overlay OPACO que bloquea todo', /_projGateModal/.test(gSrc) && /position:fi
 ok('flag una-vez-por-carga', /_projGateHecho/.test(gSrc));
 ok('elegir llama setActiveProject', /setActiveProject\(/.test(gSrc));
 ok('reintenta si los proyectos aún no sincronizan', /setTimeout\(pinta/.test(gSrc) || /CARGANDO PROYECTOS/.test(gSrc));
+// INCIDENTE 23-jul (pantalla blanca v961): pinta() se llamaba ANTES de appendChild y su
+// guard de DOM (getElementById) retornaba sin pintar → overlay VACÍO tapando toda la app.
+// El wrap debe estar EN el DOM antes del primer pinta().
+ok('appendChild ANTES del primer pinta()', gSrc.indexOf('document.body.appendChild(wrap)') > -1 && gSrc.indexOf('document.body.appendChild(wrap)') < gSrc.lastIndexOf('pinta();'));
 ok('sin botón de cerrar ni click-afuera', !/CERRAR|onclick="\S*cerrar/i.test(gSrc.replace(/CARGANDO/g, '')));
 
 // ── 3. cableado en el login ──
