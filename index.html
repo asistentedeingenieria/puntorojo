@@ -3083,7 +3083,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v963</span>
+    <span style="opacity:.5;font-size:9px">v964</span>
   </footer>
 
 </div>
@@ -8534,7 +8534,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 910;
+const APP_SYNC_VERSION = 911;
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9393,6 +9393,28 @@ const CloudSync = {
         merged.bodegaMovsEliminados = _bmTomb;
         const _mBm = _mergeById((state && state.bodegaMovs) || [], merged.bodegaMovs || [], _bmTomb);
         merged.bodegaMovs = _mBm.list; if (_mBm.changed) needsResync = true;
+
+        // v964: STORE de abastecimiento (bodegaMat.pedidos/ordenes) — pedidos y OCs de la
+        // bodega central, fuera de los proyectos. Mismo régimen de plata + tombstones.
+        {
+          const _bmL = (state && state.bodegaMat) || {};
+          if (!merged.bodegaMat || typeof merged.bodegaMat !== 'object') merged.bodegaMat = {};
+          const _bmR = merged.bodegaMat;
+          const _bpTomb = Object.assign({}, _bmL.pedidosEliminados || {}, _bmR.pedidosEliminados || {});
+          _bmR.pedidosEliminados = _bpTomb;
+          const _mBp = _mergeById(_bmL.pedidos || [], _bmR.pedidos || [], _bpTomb);
+          _bmR.pedidos = _mBp.list; if (_mBp.changed) needsResync = true;
+          const _boTomb = Object.assign({}, _bmL.ordenesEliminadas || {}, _bmR.ordenesEliminadas || {});
+          _bmR.ordenesEliminadas = _boTomb;
+          const _mBo = _mergeById(_bmL.ordenes || [], _bmR.ordenes || [], _boTomb);
+          _bmR.ordenes = _mBo.list; if (_mBo.changed) needsResync = true;
+          // memorias proveedor/precio del store: unión simple (lo local que el remoto no trae se conserva)
+          ['ocProvPorItem', 'postesPrecioMedida'].forEach(k => {
+            const _loc = _bmL[k] || {}, _rem = _bmR[k] || {};
+            _bmR[k] = Object.assign({}, _rem);
+            Object.keys(_loc).forEach(kk => { if (!(kk in _bmR[k])) { _bmR[k][kk] = _loc[kk]; needsResync = true; } });
+          });
+        }
 
         // v959: lista DE BODEGA global (bodegaItemsGlobal) — era LWW puro y un toggle sin subir
         // se perdía ante cualquier snapshot. Merge tipo v944 (firmas): mapa clave→1 con timestamps
@@ -17142,9 +17164,10 @@ function renderPedidoCard(pd, p){
 }
 
 async function advancePedido(id){
+  const _ctx = _findPedidoGlobal(id); // v964
+  if (!_ctx) return;
   const p = activeProj();
-  const pd = p.materiales.pedidos.find(x => x.id === id);
-  if (!pd) return;
+  const pd = _ctx.pd;
   const statusInfo = PEDIDO_ESTADOS.find(s => s.key === pd.status);
   if (!statusInfo || !statusInfo.next) return;
 
@@ -17261,8 +17284,8 @@ async function advancePedido(id){
 }
 
 function deletePedido(id){
-  const p = activeProj();
-  const pd = p && p.materiales && (p.materiales.pedidos || []).find(x => x.id === id);
+  const _ctx = _findPedidoGlobal(id); // v964
+  const pd = _ctx && _ctx.pd;
   if (!pd) return;
   return requestDeletion({
     type: 'pedido',
@@ -17273,14 +17296,24 @@ function deletePedido(id){
 }
 
 function _doDeletePedido(id){
-  const p = activeProj();
-  const pd = p.materiales.pedidos.find(x => x.id === id);
-  if (!pd) return;
+  const _ctx = _findPedidoGlobal(id); // v964: también resuelve pedidos del store de bodega
+  if (!_ctx) return;
+  const pd = _ctx.pd;
 
-  p.materiales.pedidos = p.materiales.pedidos.filter(x => x.id !== id);
-  logActivity('delete', `Pedido ${pd.numero} eliminado`, `${p.name} · estaba en estado ${pd.status}`);
+  if (_ctx.esBodega) {
+    // el store va por union-merge: sin tombstone el pedido REVIVIRÍA en el próximo sync
+    const b = _bodegaMatStore();
+    b.pedidos = b.pedidos.filter(x => x.id !== id);
+    b.pedidosEliminados[id] = Date.now();
+  } else {
+    const p = activeProj();
+    p.materiales.pedidos = p.materiales.pedidos.filter(x => x.id !== id);
+  }
+  logActivity('delete', `Pedido ${pd.numero} eliminado`, `${_ctx.nombre} · estaba en estado ${pd.status}`);
   saveState();
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
   renderPedidosList();
+  try { if (document.getElementById('_bodegaPanelModal')) { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } } catch (e) {}
   showToast(`PEDIDO ${pd.numero} ELIMINADO`, 'red');
 }
 window.DELETION_EXECUTORS['pedido'] = (payload) => _doDeletePedido(payload.id);
@@ -17957,9 +17990,10 @@ async function submitPedido(){
 let currentPedidoDetalleId = null;
 
 function openPedidoDetalle(id){
+  const _ctx = _findPedidoGlobal(id); // v964: bodega primero, proyecto después
+  if (!_ctx) return;
   const p = activeProj();
-  const pd = p.materiales.pedidos.find(x => x.id === id);
-  if (!pd) return;
+  const pd = _ctx.pd;
   currentPedidoDetalleId = id;
 
   document.getElementById('pedDetalleNum').textContent = pd.numero;
@@ -18090,9 +18124,8 @@ function deleteFromDetalle(){
   if (!currentPedidoDetalleId) return;
   const id = currentPedidoDetalleId;
   deletePedido(id);
-  // Si el pedido ya no existe, cerrar el modal
-  const p = activeProj();
-  const stillExists = p.materiales.pedidos.some(x => x.id === id);
+  // Si el pedido ya no existe, cerrar el modal (v964: resolución global)
+  const stillExists = !!_findPedidoGlobal(id);
   if (!stillExists) {
     closeModal('pedidoDetalle');
     currentPedidoDetalleId = null;
@@ -18142,8 +18175,12 @@ function findBestProviderForItem(itemName){
 }
 
 function getPedidoOrdenes(pdId){
+  // v964: los ids de pedido son únicos — se concatena el store de bodega (bodegaMat) con
+  // las OCs del proyecto activo y se filtra; así TODOS los llamadores (detalle, gates
+  // v927, allPedidoOcsAuthorized, advancePedido) ven las OCs de abastecimiento.
   const p = activeProj();
-  return (p.materiales.ordenes || []).filter(o => o.pedidoId === pdId);
+  const b = (state && state.bodegaMat) || {};
+  return [...(((p || {}).materiales || {}).ordenes || []), ...(b.ordenes || [])].filter(o => o && o.pedidoId === pdId);
 }
 
 function allPedidoOcsAuthorized(pdId){
@@ -18229,13 +18266,16 @@ function buildPedidoOcItems(pd){
 
 function autoAssignOcProviders(pd){
   const _p = activeProj();
-  const _memPostes = (_p && _p.materiales && _p.materiales.postesPrecioMedida) || {};
-  // v916: memoria proveedor-por-material (solo pedidos DE RECETA — la primera OC enseña)
-  const _memProv = (_p && _p.materiales && _p.materiales.ocProvPorItem) || {};
-  const _esReceta = !!(pd && pd.esDeReceta);
   // v936: en pedidos de ABASTECIMIENTO compras le está COMPRANDO al proveedor los
   // materiales de bodega para reponer stock — ahí la lista NO debe auto-asignar despacho.
   const _esAbasto = !!(pd && (pd.esAbastecimiento || String(pd.proyectoPedido || '').indexOf('OFICINA CENTRAL') > -1));
+  // v964: los abastecimientos usan la memoria PROPIA del store de bodega (con la del
+  // proyecto activo como semilla de conocimiento); los de obra siguen igual.
+  const _bmMem = (_esAbasto && state.bodegaMat) || null;
+  const _memPostes = Object.assign({}, (_p && _p.materiales && _p.materiales.postesPrecioMedida) || {}, (_bmMem && _bmMem.postesPrecioMedida) || {});
+  // v916: memoria proveedor-por-material (solo pedidos DE RECETA — la primera OC enseña)
+  const _memProv = Object.assign({}, (_p && _p.materiales && _p.materiales.ocProvPorItem) || {}, (_bmMem && _bmMem.ocProvPorItem) || {});
+  const _esReceta = !!(pd && pd.esDeReceta);
   ocWorkingItems.forEach(it => {
     // v936: material en la LISTA DE BODEGA → DESPACHO automático desde la bodega central.
     // Va ANTES del catálogo de precios: estos materiales SÍ tienen precio de catálogo
@@ -18440,14 +18480,16 @@ function _bodegaGenerarPedido(){
   if (!fIso) return showToast('ELEGÍ LA FECHA DE ENTREGA', 'red');
   const fechaEntrega = _fechaInputALatam(fIso);
   const u = getCurrentUser(); if (!u) return;
-  const p = activeProj();
-  p.materiales.pedidoCounter = (p.materiales.pedidoCounter || 0) + 1;
-  const numero = nextPedidoCode(p);
+  // v964: el abastecimiento nace en el STORE GLOBAL de bodega — no en ningún proyecto.
+  // Numeración propia DERIVADA del máximo existente (sin contador mutable, lección v953).
+  const b = _bodegaMatStore();
+  const numero = 'BODEGA – ' + String(_bodegaNextNum(b.pedidos)).padStart(5, '0');
   const hoy = new Date();
+  const _t = Date.now();
   const pedido = {
     id: 'pd-' + uid(),
     numero,
-    ts: Date.now(),
+    ts: _t, _ts: _t, // nace sellado: el store va por union-merge
     fecha: `${String(hoy.getDate()).padStart(2,'0')}/${String(hoy.getMonth()+1).padStart(2,'0')}/${hoy.getFullYear()}`,
     fechaEntrega,
     solicitante: (u.displayName || u.username || '').toUpperCase(),
@@ -18460,14 +18502,15 @@ function _bodegaGenerarPedido(){
     esDeReceta: true,        // la OC aprende proveedor/precio del catálogo (v916) como los de receta
     esAbastecimiento: true,  // v936: acá compras COMPRA — la lista de bodega no auto-asigna despacho
     status: 'SOLICITADO',
-    history: [{ ts: Date.now(), from: null, to: 'SOLICITADO', role: (u.username || 'unknown') }]
+    history: [{ ts: _t, from: null, to: 'SOLICITADO', role: (u.username || 'unknown') }]
   };
-  p.materiales.pedidos.push(pedido);
+  b.pedidos.push(pedido);
   saveState();
   try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
   _cerrarModalBodega();
-  try { if (typeof setPedidoTab === 'function') setPedidoTab('lista'); } catch (e) {}
-  showToast('PEDIDO ' + numero + ' GENERADO — ABRILO EN LA LISTA PARA GENERAR SUS OC', 'green');
+  // v964: la gestión vive en la vista de bodega — re-pintarla con el pedido nuevo.
+  try { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } catch (e) {}
+  showToast('PEDIDO ' + numero + ' GENERADO — GESTIONALO EN BODEGA CENTRAL', 'green');
 }
 window._abrirModalBodega = _abrirModalBodega; window._cerrarModalBodega = _cerrarModalBodega;
 window._bodegaGenerarPedido = _bodegaGenerarPedido; window._toggleItemBodega = _toggleItemBodega;
@@ -18560,14 +18603,54 @@ function _bodegaSalidaDespacho(oc){
 function _pedidoEsAbastecimiento(pd){
   return !!(pd && (pd.esAbastecimiento || String(pd.proyectoPedido || '').indexOf('OFICINA CENTRAL') > -1));
 }
+/* ══════════ v964: STORE GLOBAL DE ABASTECIMIENTO ══════════
+   Pedido de Antonio: el abastecimiento NO nace en un proyecto — vive en
+   state.bodegaMat {pedidos, ordenes} (union-merge por id + tombstones en applyRemote)
+   con numeración propia DERIVADA (sin contador mutable — lección v953: dos
+   dispositivos generando a la vez se pisan el correlativo). */
+function _bodegaMatStore(){
+  if (!state.bodegaMat || typeof state.bodegaMat !== 'object') state.bodegaMat = {};
+  const b = state.bodegaMat;
+  if (!Array.isArray(b.pedidos)) b.pedidos = [];
+  if (!Array.isArray(b.ordenes)) b.ordenes = [];
+  if (!b.pedidosEliminados || typeof b.pedidosEliminados !== 'object') b.pedidosEliminados = {};
+  if (!b.ordenesEliminadas || typeof b.ordenesEliminadas !== 'object') b.ordenesEliminadas = {};
+  if (!b.ocProvPorItem || typeof b.ocProvPorItem !== 'object') b.ocProvPorItem = {};
+  if (!b.postesPrecioMedida || typeof b.postesPrecioMedida !== 'object') b.postesPrecioMedida = {};
+  return b;
+}
+function _bodegaNextNum(lista){
+  return Math.max(0, ...((Array.isArray(lista) ? lista : []).map(x => {
+    const m = String((x || {}).numero || '').match(/–\s*(\d+)/);
+    return m ? Number(m[1]) : 0;
+  }))) + 1;
+}
+/* Resolución GLOBAL de un pedido: bodega PRIMERO (store global), luego el proyecto
+   activo (pedidos de obra). Devuelve el contenedor uniforme: cont.pedidos/cont.ordenes. */
+function _findPedidoGlobal(id){
+  const b = (state && state.bodegaMat) || {};
+  const enBodega = (b.pedidos || []).find(x => x && x.id === id);
+  if (enBodega) return { pd: enBodega, cont: _bodegaMatStore(), esBodega: true, nombre: 'BODEGA CENTRAL', projectId: null };
+  const p = activeProj();
+  const pd = (((p || {}).materiales || {}).pedidos || []).find(x => x && x.id === id);
+  if (pd) return { pd: pd, cont: p.materiales, esBodega: false, nombre: p.name, projectId: p.id };
+  return null;
+}
 function _ocEsAbastecimiento(oc, p){
   if (!oc || oc.esDespacho) return false;
+  // v964: si el pedido origen vive en el store de bodega, es abastecimiento por definición
+  const b = (state && state.bodegaMat) || {};
+  if ((b.pedidos || []).some(x => x && x.id === oc.pedidoId)) return true;
   const pd = (((p || activeProj() || {}).materiales || {}).pedidos || []).find(x => x.id === oc.pedidoId);
   return _pedidoEsAbastecimiento(pd);
 }
 /* v960: la bodega es GENERAL — una OC se busca en TODOS los proyectos, no solo el activo
-   (la recepción desde el panel no puede depender de qué proyecto esté abierto). */
+   (la recepción desde el panel no puede depender de qué proyecto esté abierto).
+   v964: el store de bodega se barre PRIMERO (p:null = OC de abastecimiento del store). */
 function _bodegaFindOc(id){
+  const b = (state && state.bodegaMat) || {};
+  const enB = (b.ordenes || []).find(x => x && x.id === id);
+  if (enB) return { oc: enB, p: null };
   const ps = (state && state.projects) || [];
   for (let i = 0; i < ps.length; i++) {
     const oc = (((ps[i] || {}).materiales || {}).ordenes || []).find(x => x.id === id);
@@ -18625,6 +18708,18 @@ function _ocConfirmarRecibido(id){
   movs.forEach(mv => _bodegaMovsList().push(mv));
   const u0 = getCurrentUser() || {};
   oc.recibidoBodega = { ts: Date.now(), por: String(u0.displayName || u0.username || '').toUpperCase() };
+  oc._ts = Date.now(); // v964: sello para el union-merge del store
+  // v964: si el pedido vive en el store y TODAS sus OC ya tienen ENTRADA, cerrarlo como RECIBIDO
+  try {
+    const _pctx = _findPedidoGlobal(oc.pedidoId);
+    if (_pctx && _pctx.esBodega && _pctx.pd.status !== 'RECIBIDO') {
+      const _ocsPd = _pctx.cont.ordenes.filter(o => o && o.pedidoId === oc.pedidoId && !o.esDespacho);
+      if (_ocsPd.length && _ocsPd.every(o => window._bodegaYaTieneMov(state.bodegaMovs, o.id, 'ENTRADA'))) {
+        _pctx.pd.status = 'RECIBIDO';
+        _pctx.pd._ts = Date.now();
+      }
+    }
+  } catch (e) {}
   try { logActivity('update', 'BODEGA CENTRAL', 'Recibida ' + oc.numero + ' (' + movs.length + ' materiales)'); } catch (e) {}
   saveState();
   try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
@@ -18636,8 +18731,16 @@ function _ocConfirmarRecibido(id){
 
 /* ── PANEL BODEGA CENTRAL: existencias, en camino, ajustes e historial ── */
 function _bodegaOcsPorRecibir(){
-  // v960: OCs de abastecimiento AUTORIZADAS y aún sin ENTRADA, de TODOS los proyectos.
+  // v960: OCs de abastecimiento AUTORIZADAS y aún sin ENTRADA.
+  // v964: primero las del STORE de bodega; los proyectos quedan por compatibilidad
+  // con abastecimientos viejos que nacieron dentro de un proyecto.
   const out = [];
+  (((state && state.bodegaMat) || {}).ordenes || []).forEach(oc => {
+    if (!oc || oc.esDespacho) return;
+    if ((oc.status || 'AUTORIZADA') !== 'AUTORIZADA') return;
+    if (window._bodegaYaTieneMov(state.bodegaMovs, oc.id, 'ENTRADA')) return;
+    out.push(oc);
+  });
   ((state && state.projects) || []).forEach(p => {
     (((p || {}).materiales || {}).ordenes || []).forEach(oc => {
       if (!oc || oc.esDespacho) return;
@@ -18689,6 +18792,40 @@ function _abrirPanelBodega(){
       <div style="text-align:right;font-size:11.5px;color:#78716C;font-variant-numeric:tabular-nums">${x.camino || '—'}</div>
       <input type="number" data-aj="${i}" step="any" placeholder="±" style="width:100%;padding:6px 8px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:12px;text-align:right;box-sizing:border-box">
     </div>`).join('') || '<div style="padding:24px;text-align:center;color:#9CA3AF;font-size:11px;line-height:1.6">SIN MATERIALES TODAVÍA.<br>Marcá los materiales DE BODEGA en ABASTECER BODEGA — aparecerán acá para el conteo inicial con AJUSTE.</div>';
+  // v964: PEDIDOS DE ABASTECIMIENTO del store global — se gestionan COMPLETOS acá
+  // (generar OC, autorizar v919, imprimir); ya no viven en ningún proyecto.
+  const _bm = _bodegaMatStore();
+  const pedAb = _bm.pedidos.slice().sort((a, b2) => (b2.ts || 0) - (a.ts || 0));
+  const _esAdminBod = can('users.manage');
+  const pedAbHTML = pedAb.map(pd => {
+    const ocsPd = _bm.ordenes.filter(o => o && o.pedidoId === pd.id);
+    const st = pd.status || 'SOLICITADO';
+    const stCol = st === 'RECIBIDO' ? '#166534' : st === 'APROBADO' ? '#92400E' : '#B91C1C';
+    const nItems = Object.keys(pd.items || {}).length;
+    const botonesOc = ocsPd.map(o => {
+      const pend = (o.status || 'AUTORIZADA') === 'PENDIENTE_AUTORIZACION';
+      return pend
+        ? `<button class="btn sm" style="background:var(--red-dark);border-color:var(--red-dark);color:#fff;font-size:10px" onclick="autorizarOrden('${o.id}')" title="Visto bueno + firma (quien la generó no puede)">AUTORIZAR ${o.numero.split(' - ').pop()}</button>
+           <button class="btn ghost sm" style="font-size:10px" onclick="previewOrden('${o.id}')">VER</button>`
+        : `<button class="btn ghost sm" style="font-size:10px" onclick="printOrdenCompra('${o.id}')">IMPRIMIR ${o.numero.split(' - ').pop()}</button>`;
+    }).join(' ');
+    const btnGenerar = (!ocsPd.length)
+      ? `<button class="btn sm" style="font-size:10px" onclick="_cerrarPanelBodegaDom(); currentPedidoDetalleId='${pd.id}'; openOrdenCompra()">GENERAR OC</button>`
+      : '';
+    return `
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #F3F4F6">
+      <div style="min-width:0">
+        <div style="font-size:11.5px"><b>${pd.numero}</b> <span style="font-size:9px;font-weight:700;color:${stCol};letter-spacing:.8px;margin-left:6px">${st}</span></div>
+        <div style="font-size:10px;color:#78716C;margin-top:2px">${nItems} material${nItems !== 1 ? 'es' : ''} · ${pd.solicitante || ''}${pd.fechaEntrega ? ' · ENTREGA ' + pd.fechaEntrega : ''}</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+        <button class="btn ghost sm" style="font-size:10px" onclick="_cerrarPanelBodegaDom(); openPedidoDetalle('${pd.id}')">DETALLE</button>
+        ${btnGenerar}
+        ${botonesOc}
+        ${_esAdminBod ? `<button class="btn-icon danger" onclick="deletePedido('${pd.id}')" title="Eliminar pedido (solo admin)">✕</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
   // v960: OCs de abastecimiento pendientes de recibir (cualquier proyecto) — la recepción
   // vive en el panel para que no dependa del proyecto activo.
   const porRecibir = _bodegaOcsPorRecibir();
@@ -18737,6 +18874,10 @@ function _abrirPanelBodega(){
         <button class="btn primary" onclick="_bodegaAplicarAjustes()">APLICAR AJUSTES</button>
       </div>
     </div>
+    ${pedAb.length ? `<div class="card" style="padding:12px 18px;margin-top:12px">
+      <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:6px">PEDIDOS DE ABASTECIMIENTO (${pedAb.length})</div>
+      ${pedAbHTML}
+    </div>` : ''}
     ${porRecibir.length ? `<div class="card" style="padding:12px 18px;margin-top:12px;background:#F0FDF4">
       <div style="font-size:8.5px;letter-spacing:1.5px;color:#166534;font-weight:700;margin-bottom:6px">POR RECIBIR (${porRecibir.length})</div>
       ${porRecibirHTML}
@@ -18791,9 +18932,10 @@ window._ocConfirmarRecibido = _ocConfirmarRecibido;
 async function openOrdenCompra(){
   if (!currentPedidoDetalleId) return;
 
+  const _ctx = _findPedidoGlobal(currentPedidoDetalleId); // v964
+  if (!_ctx) return;
   const p = activeProj();
-  const pd = p.materiales.pedidos.find(x => x.id === currentPedidoDetalleId);
-  if (!pd) return;
+  const pd = _ctx.pd;
   // Solo quien tiene 'compras.autorizar' o es admin puede generar OCs.
   // v959: la persona de oficina (materiales.bodega) SOLO en pedidos de abastecimiento.
   const _okBodega = can('materiales.bodega') && _pedidoEsAbastecimiento(pd);
@@ -18807,7 +18949,10 @@ async function openOrdenCompra(){
   }
 
   // Mostrar rango estimado de OCs; el número final se asigna por proveedor al generar.
-  const nextNum = (p.materiales.ordenCounter || 0) + 1;
+  // v964: en bodega el folio se DERIVA del máximo existente (sin contador mutable).
+  const nextNum = _ctx.esBodega
+    ? Math.max(0, ...(_bodegaMatStore().ordenes.map(o => Number(o.folio) || 0)), 0) + 1
+    : (p.materiales.ordenCounter || 0) + 1;
   document.getElementById('ocNumero').value = `${pd.numero} - OC${String(existingOcs.length + 1).padStart(2,'0')} / SIG. FOLIO ${nextNum}`;
 
   // Fecha de hoy y entrega solicitada del pedido.
@@ -19295,9 +19440,10 @@ function saveNewDireccion(){
 async function generarOrdenCompra(){
   if (!currentPedidoDetalleId) return;
 
+  let _ctx = _findPedidoGlobal(currentPedidoDetalleId); // v964: bodega o proyecto
+  if (!_ctx) return;
   let p = activeProj();
-  let pd = p.materiales.pedidos.find(x => x.id === currentPedidoDetalleId);
-  if (!pd) return;
+  let pd = _ctx.pd;
   // Solo quien autoriza OC puede generarlas.
   // v959: la persona de oficina (materiales.bodega) SOLO en pedidos de abastecimiento.
   const _okBodegaGen = can('materiales.bodega') && _pedidoEsAbastecimiento(pd);
@@ -19339,10 +19485,13 @@ async function generarOrdenCompra(){
 
   // v940 (regla v769): al cerrar los modales se aplica el sync pospuesto (state = merged)
   // — re-leer `p`/`pd` del state vivo y re-validar el bloqueo v927 antes de escribir.
+  _ctx = _findPedidoGlobal(currentPedidoDetalleId); // v964: re-lectura global
+  if (!_ctx) return showToast('EL PEDIDO YA NO EXISTE (CAMBIÓ EN OTRO DISPOSITIVO) — RECARGÁ', 'red');
   p = activeProj();
-  pd = ((p && p.materiales && p.materiales.pedidos) || []).find(x => x.id === currentPedidoDetalleId);
-  if (!pd) return showToast('EL PEDIDO YA NO EXISTE (CAMBIÓ EN OTRO DISPOSITIVO) — RECARGÁ', 'red');
+  pd = _ctx.pd;
   if (getPedidoOrdenes(pd.id).length > 0) return showToast('ESTE PEDIDO YA TIENE SUS ÓRDENES GENERADAS', 'red');
+  // v964: en bodega el folio se DERIVA (sin contador mutable); base antes del loop.
+  let _folioBodega = _ctx.esBodega ? Math.max(0, ...(_ctx.cont.ordenes.map(o => Number(o.folio) || 0)), 0) : 0;
 
   const groups = {};
   ocWorkingItems.forEach(it => {
@@ -19365,8 +19514,13 @@ async function generarOrdenCompra(){
     // v922: precios CON IVA — total = suma directa; el desglose (base/IVA) es informativo
     const { total, subtotal, ivaMonto } = _ocTotalesIvaIncluido(items);
 
-    p.materiales.ordenCounter = (p.materiales.ordenCounter || 0) + 1;
-    const folio = p.materiales.ordenCounter;
+    let folio;
+    if (_ctx.esBodega) {
+      _folioBodega += 1; folio = _folioBodega; // v964: derivado, sin contador en el store
+    } else {
+      p.materiales.ordenCounter = (p.materiales.ordenCounter || 0) + 1;
+      folio = p.materiales.ordenCounter;
+    }
     const seq = existingForPedido + created.length + 1;
     const numero = `${pd.numero} - ${esBodega ? 'DESP' : 'OC'}${String(seq).padStart(2,'0')}`;
 
@@ -19403,19 +19557,21 @@ async function generarOrdenCompra(){
       esDespacho: esBodega, // v921: sale de BODEGA CENTRAL (orden de despacho, no compra)
       status: 'PENDIENTE_AUTORIZACION'
     };
-    p.materiales.ordenes.push(oc);
+    if (_ctx.esBodega) oc._ts = oc.ts; // el store va por union-merge: nace sellado
+    _ctx.cont.ordenes.push(oc); // v964: al contenedor del pedido (bodegaMat o proyecto)
     created.push(oc);
   });
 
   if (created.length === 0) return showToast('NO SE PUDO GENERAR NINGUNA ORDEN', 'red');
 
-  // v909: recordar el último precio digitado de postes a medida (por medida en metros)
-  // para pre-llenarlo en la siguiente OC del proyecto.
+  // v909: recordar el último precio digitado de postes a medida (por medida en metros).
+  // v964: si el pedido es de bodega, la memoria va al STORE (no al proyecto que esté abierto).
+  const _memDest = _ctx.esBodega ? _bodegaMatStore() : p.materiales;
   ocWorkingItems.forEach(it => {
     const _mts = _ocMedidaEspecialMetros(it.name);
     if (_mts != null && Number(it.precio) > 0) {
-      if (!p.materiales.postesPrecioMedida) p.materiales.postesPrecioMedida = {};
-      p.materiales.postesPrecioMedida[String(_mts)] = Number(it.precio);
+      if (!_memDest.postesPrecioMedida) _memDest.postesPrecioMedida = {};
+      _memDest.postesPrecioMedida[String(_mts)] = Number(it.precio);
     }
   });
 
@@ -19424,8 +19580,8 @@ async function generarOrdenCompra(){
   if (pd.esDeReceta) {
     ocWorkingItems.forEach(it => {
       if (!it.proveedorId) return;
-      if (!p.materiales.ocProvPorItem) p.materiales.ocProvPorItem = {};
-      p.materiales.ocProvPorItem[_ocItemMemKey(it.name)] = it.proveedorId;
+      if (!_memDest.ocProvPorItem) _memDest.ocProvPorItem = {};
+      _memDest.ocProvPorItem[_ocItemMemKey(it.name)] = it.proveedorId;
     });
   }
 
@@ -19434,13 +19590,14 @@ async function generarOrdenCompra(){
     if (typeof window.prAddNotif === 'function') window.prAddNotif({
       toPerms: ['compras.revisar'],
       title: `OC${created.length !== 1 ? 's' : ''} PENDIENTE${created.length !== 1 ? 'S' : ''} DE AUTORIZAR`,
-      body: created.map(o => o.numero).join(' · ') + ` — ${p.name}. Revisá, dá el visto bueno y firmá para que compras pueda enviarla al proveedor.`,
+      body: created.map(o => o.numero).join(' · ') + ` — ${_ctx.nombre}. Revisá, dá el visto bueno y firmá para que compras pueda enviarla al proveedor.`,
       type: 'oc.porAutorizar'
     });
   } catch (e) {}
 
   if (pd.status === 'SOLICITADO') {
     pd.status = 'APROBADO';
+    if (_ctx.esBodega) pd._ts = Date.now(); // el store va por union-merge: la mutación se sella
     if (!Array.isArray(pd.history)) pd.history = [];
     pd.history.push({ ts: Date.now(), from: 'SOLICITADO', to: 'APROBADO', role: (getCurrentUser()?.username || 'unknown'), by: 'OC_MULTI_PROVEEDOR' });
   }
@@ -19453,14 +19610,15 @@ async function generarOrdenCompra(){
       title: `El pedido ${pd.numero} tiene nueva fecha de entrega`,
       body: `Se solicitó entrega el ${fechaOriginal}. Compras la ajustó para el ${fechaEntregaNueva}.`,
       refPedidoId: pd.id,
-      projectId: p.id
+      projectId: _ctx.projectId
     });
     pd.fechaEntregaOriginal = fechaOriginal;
     pd.fechaEntrega = fechaEntregaNueva;
+    if (_ctx.esBodega) pd._ts = Date.now();
   }
 
   const proveedoresTxt = created.map(oc => oc.proveedorNombre).join(' · ');
-  logActivity('create', `${created.length} OC generadas por proveedor para pedido ${pd.numero}`, `${p.name} · ${proveedoresTxt}`);
+  logActivity('create', `${created.length} OC generadas por proveedor para pedido ${pd.numero}`, `${_ctx.nombre} · ${proveedoresTxt}`);
 
   // Notificar a Oficina (oficina.firmar): hay OCs nuevas pendientes de firma.
   // También al solicitante del pedido para que vea que avanzó a Compras.
@@ -19471,27 +19629,33 @@ async function generarOrdenCompra(){
     await _notifyByPerm('oficina.firmar', {
       type: 'oc-pendiente-firma',
       title: `${actorName} · GENERÓ ${ocLabel}`,
-      body: `${p.name} · Pedido ${pd.numero} · ${proveedoresTxt} · Pendiente de firma de Oficina.`,
+      body: `${_ctx.nombre} · Pedido ${pd.numero} · ${proveedoresTxt} · Pendiente de firma de Oficina.`,
       refPedidoId: pd.id,
-      projectId: p.id
+      projectId: _ctx.projectId
     });
     if (pd.solicitanteUsername) {
       await _notifyByUsername(pd.solicitanteUsername, {
         type: 'pedido-aprobado',
         title: `Pedido ${pd.numero} APROBADO · OC generada`,
-        body: `${p.name} · ${ocLabel} · ${proveedoresTxt} · Pendiente de firma de Oficina.`,
+        body: `${_ctx.nombre} · ${ocLabel} · ${proveedoresTxt} · Pendiente de firma de Oficina.`,
         refPedidoId: pd.id,
-        projectId: p.id
+        projectId: _ctx.projectId
       });
     }
   } catch(e){ console.warn('Notif generarOrdenesCompra:', e); }
 
   saveState();
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {} // v964: OCs son plata — primer intento sube
 
   closeModal('ordenCompra');
   showToast(`${created.length} ORDEN${created.length!==1?'ES':''} CREADA${created.length!==1?'S':''} POR PROVEEDOR`, 'green');
-  setView('materiales');
-  setMatTab('ordenes');
+  if (_ctx.esBodega) {
+    // v964: las OCs de abastecimiento se gestionan en la vista de bodega
+    try { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } catch (e) {}
+  } else {
+    setView('materiales');
+    setMatTab('ordenes');
+  }
 }
 
 // v920: logo PUNTO ROJO incrustado — las hojas de impresión abren en about:blank
@@ -19709,8 +19873,9 @@ function _ocTelGuiones(txt){
 }
 
 function printOrdenCompra(ocId, isDraft){
-  const p = activeProj();
-  const oc = (p.materiales.ordenes || []).find(x => x.id === ocId);
+  const _hit = _bodegaFindOc(ocId); // v964: la OC puede vivir en el store de bodega
+  const oc = _hit && _hit.oc;
+  const p = (_hit && _hit.p) || activeProj();
   if (!oc) return;
 
   // Solo las AUTORIZADAS se imprimen "de verdad"; las pendientes solo se pueden VER en borrador
@@ -20194,8 +20359,9 @@ function renderOrdenesList(){
 async function autorizarOrden(id){
   // v919: autoriza el REVISOR (compras.revisar) — compras genera pero no autoriza
   if (!can('compras.revisar') && !can('users.manage')) return showToast('SOLO EL REVISOR AUTORIZADO PUEDE DAR EL VISTO BUENO Y FIRMAR', 'red');
-  let p = activeProj();
-  let oc = (p.materiales.ordenes || []).find(x => x.id === id);
+  let _hit = _bodegaFindOc(id); // v964: la OC puede vivir en el store de bodega
+  let oc = _hit && _hit.oc;
+  let p = (_hit && _hit.p) || activeProj();
   if (!oc) return;
 
   if (oc.status === 'AUTORIZADA') return showToast('YA ESTÁ AUTORIZADA', 'amber');
@@ -20239,8 +20405,9 @@ async function autorizarOrden(id){
   // (state = merged con objetos nuevos) — `p`/`oc` capturados arriba quedarían huérfanos
   // y la autorización se escribiría en el vacío ("le di FIRMAR Y AUTORIZAR y no generó
   // nada"). Re-leer del state VIVO y re-validar antes de escribir.
-  p = activeProj();
-  oc = ((p && p.materiales && p.materiales.ordenes) || []).find(x => x.id === id);
+  _hit = _bodegaFindOc(id); // v964: re-lectura global (bodega o proyecto)
+  oc = _hit && _hit.oc;
+  p = (_hit && _hit.p) || activeProj();
   if (!oc) return showToast('LA OC YA NO EXISTE (CAMBIÓ EN OTRO DISPOSITIVO) — RECARGÁ LA LISTA', 'red');
   if (oc.status === 'AUTORIZADA') return showToast('YA ESTÁ AUTORIZADA', 'amber');
 
@@ -20252,6 +20419,7 @@ async function autorizarOrden(id){
   oc.autorizadoPor = _autorizadorDefault;
   oc.autorizadoPorUsername = String((_u || {}).username || '').toLowerCase(); // v926: para su firma dibujada
   oc.autorizadoTs = Date.now();
+  oc._ts = Date.now(); // v964: el store de bodega va por union-merge — toda mutación se sella
   oc.firmaDigital = _firmaDefault;
   oc.selloDigital = `AUTORIZADO DIGITALMENTE POR ${_autorizadorDefault} · ${_selloHora}`;
 
@@ -20262,7 +20430,8 @@ async function autorizarOrden(id){
 
   // Notificar al solicitante del pedido original. Si todas las OC están autorizadas, ya puede marcar recibido.
   if (oc.pedidoId) {
-    const pd = (p.materiales.pedidos || []).find(x => x.id === oc.pedidoId);
+    const _pctx = _findPedidoGlobal(oc.pedidoId); // v964: el pedido puede vivir en bodegaMat
+    const pd = _pctx && _pctx.pd;
     if (pd && pd.solicitanteUsername) {
       const allAuth = allPedidoOcsAuthorized(pd.id);
       addNotification({
@@ -20274,7 +20443,7 @@ async function autorizarOrden(id){
           : `La OC ${oc.numero} de ${oc.proveedorNombre} ya fue autorizada. Aún pueden quedar otras OC pendientes.`,
         refPedidoId: pd.id,
         refOcId: oc.id,
-        projectId: p.id
+        projectId: _pctx.projectId
       });
     }
   }
@@ -20289,10 +20458,12 @@ async function autorizarOrden(id){
     });
   } catch (e) {}
 
-  logActivity('auth', `OC No. ${oc.numero} AUTORIZADA por Finanzas`, `${p.name} · ${oc.proveedorNombre} · Q ${fmtQ(oc.total)} · ${oc.autorizadoPor}`);
+  logActivity('auth', `OC No. ${oc.numero} AUTORIZADA por Finanzas`, `${_hit && _hit.p ? p.name : 'BODEGA CENTRAL'} · ${oc.proveedorNombre} · Q ${fmtQ(oc.total)} · ${oc.autorizadoPor}`);
   saveState();
   try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {} // v940: acción de documento — el primer intento debe subir
   renderOrdenesList();
+  // v964: si la vista de bodega está abierta, re-pintarla (la OC pasó a AUTORIZADA / POR RECIBIR)
+  try { if (document.getElementById('_bodegaPanelModal')) { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } } catch (e) {}
   showToast(`OC No. ${oc.numero} AUTORIZADA — LISTA PARA IMPRIMIR`, 'green');
 }
 
@@ -20309,8 +20480,8 @@ function previewOrden(id){
 function _ocAbrirSubirFactura(ocId){
   if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
   if (document.getElementById('_ocFacturaModal')) return;
-  const p = activeProj();
-  const oc = (p.materiales.ordenes || []).find(x => x.id === ocId);
+  const _hit = _bodegaFindOc(ocId); // v964
+  const oc = _hit && _hit.oc;
   if (!oc) return;
   if (oc.status !== 'AUTORIZADA') return showToast('LA FACTURA SE SUBE CUANDO LA OC YA ESTÁ AUTORIZADA', 'red');
   if (oc.facturaUrl && !can('users.manage')) return showToast('YA TIENE FACTURA — SOLO UN ADMIN PUEDE REEMPLAZARLA', 'red');
@@ -20355,8 +20526,8 @@ async function _ocSubirFactura(ocId){
   try { window._prUploadHide && window._prUploadHide(); } catch (e) {}
   const _borrarMiArchivo = () => { try { firebase.storage().refFromURL(url).delete().catch(() => {}); } catch (e) {} };
   // regla v769/v940: re-leer del state VIVO tras los awaits (la subida tarda segundos)
-  const p = activeProj();
-  const oc = ((p && p.materiales && p.materiales.ordenes) || []).find(x => x.id === ocId);
+  const _hit = _bodegaFindOc(ocId); // v964: la OC puede vivir en el store de bodega
+  const oc = _hit && _hit.oc;
   _ocCerrarFacturaModal();
   if (!oc) { _borrarMiArchivo(); return showToast('LA OC YA NO EXISTE — RECARGÁ LA LISTA', 'red'); }
   if (oc.facturaUrl && !esAdmin) { _borrarMiArchivo(); return showToast('OTRA PERSONA YA SUBIÓ LA FACTURA — SE CONSERVA ESA', 'amber'); }
@@ -20365,6 +20536,7 @@ async function _ocSubirFactura(ocId){
   oc.facturaNombre = file.name || '';
   oc.facturaSubidaPor = (u.displayName || u.username || '').toUpperCase();
   oc.facturaSubidaEn = (typeof nowStr === 'function') ? nowStr() : new Date().toISOString();
+  oc._ts = Date.now(); // v964: sello para el union-merge del store
   saveState();
   try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
   renderOrdenesList();
@@ -20389,9 +20561,11 @@ function deleteOrden(id){
 }
 
 function _doDeleteOrden(id){
-  const p = activeProj();
-  const oc = (p.materiales.ordenes || []).find(x => x.id === id);
+  const _hit = _bodegaFindOc(id); // v964: también OCs del store de bodega
+  const oc = _hit && _hit.oc;
+  const p = (_hit && _hit.p) || activeProj();
   if (!oc) return;
+  const _esDeBodegaMat = !!(_hit && !_hit.p && ((state.bodegaMat || {}).ordenes || []).some(x => x && x.id === id));
 
   // v959: si la orden ya movió existencias de bodega (SALIDA de despacho o ENTRADA de
   // abastecimiento), se escribe la REVERSA como AJUSTE — nunca se borran movimientos
@@ -20405,18 +20579,28 @@ function _doDeleteOrden(id){
     }
   } catch (e) {}
 
-  p.materiales.ordenes = p.materiales.ordenes.filter(x => x.id !== id);
-  logActivity('delete', `Orden de Compra No. ${oc.numero} eliminada`, `${p.name} · ${oc.proveedorNombre} · Q ${fmtQ(oc.total)}`);
+  if (_esDeBodegaMat) {
+    // v964: el store va por union-merge — sin tombstone la OC reviviría en el próximo sync
+    const b = _bodegaMatStore();
+    b.ordenes = b.ordenes.filter(x => x.id !== id);
+    b.ordenesEliminadas[id] = Date.now();
+  } else {
+    p.materiales.ordenes = p.materiales.ordenes.filter(x => x.id !== id);
+  }
+  logActivity('delete', `Orden de Compra No. ${oc.numero} eliminada`, `${_esDeBodegaMat ? 'BODEGA CENTRAL' : p.name} · ${oc.proveedorNombre} · Q ${fmtQ(oc.total)}`);
   saveState();
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
   renderOrdenesList();
+  try { if (document.getElementById('_bodegaPanelModal')) { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } } catch (e) {}
   showToast(`ORDEN No. ${oc.numero} ELIMINADA`, 'red');
 }
 window.DELETION_EXECUTORS['orden'] = (payload) => _doDeleteOrden(payload.id);
 
 function printPedido(){
+  const _ctx = _findPedidoGlobal(currentPedidoDetalleId); // v964
+  if (!_ctx) return;
   const p = activeProj();
-  const pd = p.materiales.pedidos.find(x => x.id === currentPedidoDetalleId);
-  if (!pd) return;
+  const pd = _ctx.pd;
 
   // Agrupar por categoría (con specs)
   const byCat = {};

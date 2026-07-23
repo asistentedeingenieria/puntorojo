@@ -30,7 +30,8 @@ ok('_ocSubirFactura existe', !!srcSubir);
 ok('sube a Storage oc-facturas/ (solo URL en el state, lección v880)', /oc-facturas\//.test(srcSubir) && /getDownloadURL/.test(srcSubir));
 ok('overlay de subida (patrón v842)', /_prUploadShow/.test(srcSubir) && /_prUploadHide/.test(srcSubir));
 const iUrl = srcSubir.indexOf('getDownloadURL');
-ok('re-lee la OC del state vivo TRAS el await (regla v769/v940)', iUrl > -1 && srcSubir.indexOf('activeProj()', iUrl) > iUrl);
+// v964: la re-lectura es GLOBAL (_bodegaFindOc: la OC puede vivir en el store de bodega)
+ok('re-lee la OC del state vivo TRAS el await (regla v769/v940)', iUrl > -1 && srcSubir.indexOf('_bodegaFindOc(', iUrl) > iUrl);
 ok('irreversible: con factura existente solo admin reemplaza', /facturaUrl/.test(srcSubir) && /users\.manage/.test(srcSubir));
 ok('si otro ganó la carrera, borra el archivo propio best-effort', /refFromURL/.test(srcSubir));
 ok('guarda quién y cuándo + sube al toque', /facturaSubidaPor/.test(srcSubir) && /forceUploadNow/.test(srcSubir));

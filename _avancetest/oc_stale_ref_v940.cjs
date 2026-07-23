@@ -23,7 +23,8 @@ ok('#_bodegaModal pospone applyRemote', busy.indexOf('#_bodegaModal') > -1);
 // ── 2. autorizarOrden re-lee del state vivo tras los modales ──
 const au = extractFn('autorizarOrden');
 const iFirmaAu = au.indexOf('_pedirFirmaSiFalta()');
-const iReleeAu = au.indexOf('p = activeProj()', iFirmaAu);
+// v964: la re-lectura es GLOBAL (_bodegaFindOc — la OC puede vivir en el store de bodega)
+const iReleeAu = au.indexOf('_bodegaFindOc(', iFirmaAu);
 ok('re-lee p/oc DESPUÉS del modal de firma', iFirmaAu > -1 && iReleeAu > iFirmaAu);
 ok('re-encuentra la OC por id tras el await', au.indexOf('oc = ', iFirmaAu) > iFirmaAu);
 ok('re-valida que no se haya autorizado en otro lado', au.indexOf("YA ESTÁ AUTORIZADA", iReleeAu) > iReleeAu);

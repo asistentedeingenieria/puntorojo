@@ -82,7 +82,8 @@ ok('_bodegaGenerarPedido existe', !!srcGen);
 ok('pedido a OFICINA CENTRAL — ABASTECIMIENTO', /OFICINA CENTRAL — ABASTECIMIENTO/.test(srcGen));
 ok('marcado esAbastecimiento + esDeReceta (memoria de proveedor aprende)', /esAbastecimiento: true/.test(srcGen) && /esDeReceta: true/.test(srcGen));
 ok('NO toca la cobertura del supervisor (sin recetaKeys)', srcGen.indexOf('recetaKeys') === -1);
-ok('correlativo + subida inmediata', /pedidoCounter/.test(srcGen) && /forceUploadNow/.test(srcGen));
+// v964: el abastecimiento nace en el STORE de bodega con numeración DERIVADA (sin contador)
+ok('correlativo derivado + subida inmediata', /_bodegaNextNum/.test(srcGen) && /forceUploadNow/.test(srcGen));
 
 // ── 4. botón en la pestaña de pedidos ──
 // v960: un solo botón en la toolbar; v963: la ENTRADA la decide Antonio (materiales.bodega|admin)
