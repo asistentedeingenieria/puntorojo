@@ -34,18 +34,20 @@ if (srcEs) {
 const srcTog = extractFn('_toggleItemBodega');
 ok('_toggleItemBodega existe', !!srcTog);
 if (srcTog) {
+  // v959: el gate es el helper _puedeGestionarBodega (bodega|compras|admin) — se inyecta.
+  const srcGate = extractFn('_puedeGestionarBodega');
   const st = {};
   let toast = '';
-  const fn = new Function('state', '_ocItemMemKey', 'can', 'showToast', 'saveState', 'CloudSync',
-    'return ' + srcTog)(st, memKey, perm => perm === 'compras.autorizar', m => { toast = m; }, () => {}, { forceUploadNow: () => ({ catch: () => {} }) });
+  const mk = canFn => new Function('state', '_ocItemMemKey', 'can', 'showToast', 'saveState', 'CloudSync',
+    srcGate + '\nreturn ' + srcTog)(st, memKey, canFn, m => { toast = m; }, () => {}, { forceUploadNow: () => ({ catch: () => {} }) });
+  const fn = mk(perm => perm === 'compras.autorizar');
   fn('FULMINANTE TIRA CAL. 27');
   ok('marca (compras puede)', st.bodegaItemsGlobal && st.bodegaItemsGlobal[memKey('FULMINANTE TIRA CAL. 27')] === 1);
   fn('FULMINANTE TIRA CAL. 27');
   ok('desmarca al segundo toque', !st.bodegaItemsGlobal[memKey('FULMINANTE TIRA CAL. 27')]);
-  const fnSin = new Function('state', '_ocItemMemKey', 'can', 'showToast', 'saveState', 'CloudSync',
-    'return ' + srcTog)(st, memKey, () => false, m => { toast = m; }, () => {}, { forceUploadNow: () => ({ catch: () => {} }) });
+  const fnSin = mk(() => false);
   fnSin('OTRA COSA');
-  ok('sin permiso no toca la lista', !st.bodegaItemsGlobal[memKey('OTRA COSA')] && /COMPRAS|ADMIN|PERMISO/.test(toast));
+  ok('sin permiso no toca la lista', !st.bodegaItemsGlobal[memKey('OTRA COSA')] && /COMPRAS|ADMIN|PERMISO|BODEGA/.test(toast));
 }
 
 // ── 2. la lista de bodega gana ANTES que el catálogo (la causa raíz) ──
@@ -72,7 +74,7 @@ if (srcProd) {
 }
 const srcModal = extractFn('_abrirModalBodega');
 ok('modal ABASTECER BODEGA a nivel body (regla v913)', /document\.body\.appendChild/.test(srcModal));
-ok('gate de permiso compras/admin', /can\('compras\.autorizar'\)/.test(srcModal) && /can\('users\.manage'\)/.test(srcModal));
+ok('gate de permiso compras/admin', /_puedeGestionarBodega\(\)/.test(srcModal)); // v959: helper bodega|compras|admin
 ok('checkbox DE BODEGA por producto', /_toggleItemBodega\(/.test(srcModal));
 ok('fecha de entrega obligatoria (v915) con calendario', /type="date"/.test(srcModal) && /_hoyInputISO\(\)/.test(srcModal));
 const srcGen = extractFn('_bodegaGenerarPedido');
@@ -83,7 +85,7 @@ ok('NO toca la cobertura del supervisor (sin recetaKeys)', srcGen.indexOf('recet
 ok('correlativo + subida inmediata', /pedidoCounter/.test(srcGen) && /forceUploadNow/.test(srcGen));
 
 // ── 4. botón en la pestaña de pedidos ──
-ok('botón ABASTECER BODEGA gateado a compras|admin', /data-perm="compras\.autorizar\|users\.manage"[^>]*onclick="_abrirModalBodega\(\)"/.test(html) && /ABASTECER BODEGA/.test(html));
+ok('botón ABASTECER BODEGA gateado a bodega|compras|admin', /data-perm="materiales\.bodega\|compras\.autorizar\|users\.manage"[^>]*onclick="_abrirModalBodega\(\)"/.test(html) && /ABASTECER BODEGA/.test(html)); // v959
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

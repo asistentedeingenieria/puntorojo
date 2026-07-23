@@ -16,7 +16,7 @@ ok('compras.autorizar relabeleado a generar/gestionar', /key: 'compras\.autoriza
 
 // ── 2. la pestaña OC la ven compras Y el revisor ──
 ok('applyPermissions soporta data-perm con | (cualquiera)', /split\('\|'\)/.test(extractFn('applyPermissions')));
-ok('tab ÓRDENES DE COMPRA visible para ambos', /data-perm="compras\.autorizar\|compras\.revisar"/.test(html));
+ok('tab ÓRDENES DE COMPRA visible para ambos', /data-perm="compras\.autorizar\|compras\.revisar(\|[a-z.]+)*"/.test(html)); // v959: también materiales.bodega
 
 // ── 3. generar: usuario real + aviso al revisor ──
 const srcGen = extractFn('generarOrdenCompra');

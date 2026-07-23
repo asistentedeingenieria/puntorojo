@@ -2730,7 +2730,7 @@ table{max-width:100%}
       <div class="mat-tabs">
         <button class="mat-tab active" data-mattab="receta" onclick="setMatTab('receta')">RECETA DE MATERIAL</button>
         <button class="mat-tab" data-mattab="pedidos" onclick="setMatTab('pedidos')">PEDIDOS DE MATERIAL</button>
-        <button class="mat-tab" data-mattab="ordenes" onclick="setMatTab('ordenes')" data-perm="compras.autorizar|compras.revisar">ÓRDENES DE COMPRA<span id="tabBadge-ordenes"></span></button>
+        <button class="mat-tab" data-mattab="ordenes" onclick="setMatTab('ordenes')" data-perm="compras.autorizar|compras.revisar|materiales.bodega">ÓRDENES DE COMPRA<span id="tabBadge-ordenes"></span></button>
         <button class="mat-tab" data-mattab="inventario" onclick="setMatTab('inventario')">INVENTARIOS</button>
         <button class="mat-tab" data-mattab="avanceapto" onclick="setMatTab('avanceapto')">AVANCE POR APARTAMENTO</button>
       </div>
@@ -2750,7 +2750,8 @@ table{max-width:100%}
           <button class="mat-tab active" data-pedtab="lista" onclick="setPedidoTab('lista')" style="color:var(--cafe);border-bottom-color:var(--cafe)">LISTA DE PEDIDOS</button>
           <button class="mat-tab" data-pedtab="nuevo" onclick="setPedidoTab('nuevo')" data-perm="pedidos.create">+ NUEVO PEDIDO</button>
           <button class="mat-tab" data-pedtab="receta" onclick="setPedidoTab('receta')" data-perm="pedidos.create">PEDIR DE RECETA</button>
-          <button class="btn ghost sm" data-perm="compras.autorizar|users.manage" onclick="_abrirModalBodega()" style="margin-left:auto;align-self:center" title="Marcar los materiales DE BODEGA y comprar stock para la bodega central desde la receta">ABASTECER BODEGA</button>
+          <button class="btn ghost sm" data-perm="materiales.bodega|compras.autorizar|users.manage" onclick="_abrirPanelBodega()" style="margin-left:auto;align-self:center" title="Existencias de la bodega central: entradas, salidas y ajustes">BODEGA CENTRAL</button>
+          <button class="btn ghost sm" data-perm="materiales.bodega|compras.autorizar|users.manage" onclick="_abrirModalBodega()" style="margin-left:8px;align-self:center" title="Marcar los materiales DE BODEGA y comprar stock para la bodega central desde la receta">ABASTECER BODEGA</button>
         </div>
 
         <!-- LISTA DE PEDIDOS -->
@@ -3046,7 +3047,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v958</span>
+    <span style="opacity:.5;font-size:9px">v959</span>
   </footer>
 
 </div>
@@ -4607,6 +4608,7 @@ const PERMS_DISPONIBLES = [
   { key: 'receta.autorizar', label: 'Autorizar cambios propuestos a la receta de materiales', group: 'EDICIÓN MATERIALES' },
   { key: 'compras.autorizar',label: 'Generar y gestionar Órdenes de Compra (Compras)',  group: 'EDICIÓN MATERIALES' },
   { key: 'compras.revisar',  label: 'Revisar y autorizar OC (visto bueno + firma digital)', group: 'EDICIÓN MATERIALES' },
+  { key: 'materiales.bodega', label: 'Bodega central: existencias, recepción y OC de abastecimiento (Oficina)', group: 'EDICIÓN MATERIALES' },
   { key: 'precios.autorizar', label: 'Autorizar cambios de precio del catálogo', group: 'EDICIÓN MATERIALES' },
   { key: 'precios.proponer', label: 'Ver catálogo de precios y proponer cambios', group: 'EDICIÓN MATERIALES' },
   { key: 'personal.add',     label: 'Agregar nuevos colaboradores', group: 'EDICIÓN PERSONAL' },
@@ -8496,7 +8498,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 909;
+const APP_SYNC_VERSION = 910;
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9348,6 +9350,43 @@ const CloudSync = {
         merged.gerenciaEliminados = _gerTomb;
         const _mGer = _mergeById((state && state.gerenciaGlobal) || [], merged.gerenciaGlobal || [], _gerTomb);
         merged.gerenciaGlobal = _mGer.list; if (_mGer.changed) needsResync = true;
+
+        // v959: BODEGA CENTRAL — libro de movimientos de existencias (entradas/salidas/ajustes).
+        // Es plata operativa: mismo régimen que el resto del bloque.
+        const _bmTomb = Object.assign({}, (state && state.bodegaMovsEliminados) || {}, merged.bodegaMovsEliminados || {});
+        merged.bodegaMovsEliminados = _bmTomb;
+        const _mBm = _mergeById((state && state.bodegaMovs) || [], merged.bodegaMovs || [], _bmTomb);
+        merged.bodegaMovs = _mBm.list; if (_mBm.changed) needsResync = true;
+
+        // v959: lista DE BODEGA global (bodegaItemsGlobal) — era LWW puro y un toggle sin subir
+        // se perdía ante cualquier snapshot. Merge tipo v944 (firmas): mapa clave→1 con timestamps
+        // por clave (bodegaItemsTs) y tombstones (bodegaItemsEliminados) que solo borran si son
+        // más nuevos que el ts de la clave (re-marcar tras un desmarque no muere por el tombstone).
+        {
+          const _lbLoc = (state && state.bodegaItemsGlobal) || {};
+          const _lbRem = merged.bodegaItemsGlobal || {};
+          const _lbTsLoc = (state && state.bodegaItemsTs) || {};
+          const _lbTsRem = merged.bodegaItemsTs || {};
+          const _lbTs = {};
+          Object.keys(_lbTsLoc).concat(Object.keys(_lbTsRem)).forEach(k => {
+            _lbTs[k] = Math.max(Number(_lbTsLoc[k]) || 0, Number(_lbTsRem[k]) || 0);
+          });
+          const _lbTomb = {};
+          const _lbTbLoc = (state && state.bodegaItemsEliminados) || {};
+          const _lbTbRem = merged.bodegaItemsEliminados || {};
+          Object.keys(_lbTbLoc).concat(Object.keys(_lbTbRem)).forEach(k => {
+            _lbTomb[k] = Math.max(Number(_lbTbLoc[k]) || 0, Number(_lbTbRem[k]) || 0);
+          });
+          merged.bodegaItemsGlobal = Object.assign({}, _lbRem);
+          Object.keys(_lbLoc).forEach(k => {
+            if (!merged.bodegaItemsGlobal[k]) { merged.bodegaItemsGlobal[k] = 1; needsResync = true; }
+          });
+          Object.keys(_lbTomb).forEach(k => {
+            if (merged.bodegaItemsGlobal[k] && _lbTomb[k] > (_lbTs[k] || 0)) delete merged.bodegaItemsGlobal[k];
+          });
+          merged.bodegaItemsTs = _lbTs;
+          merged.bodegaItemsEliminados = _lbTomb;
+        }
       }
     } catch(e){ console.warn('blindaje de plata en applyRemote:', e); }
 
@@ -9491,7 +9530,7 @@ const CloudSync = {
     // referencia queda huerfana y el cambio (push/Object.assign/splice) no persiste. Esto
     // arregla de raiz toda la familia "await modal -> escribir" (aprobar/rechazar/procesar/
     // anular planilla, editar/eliminar anticipos y polizas, etc.).
-    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936) también
+    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_bodegaPanelModal, #_ocRecibidoModal')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: panel de existencias y MARCAR RECIBIDO
     const focused = document.activeElement;
     if (focused && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)) return true;
     return false;
@@ -17986,7 +18025,8 @@ function openPedidoDetalle(id){
 
   // Generar OC requiere el permiso "Autorizar Órdenes de Compra (compras.autorizar)"
   // o ser admin. Si el usuario solo crea pedidos (Rony p.ej.), no ve el botón ni la pestaña.
-  const canOC = can('compras.autorizar') || can('users.manage');
+  // v959: la persona de oficina (materiales.bodega) genera OC SOLO de pedidos de abastecimiento.
+  const canOC = can('compras.autorizar') || can('users.manage') || (can('materiales.bodega') && _pedidoEsAbastecimiento(pd));
   // v927: un pedido que YA tiene sus OC generadas no genera más (si se eliminan, vuelve)
   const _yaTieneOcs = getPedidoOrdenes(pd.id).length > 0;
   const ocBtn = document.getElementById('pedDetalleOCBtn');
@@ -18210,12 +18250,25 @@ function _esItemBodega(name){
   const k = _ocItemMemKey(name);
   return !!(((state || {}).bodegaItemsGlobal) || {})[k];
 }
+/* v959: gate único de bodega central — oficina (materiales.bodega), compras o admin. */
+function _puedeGestionarBodega(){
+  return can('materiales.bodega') || can('compras.autorizar') || can('users.manage');
+}
 function _toggleItemBodega(name){
-  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN ADMINISTRAN LA LISTA DE BODEGA', 'red');
+  if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN ADMINISTRAN LA LISTA DE BODEGA', 'red');
   const k = _ocItemMemKey(name);
   if (!state.bodegaItemsGlobal || typeof state.bodegaItemsGlobal !== 'object') state.bodegaItemsGlobal = {};
-  if (state.bodegaItemsGlobal[k]) delete state.bodegaItemsGlobal[k];
-  else state.bodegaItemsGlobal[k] = 1;
+  // v959: sellos por clave para el merge (bodegaItemsTs) y tombstones (bodegaItemsEliminados) —
+  // el tombstone solo mata si es más nuevo que el ts, así re-marcar revive sin pelear.
+  if (!state.bodegaItemsTs || typeof state.bodegaItemsTs !== 'object') state.bodegaItemsTs = {};
+  if (!state.bodegaItemsEliminados || typeof state.bodegaItemsEliminados !== 'object') state.bodegaItemsEliminados = {};
+  if (state.bodegaItemsGlobal[k]) {
+    delete state.bodegaItemsGlobal[k];
+    state.bodegaItemsEliminados[k] = Date.now();
+  } else {
+    state.bodegaItemsGlobal[k] = 1;
+    state.bodegaItemsTs[k] = Date.now();
+  }
   saveState();
   try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
 }
@@ -18245,7 +18298,7 @@ function _bodegaProductosDeReceta(p){
 /* v936: modal a nivel BODY (regla v913). Los nombres reales traen comillas (1") —
    NADA de nombres en atributos onclick (trampa escapeAttr v740): se cablea por índice. */
 function _abrirModalBodega(){
-  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
+  if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN', 'red');
   if (document.getElementById('_bodegaModal')) return;
   const p = activeProj();
   const prods = _bodegaProductosDeReceta(p);
@@ -18276,6 +18329,17 @@ function _abrirModalBodega(){
   document.body.appendChild(wrap);
   const _f = document.getElementById('_bodegaFecha'); if (_f) _f.min = _hoyInputISO();
   window._bodegaProds = prods;
+  // v959: los FALTANTES de bodega (existencia negativa) vienen pre-llenados como sugerido de compra.
+  try {
+    const _sal = window._bodegaSaldos((state || {}).bodegaMovs);
+    prods.forEach((x, i) => {
+      const s = _sal[x.key];
+      if (s && s.saldo < 0) {
+        const q = wrap.querySelector('input[data-bqty="' + i + '"]');
+        if (q && !q.value) q.value = -s.saldo;
+      }
+    });
+  } catch (e) {}
   wrap.querySelectorAll('input[data-bi]').forEach(chk => chk.addEventListener('change', () => _toggleItemBodega(window._bodegaProds[Number(chk.dataset.bi)].name)));
   wrap.querySelectorAll('[data-bsug]').forEach(el => el.addEventListener('click', () => {
     const q = wrap.querySelector('input[data-bqty="' + el.dataset.bsug + '"]');
@@ -18287,7 +18351,7 @@ function _cerrarModalBodega(){ const m = document.getElementById('_bodegaModal')
 /* v936: crea el pedido de ABASTECIMIENTO (compras compra stock para la bodega central).
    No toca etapasPedidas ni la cobertura del supervisor: sin recetaKeys ni recetaQty. */
 function _bodegaGenerarPedido(){
-  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
+  if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN', 'red');
   const m = document.getElementById('_bodegaModal'); if (!m) return;
   const prods = window._bodegaProds || [];
   const items = {};
@@ -18336,14 +18400,279 @@ function _bodegaGenerarPedido(){
 window._abrirModalBodega = _abrirModalBodega; window._cerrarModalBodega = _cerrarModalBodega;
 window._bodegaGenerarPedido = _bodegaGenerarPedido; window._toggleItemBodega = _toggleItemBodega;
 
+/* ══════════ v959: BODEGA CENTRAL — EXISTENCIAS REALES ══════════
+   Libro de movimientos GLOBAL (state.bodegaMovs, union-merge por id + tombstones en applyRemote):
+   ENTRADA = MARCAR RECIBIDO en una OC de abastecimiento (cantidad real que llegó);
+   SALIDA  = automática al AUTORIZAR una orden de despacho (una sola vez por OC);
+   AJUSTE  = conteo inicial / correcciones con motivo desde el panel (delta con signo).
+   El saldo se DERIVA sumando movimientos — nunca hay un contador mutable que dos
+   dispositivos puedan pisarse (lección de los incidentes v953/v950). */
+function _bodegaMovsList(){
+  if (!Array.isArray(state.bodegaMovs)) state.bodegaMovs = [];
+  return state.bodegaMovs;
+}
+window._bodegaSaldos = function(movs){
+  const out = {};
+  (Array.isArray(movs) ? movs : []).forEach(m => {
+    if (!m || !m.k) return;
+    if (!out[m.k]) out[m.k] = { k: m.k, name: m.name || m.k, u: m.u || '', saldo: 0 };
+    if (m.u && !out[m.k].u) out[m.k].u = m.u;
+    const q = Number(m.qty) || 0;
+    if (m.tipo === 'ENTRADA') out[m.k].saldo += Math.abs(q);
+    else if (m.tipo === 'SALIDA') out[m.k].saldo -= Math.abs(q);
+    else if (m.tipo === 'AJUSTE') out[m.k].saldo += q;
+  });
+  return out;
+};
+window._bodegaYaTieneMov = function(movs, ocId, tipo){
+  return (Array.isArray(movs) ? movs : []).some(m => m && m.tipo === tipo && m.ref && m.ref.ocId === ocId);
+};
+/* Unidad por clave canónica: los items de OC no guardan unidad — se busca en las
+   recetas de TODOS los proyectos. Falla en silencio a ''. */
+function _bodegaUnidadDe(name){
+  try {
+    const k = _ocItemMemKey(name);
+    const ps = (state && state.projects) || [];
+    for (let i = 0; i < ps.length; i++) {
+      const rv = ps[i] && ps[i].materiales && ps[i].materiales.recetaV2;
+      if (!rv || !rv.niveles) continue;
+      const lids = Object.keys(rv.niveles);
+      for (let j = 0; j < lids.length; j++) {
+        const nv = rv.niveles[lids[j]] || {};
+        for (let si = 0; si < 4; si++) {
+          const arr = nv[si] || [];
+          for (let a = 0; a < arr.length; a++) {
+            const it = arr[a];
+            if (it && it.m && it.u && _ocItemMemKey(it.nc || it.m) === k) return it.u;
+          }
+        }
+      }
+    }
+  } catch (e) {}
+  return '';
+}
+function _bodegaMov(tipo, name, qty, ref){
+  const u0 = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  const t = Date.now();
+  return {
+    id: 'bm-' + uid(), ts: t, _ts: t, tipo,
+    k: _ocItemMemKey(name), name: String(name || ''), u: _bodegaUnidadDe(name),
+    qty: Number(qty) || 0, ref: ref || {},
+    por: String(u0.displayName || u0.username || '').toUpperCase(),
+    porUsername: String(u0.username || '').toLowerCase()
+  };
+}
+/* Constructor PURO de entradas: cants[i] = cantidad RECIBIDA del item i de la OC.
+   Cableado por ÍNDICE, nunca nombres en atributos (trampa escapeAttr v740). */
+window._bodegaMovsEntradaDeOc = function(oc, cants){
+  const out = [];
+  (((oc || {}).items) || []).forEach((it, i) => {
+    const q = Number(cants && cants[i]);
+    if (!it || !(q > 0)) return;
+    out.push(_bodegaMov('ENTRADA', it.name, q, { ocId: oc.id, ocNumero: oc.numero || '', proyecto: oc.proyecto || '' }));
+  });
+  return out;
+};
+/* SALIDA al autorizar un despacho — idempotente por OC (guard _bodegaYaTieneMov). */
+function _bodegaSalidaDespacho(oc){
+  if (!oc || !oc.esDespacho) return false;
+  if (window._bodegaYaTieneMov(state.bodegaMovs, oc.id, 'SALIDA')) return false;
+  let n = 0;
+  (oc.items || []).forEach(it => {
+    if (!it || !(Number(it.qty) > 0)) return;
+    _bodegaMovsList().push(_bodegaMov('SALIDA', it.name, Number(it.qty), { ocId: oc.id, ocNumero: oc.numero || '', proyecto: oc.proyecto || '' }));
+    n++;
+  });
+  return n > 0;
+}
+function _pedidoEsAbastecimiento(pd){
+  return !!(pd && (pd.esAbastecimiento || String(pd.proyectoPedido || '').indexOf('OFICINA CENTRAL') > -1));
+}
+function _ocEsAbastecimiento(oc, p){
+  if (!oc || oc.esDespacho) return false;
+  const pd = (((p || activeProj() || {}).materiales || {}).pedidos || []).find(x => x.id === oc.pedidoId);
+  return _pedidoEsAbastecimiento(pd);
+}
+
+/* ── MARCAR RECIBIDO (modal body-level, regla v913; registrado en isUserBusy) ── */
+function _ocAbrirRecibido(id){
+  if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN', 'red');
+  if (document.getElementById('_ocRecibidoModal')) return;
+  const p = activeProj();
+  const oc = (((p || {}).materiales || {}).ordenes || []).find(x => x.id === id);
+  if (!oc) return;
+  if ((oc.status || 'AUTORIZADA') !== 'AUTORIZADA') return showToast('LA OC DEBE ESTAR AUTORIZADA ANTES DE RECIBIRSE', 'red');
+  if (window._bodegaYaTieneMov(state.bodegaMovs, oc.id, 'ENTRADA')) return showToast('ESTA OC YA FUE RECIBIDA', 'red');
+  const filas = (oc.items || []).map((it, i) => `
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) 90px 110px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
+      <div style="font-size:11.5px;letter-spacing:.2px">${it.name}</div>
+      <div style="text-align:right;font-size:11.5px;color:#78716C">${it.qty}</div>
+      <input type="number" data-rqty="${i}" min="0" step="any" value="${Number(it.qty) || 0}" style="width:100%;padding:6px 8px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:12px;text-align:right;box-sizing:border-box">
+    </div>`).join('');
+  const wrap = document.createElement('div');
+  wrap.id = '_ocRecibidoModal';
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:100070;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+  wrap.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:640px;width:100%;max-height:88vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid rgba(0,0,0,.08)">
+      <b style="font-size:13px;letter-spacing:.5px">MARCAR RECIBIDO · ${oc.numero}</b>
+      <div style="font-size:11px;color:#78716C;margin-top:4px;line-height:1.5">Anotá la cantidad que LLEGÓ DE VERDAD de cada material (viene prellenada con lo pedido). Esto suma existencias a la bodega central.</div>
+    </div>
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) 90px 110px;gap:10px;padding:10px 18px 4px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700"><span>MATERIAL</span><span style="text-align:right">PEDIDO</span><span style="text-align:right">RECIBIDO</span></div>
+    <div style="overflow:auto;flex:1;padding:0 18px 8px">${filas}</div>
+    <div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" onclick="_ocCerrarRecibido()">CANCELAR</button>
+      <button class="btn primary" onclick="_ocConfirmarRecibido('${oc.id}')">CONFIRMAR RECEPCIÓN</button>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap);
+}
+function _ocCerrarRecibido(){ const m = document.getElementById('_ocRecibidoModal'); if (m) m.remove(); }
+function _ocConfirmarRecibido(id){
+  if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN', 'red');
+  const m = document.getElementById('_ocRecibidoModal'); if (!m) return;
+  const cants = [];
+  m.querySelectorAll('input[data-rqty]').forEach(inp => { cants[Number(inp.dataset.rqty)] = Number(inp.value) || 0; });
+  _ocCerrarRecibido();
+  // regla v769/v940: el modal pospuso applyRemote; tras cerrarlo se re-lee el state VIVO.
+  const p = activeProj();
+  const oc = (((p || {}).materiales || {}).ordenes || []).find(x => x.id === id);
+  if (!oc) return showToast('LA OC YA NO EXISTE (CAMBIÓ EN OTRO DISPOSITIVO) — RECARGÁ', 'red');
+  if (window._bodegaYaTieneMov(state.bodegaMovs, oc.id, 'ENTRADA')) return showToast('ESTA OC YA FUE RECIBIDA', 'red');
+  const movs = window._bodegaMovsEntradaDeOc(oc, cants);
+  if (!movs.length) return showToast('PONÉ CANTIDAD RECIBIDA A AL MENOS UN MATERIAL', 'red');
+  movs.forEach(mv => _bodegaMovsList().push(mv));
+  const u0 = getCurrentUser() || {};
+  oc.recibidoBodega = { ts: Date.now(), por: String(u0.displayName || u0.username || '').toUpperCase() };
+  try { logActivity('update', 'BODEGA CENTRAL', 'Recibida ' + oc.numero + ' (' + movs.length + ' materiales)'); } catch (e) {}
+  saveState();
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
+  try { renderOrdenesList(); } catch (e) {}
+  showToast('RECEPCIÓN REGISTRADA — EXISTENCIAS ACTUALIZADAS', 'green');
+}
+
+/* ── PANEL BODEGA CENTRAL: existencias, en camino, ajustes e historial ── */
+function _bodegaEnCamino(){
+  // OCs de abastecimiento AUTORIZADAS y aún sin ENTRADA, de TODOS los proyectos.
+  const out = {};
+  ((state && state.projects) || []).forEach(p => {
+    (((p || {}).materiales || {}).ordenes || []).forEach(oc => {
+      if (!oc || oc.esDespacho) return;
+      if ((oc.status || 'AUTORIZADA') !== 'AUTORIZADA') return;
+      const pd = ((p.materiales || {}).pedidos || []).find(x => x.id === oc.pedidoId);
+      if (!_pedidoEsAbastecimiento(pd)) return;
+      if (window._bodegaYaTieneMov(state.bodegaMovs, oc.id, 'ENTRADA')) return;
+      (oc.items || []).forEach(it => {
+        if (!it || !(Number(it.qty) > 0)) return;
+        const k = _ocItemMemKey(it.name);
+        if (!out[k]) out[k] = { qty: 0, name: it.name };
+        out[k].qty += Number(it.qty);
+      });
+    });
+  });
+  return out;
+}
+function _abrirPanelBodega(){
+  if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN', 'red');
+  if (document.getElementById('_bodegaPanelModal')) return;
+  const saldos = window._bodegaSaldos(state.bodegaMovs);
+  const camino = _bodegaEnCamino();
+  const rows = {};
+  Object.keys(saldos).forEach(k => { rows[k] = { k, name: saldos[k].name, u: saldos[k].u, saldo: saldos[k].saldo, camino: 0 }; });
+  Object.keys(camino).forEach(k => {
+    if (!rows[k]) rows[k] = { k, name: camino[k].name, u: _bodegaUnidadDe(camino[k].name), saldo: 0, camino: 0 };
+    rows[k].camino = camino[k].qty;
+  });
+  try {
+    (_bodegaProductosDeReceta(activeProj()) || []).forEach(x => {
+      if (_esItemBodega(x.name) && !rows[x.key]) rows[x.key] = { k: x.key, name: x.name, u: x.u, saldo: 0, camino: 0 };
+      else if (rows[x.key] && !rows[x.key].u) rows[x.key].u = x.u;
+    });
+  } catch (e) {}
+  const lista = Object.values(rows).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+  window._bodegaPanelRows = lista;
+  const filas = lista.map((x, i) => `
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) 56px 84px 84px 100px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
+      <div style="font-size:11.5px;letter-spacing:.2px">${x.name}</div>
+      <div style="text-align:center;font-size:10px;color:#6B7280">${x.u || ''}</div>
+      <div style="text-align:right;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;color:${x.saldo < 0 ? '#C62828' : '#111827'}">${x.saldo}</div>
+      <div style="text-align:right;font-size:11.5px;color:#78716C;font-variant-numeric:tabular-nums">${x.camino || '—'}</div>
+      <input type="number" data-aj="${i}" step="any" placeholder="±" style="width:100%;padding:6px 8px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:12px;text-align:right;box-sizing:border-box">
+    </div>`).join('') || '<div style="padding:24px;text-align:center;color:#9CA3AF;font-size:11px;line-height:1.6">SIN MATERIALES TODAVÍA.<br>Marcá los materiales DE BODEGA en ABASTECER BODEGA — aparecerán acá para el conteo inicial con AJUSTE.</div>';
+  const ult = (Array.isArray(state.bodegaMovs) ? state.bodegaMovs.slice() : []).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 40);
+  const histo = ult.map(mv => {
+    const f = new Date(mv.ts || 0);
+    const ff = String(f.getDate()).padStart(2, '0') + '/' + String(f.getMonth() + 1).padStart(2, '0') + '/' + f.getFullYear();
+    const col = mv.tipo === 'ENTRADA' ? '#2E7D32' : mv.tipo === 'SALIDA' ? '#C62828' : '#92400E';
+    const qtx = mv.tipo === 'AJUSTE' ? (Number(mv.qty) > 0 ? '+' + mv.qty : String(mv.qty)) : (mv.tipo === 'ENTRADA' ? '+' : '−') + Math.abs(Number(mv.qty) || 0);
+    const ref = (mv.ref && (mv.ref.ocNumero || mv.ref.motivo)) || '';
+    return `<div style="display:grid;grid-template-columns:64px 64px minmax(0,1fr) 70px;gap:8px;padding:4px 0;border-bottom:1px solid #F9FAFB;font-size:10.5px">
+      <span style="color:#9CA3AF">${ff}</span>
+      <span style="font-weight:700;color:${col}">${mv.tipo}</span>
+      <span>${mv.name}${ref ? ' <span style="color:#9CA3AF">· ' + ref + '</span>' : ''}${mv.por ? ' <span style="color:#C7CDD4">· ' + mv.por + '</span>' : ''}</span>
+      <span style="text-align:right;font-variant-numeric:tabular-nums;font-weight:700;color:${col}">${qtx}</span>
+    </div>`;
+  }).join('') || '<div style="padding:12px;text-align:center;color:#9CA3AF;font-size:10.5px">SIN MOVIMIENTOS</div>';
+  const wrap = document.createElement('div');
+  wrap.id = '_bodegaPanelModal';
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:100070;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+  wrap.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:860px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid rgba(0,0,0,.08)">
+      <b style="font-size:13px;letter-spacing:.5px">BODEGA CENTRAL · EXISTENCIAS</b>
+      <div style="font-size:11px;color:#78716C;margin-top:4px;line-height:1.5">EXISTENCIA en <b style="color:#C62828">rojo</b> = faltante (hay que comprar). EN CAMINO = OCs de abastecimiento autorizadas que aún no se marcan recibidas. Para el conteo inicial o correcciones poné el AJUSTE (±) y el motivo.</div>
+    </div>
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) 56px 84px 84px 100px;gap:10px;padding:10px 18px 4px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700"><span>MATERIAL</span><span style="text-align:center">U</span><span style="text-align:right">EXISTENCIA</span><span style="text-align:right">EN CAMINO</span><span style="text-align:right">AJUSTE ±</span></div>
+    <div style="overflow:auto;flex:1;padding:0 18px 8px">${filas}</div>
+    <div style="padding:10px 18px;border-top:1px solid rgba(0,0,0,.06);max-height:180px;overflow:auto">
+      <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:6px">ÚLTIMOS MOVIMIENTOS</div>
+      ${histo}
+    </div>
+    <div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+      <label style="flex:1;min-width:200px;font-size:8.5px;letter-spacing:1.5px;color:#78716C;font-weight:700">MOTIVO DEL AJUSTE<br><input type="text" id="_bodegaAjMotivo" placeholder="EJ: CONTEO INICIAL" style="margin-top:3px;width:100%;padding:6px 8px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:12px;box-sizing:border-box"></label>
+      <button class="btn ghost" onclick="_cerrarPanelBodega()">CERRAR</button>
+      <button class="btn ghost" onclick="_cerrarPanelBodega(); _abrirModalBodega()" title="Generar pedido de abastecimiento (los faltantes van pre-llenados)">ABASTECER</button>
+      <button class="btn primary" onclick="_bodegaAplicarAjustes()">APLICAR AJUSTES</button>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap);
+}
+function _cerrarPanelBodega(){ const m = document.getElementById('_bodegaPanelModal'); if (m) m.remove(); window._bodegaPanelRows = null; }
+function _bodegaAplicarAjustes(){
+  if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN', 'red');
+  const m = document.getElementById('_bodegaPanelModal'); if (!m) return;
+  const rows = window._bodegaPanelRows || [];
+  const cambios = [];
+  m.querySelectorAll('input[data-aj]').forEach(inp => {
+    const q = Number(inp.value);
+    if (!q) return;
+    const x = rows[Number(inp.dataset.aj)];
+    if (x) cambios.push({ name: x.name, q });
+  });
+  if (!cambios.length) return showToast('PONÉ CANTIDAD (±) A AL MENOS UN MATERIAL', 'red');
+  const motivo = String((document.getElementById('_bodegaAjMotivo') || {}).value || '').trim();
+  if (!motivo) return showToast('ESCRIBÍ EL MOTIVO DEL AJUSTE (EJ: CONTEO INICIAL)', 'red');
+  _cerrarPanelBodega();
+  // regla v769/v940: tras cerrar el modal se escribe contra el state VIVO.
+  cambios.forEach(c => _bodegaMovsList().push(_bodegaMov('AJUSTE', c.name, c.q, { motivo })));
+  try { logActivity('update', 'BODEGA CENTRAL', 'Ajuste de existencias (' + cambios.length + ' materiales) — ' + motivo); } catch (e) {}
+  saveState();
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
+  showToast('AJUSTE REGISTRADO', 'green');
+}
+window._abrirPanelBodega = _abrirPanelBodega; window._cerrarPanelBodega = _cerrarPanelBodega;
+window._bodegaAplicarAjustes = _bodegaAplicarAjustes;
+window._ocAbrirRecibido = _ocAbrirRecibido; window._ocCerrarRecibido = _ocCerrarRecibido;
+window._ocConfirmarRecibido = _ocConfirmarRecibido;
+
 async function openOrdenCompra(){
-  // Solo quien tiene 'compras.autorizar' o es admin puede generar OCs
-  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO QUIEN AUTORIZA OC PUEDE GENERARLAS', 'red');
   if (!currentPedidoDetalleId) return;
 
   const p = activeProj();
   const pd = p.materiales.pedidos.find(x => x.id === currentPedidoDetalleId);
   if (!pd) return;
+  // Solo quien tiene 'compras.autorizar' o es admin puede generar OCs.
+  // v959: la persona de oficina (materiales.bodega) SOLO en pedidos de abastecimiento.
+  const _okBodega = can('materiales.bodega') && _pedidoEsAbastecimiento(pd);
+  if (!can('compras.autorizar') && !can('users.manage') && !_okBodega) return showToast('SOLO QUIEN AUTORIZA OC PUEDE GENERARLAS', 'red');
 
   const existingOcs = getPedidoOrdenes(pd.id);
   if (existingOcs.length > 0) {
@@ -18836,13 +19165,15 @@ function saveNewDireccion(){
 }
 
 async function generarOrdenCompra(){
-  // Solo quien autoriza OC puede generarlas
-  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO QUIEN AUTORIZA OC PUEDE GENERARLAS', 'red');
   if (!currentPedidoDetalleId) return;
 
   let p = activeProj();
   let pd = p.materiales.pedidos.find(x => x.id === currentPedidoDetalleId);
   if (!pd) return;
+  // Solo quien autoriza OC puede generarlas.
+  // v959: la persona de oficina (materiales.bodega) SOLO en pedidos de abastecimiento.
+  const _okBodegaGen = can('materiales.bodega') && _pedidoEsAbastecimiento(pd);
+  if (!can('compras.autorizar') && !can('users.manage') && !_okBodegaGen) return showToast('SOLO QUIEN AUTORIZA OC PUEDE GENERARLAS', 'red');
 
   const sinProveedor = ocWorkingItems.filter(it => !it.proveedorId);
   if (sinProveedor.length > 0) {
@@ -19679,6 +20010,16 @@ function renderOrdenesList(){
     const facturaBtn = (isAuth && canFactura && !oc.facturaUrl)
       ? `<button class="btn ghost sm" onclick="_ocAbrirSubirFactura('${oc.id}')" title="Subir la factura que generó el proveedor">SUBIR FACTURA</button>`
       : '';
+
+    // v959: OC de abastecimiento AUTORIZADA y sin ENTRADA registrada → MARCAR RECIBIDO
+    // (suma existencias a la bodega central con la cantidad que llegó de verdad).
+    const _yaRecibida = window._bodegaYaTieneMov((state || {}).bodegaMovs, oc.id, 'ENTRADA');
+    const recibirBtn = (isAuth && !oc.esDespacho && _puedeGestionarBodega() && _ocEsAbastecimiento(oc, p) && !_yaRecibida)
+      ? `<button class="btn sm" onclick="_ocAbrirRecibido('${oc.id}')" style="background:#166534;border-color:#166534;color:#fff" title="Registrar la cantidad que llegó — suma existencias de bodega">MARCAR RECIBIDO</button>`
+      : '';
+    const recibidaInfo = _yaRecibida
+      ? `<div style="font-size:10px;color:#166534;margin-top:4px;font-weight:700">RECIBIDA EN BODEGA${oc.recibidoBodega && oc.recibidoBodega.por ? ' · ' + oc.recibidoBodega.por : ''}</div>`
+      : '';
     const facturaInfo = oc.facturaUrl
       ? `<div style="font-size:10px;color:#15803D;margin-top:4px;font-weight:700">FACTURA: <a href="${oc.facturaUrl}" target="_blank" style="color:#15803D;text-decoration:underline">VER (${oc.facturaNombre || 'archivo'})</a>${_esAdminOC ? ` · <a href="#" onclick="_ocAbrirSubirFactura('${oc.id}');return false" style="color:#B91C1C;font-size:9px;text-decoration:underline">REEMPLAZAR (ADMIN)</a>` : ''}</div>`
       : '';
@@ -19697,6 +20038,7 @@ function renderOrdenesList(){
         <dd class="proveedor">${oc.proveedorNombre || '—'}</dd>
         <div style="margin-top:4px">${statusBadge}${autorizInfo}</div>
         ${facturaInfo}
+        ${recibidaInfo}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px">
           <div><dt>PROYECTO / ÁREA</dt><dd style="font-size:10.5px">${oc.proyecto || '—'}${oc.area ? ' · ' + oc.area : ''}</dd></div>
           <div><dt>PEDIDO ORIGEN</dt><dd style="font-size:10.5px">${oc.pedidoNumero || '—'}</dd></div>
@@ -19712,6 +20054,7 @@ function renderOrdenesList(){
       <div class="oc-list-actions">
         ${authBtn}
         ${viewBtn}
+        ${recibirBtn}
         ${printBtn}
         ${facturaBtn}
         ${canDeleteOC ? `<button class="btn-icon danger" onclick="deleteOrden('${oc.id}')" title="Eliminar orden">✕</button>` : ''}
@@ -19783,6 +20126,11 @@ async function autorizarOrden(id){
   oc.autorizadoTs = Date.now();
   oc.firmaDigital = _firmaDefault;
   oc.selloDigital = `AUTORIZADO DIGITALMENTE POR ${_autorizadorDefault} · ${_selloHora}`;
+
+  // v959: una ORDEN DE DESPACHO autorizada descuenta existencias de la bodega central.
+  // Idempotente por OC (_bodegaYaTieneMov dentro de _bodegaSalidaDespacho); si el saldo
+  // queda negativo NO se bloquea la obra — el rojo del panel es la señal de compra.
+  try { if (typeof _bodegaSalidaDespacho === 'function') _bodegaSalidaDespacho(oc); } catch (e) {}
 
   // Notificar al solicitante del pedido original. Si todas las OC están autorizadas, ya puede marcar recibido.
   if (oc.pedidoId) {
@@ -19916,6 +20264,18 @@ function _doDeleteOrden(id){
   const p = activeProj();
   const oc = (p.materiales.ordenes || []).find(x => x.id === id);
   if (!oc) return;
+
+  // v959: si la orden ya movió existencias de bodega (SALIDA de despacho o ENTRADA de
+  // abastecimiento), se escribe la REVERSA como AJUSTE — nunca se borran movimientos
+  // (el libro es auditable y el borrado directo pelearía con el union-merge).
+  try {
+    if (!window._bodegaYaTieneMov(state.bodegaMovs, oc.id, 'AJUSTE')) { // solo las reversas llevan ocId en AJUSTE
+      (state.bodegaMovs || []).filter(mv => mv && mv.ref && mv.ref.ocId === oc.id && mv.tipo !== 'AJUSTE').forEach(mv => {
+        const delta = mv.tipo === 'SALIDA' ? Math.abs(Number(mv.qty) || 0) : -Math.abs(Number(mv.qty) || 0);
+        if (delta) _bodegaMovsList().push(_bodegaMov('AJUSTE', mv.name, delta, { ocId: oc.id, motivo: 'REVERSA POR ELIMINACIÓN DE ' + (oc.numero || 'OC') }));
+      });
+    }
+  } catch (e) {}
 
   p.materiales.ordenes = p.materiales.ordenes.filter(x => x.id !== id);
   logActivity('delete', `Orden de Compra No. ${oc.numero} eliminada`, `${p.name} · ${oc.proveedorNombre} · Q ${fmtQ(oc.total)}`);
@@ -50389,6 +50749,20 @@ async function _anulAnularReal(){
   // v357: normalización de nombres (sin acentos, espacios colapsados, uppercase)
   function _normName(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim().toUpperCase(); }
 
+  /* v959 (pedido 23-jul): con el filtro CANCELADA el listado se ordena por la FECHA DE BAJA
+     (la del OBS) de la más reciente a la más vieja; sin fecha van al final y los empates caen
+     al alfabético v356. Con cualquier otro filtro se mantiene el alfabético por asegurado.
+     fechaBaja siempre es ISO yyyy-mm-dd, así que la comparación de strings ordena bien. */
+  window._polOrdenListado = function(filas, filtroEstatus){
+    return (Array.isArray(filas) ? filas : []).sort((a, b) => {
+      if (filtroEstatus === 'CANCELADA') {
+        const fb = String(b.fechaBaja || '').localeCompare(String(a.fechaBaja || ''));
+        if (fb) return fb;
+      }
+      return String(a.aseguradoNombre || '').localeCompare(String(b.aseguradoNombre || ''), 'es', { sensitivity: 'base' });
+    });
+  };
+
   window.renderPlanillaPolizas = function(){
     const cont = document.getElementById('planilla-polizas');
     if (!cont) return;
@@ -50403,7 +50777,8 @@ async function _anulAnularReal(){
     const filtroACargoNombre = String(filtroACargo||'').trim().toUpperCase();
     const aseguradoras = Array.from(new Set(polizas.map(x => x.aseguradora).filter(Boolean))).sort();
     const aCargoOpciones = Array.from(new Set(polizas.map(x => String(x.aCargoDeNombre||'').trim()).filter(Boolean))).sort((a,b) => a.localeCompare(b));
-    const filas = polizas.filter(po => { if (filtroEstatus !== 'todas' && po.estatus !== filtroEstatus) return false; if (filtroAseg && po.aseguradora !== filtroAseg) return false; if (filtroACargo) { const matchId = po.aCargoDeColabId === filtroACargo; const matchName = filtroACargoNombre && String(po.aCargoDeNombre||'').trim().toUpperCase() === filtroACargoNombre; if (!matchId && !matchName) return false; } return true; }).sort((a,b) => String(a.aseguradoNombre||'').localeCompare(String(b.aseguradoNombre||''), 'es', {sensitivity:'base'})); // v356: alfabético por ASEGURADO
+    const filas = polizas.filter(po => { if (filtroEstatus !== 'todas' && po.estatus !== filtroEstatus) return false; if (filtroAseg && po.aseguradora !== filtroAseg) return false; if (filtroACargo) { const matchId = po.aCargoDeColabId === filtroACargo; const matchName = filtroACargoNombre && String(po.aCargoDeNombre||'').trim().toUpperCase() === filtroACargoNombre; if (!matchId && !matchName) return false; } return true; });
+    window._polOrdenListado(filas, filtroEstatus); // v959: CANCELADA → baja más reciente primero; resto alfabético v356
     const totalActivas = polizas.filter(po => po.estatus === 'ACTIVA').length;
     const totalEnProceso = polizas.filter(po => po.estatus === 'EN PROCESO').length;
     const totalCanceladas = polizas.filter(po => po.estatus === 'CANCELADA').length;
