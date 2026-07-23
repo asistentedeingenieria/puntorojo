@@ -3046,7 +3046,7 @@ table{max-width:100%}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v957</span>
+    <span style="opacity:.5;font-size:9px">v958</span>
   </footer>
 
 </div>
@@ -30000,6 +30000,14 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   try {
     const pushPerm = p => { if (!PERMS_DISPONIBLES.some(x => x.key === p.key)) PERMS_DISPONIBLES.push(p); };
     pushPerm({ key:'view.planilla', label:'Ver liquidaciones a proveedores', group:'VISTAS' });
+    // v958: vistas GRANULARES de solo lectura para LIQUIDACIÓN PROVEEDORES (pedido de
+    // Antonio 22-jul): el admin marca por usuario QUÉ sub-pestañas puede VER — sin editar
+    // nada, con los DESCARGAR PDF funcionando. Un usuario con cualquiera de estas entra a
+    // la pestaña principal por la regla implícita de can() (planilla.* pasa view.planilla).
+    pushPerm({ key:'planilla.verEtapas',      label:'Ver PAGOS POR ETAPA (solo lectura)',              group:'VISTAS' });
+    pushPerm({ key:'planilla.verRetenciones', label:'Ver RETENCIONES (solo lectura)',                  group:'VISTAS' });
+    pushPerm({ key:'planilla.verAvance',      label:'Ver AVANCE POR APARTAMENTO (solo lectura + PDF)', group:'VISTAS' });
+    pushPerm({ key:'planilla.verResumen',     label:'Ver RESUMEN POR PERSONA (solo lectura)',          group:'VISTAS' });
     pushPerm({ key:'planilla.generate', label:'Generar liquidaciones', group:'EDICIÓN LIQUIDACIONES' });
     pushPerm({ key:'planilla.authorize', label:'Revisar y autorizar liquidaciones', group:'EDICIÓN LIQUIDACIONES' });
     // v248: nuevo permiso para la persona que agrega descuentos a la planilla
@@ -39357,6 +39365,8 @@ window.addEventListener('load', () => {
     const oldOcs = tabs.querySelector('[data-plantab="ocs"]'); if (oldOcs) oldOcs.style.display = 'none'; // v867: PLANILLAS OC eliminada (se rehará), ocultá la vieja del cache
     // v404b: filtro de pestañas para descuentos-only
     try { if (typeof window._v404bAplicarFiltroDescuentosTabs === 'function') window._v404bAplicarFiltroDescuentosTabs(); } catch(e){}
+    // v958: filtro de pestañas para el rol solo-vista granular
+    try { if (typeof window._v958AplicarFiltroVerTabs === 'function') window._v958AplicarFiltroVerTabs(); } catch(e){}
   }
   // v404b: si el user solo tiene planilla.descuentos (no admin/PM/gerente), solo muestra ANTICIPOS/POLIZAS/COLABORADORES
   function _v404bEsDescuentosOnly(){ try { if (typeof isReadOnly==='function' && isReadOnly()) return false; if (typeof can !== 'function') return false; return can('planilla.descuentos') && !can('users.manage') && !can('planilla.generate') && !can('planilla.authorize'); } catch(e){ return false; } }
@@ -39379,8 +39389,42 @@ window.addEventListener('load', () => {
     if (!activeTab || !VISIBLES.has(activeTab)){ if (typeof window.setPlanillaTab === 'function'){ try { window.setPlanillaTab('anticipos'); } catch(e){} } }
   };
 
+  // v958: rol SOLO-VISTA GRANULAR de liquidaciones. PURA (recibe el array de permisos):
+  // devuelve las sub-pestañas visibles, o null si el usuario conserva la vista completa
+  // (edición/gestión, view.planilla explícito, SOLO LECTURA global v866 o admin).
+  window._v958TabsPermitidas = function(perms){
+    if (!Array.isArray(perms)) return null;
+    const MAP = { etapas:'planilla.verEtapas', retenciones:'planilla.verRetenciones', reporte:'planilla.verAvance', resumenpersona:'planilla.verResumen' };
+    const tiene = Object.keys(MAP).filter(k => perms.includes(MAP[k]));
+    if (!tiene.length) return null;
+    const FULL = ['*','view.*','view.planilla','users.manage','planilla.generate','planilla.authorize','planilla.descuentos'];
+    if (FULL.some(k => perms.includes(k))) return null;
+    return tiene;
+  };
+  window._v958AplicarFiltroVerTabs = function(){
+    try {
+      const u = (typeof getCurrentUser === 'function') ? getCurrentUser() : null;
+      const permitidas = u ? window._v958TabsPermitidas(u.perms) : null;
+      if (!permitidas) return;
+      const tabs = document.querySelector('#view-planilla .mat-tabs');
+      if (!tabs) return;
+      const VIS = new Set(permitidas);
+      tabs.querySelectorAll('[data-plantab]').forEach(btn => { if (!VIS.has(btn.dataset.plantab)) btn.style.display = 'none'; });
+      // anti-recursión v822: decidir con window.currentPlanillaTab (fijada ANTES por
+      // setPlanillaTab), NO con el .active del DOM — con el .active esto recursaba.
+      const activeTab = window.currentPlanillaTab || null;
+      if (!activeTab || !VIS.has(activeTab)){ if (typeof window.setPlanillaTab === 'function'){ try { window.setPlanillaTab(permitidas[0]); } catch(e){} } }
+    } catch(e){ console.warn('v958 filtro ver-tabs:', e); }
+  };
+
   window.setPlanillaTab = function(tab){
     if (tab === 'colaboradores' || tab === 'polizas') tab = 'etapas'; // COLABORADORES y PÓLIZAS movidas a PERSONAL
+    // v958: el rol solo-vista granular no puede navegar a pestañas no permitidas
+    try {
+      const _u958 = (typeof getCurrentUser === 'function') ? getCurrentUser() : null;
+      const _p958 = _u958 ? window._v958TabsPermitidas(_u958.perms) : null;
+      if (_p958 && !_p958.includes(tab)) tab = _p958[0];
+    } catch(e){}
     if (window._lastPlanillaTab !== null && window._lastPlanillaTab !== tab && typeof _resetAllCollapsibles === 'function') {
       _resetAllCollapsibles();
     }
