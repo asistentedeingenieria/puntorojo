@@ -2786,8 +2786,8 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
           <button class="mat-tab active" data-pedtab="lista" onclick="setPedidoTab('lista')" style="color:var(--cafe);border-bottom-color:var(--cafe)">LISTA DE PEDIDOS</button>
           <button class="mat-tab" data-pedtab="nuevo" onclick="setPedidoTab('nuevo')" data-perm="pedidos.create">+ NUEVO PEDIDO</button>
           <button class="mat-tab" data-pedtab="receta" onclick="setPedidoTab('receta')" data-perm="pedidos.create">PEDIR DE RECETA</button>
-          <!-- v960: UN solo botón (pedido de Antonio) — ABASTECER vive DENTRO del panel -->
-          <button class="btn ghost sm" data-perm="materiales.bodega|compras.autorizar|users.manage" onclick="_abrirPanelBodega()" style="margin-left:auto;align-self:center" title="Bodega central GENERAL (todos los proyectos): existencias, recepción, ajustes y abastecimiento">BODEGA CENTRAL</button>
+          <!-- v960: UN solo botón — ABASTECER vive DENTRO del panel. v963: entrada solo materiales.bodega|admin -->
+          <button class="btn ghost sm" data-perm="materiales.bodega|users.manage" onclick="_abrirPanelBodega()" style="margin-left:auto;align-self:center" title="Bodega central GENERAL (todos los proyectos): existencias, recepción, ajustes y abastecimiento">BODEGA CENTRAL</button>
         </div>
 
         <!-- LISTA DE PEDIDOS -->
@@ -3083,7 +3083,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v962</span>
+    <span style="opacity:.5;font-size:9px">v963</span>
   </footer>
 
 </div>
@@ -11044,7 +11044,7 @@ function renderProjectSelect(){
     // final del desplegable (solo quien puede gestionarla). Abre la vista completa SIN
     // cambiar el proyecto activo real.
     try {
-      if (typeof _puedeGestionarBodega === 'function' && _puedeGestionarBodega()) {
+      if (typeof _puedeVerBodega === 'function' && _puedeVerBodega()) { // v963: entrada solo para quien Antonio marque
         list.innerHTML += `<div class="pr-proj-item" role="option" style="border-top:1px solid rgba(0,0,0,.08);margin-top:4px" onclick="window.prToggleProjDropdown(); window._abrirPanelBodega()">
           <span class="pr-proj-dot" aria-hidden="true" style="background:#166534"></span>
           <span>BODEGA CENTRAL</span>
@@ -11093,7 +11093,6 @@ document.addEventListener('keydown', (ev) => {
 
 function setActiveProject(id){
   state.activeProjectId = id;
-  window._projGateEligioProyecto = true; // v961: ya hay un proyecto elegido a conciencia
   // v648: al cambiar de proyecto, reiniciar el filtro de obra de asistencia a TODAS LAS OBRAS.
   // Evita que un filtro viejo (p.ej. otra obra) oculte los marcados del proyecto nuevo y parezca
   // que "no marcó nadie". El encargado lo vuelve a fijar a su obra en renderPersonal.
@@ -11110,65 +11109,10 @@ function setActiveProject(id){
   renderAll();
 }
 
-/* ══════════ v961: GATE DE PROYECTO AL ABRIR ══════════
-   Pedido de Antonio (23-jul): SIEMPRE que se abre la app no hay proyecto seleccionado —
-   un overlay OPACO bloquea todo hasta elegir con cuál se va a trabajar. Aplica a todos
-   los usuarios, en cada carga de página. NO se registra en isUserBusy: el sync inicial
-   corre detrás mientras el usuario decide (por eso el reintento cuando los proyectos
-   aún no llegaron en un dispositivo nuevo). */
-window._projGateAplica = function(user, projects){
-  // el encargado con obra asignada VÁLIDA se lo salta: su obra se fuerza sola (v631)
-  const obra = user && user.obraAsignada;
-  if (obra && (projects || []).some(p => p && p.id === obra)) return false;
-  return true;
-};
-function _abrirGateProyecto(){
-  if (window._projGateHecho) return;
-  if (!window._projGateAplica(currentUser, (state && state.projects) || [])) {
-    window._projGateHecho = true;
-    window._projGateEligioProyecto = true; // su obra se fuerza sola — cuenta como elegido
-    return;
-  }
-  if (document.getElementById('_projGateModal')) return;
-  const wrap = document.createElement('div');
-  wrap.id = '_projGateModal';
-  wrap.style.cssText = 'position:fixed;inset:0;z-index:99000;background:var(--paper);display:flex;align-items:center;justify-content:center;padding:20px;overflow:auto';
-  const pinta = () => {
-    if (!document.getElementById('_projGateModal')) return; // ya eligió (o logout)
-    const projs = (state && state.projects) || [];
-    const botones = projs.map(p => `
-      <button class="btn" data-pgid="${p.id}" style="display:block;width:100%;padding:15px 18px;margin-top:10px;font-size:13px;font-weight:700;letter-spacing:.8px;text-align:left;border-radius:10px;text-transform:uppercase">${p.name}</button>`).join('');
-    wrap.innerHTML = `<div style="max-width:440px;width:100%">
-      <div style="font-size:10px;letter-spacing:2px;color:var(--mute);font-weight:700">PARA EMPEZAR</div>
-      <h2 style="margin:6px 0 2px;font-size:20px;letter-spacing:.5px">SELECCIONÁ EL PROYECTO.</h2>
-      <div style="font-size:11.5px;color:var(--mute);line-height:1.5">Ningún proyecto está abierto. Elegí con cuál vas a trabajar — podés cambiarlo después desde el botón PROYECTO de arriba.</div>
-      ${botones || '<div style="margin-top:16px;padding:18px;text-align:center;color:var(--mute);font-size:11px;letter-spacing:1px">CARGANDO PROYECTOS…</div>'}
-      ${(typeof _puedeGestionarBodega === 'function' && _puedeGestionarBodega()) ? `
-      <button class="btn ghost" id="_pgBodegaBtn" style="display:block;width:100%;padding:13px 18px;margin-top:16px;font-size:12px;letter-spacing:.8px;text-align:left;border-radius:10px;color:#166534;border-color:#166534">■ ENTRAR A LA BODEGA CENTRAL</button>` : ''}
-    </div>`;
-    wrap.querySelectorAll('[data-pgid]').forEach(b => {
-      b.onclick = () => {
-        window._projGateHecho = true;
-        wrap.remove();
-        try { setActiveProject(b.dataset.pgid); } catch (e) {}
-      };
-    });
-    const _bg = wrap.querySelector('#_pgBodegaBtn');
-    if (_bg) _bg.onclick = () => {
-      // v961: entrar directo a la bodega SIN elegir proyecto — al salir de la bodega,
-      // si sigue sin proyecto elegido, el gate vuelve a aparecer.
-      window._projGateHecho = true;
-      wrap.remove();
-      try { _abrirPanelBodega(); } catch (e) {}
-    };
-    if (!projs.length) setTimeout(pinta, 800); // primer arranque: el sync trae los proyectos detrás
-  };
-  // INCIDENTE 23-jul (pantalla blanca): el wrap debe estar EN el DOM antes del primer
-  // pinta() — su guard getElementById retornaba sin pintar y el overlay quedaba VACÍO.
-  document.body.appendChild(wrap);
-  pinta();
-}
-window._abrirGateProyecto = _abrirGateProyecto;
+/* v963: el GATE de proyecto al abrir (v961/v962) fue ELIMINADO a pedido de Antonio el
+   mismo 23-jul ("Esto no me gusta asi") tras probarlo — se entra directo como siempre.
+   NO recrear esta pantalla sin pedido explícito. La entrada a BODEGA CENTRAL quedó en
+   el desplegable PROYECTO del navbar (gated _puedeVerBodega). */
 
 /* ─────────────── DASHBOARD ─────────────── */
 function renderDashboard(){
@@ -18359,9 +18303,15 @@ function _esItemBodega(name){
   const k = _ocItemMemKey(name);
   return !!(((state || {}).bodegaItemsGlobal) || {})[k];
 }
-/* v959: gate único de bodega central — oficina (materiales.bodega), compras o admin. */
+/* v959: gate único de ACCIONES de bodega — oficina (materiales.bodega), compras o admin. */
 function _puedeGestionarBodega(){
   return can('materiales.bodega') || can('compras.autorizar') || can('users.manage');
+}
+/* v963 (pedido de Antonio): la ENTRADA a la bodega central la decide ÉL por usuario —
+   solo quien tenga marcado el permiso de bodega (o admin) VE la entrada y la vista.
+   Compras NO entra por defecto: si Antonio quiere, le marca el permiso. */
+function _puedeVerBodega(){
+  return can('materiales.bodega') || can('users.manage');
 }
 function _toggleItemBodega(name){
   if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN ADMINISTRAN LA LISTA DE BODEGA', 'red');
@@ -18713,7 +18663,7 @@ function _bodegaEnCamino(){
   return out;
 }
 function _abrirPanelBodega(){
-  if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN', 'red');
+  if (!_puedeVerBodega()) return showToast('LA BODEGA CENTRAL ES SOLO PARA USUARIOS AUTORIZADOS', 'red'); // v963
   if (document.getElementById('_bodegaPanelModal')) return;
   const saldos = window._bodegaSaldos(state.bodegaMovs);
   const camino = _bodegaEnCamino();
@@ -18808,12 +18758,7 @@ window._bodegaViewFiltrar = function(q){
 };
 function _cerrarPanelBodegaDom(){ const m = document.getElementById('_bodegaPanelModal'); if (m) m.remove(); window._bodegaPanelRows = null; }
 function _cerrarPanelBodega(){
-  _cerrarPanelBodegaDom();
-  // v961: si entró directo por el gate y todavía no eligió proyecto real, el gate vuelve.
-  if (currentUser && !window._projGateEligioProyecto) {
-    window._projGateHecho = false;
-    try { _abrirGateProyecto(); } catch (e) {}
-  }
+  _cerrarPanelBodegaDom(); // v963: sin gate — VOLVER regresa a la app tal como estaba
 }
 function _bodegaAplicarAjustes(){
   if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN', 'red');
@@ -39494,9 +39439,6 @@ function initAuthListener(){
   function _showLoginScreenNow(){
     currentUser = null;
     cachedUsers = [];
-    // v961: al salir se resetea el gate de proyecto — el próximo login vuelve a elegir.
-    window._projGateHecho = false;
-    try { const _pg = document.getElementById('_projGateModal'); if (_pg) _pg.remove(); } catch(e){}
     try { _stopPresence(); } catch(e){}
     try { unsubscribeFromMyNotifications(); } catch(e){}
     try { saveNotifications([]); } catch(e){}
@@ -39636,10 +39578,7 @@ function applyAuthSession(fbUser, profileData){
   // forzamos el cambio de clave ANTES de que pueda usar la app.
   if (profileData.mustChangePassword === true) {
     setTimeout(() => showForcedPasswordChange(), 100);
-    // v961: acá NO va el gate de proyecto — el modal de cambio de clave es z100 y quedaría tapado.
   } else {
-    // v961: cada apertura arranca SIN proyecto — gate obligatorio que bloquea todo hasta elegir.
-    setTimeout(() => { try { _abrirGateProyecto(); } catch (e) {} }, 60);
     // v630: empujar a activar notificaciones (push) si aún no están.
     setTimeout(() => { try{ _refreshNotifActivarBanner(); }catch(e){} }, 1500);
   }

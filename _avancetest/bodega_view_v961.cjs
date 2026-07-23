@@ -16,11 +16,13 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 const iDd = html.indexOf("list.innerHTML = _projsVis.map");
 const zDd = html.slice(iDd, iDd + 2200);
 ok('desplegable con entrada BODEGA CENTRAL', /BODEGA CENTRAL/.test(zDd) && /_abrirPanelBodega/.test(zDd));
-ok('...solo para quien puede gestionarla', /_puedeGestionarBodega\(\)/.test(zDd));
+// v963: la ENTRADA la decide Antonio por usuario — solo materiales.bodega|admin la ven
+ok('...solo para quien Antonio marque (_puedeVerBodega)', /_puedeVerBodega\(\)/.test(zDd));
 
-// ── 2. entrada en el gate de proyecto ──
-const zGate = extractFrom('function _abrirGateProyecto(');
-ok('el gate ofrece entrar a la BODEGA CENTRAL', /BODEGA CENTRAL/.test(zGate) && /_abrirPanelBodega/.test(zGate) && /_puedeGestionarBodega\(\)/.test(zGate));
+// ── 2. gate de entrada por permiso ──
+const vSrc = extractFrom('function _puedeVerBodega(');
+ok('_puedeVerBodega = materiales.bodega o admin (SIN compras)', /materiales\.bodega/.test(vSrc) && /users\.manage/.test(vSrc) && !/compras\.autorizar/.test(vSrc));
+ok('el botón de la toolbar usa el permiso restringido', /data-perm="materiales\.bodega\|users\.manage"[^>]*onclick="_abrirPanelBodega\(\)"/.test(html));
 
 // ── 3. la vista completa ──
 const zView = extractFrom('function _abrirPanelBodega(');
@@ -35,10 +37,9 @@ const qsBusy = (zBusy.match(/querySelector\('#prConfirmModal[^']*'\)/) || [''])[
 ok('la vista de bodega YA NO está en isUserBusy', !!qsBusy && !/_bodegaPanelModal/.test(qsBusy));
 ok('el modal RECIBIDO sigue posponiendo', /_ocRecibidoModal/.test(qsBusy));
 
-// ── 5. cerrar sin proyecto elegido reabre el gate ──
+// ── 5. cerrar la bodega regresa a la app tal cual (v963: sin gate) ──
 const zCerrar = extractFrom('function _cerrarPanelBodega(');
-ok('cerrar la bodega sin proyecto reabre el gate', /_projGateEligioProyecto/.test(zCerrar) && /_abrirGateProyecto/.test(zCerrar));
-ok('setActiveProject sella que SÍ se eligió proyecto', /_projGateEligioProyecto = true/.test(extractFrom('function setActiveProject(')));
+ok('cerrar la bodega es un cierre simple', /_cerrarPanelBodegaDom\(\)/.test(zCerrar) && !/_abrirGateProyecto/.test(zCerrar));
 
 // ── 6. recepción desde la vista re-pinta la vista ──
 ok('confirmar RECIBIDO refresca la vista si está abierta', /_bodegaPanelModal/.test(extractFrom('function _ocConfirmarRecibido(')));
