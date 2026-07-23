@@ -3083,7 +3083,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v964</span>
+    <span style="opacity:.5;font-size:9px">v965</span>
   </footer>
 
 </div>
@@ -9588,7 +9588,7 @@ const CloudSync = {
     // referencia queda huerfana y el cambio (push/Object.assign/splice) no persiste. Esto
     // arregla de raiz toda la familia "await modal -> escribir" (aprobar/rechazar/procesar/
     // anular planilla, editar/eliminar anticipos y polizas, etc.).
-    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo.
+    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal, #_bodegaCargaModal')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo.
     const focused = document.activeElement;
     if (focused && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)) return true;
     return false;
@@ -18588,6 +18588,107 @@ window._bodegaMovsEntradaDeOc = function(oc, cants){
   });
   return out;
 };
+/* v965: CARGA DE EXISTENCIAS — "lo que YA hay en bodega" sin pedido ni OC (pedido de
+   Antonio). Se escribe el TOTAL REAL físico y el constructor deriva el AJUSTE
+   (total − saldo actual); solo deltas ≠ 0 generan movimiento. */
+window._bodegaMovsDeCarga = function(filas, saldos){
+  const out = [];
+  (Array.isArray(filas) ? filas : []).forEach(f => {
+    if (!f || !String(f.name || '').trim()) return;
+    const total = Number(f.total);
+    if (!isFinite(total) || total < 0) return;
+    const k = _ocItemMemKey(f.name);
+    const actual = (saldos && saldos[k] && Number(saldos[k].saldo)) || 0;
+    const delta = total - actual;
+    if (!delta) return;
+    const mv = _bodegaMov('AJUSTE', f.name, delta, { motivo: 'CARGA DE EXISTENCIAS' });
+    if (f.u && !mv.u) mv.u = String(f.u).toUpperCase();
+    out.push(mv);
+  });
+  return out;
+};
+function _abrirCargaExistencias(){
+  if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN', 'red');
+  if (document.getElementById('_bodegaCargaModal')) return;
+  const saldos = window._bodegaSaldos(state.bodegaMovs);
+  const prods = _bodegaProductosGlobal();
+  const vistos = {};
+  const filas = [];
+  prods.forEach(x => { vistos[x.key] = 1; filas.push({ key: x.key, name: x.name, u: x.u, saldo: (saldos[x.key] || {}).saldo || 0 }); });
+  Object.keys(saldos).forEach(k => { if (!vistos[k]) filas.push({ key: k, name: saldos[k].name, u: saldos[k].u, saldo: saldos[k].saldo }); });
+  window._bodegaCargaFilas = filas;
+  // cableado por ÍNDICE (data-cx) — nunca nombres en atributos (trampa escapeAttr v740)
+  const filasHTML = filas.map((x, i) => `
+    <div data-cfila data-cname="${String(x.name).toLowerCase().replace(/"/g, '&quot;')}" style="display:grid;grid-template-columns:minmax(0,1fr) 56px 80px 110px;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid #F3F4F6">
+      <div style="font-size:11.5px;letter-spacing:.2px">${x.name}</div>
+      <div style="text-align:center;font-size:10px;color:#6B7280">${x.u || ''}</div>
+      <div style="text-align:right;font-size:11.5px;color:#78716C;font-variant-numeric:tabular-nums">${x.saldo}</div>
+      <input type="number" data-cx="${i}" min="0" step="any" placeholder="—" style="width:100%;padding:6px 8px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:12px;text-align:right;box-sizing:border-box">
+    </div>`).join('') || '<div style="padding:20px;text-align:center;color:#9CA3AF;font-size:11px">SIN MATERIALES EN LAS RECETAS — USÁ OTRO MATERIAL ABAJO</div>';
+  const wrap = document.createElement('div');
+  wrap.id = '_bodegaCargaModal';
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:100070;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+  wrap.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:760px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid rgba(0,0,0,.08)">
+      <b style="font-size:13px;letter-spacing:.5px">CARGAR EXISTENCIAS · LO QUE YA HAY EN BODEGA</b>
+      <div style="font-size:11px;color:#78716C;margin-top:4px;line-height:1.5">Escribí el <b>TOTAL REAL</b> que hay físicamente de cada material — el sistema calcula solo la diferencia contra lo registrado. Sin pedido y sin OC. Los que dejés vacíos no se tocan.</div>
+    </div>
+    <div style="padding:10px 18px 0"><input id="_bodegaCargaFiltro" class="pr-buscador" placeholder="BUSCAR MATERIAL…" oninput="window._bodegaCargaFiltrar(this.value)" style="width:100%"></div>
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) 56px 80px 110px;gap:10px;padding:10px 18px 4px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700"><span>MATERIAL</span><span style="text-align:center">U</span><span style="text-align:right">REGISTRADO</span><span style="text-align:right">TOTAL REAL</span></div>
+    <div style="overflow:auto;flex:1;padding:0 18px 8px">${filasHTML}</div>
+    <div style="padding:10px 18px;border-top:1px solid rgba(0,0,0,.06)">
+      <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:6px">OTRO MATERIAL (LIBRE — no está en las recetas)</div>
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 90px 110px;gap:10px">
+        <input id="_cargaLibreNombre" class="pr-buscador" placeholder="NOMBRE DEL MATERIAL" style="width:100%">
+        <input id="_cargaLibreUnidad" class="pr-buscador" placeholder="UNIDAD" style="width:100%">
+        <input id="_cargaLibreTotal" type="number" min="0" step="any" class="pr-buscador" placeholder="TOTAL" style="width:100%;text-align:right">
+      </div>
+    </div>
+    <div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" onclick="_cerrarCargaExistencias()">CANCELAR</button>
+      <button class="btn primary" onclick="_bodegaConfirmarCarga()">GUARDAR EXISTENCIAS</button>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap);
+}
+window._bodegaCargaFiltrar = function(q){
+  const m = document.getElementById('_bodegaCargaModal'); if (!m) return;
+  const f = String(q || '').toLowerCase().trim();
+  m.querySelectorAll('[data-cfila]').forEach(el => {
+    el.style.display = (!f || (el.dataset.cname || '').includes(f)) ? '' : 'none';
+  });
+};
+function _cerrarCargaExistencias(){ const m = document.getElementById('_bodegaCargaModal'); if (m) m.remove(); window._bodegaCargaFilas = null; }
+function _bodegaConfirmarCarga(){
+  if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN', 'red');
+  const m = document.getElementById('_bodegaCargaModal'); if (!m) return;
+  const filas = window._bodegaCargaFilas || [];
+  const entradas = [];
+  m.querySelectorAll('input[data-cx]').forEach(inp => {
+    if (inp.value === '') return;
+    const f = filas[Number(inp.dataset.cx)];
+    if (f) entradas.push({ name: f.name, u: f.u, total: Number(inp.value) });
+  });
+  const _ln = String((document.getElementById('_cargaLibreNombre') || {}).value || '').trim();
+  const _lu = String((document.getElementById('_cargaLibreUnidad') || {}).value || '').trim();
+  const _lt = (document.getElementById('_cargaLibreTotal') || {}).value;
+  if (_ln && _lt !== '' && _lt != null) entradas.push({ name: _ln.toUpperCase(), u: _lu, total: Number(_lt) });
+  _cerrarCargaExistencias();
+  // regla v769/v940: tras cerrar el modal se re-lee el state VIVO y ahí se escribe.
+  const saldos = window._bodegaSaldos(state.bodegaMovs);
+  const movs = window._bodegaMovsDeCarga(entradas, saldos);
+  if (!movs.length) return showToast('NO HAY CAMBIOS QUE GUARDAR (los totales coinciden)', 'amber');
+  movs.forEach(mv => _bodegaMovsList().push(mv));
+  try { logActivity('update', 'BODEGA CENTRAL', 'Carga de existencias (' + movs.length + ' materiales)'); } catch (e) {}
+  saveState();
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
+  try { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } catch (e) {}
+  showToast('EXISTENCIAS CARGADAS', 'green');
+}
+window._abrirCargaExistencias = _abrirCargaExistencias;
+window._cerrarCargaExistencias = _cerrarCargaExistencias;
+window._bodegaConfirmarCarga = _bodegaConfirmarCarga;
+
 /* SALIDA al autorizar un despacho — idempotente por OC (guard _bodegaYaTieneMov). */
 function _bodegaSalidaDespacho(oc){
   if (!oc || !oc.esDespacho) return false;
@@ -18862,6 +18963,7 @@ function _abrirPanelBodega(){
       </div>
       <div style="flex:1"></div>
       <button class="btn ghost" onclick="_cerrarPanelBodega()">← VOLVER A PROYECTOS</button>
+      <button class="btn ghost" onclick="_abrirCargaExistencias()" title="Anotar el total real que YA hay físicamente — sin pedido ni OC">CARGAR EXISTENCIAS</button>
       <button class="btn primary" onclick="_abrirModalBodega()" title="Generar pedido de abastecimiento (los faltantes van pre-llenados)">ABASTECER</button>
     </div>
     <div style="font-size:11px;color:#78716C;margin:6px 0 12px;line-height:1.5">EXISTENCIA en <b style="color:#C62828">rojo</b> = faltante (hay que comprar). EN CAMINO = OCs de abastecimiento autorizadas que aún no se marcan recibidas. Para el conteo inicial o correcciones poné el AJUSTE (±) y el motivo.</div>
