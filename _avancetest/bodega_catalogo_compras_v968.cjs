@@ -48,7 +48,7 @@ ok('_bodegaProductosGlobal arranca del CATALOGO_COMPRAS', /CATALOGO_COMPRAS/.tes
 let gFn = null;
 try {
   gFn = new Function('state', 'CATALOGO_COMPRAS',
-    normSrc + '\n' + memSrc + '\nfunction _bodegaProductosDeReceta(p){ return []; }\nreturn (' + gSrc + ')'
+    normSrc + '\n' + memSrc + '\n' + extractFrom('function _bodegaUnidadDelNombre(') + '\nfunction _bodegaProductosDeReceta(p){ return []; }\nreturn (' + gSrc + ')'
   )({ projects: [] }, CC || []);
 } catch(e){}
 if (typeof gFn === 'function') {
