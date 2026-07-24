@@ -27,7 +27,10 @@ let gFn = null;
 const fakeReceta = (nombre, total) => ({ materiales: { recetaV2: { niveles: { L1: { 0: [{ m: nombre, u: 'UND', tn: total, aptos: {} }] } } } } });
 const fakeState = { projects: [ fakeReceta('PLANCHA 1/2"', 10), fakeReceta('PLANCHA 1/2"', 5), fakeReceta('MASILLA', 3) ] };
 try {
-  gFn = new Function('state', normSrc + '\n' + memSrc + '\n' + recSrc + '\nreturn (' + gSrc + ')')(fakeState);
+  // v968/v970: el catálogo global ahora usa CATALOGO_COMPRAS + derivación/normalización de unidad
+  gFn = new Function('state', 'CATALOGO_COMPRAS',
+    normSrc + '\n' + memSrc + '\n' + recSrc + '\n' + extractFrom('function _bodegaUnidadDelNombre(') + '\n' + extractFrom('function _bodegaUFmt(') + '\nreturn (' + gSrc + ')'
+  )(fakeState, []);
 } catch(e){}
 ok('_bodegaProductosGlobal evaluable', typeof gFn === 'function');
 if (typeof gFn === 'function') {

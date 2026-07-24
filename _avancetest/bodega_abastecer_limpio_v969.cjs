@@ -40,7 +40,7 @@ const memSrc = extractFrom('function _ocItemMemKey(');
 let gFn = null;
 try {
   gFn = new Function('state', 'CATALOGO_COMPRAS',
-    normSrc + '\n' + memSrc + '\n' + uSrc + '\nfunction _bodegaProductosDeReceta(p){ return []; }\nreturn (' + gSrc + ')'
+    normSrc + '\n' + memSrc + '\n' + uSrc + '\n' + extractFrom('function _bodegaUFmt(') + '\nfunction _bodegaProductosDeReceta(p){ return []; }\nreturn (' + gSrc + ')'
   )({ projects: [] }, [{ cat: 'X', interno: 'PASTA CAJA', compras: ['PASTA REDIMIX USG 21.8 KG CAJA'] }]);
 } catch(e){}
 if (typeof gFn === 'function') {
@@ -49,6 +49,19 @@ if (typeof gFn === 'function') {
 } else { ok('_bodegaProductosGlobal evaluable con derivación', false); }
 // los movimientos también la usan de fallback
 ok('_bodegaUnidadDe cae a la derivada', /_bodegaUnidadDelNombre/.test(extractFrom('function _bodegaUnidadDe(')));
+
+// ── 3. v970: U ≡ UND (duda de Antonio) — los sinónimos de pieza se muestran igual ──
+const fSrc = extractFrom('function _bodegaUFmt(');
+ok('_bodegaUFmt existe', !!fSrc);
+let fFn = null;
+try { fFn = new Function('return (' + fSrc + ')')(); } catch(e){}
+if (typeof fFn === 'function') {
+  ok("'U' de receta se muestra UND", fFn('U') === 'UND' && fFn('u') === 'UND' && fFn('PZA') === 'UND');
+  ok('otras unidades pasan tal cual', fFn('saco') === 'SACO' && fFn('CIENTO') === 'CIENTO');
+  ok('vacío queda vacío', fFn('') === '');
+} else { ok('_bodegaUFmt evaluable', false); }
+ok('el catálogo global la aplica', /_bodegaUFmt/.test(extractFrom('function _bodegaProductosGlobal(')));
+ok('los movimientos la aplican', /_bodegaUFmt/.test(extractFrom('function _bodegaUnidadDe(')));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
