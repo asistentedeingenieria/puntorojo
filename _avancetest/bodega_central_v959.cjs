@@ -100,9 +100,9 @@ if (typeof eFn === 'function') {
   ok('solo cantidades > 0 generan ENTRADA', movs.length === 1);
   ok('la ENTRADA lleva ocId y tipo', movs[0] && movs[0].tipo === 'ENTRADA' && movs[0].ref && movs[0].ref.ocId === 'oc-9');
   ok('qty = lo RECIBIDO, no lo pedido', movs[0] && movs[0].qty === 48);
-  // normOcName descarta la barra de 1/2 (no está en la clase permitida) y toda medida
-  // colapsa a X 10' — MISMA clave que ya usan bodegaItemsGlobal y ocProvPorItem.
-  ok('clave canónica _ocItemMemKey', movs[0] && movs[0].k === 'PLANCHA 1 2" X 10\'');
+  // normOcName descarta la barra de 1/2 (no está en la clase permitida). v968: el colapso
+  // X n' → X 10' quedó SOLO para (MEDIDA ESPECIAL) — los largos son stock distinto.
+  ok('clave canónica _ocItemMemKey', movs[0] && movs[0].k === 'PLANCHA 1 2" X 8\'');
   ok('mov nace sellado con _ts', movs[0] && typeof movs[0]._ts === 'number' && movs[0]._ts > 0);
 }
 

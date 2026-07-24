@@ -51,7 +51,8 @@ if (srcParts) {
 // ── 3. buildPedidoOcItems ya no produce "undefined" ──
 const srcOc = extractFn('buildPedidoOcItems');
 if (srcOc && srcParts) {
-  const h = new Function(srcParts + '\n' + srcOc + '\nreturn buildPedidoOcItems;')();
+  // v968: buildPedidoOcItems consulta _ncDeCompra (nombre de compra) — stub neutro acá
+  const h = new Function(srcParts + '\nfunction _ncDeCompra(){ return null; }\n' + srcOc + '\nreturn buildPedidoOcItems;')();
   const pd = { items: { "POSTE DE 2½\" X 9.19' (0.35) CAL. 26 (MEDIDA ESPECIAL 2.8 m)": 424, 'PLANCHAS::Plancha 1/2': 10 }, specs: {} };
   const arr = h(pd);
   const poste = arr.find(x => /POSTE/.test(x.name));
