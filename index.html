@@ -3115,7 +3115,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v982</span>
+    <span style="opacity:.5;font-size:9px">v983</span>
   </footer>
 
 </div>
@@ -3358,9 +3358,9 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
       <button class="btn ghost" onclick="closeModal('pedidoDetalle')">CERRAR</button>
       <button class="btn ghost" id="pedDetalleDeleteBtn" onclick="deleteFromDetalle()" style="color:var(--red);border-color:var(--red);display:none">ELIMINAR PEDIDO</button>
       <button class="btn ghost" id="pedDetalleOCBtn" onclick="openOrdenCompra()" style="display:none">GENERAR ORDEN DE COMPRA</button>
-      <button class="btn" onclick="printPedido()">IMPRIMIR SOLICITUD</button>
-      <!-- v980: compartir la solicitud como IMAGEN desde la app (funciona en compu/Android/iPhone/tablet) -->
-      <button class="btn" onclick="compartirSolicitudImg()" style="background:#25D366;border-color:#25D366;color:#fff">COMPARTIR IMAGEN</button>
+      <!-- v983 (pedido de Antonio): UN solo botón — comparte la solicitud como imagen
+           (hoja nativa en celular; descarga PNG en compu). IMPRIMIR salió del modal. -->
+      <button class="btn" onclick="compartirSolicitudImg()" style="background:#25D366;border-color:#25D366;color:#fff">COMPARTIR SOLICITUD</button>
     </div>
   </div>
 </div>
@@ -8572,11 +8572,12 @@ function migrateData(data){
           Object.keys(p.materiales.etapasPedidas).forEach(lid => (p.materiales.etapasPedidas[lid] || []).forEach((v, ei) => { if (v) _recetaLiberarCandadoEtapa(p, lid, ei); }));
         }
       } catch(e){}
-      // v978: dirección de OFICINAS actualizada (pedido de Antonio 26-jul) — self-heal de la
-      // copia vieja que ya vive en los proyectos existentes. Solo si NADIE la editó a otra
-      // cosa (compara contra la dirección vieja exacta); idempotente.
+      // v978/v983: dirección de OFICINAS actualizada (pedido de Antonio 26-jul) — self-heal.
+      // v983: el matcher se amplió — la entrada viva se llama "OFICINAS PUNTO ROJO" (creada
+      // a mano, id distinto de dir-oficina) y el exact-match de v978 no la tocaba. Ahora
+      // CUALQUIER dirección que contenga la vieja "4TA AVENIDA 20-51" se reescribe. Idempotente.
       (p.materiales.direccionesEntrega || []).forEach(d => {
-        if (d && d.id === 'dir-oficina' && d.direccion === '4TA AVENIDA 20-51 ZONA 14') {
+        if (d && /4TA AVENIDA 20-51/i.test(String(d.direccion || ''))) {
           d.direccion = '19 AVENIDA B, 0-03 VISTA HERMOSA 2, ZONA 15';
           d.contacto = 'SUSANA MONROY';
           d.telefono = '4707 - 9414';
@@ -16927,6 +16928,12 @@ function _invUpload(){ try { if (CloudSync && CloudSync.forceUploadNow) CloudSyn
 /* v982: unidad AUTO del material (patrón v969: derivada del nombre). */
 function _invUnidadDe(nombre){
   try{
+    // v983: primero la unidad del CATÁLOGO GENERAL de bodega central; si no, derivada del nombre
+    var n = String(nombre || '').trim().toUpperCase();
+    if (n && typeof _bodegaProductosGlobal === 'function'){
+      var hit = _bodegaProductosGlobal().find(function(x){ return x && String(x.name || '').trim().toUpperCase() === n; });
+      if (hit && hit.u) return hit.u;
+    }
     var u = (typeof _bodegaUnidadDelNombre === 'function') ? _bodegaUnidadDelNombre(nombre) : '';
     if (u) return (typeof _bodegaUFmt === 'function') ? _bodegaUFmt(u) : u;
   }catch(e){}
@@ -16936,16 +16943,20 @@ function _invUnidadDe(nombre){
 function _invSugerir(q){
   var box = document.getElementById('invSugPanel'); if (!box) return;
   var s = String(q || '').trim().toUpperCase();
-  var all = (typeof _nmGetAllMaterials === 'function') ? _nmGetAllMaterials() : [];
-  var seen = {}, out = [];
+  // v983 (pedido de Antonio): el listado es el CATÁLOGO GENERAL DE BODEGA CENTRAL
+  // (Excel de compras + recetas) — cualquier material elegible; el alias interno también
+  // busca; y si no está en el listado, se puede escribir tal cual (texto libre).
+  var all = (typeof _bodegaProductosGlobal === 'function') ? _bodegaProductosGlobal() : [];
+  var out = [];
   for (var i = 0; i < all.length && out.length < 30; i++){
-    var nm = all[i] && all[i].name; if (!nm || seen[nm]) continue; seen[nm] = 1;
-    if (!s || nm.toUpperCase().indexOf(s) >= 0) out.push(nm);
+    var it = all[i]; if (!it || !it.name) continue;
+    if (!s || String(it.name).toUpperCase().indexOf(s) >= 0 || String(it.alias || '').toUpperCase().indexOf(s) >= 0) out.push(it);
   }
-  if (!out.length){ box.style.display = 'none'; return; }
-  box.innerHTML = out.map(function(nm){
-    return '<div onmousedown="event.preventDefault();_invSugPick(this.dataset.nm)" data-nm="' + _invEscAttr(nm) + '" style="padding:8px 12px;font-size:12px;cursor:pointer;border-bottom:1px solid #F1F5F9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" onmouseover="this.style.background=\'#FFF4F4\'" onmouseout="this.style.background=\'\'">' + _invEsc(nm) + '</div>';
-  }).join('');
+  var libre = '<div style="padding:7px 12px;font-size:10px;color:#92400E;background:#FFFBEB;border-top:1px solid #FCD34D">¿No está en el listado? Escribilo tal cual y tocá AGREGAR.</div>';
+  if (!out.length){ box.innerHTML = libre; box.style.display = 'block'; return; }
+  box.innerHTML = out.map(function(it){
+    return '<div onmousedown="event.preventDefault();_invSugPick(this.dataset.nm)" data-nm="' + _invEscAttr(it.name) + '" style="display:flex;justify-content:space-between;gap:8px;padding:8px 12px;font-size:12px;cursor:pointer;border-bottom:1px solid #F1F5F9" onmouseover="this.style.background=\'#FFF4F4\'" onmouseout="this.style.background=\'\'"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _invEsc(it.name) + '</span><span style="color:#9CA3AF;font-size:10px;flex:0 0 auto">' + _invEsc(it.u || '') + '</span></div>';
+  }).join('') + libre;
   box.style.display = 'block';
 }
 function _invSugCerrar(){ var b = document.getElementById('invSugPanel'); if (b) b.style.display = 'none'; }
@@ -21372,7 +21383,8 @@ ${paraCaptura ? '' : `<div class="no-print" style="display:flex;gap:10px;justify
        v979: con la FIRMA registrada del solicitante, como en las órdenes de compra -->
   <div class="signature" style="grid-template-columns:1fr;max-width:340px;margin-left:auto;margin-right:auto">
     <div style="border-top:none;padding-top:0">
-      <div style="height:64px;display:flex;align-items:flex-end;justify-content:center;margin-bottom:4px">${_miFirmaImg(pd.solicitanteUsername) ? `<img src="${_miFirmaImg(pd.solicitanteUsername)}" style="height:60px;max-width:240px;object-fit:contain;display:block">` : ''}</div>
+      <!-- v983: sin línea ARRIBA de la firma (la regla .signature div le metía border-top) -->
+      <div style="height:64px;display:flex;align-items:flex-end;justify-content:center;margin-bottom:4px;border-top:none">${_miFirmaImg(pd.solicitanteUsername) ? `<img src="${_miFirmaImg(pd.solicitanteUsername)}" style="height:60px;max-width:240px;object-fit:contain;display:block">` : ''}</div>
       <div style="border-top:1px solid #000;padding-top:4px;text-align:center;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666">SOLICITANTE<br><br>${pd.solicitante}</div>
     </div>
   </div>
@@ -30892,6 +30904,14 @@ function renderRecetaPedir(){
   // v911: cualquier excepción se PINTA en el panel (nunca más un panel blanco silencioso)
   try {
   const p = activeProj();
+  // v983: liberar candados huérfanos JUSTO antes de pintar — en el ARRANQUE la receta
+  // aligerada (v930) aún no está adjunta y el self-heal de ensureDataV9 veía 0 ítems
+  // disponibles (por eso a Antonio le seguía saliendo ETAPA · PEDIDA tras eliminar).
+  try {
+    let _lib = 0;
+    Object.keys((p.materiales && p.materiales.etapasPedidas) || {}).forEach(lid => ((p.materiales.etapasPedidas[lid]) || []).forEach((v, ei) => { if (v && _recetaLiberarCandadoEtapa(p, lid, ei)) _lib++; }));
+    if (_lib) { saveState(); try { CloudSync.forceUploadNow().catch(() => {}); } catch(e){} }
+  } catch(e){}
 
   const torres = p.towers || [];
   if (torres.length === 0) {

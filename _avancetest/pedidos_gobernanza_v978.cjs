@@ -30,7 +30,9 @@ ok('deletePedido exige users.manage', /SOLO EL ADMIN PUEDE ELIMINAR PEDIDOS/.tes
 
 // ── 3. dirección de oficinas ──
 ok('dirección nueva en los seeds (4 sitios)', (html.match(/19 AVENIDA B, 0-03 VISTA HERMOSA 2, ZONA 15/g) || []).length >= 5 && (html.match(/SUSANA MONROY/g) || []).length >= 5);
-ok('la dirección vieja solo queda en el self-heal (comparación)', (html.match(/4TA AVENIDA 20-51 ZONA 14/g) || []).length === 1 && !/SERGIO HERNÁNDEZ/.test(html));
+// v983: matcher amplio — CUALQUIER dirección que contenga la vieja se reescribe (la entrada
+// viva "OFICINAS PUNTO ROJO" tenía id propio y el exact-match de v978 no la tocaba)
+ok('la dirección vieja solo queda en el self-heal (matcher + comentario)', (html.match(/4TA AVENIDA 20-51/g) || []).length <= 3 && /4TA AVENIDA 20-51\/i\.test/.test(html) && !/SERGIO HERNÁNDEZ/.test(html));
 
 // ── 4. impresión de la SOLICITUD: solo SOLICITANTE + compartir como imagen ──
 const iSol = html.indexOf('FORMATO DE SOLICITUD');
