@@ -17,8 +17,8 @@ ok('th P.U. centrado con ancho', /width:120px;text-align:center[^>]*>P\.U\.</.te
 ok('th SUBTOTAL centrado con ancho', /width:130px;text-align:center[^>]*>SUBTOTAL</.test(src));
 
 // celdas con la MISMA alineación centrada
-// v977: la celda ahora puede llevar el ≈ de miles — el centrado sigue, el contenido es condicional
-ok('celda cantidad centrada', /text-align:center;font-variant-numeric:tabular-nums;padding:6px 8px">'\+\(\(esTotal && esMiles/.test(src));
+// v977/v978: la celda lleva el ≈ de miles o del fulminante derivado — el centrado sigue
+ok('celda cantidad centrada', /text-align:center;font-variant-numeric:tabular-nums;padding:6px 8px">'\+\(\(esTotal && \(esMiles \|\| esFulmDeriv\)/.test(src));
 ok('celda P.U. centrada', /text-align:center;padding:6px 8px;color:'\+\(tienePrecio/.test(src));
 ok('celda subtotal centrada', /text-align:center;font-variant-numeric:tabular-nums;padding:6px 8px">'\+\(tienePrecio\?money\(sub\)/.test(src));
 ok('sin celdas numéricas alineadas a la derecha (desalineadas del título)', !/text-align:right;font-variant-numeric/.test(src));

@@ -11,10 +11,11 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
 // ── 1. la regla de redondeo (funcional) ──
 // la regla vive DENTRO de la zona RECETA-PURE (función plana); window.* es solo el alias de afuera
-const zAx = ex('function _recetaAproxMiles(');
-ok('_recetaAproxMiles existe', !!zAx);
+// v978: la regla base es _recetaAprox(n, mult) — acá se prueba el caso millar (mult 1000)
+const zAx = ex('function _recetaAprox(');
+ok('_recetaAproxMiles existe (alias de mult 1000)', !!zAx && /function _recetaAproxMiles\(n\)\{ return _recetaAprox\(n, 1000\); \}/.test(html));
 let fx = null;
-try { fx = new Function('return (' + zAx.slice(zAx.indexOf('function')) + ')')(); } catch(e){}
+try { const g = new Function('return (' + zAx.slice(zAx.indexOf('function')) + ')')(); fx = n => g(n, 1000); } catch(e){}
 if (fx) {
   ok('1,146 → 1,000 (restante <500 al inferior)', fx(1146) === 1000);
   ok('1,550 → 2,000 (restante >500 al siguiente)', fx(1550) === 2000);
@@ -27,30 +28,30 @@ if (fx) {
 // ── 2. el flag y su toggle (solo admin) ──
 const zEs = ex('function _recetaEsMiles(');
 ok('_recetaEsMiles lee p.materiales.recetaMiles en MAYÚSCULA', /recetaMiles/.test(zEs) && /toUpperCase\(\)/.test(zEs));
-const zTg = ex('window.recetaToggleMiles = function');
+const zTg = ex('window.recetaToggleMiles = async function'); // v978: async (pregunta el múltiplo)
 ok('recetaToggleMiles solo admin', /can\('users\.manage'\)/.test(zTg));
 ok('toggle guarda y fuerza subida', /saveState\(\)/.test(zTg) && /forceUploadNow/.test(zTg));
 
 // ── 3. la vista TOTAL de la receta muestra el aproximado ──
 const iR = html.indexOf('// v949: el admin APLICA cambios directo');
 const zRen = html.slice(iR, iR + 9000);
-ok('el render calcula qty aproximada para marcados en TOTAL', /_recetaEsMiles\(p, l\.nc \|\| l\.m\)/.test(zRen) && /_recetaAproxMiles\(/.test(zRen)); // v977-fix2: clave única nc||m
+ok('el render calcula qty aproximada para marcados en TOTAL', /_recetaEsMiles\(p, l\.nc \|\| l\.m\)/.test(zRen) && /_recetaAprox\(/.test(zRen)); // v977-fix2/v978: clave única nc||m + múltiplo
 ok('marca visual ≈ con la cantidad real en el title', /REAL:/.test(zRen));
 ok('toggle ≈ del admin en la fila (vista TOTAL)', /recetaToggleMiles\(/.test(zRen));
 
 // ── 4. los pedidos de receta nacen aproximados ──
 const iB = html.indexOf('// v909: SOLO POSTES A MEDIDA');
 const zB = html.slice(iB, iB + 6000);
-ok('el pedido redondea el q final del marcado', /_recetaEsMiles\(/.test(zB) && /_recetaAproxMiles\(/.test(zB));
-ok('el modal de confirmación muestra el mismo número que saldrá', (zB.match(/_recetaAproxMiles\(/g) || []).length >= 2);
+ok('el pedido redondea el q final del marcado', /_recetaEsMiles\(/.test(zB) && /_recetaAprox\(/.test(zB));
+ok('el modal de confirmación muestra el mismo número que saldrá', (zB.match(/_recetaAprox\(/g) || []).length >= 2);
 
 // ── 5. FIXES de la revisión adversarial (26-jul) ──
 // D1: las claves del circuito de pedidos son nc||m — el flag debe cubrir AMBAS
-const zTg2 = ex('window.recetaToggleMiles = function');
+const zTg2 = ex('window.recetaToggleMiles = async function');
 // v977-fix2 (verificación): UNA sola clave = nc||m — la MISMA del circuito de pedidos.
 // Así toggle, render y pedido siempre coinciden (el diseño de "ambas claves" era asimétrico:
 // decidía por m pero el render miraba m||nc, y con nc compartido quedaba desync UI/pedido).
-ok('D1: el toggle usa la clave del circuito (nc||m) con {on,ts}', /String\(nombreCompra \|\| material \|\| ''\)/.test(zTg2) && /\{ on: nuevo, ts: Date\.now\(\) \}/.test(zTg2));
+ok('D1: el toggle usa la clave del circuito (nc||m) con {on,ts,mult}', /String\(nombreCompra \|\| material \|\| ''\)/.test(zTg2) && /\{ on: nuevo, ts: Date\.now\(\), mult: mult \}/.test(zTg2));
 ok('D1: el toggle decide por ESA misma clave', /nuevo = !_recetaEsMiles\(p, k\)/.test(zTg2));
 let fEs = null;
 try { fEs = new Function('return (' + ex('function _recetaEsMiles(') + ')')(); } catch(e){}
