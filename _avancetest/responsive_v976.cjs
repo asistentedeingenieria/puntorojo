@@ -15,13 +15,17 @@ const iEnd = html.indexOf('</style>', i0);
 const z = (i0 > 0 && iEnd > i0) ? html.slice(i0, iEnd) : '';
 ok('el bloque vive en el <head>', i0 > 0 && i0 < html.indexOf('</head>'));
 
-ok('pestañas principales se envuelven en celular', /\.tabs\{[^}]*flex-wrap:wrap/.test(z) && /\.tabs\{[^}]*overflow-x:visible/.test(z));
-ok('sub-pestañas .mat-tabs se envuelven (sin máscara de fade)', /\.mat-tabs\{[^}]*flex-wrap:wrap/.test(z) && /mask-image:none/.test(z));
+// v977 (reversa de Antonio 26-jul): "quiero regresar al scroll lateral que teníamos" —
+// el bloque NO debe envolver pestañas; el scroll lateral nativo de .tabs/.mat-tabs queda.
+ok('pestañas con scroll lateral (SIN flex-wrap en .tabs)', !/\.tabs\{[^}]*flex-wrap/.test(z) && !/overflow-x:visible/.test(z));
+ok('las .mat-tabs conservan su máscara de fade (no se tocan)', !/\.mat-tabs/.test(z));
 ok('inputs a 16px (iOS no hace zoom al enfocar)', /select,\s*textarea\{font-size:16px!important\}/.test(z.replace(/\n\s*/g,'')));
 ok('botones con altura táctil', /\.btn\{[^}]*min-height/.test(z));
 ok('todo dentro de @media (desktop intacto)', /@media \(max-width:820px\)/.test(z));
 
 ok('tabla de receta scrollea en vez de aplastarse', /min-width:640px;border-collapse:collapse;font-size:11\.5px/.test(html));
+// v977: detalle de pedido apilado en celular (foto de Antonio 26-jul: columnas aplastadas)
+ok('detalle de pedido: label arriba del valor en celular', /\.pd-track-row\{grid-template-columns:1fr/.test(z));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

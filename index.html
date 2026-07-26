@@ -2329,12 +2329,9 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
    Los 3 dolores de las fotos: (1) pestañas cortadas con scroll escondido,
    (2) iOS hace zoom al enfocar inputs <16px y descuadra todo, (3) botones enanos. */
 @media (max-width:820px){
-  /* 1. PESTAÑAS: se envuelven — TODO visible, nada cortado.
-     El nav principal deja de ser sticky en celular (2 filas pegadas comían pantalla). */
-  .tabs{flex-wrap:wrap;overflow-x:visible;position:static;padding:2px 6px}
-  .tab{padding:10px 10px;font-size:11px;flex:0 0 auto}
-  .mat-tabs{flex-wrap:wrap;overflow-x:visible;-webkit-mask-image:none;mask-image:none}
-  .mat-tab{padding:9px 12px}
+  /* 1. PESTAÑAS: scroll lateral (Antonio 26-jul: "quiero regresar al scroll lateral
+     que teníamos" — el wrap en filas NO le gustó). Solo se compactan un poco. */
+  .tab{padding:12px 10px;font-size:11px}
   /* 2. INPUTS a 16px: por debajo de eso iOS hace zoom automático al enfocar
      (el clásico "se me corre la pantalla al escribir"). Solo en celular. */
   input[type=text], input[type=search], input[type=number], input[type=date],
@@ -2346,6 +2343,10 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
   /* 4. Tarjetas y modales respiran en pantallas angostas. */
   .card{border-radius:8px}
   .card-hd{flex-wrap:wrap;gap:8px}
+  /* 5. Detalle de pedido (VER DETALLE): las 2 columnas fijas (150px + valor) se
+     aplastaban en el modal angosto — en celular el label va ARRIBA del valor. */
+  .pd-track-row{grid-template-columns:1fr;gap:3px}
+  .pd-track-lbl{padding-top:0}
 }
 /* Tablet (821-1180): pestañas un poco más compactas para que quepan sin cortar. */
 @media (min-width:821px) and (max-width:1180px){
@@ -3114,7 +3115,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v976</span>
+    <span style="opacity:.5;font-size:9px">v977</span>
   </footer>
 
 </div>
@@ -8740,7 +8741,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 912;
+const APP_SYNC_VERSION = 913; // v977: merge por clave/ts de p.materiales.recetaMiles en applyRemote
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9571,6 +9572,24 @@ const CloudSync = {
           const _moc = _mergeById((lp && lp.materiales && lp.materiales.ordenes) || [], rp.materiales.ordenes || [], _toc);
           rp.materiales.ordenes = _moc.list;
           if (_moc.changed) needsResync = true;
+          // v977: flags "SE PIDE EN MILES" (p.materiales.recetaMiles) — mapa chico por clave
+          // {on,ts}: por clave gana el ts más nuevo (idempotente). Sin esto el LWW del proyecto
+          // borraba el toggle ante cualquier copia vieja (misma familia que v950/v953/v972).
+          // Legacy true (sin ts) cuenta como ts 0 — cualquier {on,ts} lo vence.
+          try {
+            const _rmL = (lp && lp.materiales && lp.materiales.recetaMiles) || null;
+            const _rmR = rp.materiales.recetaMiles || null;
+            if (_rmL || _rmR) {
+              const _rmOut = {};
+              const _rmTs = v => (v && typeof v === 'object' && Number(v.ts)) || 0;
+              Object.keys(Object.assign({}, _rmL || {}, _rmR || {})).forEach(k => {
+                const a = _rmL ? _rmL[k] : undefined, b = _rmR ? _rmR[k] : undefined;
+                _rmOut[k] = (a === undefined) ? b : (b === undefined) ? a : (_rmTs(a) >= _rmTs(b) ? a : b);
+              });
+              if (JSON.stringify(_rmOut) !== JSON.stringify(_rmR || {})) needsResync = true;
+              rp.materiales.recetaMiles = _rmOut;
+            }
+          } catch(e){ console.warn('merge recetaMiles en applyRemote:', e); }
         });
       }
     } catch(e){ console.warn('blindaje de pedidos/OCs en applyRemote:', e); }
@@ -9823,7 +9842,7 @@ const CloudSync = {
     // referencia queda huerfana y el cambio (push/Object.assign/splice) no persiste. Esto
     // arregla de raiz toda la familia "await modal -> escribir" (aprobar/rechazar/procesar/
     // anular planilla, editar/eliminar anticipos y polizas, etc.).
-    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal, #_bodegaCargaModal')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo.
+    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal, #_bodegaCargaModal, .prModal-backdrop')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO; v977: prPrompt/prAlert (.prModal-backdrop) — recetaV2Op escribía sobre un p tomado antes del await del prompt. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo.
     const focused = document.activeElement;
     if (focused && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)) return true;
     return false;
@@ -13346,16 +13365,22 @@ function _etapaItemsParaPedir(p, t, l, stageIdx, aptoId){
     if(ya[key]) return;
     var qtyBase=etapaReceta[key];
     var name=(key.split('::').length>1)?key.split('::').slice(1).join('::'):key;
+    // v977-fix (revisión): el selector ES la confirmación (no pasa por el modal) — tiene que
+    // mostrar el número que de verdad saldrá: mil marca el ≈ y qtyMostrar es el aproximado.
+    // qtyFinal queda EXACTO (los consumidores aritméticos no se tocan).
+    var _mil = (typeof _recetaEsMiles === 'function') && _recetaEsMiles(p, name);
+    var _aprox = function(n){ return (_mil && typeof _recetaAproxMiles === 'function') ? _recetaAproxMiles(n) : n; };
     if (aptoId){
       // v909: lo ya pedido para ESTE apto se bloquea
       if (cob[key] && cob[key].porApto && cob[key].porApto[aptoId]) return;
-      out.push({ key:key, name:name, qtyFinal:Math.ceil(qtyBase) });
+      var qA = Math.ceil(qtyBase);
+      out.push({ key:key, name:name, qtyFinal:qA, qtyMostrar:_aprox(qA), mil:_mil && _aprox(qA) !== qA });
     } else {
       var qtyFinal=Math.ceil(usarTotalesPDF?qtyBase:qtyBase*numAptos);
       // v909: el NIVEL resta lo ya pedido por apto — el total del nivel cierra con el Excel
       if (cob[key] && cob[key].total > 0) qtyFinal -= cob[key].total;
       if (qtyFinal <= 0) return;
-      out.push({ key:key, name:name, qtyFinal:qtyFinal });
+      out.push({ key:key, name:name, qtyFinal:qtyFinal, qtyMostrar:_aprox(qtyFinal), mil:_mil && _aprox(qtyFinal) !== qtyFinal });
     }
   });
   return out;
@@ -28374,6 +28399,54 @@ function aplicarOperacionReceta(recetaV2, precios, op){
   }
   return { ok:false, error:'TIPO DESCONOCIDO' };
 }
+/* v977: APROXIMACIÓN A MILES (pedido de Antonio 26-jul, caso clavos VLA-00003).
+   Regla: el restante a miles <500 → inferior, >500 → siguiente (1,146→1,000; 1,550→2,000).
+   Guardas: debajo de 500 la cantidad va EXACTA (un pedido por apto de 122 clavos no se
+   infla a mil, y un material marcado nunca colapsa a 0); de 500 en adelante piso 1,000.
+   Aplica SOLO a los materiales que el admin marque (≈) — flags en p.materiales.recetaMiles,
+   FUERA de recetaV2 para que sobrevivan un re-import del Excel.
+   OJO: estamos dentro de la zona RECETA-PURE (los tests la evalúan en Node sin window) —
+   acá solo funciones PURAS; el toggle (can/activeProj/showToast) vive DESPUÉS del END. */
+function _recetaAproxMiles(n){
+  n = Number(n) || 0;
+  if (n < 500) return n;
+  const r = Math.round(n / 1000) * 1000;
+  return r < 1000 ? 1000 : r;
+}
+function _recetaEsMiles(p, materialNombre){
+  try{
+    const f = p && p.materiales && p.materiales.recetaMiles;
+    if (!f) return false;
+    const v = f[String(materialNombre||'').trim().toUpperCase()];
+    // v977-fix: valor {on,ts} (mergeable por clave en applyRemote); legacy true sigue valiendo
+    return v === true || !!(v && typeof v === 'object' && v.on);
+  }catch(e){ return false; }
+}
+/* v977: EDICIÓN POR TIPO DE APTO (pedido de Antonio 26-jul): al cambiar la CANTIDAD de un
+   apto, el cambio se aplica a TODOS los aptos del MISMO TIPO en TODO el proyecto. El tipo
+   viene del encabezado del Excel de la receta ("301 - A1" → A1; sin nada alapar, el
+   encabezado mismo es el modelo) y vive en recetaV2.tipos (se captura al re-cargar).
+   FRONTERA: reusa el ejecutor PURO por cada apto destino (los gates ya pasaron en quien
+   llama — admin directo o solicitud autorizada); el tn de cada nivel se ajusta por delta. */
+function _recetaPropagarPorTipo(p, rv, op){
+  const out = { aplicados: 0, tipo: '' };
+  try{
+    if (!rv || !rv.tipos || !op || op.tipo !== 'cantidad' || !op.aptoId) return out;
+    const tipoApto = rv.tipos[op.aptoId];
+    if (!tipoApto) return out;
+    out.tipo = tipoApto;
+    ((p && p.towers) || []).forEach(t => (t.levels||[]).forEach(l => (l.aptos||[]).forEach(a => {
+      if (a.id === op.aptoId) return;
+      if (rv.tipos[a.id] !== tipoApto) return;
+      if (!rv.niveles || !rv.niveles[l.id]) return;
+      const lista = rv.niveles[l.id][op.etapaIdx] || [];
+      if (!lista.find(x => x && x.m === op.material)) return; // ese nivel no tiene el material
+      const r = aplicarOperacionReceta(rv, null, { tipo:'cantidad', levelId:l.id, etapaIdx:op.etapaIdx, material:op.material, aptoId:a.id, cantidadNueva:op.cantidadNueva });
+      if (r && r.ok) out.aplicados++;
+    })));
+  }catch(e){}
+  return out;
+}
 function matchKeyProducto(nombre){ return normProducto(nombre).trim().toUpperCase(); }
 function precioDeProductoReceta(proveedores, materialNombre, nombreCompra){
   // v908: el catálogo de proveedores suele tener el NOMBRE REAL DE COMPRA (item.nc de la
@@ -28508,7 +28581,14 @@ function parseRecetaEstandar(sheets, towers){
       if (/TOTAL/.test(_aptoNorm(hs))) return;
       const lead = hs.match(/^(\d{2,4})\b/);
       const aid = resolveAptoId(level, lead ? lead[1] : hs);
-      if (aid) aptoCols.push({ col:c, aptoId:aid });
+      if (aid){
+        aptoCols.push({ col:c, aptoId:aid });
+        // v977: el TIPO/MODELO del apto viene ALAPAR en el encabezado ("301 - A1" → A1);
+        // si no trae nada alapar, el encabezado MISMO es el modelo (regla de Antonio 26-jul).
+        if (!recetaV2.tipos) recetaV2.tipos = {};
+        const mT = hs.match(/^\d{2,4}\s*[-–—]\s*(.+)$/);
+        recetaV2.tipos[aid] = _aptoNorm(mT ? mT[1] : hs);
+      }
       else avisos.push(raw+': "'+hs+'" sin equivalente en el nivel.');
     });
     const lid = level.id;
@@ -28882,6 +28962,27 @@ function parseProveedoresPago(aoa){
   return out;
 }
 // ===RECETA-PURE-END===
+// v977: toggle del flag "SE PIDE EN MILES" (impuro: can/activeProj/showToast — por eso vive
+// FUERA de la zona pura; la regla _recetaAproxMiles y _recetaEsMiles quedaron adentro).
+window._recetaAproxMiles = _recetaAproxMiles;
+window.recetaToggleMiles = function(material, nombreCompra){
+  if (!can('users.manage')) return showToast('SOLO EL ADMIN MARCA MATERIALES EN MILES','red');
+  const p = activeProj(); if (!p) return;
+  if (!p.materiales.recetaMiles) p.materiales.recetaMiles = {};
+  const f = p.materiales.recetaMiles;
+  // v977-fix2 (verificación): UNA sola clave = nc||m, LA MISMA que usa el circuito de pedidos
+  // (_recetaV2EtapaNivel: key = item.nc || item.m). Toggle, render y pedido siempre coinciden.
+  // Valor {on,ts} en vez de true/delete: el ts permite el merge por clave en applyRemote
+  // (sin eso el LWW del proyecto borraba el toggle ante cualquier copia vieja).
+  const k = String(nombreCompra || material || '').trim().toUpperCase();
+  if (!k) return;
+  const nuevo = !_recetaEsMiles(p, k);
+  f[k] = { on: nuevo, ts: Date.now() };
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  showToast(nuevo ? ('SE APROXIMA A MILES: '+k) : ('YA NO SE APROXIMA: '+k), 'info');
+  try { renderRecetaV2(); } catch(e){}
+};
 // v524: accessor del catálogo GLOBAL de proveedores. Top-level (global) para que lo alcancen OCs, recetas y catálogo.
 function _getProveedores(){ try { if (typeof state !== 'undefined' && state) { if (!Array.isArray(state.proveedoresGlobales)) state.proveedoresGlobales = []; return state.proveedoresGlobales; } } catch(e){} return []; }
 function _getPersonal(){ try { if (typeof state !== 'undefined' && state) { if (!Array.isArray(state.personalGlobal)) state.personalGlobal = []; return state.personalGlobal; } } catch(e){} return []; }
@@ -29618,7 +29719,8 @@ window.renderRecetaV2 = function(){
   html += selrow('Nivel', niveles.map(l => chip(l.name.replace(/^NIVEL\s+/i,''), l.id===recetaV2NivelSel, "setRecetaV2Sel('"+recetaV2TorreSel+"','"+l.id+"','TOTAL')")).join(''));
   html += selrow('Apartamento',
     chip('TOTAL', recetaV2AptoSel==='TOTAL', "setRecetaV2Sel('"+recetaV2TorreSel+"','"+recetaV2NivelSel+"','TOTAL')")
-    + aptosNivel.map(a => chip(a.name.replace(/^APARTAMENTO\s+/i,''), a.id===recetaV2AptoSel, "setRecetaV2Sel('"+recetaV2TorreSel+"','"+recetaV2NivelSel+"','"+a.id+"')")).join(''));
+    // v977: el chip muestra el TIPO del apto (del encabezado del Excel) para saber qué modelo es
+    + aptosNivel.map(a => { const _tp = (rv.tipos||{})[a.id]; const _lbl = a.name.replace(/^APARTAMENTO\s+/i,''); return chip(_lbl + (_tp && _tp !== _aptoNorm(_lbl) ? ' · '+_tp : ''), a.id===recetaV2AptoSel, "setRecetaV2Sel('"+recetaV2TorreSel+"','"+recetaV2NivelSel+"','"+a.id+"')"); }).join(''));
   html += '</div>';
   const esTotal = recetaV2AptoSel==='TOTAL';
   // v949: el admin APLICA cambios directo; quien tiene receta.edit los PROPONE (los autoriza el admin).
@@ -29643,6 +29745,10 @@ window.renderRecetaV2 = function(){
   // se ajusta solo) — avisarlo para que nadie lo busque donde no está (duda real 25-jul).
   if (esTotal && puedeVerControles) {
     html += '<div style="font-size:10.5px;letter-spacing:.4px;color:#92400E;background:#FFFBEB;border:1px solid #FCD34D;border-radius:6px;padding:6px 10px;margin:0 0 8px">✎ PARA CAMBIAR CANTIDADES ELEGÍ UN <b>APARTAMENTO</b> ARRIBA — EL TOTAL DEL NIVEL SE AJUSTA SOLO.</div>';
+  } else if (!esTotal && puedeVerControles && (rv.tipos||{})[recetaV2AptoSel]) {
+    // v977: el cambio de cantidad se propaga a todos los aptos del mismo TIPO — avisarlo
+    const _tpSel = rv.tipos[recetaV2AptoSel];
+    html += '<div style="font-size:10.5px;letter-spacing:.4px;color:#1E40AF;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:6px;padding:6px 10px;margin:0 0 8px">TIPO <b>'+esc(_tpSel)+'</b> — AL CAMBIAR UNA CANTIDAD AQUÍ SE APLICA A TODOS LOS APARTAMENTOS TIPO '+esc(_tpSel)+' DEL PROYECTO.</div>';
   }
   const fills = ['#FDE9E7','#E7F0FD','#E9F7E9','#FBF4E1'];
   let totalNivel = 0;
@@ -29659,7 +29765,10 @@ window.renderRecetaV2 = function(){
       + '<th style="width:70px"></th></tr></thead><tbody>';
     if (!lineas.length) html += '<tr><td colspan="' + (puedeVerPrecios ? 6 : 4) + '" style="padding:10px 12px;color:#9CA3AF">— sin materiales —</td></tr>';
     lineas.forEach(l => {
-      const qty = esTotal ? totalMaterialNivel(l) : (Number((l.aptos||{})[recetaV2AptoSel])||0);
+      const qtyReal = esTotal ? totalMaterialNivel(l) : (Number((l.aptos||{})[recetaV2AptoSel])||0);
+      // v977-fix2: el flag vive bajo LA clave del circuito de pedidos (nc||m) — misma consulta
+      const esMiles = _recetaEsMiles(p, l.nc || l.m);
+      const qty = (esTotal && esMiles) ? window._recetaAproxMiles(qtyReal) : qtyReal;
       const info = precioDeProductoReceta(_getProveedores(), l.m, l.nc);
       const rend = info && info.rendimiento ? info.rendimiento : 1;
       const tienePrecio = info && info.precio>0;
@@ -29671,7 +29780,7 @@ window.renderRecetaV2 = function(){
       html += '<tr style="border-top:1px solid #F1F5F9">'
         + '<td style="padding:6px 12px">'+esc(l.m)+(l.nc ? '<div style="font-size:9px;color:#9CA3AF;margin-top:1px">'+esc(_nombreCompraConMedida(l.nc, p, recetaV2NivelSel))+'</div>' : '')+'</td>'
         + '<td style="text-align:center;color:#6B7280;padding:6px 8px">'+esc(l.u)+'</td>'
-        + '<td style="text-align:center;font-variant-numeric:tabular-nums;padding:6px 8px">'+qty.toLocaleString('es-GT')+'</td>'
+        + '<td style="text-align:center;font-variant-numeric:tabular-nums;padding:6px 8px">'+((esTotal && esMiles && qty !== qtyReal) ? ('<span title="REAL: '+qtyReal.toLocaleString('es-GT')+'" style="color:#B45309;font-weight:700">≈ '+qty.toLocaleString('es-GT')+'</span>') : qty.toLocaleString('es-GT'))+'</td>'
         + (puedeVerPrecios ? '<td style="text-align:center;padding:6px 8px;color:'+(tienePrecio?'#374151':'#D1D5DB')+'">'+puCell+'</td>' : '')
         + (puedeVerPrecios ? '<td style="text-align:center;font-variant-numeric:tabular-nums;padding:6px 8px">'+(tienePrecio?money(sub):'—')+'</td>' : '')
         + '<td style="text-align:center;white-space:nowrap;padding:6px 8px">'
@@ -29679,6 +29788,8 @@ window.renderRecetaV2 = function(){
           // quien propone puede cambiar cantidades y agregar, pero NUNCA quitar.
           + (puedeVerControles ? (
               (esTotal ? '' : '<button class="btn-icon" title="'+(esAdminReceta?'Editar cantidad del apto':'Proponer cambio de cantidad (lo aprueba quien autoriza)')+'" onclick="'+accion+'(\''+recetaV2NivelSel+'\','+ei+',\'cantidad\',\''+matArg+'\',\''+recetaV2AptoSel+'\')">✎</button>')
+              // v977: toggle ≈ del admin — marca "SE PIDE EN MILES" (vista TOTAL)
+              + (esAdminReceta && esTotal ? '<button class="btn-icon" title="'+(esMiles?'Ya NO aproximar a miles':'Aproximar a MILES (este material se pide en miles)')+'" style="'+(esMiles?'color:#B45309;font-weight:800':'color:#C4C4C4')+'" onclick="recetaToggleMiles(\''+matArg+'\',\''+esc(String(l.nc || '').replace(/'/g,"\\'"))+'\')">≈</button>' : '')
               + (esAdminReceta ? '<button class="btn-icon danger" title="Quitar material del nivel (solo admin)" onclick="recetaV2Op(\''+recetaV2NivelSel+'\','+ei+',\'quitar\',\''+matArg+'\')">✕</button>' : '')
             ) : '')
         + '</td></tr>';
@@ -29724,15 +29835,19 @@ window._recetaV2PedirDatos = async function(levelId, etapaIdx, tipo, material, a
 };
 window.recetaV2Op = async function(levelId, etapaIdx, tipo, material, aptoId){
   if (!can('users.manage')) return showToast('SIN PERMISO','red'); // v949: aplicar directo = solo admin
-  const p = activeProj();
   const datos = await window._recetaV2PedirDatos(levelId, etapaIdx, tipo, material, aptoId);
   if (!datos) return;
+  // v977-fix (regla v769/v770): el prompt esperó — leer el proyecto del state VIVO después
+  // del await (un snapshot remoto pudo reemplazar state y dejaría huérfano un p anterior).
+  const p = activeProj();
   const res = aplicarOperacionReceta(p.materiales.recetaV2, p.materiales.precios, { tipo, levelId, etapaIdx, material:datos.material, unidad:datos.unidad, aptoId:datos.aptoId, cantidadNueva:datos.cantidadNueva });
   if (!res.ok) return showToast('NO SE PUDO: '+(res.error||''),'red');
-  try { if (typeof logActivity==='function') logActivity('update','Receta editada', p.name+' · '+tipo+' · '+datos.material); } catch(e){}
+  // v977: el cambio de CANTIDAD se propaga a todos los aptos del mismo TIPO del proyecto
+  const _prop = (tipo === 'cantidad') ? _recetaPropagarPorTipo(p, p.materiales.recetaV2, { tipo:'cantidad', levelId, etapaIdx, material:datos.material, aptoId:datos.aptoId, cantidadNueva:datos.cantidadNueva }) : { aplicados:0, tipo:'' };
+  try { if (typeof logActivity==='function') logActivity('update','Receta editada', p.name+' · '+tipo+' · '+datos.material+(_prop.aplicados?(' · +'+_prop.aplicados+' aptos tipo '+_prop.tipo):'')); } catch(e){}
   saveState();
   try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
-  showToast('RECETA ACTUALIZADA','green');
+  showToast(_prop.aplicados > 0 ? ('RECETA ACTUALIZADA · TAMBIÉN EN '+_prop.aplicados+' APTO'+(_prop.aplicados===1?'':'S')+' TIPO '+_prop.tipo) : 'RECETA ACTUALIZADA','green');
   renderRecetaV2();
 };
 /* v975: el proponente pide el cambio de MEDIDA DE POSTES por solicitud (pedido de Antonio) */
@@ -29760,9 +29875,10 @@ window.solicitarPostesMedida = async function(levelId, levelName){
   if (typeof renderRecetaV2==='function') renderRecetaV2();
 };
 window.recetaV2Solicitar = async function(levelId, etapaIdx, tipo, material, aptoId){
-  const p = activeProj();
   const datos = await window._recetaV2PedirDatos(levelId, etapaIdx, tipo, material, aptoId);
   if (!datos) return;
+  // v977-fix (regla v769/v770): re-leer el proyecto del state VIVO tras el await del prompt
+  const p = activeProj();
   if (!Array.isArray(p.solicitudesReceta)) p.solicitudesReceta = [];
   const torre = (p.towers||[]).find(t => (t.levels||[]).some(l => l.id===levelId));
   const lvl = torre && (torre.levels||[]).find(l => l.id===levelId);
@@ -29802,6 +29918,8 @@ window.autorizarReceta = async function(solId){
   } else {
   const res = aplicarOperacionReceta(p.materiales.recetaV2, p.materiales.precios, { tipo:sol.tipo, levelId:sol.levelId, etapaIdx:sol.etapaIdx, material:sol.material, unidad:sol.unidad, aptoId:sol.aptoId, cantidadNueva:sol.cantidadNueva });
   if (!res.ok){ showToast('NO SE PUDO APLICAR: '+(res.error||''),'red'); return; }
+  // v977: la solicitud de CANTIDAD aprobada también se propaga a los aptos del mismo TIPO
+  if (sol.tipo === 'cantidad') try { _recetaPropagarPorTipo(p, p.materiales.recetaV2, { tipo:'cantidad', levelId:sol.levelId, etapaIdx:sol.etapaIdx, material:sol.material, aptoId:sol.aptoId, cantidadNueva:sol.cantidadNueva }); } catch(e){}
   }
   sol.estado = 'APROBADA';
   sol.procesadoPor = (typeof window._getUserEmail==='function' ? window._getUserEmail() : '') || '';
@@ -30352,7 +30470,7 @@ function _abrirSelectorItemsEtapa(towerId, levelId, stageIdx){
     return '<label style="display:flex;align-items:center;gap:10px;padding:9px 6px;border-bottom:1px solid rgba(0,0,0,.06);font-size:13px;cursor:pointer">'
       +'<input type="checkbox" class="_selItemChk" data-key="'+esc(it.key)+'" checked style="width:17px;height:17px;flex:0 0 auto">'
       +'<span style="flex:1;min-width:0">'+esc(it.name)+'</span>'
-      +'<span style="color:var(--mute);font-size:11px;font-weight:700;white-space:nowrap">'+it.qtyFinal+'</span></label>';
+      +'<span style="color:var(--mute);font-size:11px;font-weight:700;white-space:nowrap">'+(it.mil ? '≈ ' : '')+(it.qtyMostrar != null ? it.qtyMostrar : it.qtyFinal)+'</span></label>';
   }).join('');
   var html='<div id="_selItemsModal" style="position:fixed;inset:0;z-index:100080;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)_cerrarSelectorItems()">'
     +'<div style="background:var(--card,#fff);color:var(--ink,#1C1917);border-radius:14px;max-width:520px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden" onclick="event.stopPropagation()">'
@@ -30473,7 +30591,7 @@ function _selAptoRefresh(towerId, levelId, stageIdx){
     return '<label style="display:flex;align-items:center;gap:10px;padding:9px 6px;border-bottom:1px solid rgba(0,0,0,.06);font-size:13px;cursor:pointer">'
       +'<input type="checkbox" class="_selAptoChk" data-key="'+esc(it.key)+'" checked style="width:17px;height:17px;flex:0 0 auto">'
       +'<span style="flex:1;min-width:0">'+esc(it.name)+'</span>'
-      +'<span style="color:var(--mute);font-size:11px;font-weight:700;white-space:nowrap">'+it.qtyFinal+'</span></label>';
+      +'<span style="color:var(--mute);font-size:11px;font-weight:700;white-space:nowrap">'+(it.mil ? '≈ ' : '')+(it.qtyMostrar != null ? it.qtyMostrar : it.qtyFinal)+'</span></label>';
   }).join('');
 }
 function _cerrarSelectorApto(){ var m=document.getElementById('_selAptoModal'); if(m) m.remove(); if(window._prUnlockScroll) window._prUnlockScroll(); }
@@ -30816,9 +30934,11 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
       materiales: Object.entries(recetaDisponible).map(([key, qtyBase]) => {
         const parts = key.split('::');
         let name = parts.length > 1 ? parts.slice(1).join('::') : key;
+        const _nOrig = name; // v977: el flag EN MILES va por el nombre ORIGINAL de la receta
         // v906/v907: mostrar en el modal la medida de postes DEL NIVEL que quedará en el pedido
         if (typeof _nombreCompraConMedida === 'function') name = _nombreCompraConMedida(name, p, levelId);
-        const qtyFinal = usarTotalesPDF ? qtyBase : qtyBase * numAptos;
+        let qtyFinal = Math.ceil(usarTotalesPDF ? qtyBase : qtyBase * numAptos);
+        if (_recetaEsMiles(p, _nOrig)) qtyFinal = window._recetaAproxMiles(qtyFinal); // v977: el modal muestra lo que saldrá
         return { name, qtyBase, qtyFinal };
       })
     });
@@ -30844,9 +30964,15 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
     // v906/v907: los POSTES salen con la medida DEL NIVEL en el nombre (queda CONGELADA en este
     // pedido; si la medida cambia después, los pedidos viejos no se tocan)
     const finalKey = (typeof _nombreCompraConMedida === 'function') ? _nombreCompraConMedida(key, p, levelId) : key;
-    const q = Math.ceil(usarTotalesPDF ? qtyBase : qtyBase * numAptos);
+    const qExacto = Math.ceil(usarTotalesPDF ? qtyBase : qtyBase * numAptos);
+    // v977: material marcado EN MILES → lo COMPRADO (items) nace aproximado (1,146→1,000).
+    // v977-fix (revisión): recetaQty — la contabilidad v909 en unidades de RECETA — queda
+    // EXACTA; si se guardara aproximada, la resta nivel−aptos descuadra (residuales fantasma
+    // que no dejan cerrar la etapa, o sub-cobertura del apto restante).
+    const _nOrigItem = key.split('::').length > 1 ? key.split('::').slice(1).join('::') : key;
+    const q = _recetaEsMiles(p, _nOrigItem) ? window._recetaAproxMiles(qExacto) : qExacto;
     items[finalKey] = q;
-    recetaQty[key] = q;
+    recetaQty[key] = qExacto;
   });
 
   const pedido = {
