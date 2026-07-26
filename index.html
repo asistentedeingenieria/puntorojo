@@ -3115,7 +3115,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v980</span>
+    <span style="opacity:.5;font-size:9px">v981</span>
   </footer>
 
 </div>
@@ -8564,11 +8564,12 @@ function migrateData(data){
           {id:'dir-oficina',label:'OFICINAS CENTRALES', direccion:'19 AVENIDA B, 0-03 VISTA HERMOSA 2, ZONA 15', contacto:'SUSANA MONROY', telefono:'4707 - 9414'}
         ];
       }
-      // v979 self-heal: candados de etapa huérfanos — pedidos de receta eliminados ANTES
-      // del fix de liberación dejaron etapas trabadas como PEDIDA para siempre.
+      // v979/v981 self-heal: candados de etapa huérfanos — pedidos eliminados ANTES del fix
+      // dejaron etapas trabadas. v981: regla REAL (_etapaItemsParaPedir) — la v979 no soltaba
+      // la etapa si quedaba vivo un SOLO POSTES del mismo nivel.
       try {
-        if (typeof _recetaRecalcularCandadoEtapa === 'function' && p.materiales.etapasPedidas) {
-          Object.keys(p.materiales.etapasPedidas).forEach(lid => (p.materiales.etapasPedidas[lid] || []).forEach((v, ei) => { if (v) _recetaRecalcularCandadoEtapa(p, lid, ei); }));
+        if (typeof _recetaLiberarCandadoEtapa === 'function' && p.materiales.etapasPedidas) {
+          Object.keys(p.materiales.etapasPedidas).forEach(lid => (p.materiales.etapasPedidas[lid] || []).forEach((v, ei) => { if (v) _recetaLiberarCandadoEtapa(p, lid, ei); }));
         }
       } catch(e){}
       // v978: dirección de OFICINAS actualizada (pedido de Antonio 26-jul) — self-heal de la
@@ -17344,6 +17345,13 @@ function setPedidoTab(tab){
   if (tab === 'nuevo') {
     renderPedidoForm();
   }
+  // v981: la LISTA se renderiza SIEMPRE al entrar — antes solo alternaba display y el
+  // pedido recién creado (nace en el modal PEDIR DE RECETA) no aparecía hasta salir de
+  // la pestaña y volver (queja de Antonio: "no me sale nada y tengo que presionar otra
+  // pestaña y regresar").
+  if (tab === 'lista') {
+    try { renderPedidosList(); } catch(e){ console.warn('renderPedidosList:', e); }
+  }
 }
 
 function renderPedidosList(){
@@ -17587,6 +17595,23 @@ async function advancePedido(id){
   showToast(`PEDIDO ${pd.status}`, pd.status === 'RECIBIDO' ? 'green' : '');
 }
 
+/* v981: liberar el candado de etapa con la regla REAL — la MISMA _todoPedido (v909): la
+   etapa está PEDIDA solo si NO queda nada disponible (_etapaItemsParaPedir vacío). La
+   regla v979 ("¿queda pedido a escala de nivel?") era insuficiente: un pedido SOLO
+   POSTES vivo mantenía trabada la etapa ENTERA (caso real de Antonio, VLA nivel 02).
+   Solo LIBERA (nunca traba). Devuelve true si liberó. */
+function _recetaLiberarCandadoEtapa(p, levelId, etapaIdx){
+  try{
+    const ep = p && p.materiales && p.materiales.etapasPedidas;
+    if (!ep || !Array.isArray(ep[levelId]) || !ep[levelId][etapaIdx]) return false;
+    let t = null, l = null;
+    ((p.towers) || []).forEach(tt => ((tt.levels) || []).forEach(ll => { if (ll && ll.id === levelId){ t = tt; l = ll; } }));
+    if (!t || !l) return false;
+    const disponibles = (typeof _etapaItemsParaPedir === 'function') ? _etapaItemsParaPedir(p, t, l, etapaIdx).length : 0;
+    if (disponibles > 0){ ep[levelId][etapaIdx] = false; return true; }
+  }catch(e){}
+  return false;
+}
 function deletePedido(id){
   // v978: gate DURO — eliminar pedidos es SOLO del admin (el ✕ ya era solo-admin desde
   // v949; esto blinda la frontera igual que deleteOrden).
@@ -17618,14 +17643,13 @@ function _doDeletePedido(id){
     p.materiales.pedidos = p.materiales.pedidos.filter(x => x.id !== id);
     if (!p.materiales.pedidosEliminados || typeof p.materiales.pedidosEliminados !== 'object') p.materiales.pedidosEliminados = {};
     p.materiales.pedidosEliminados[id] = Date.now();
-    // v979: LIBERAR lo que este pedido trababa (queja de Antonio: eliminó el pedido y la
-    // etapa seguía "ETAPA · PEDIDA" sin dejar re-pedirla): el candado se recalcula y el
-    // metal a medida suelta el id del pedido eliminado.
+    // v979/v981: LIBERAR lo que este pedido trababa. PRIMERO suelta el metal (la regla de
+    // disponibilidad lo consulta) y DESPUÉS recalcula el candado con la regla real.
     if (pd.esDeReceta && pd.recetaLevelId) {
-      _recetaRecalcularCandadoEtapa(p, pd.recetaLevelId, pd.recetaEtapaIdx);
       if (p.materiales.metalMedidaPedida && Array.isArray(p.materiales.metalMedidaPedida[pd.recetaLevelId])) {
         p.materiales.metalMedidaPedida[pd.recetaLevelId] = p.materiales.metalMedidaPedida[pd.recetaLevelId].filter(x => x !== id);
       }
+      _recetaLiberarCandadoEtapa(p, pd.recetaLevelId, pd.recetaEtapaIdx);
     }
   }
   logActivity('delete', `Pedido ${pd.numero} eliminado`, `${_ctx.nombre} · estaba en estado ${pd.status}`);
@@ -28622,22 +28646,6 @@ function _recetaPropagarPorTipo(p, rv, op){
   }catch(e){}
   return out;
 }
-/* v979 PURO: candado de etapa PEDIDA — la etapa queda trabada solo si sigue vivo algún
-   pedido de receta a ESCALA DE NIVEL de ese nivel/etapa (los pedidos POR APTO no cierran
-   la etapa — v909). Se usa al ELIMINAR un pedido (liberar) y en el self-heal de carga
-   (candados huérfanos: el pedido se eliminó antes de este fix y la etapa quedó "PEDIDA"
-   para siempre — queja de Antonio 26-jul). Devuelve true si liberó. */
-function _recetaRecalcularCandadoEtapa(p, levelId, etapaIdx){
-  try{
-    const hayNivel = (((p || {}).materiales || {}).pedidos || []).some(x => x && x.esDeReceta && !x.recetaAptoId && x.recetaLevelId === levelId && x.recetaEtapaIdx === etapaIdx);
-    const ep = p.materiales.etapasPedidas;
-    if (!hayNivel && ep && Array.isArray(ep[levelId]) && ep[levelId][etapaIdx]) {
-      ep[levelId][etapaIdx] = false;
-      return true;
-    }
-  }catch(e){}
-  return false;
-}
 function matchKeyProducto(nombre){ return normProducto(nombre).trim().toUpperCase(); }
 function precioDeProductoReceta(proveedores, materialNombre, nombreCompra){
   // v908: el catálogo de proveedores suele tener el NOMBRE REAL DE COMPRA (item.nc de la
@@ -31239,6 +31247,7 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
   saveState();
 
   renderRecetaPedir();
+  try { renderPedidosList(); } catch(e){} // v981: que LISTA DE PEDIDOS ya lo tenga al entrar
   showToast(`PEDIDO ${numero} GENERADO AUTOMÁTICAMENTE`, 'green');
 }
 
