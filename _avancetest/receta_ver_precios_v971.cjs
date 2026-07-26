@@ -33,8 +33,12 @@ ok('v973: el ✕ vive SOLO en la rama admin (recetaV2Op directo)', /esAdminRecet
 ok('v973: el proponente NO tiene quitar (su única acción de fila es ✎)', !/accionReceta[^\n]*quitar/.test(zona) && !/accion\+'[^']*quitar/.test(zona));
 ok('v973: el prompt de quitar exige admin', /ELIMINAR MATERIALES DE LA RECETA ES SOLO DEL ADMIN/.test(html));
 ok('v973: una solicitud vieja de quitar NO se autoriza sin ser admin', /sol\.tipo === 'quitar' && !can\('users\.manage'\)/.test(html));
-// v974: la vista TOTAL avisa que la edición es POR APARTAMENTO (duda real de Antonio)
-ok('v974: aviso de edición por apartamento en vista TOTAL', /Para cambiar cantidades elegí un <b>APARTAMENTO<\/b>/.test(zona));
+// v974/v975: la vista TOTAL avisa (EN MAYÚSCULAS) que la edición es POR APARTAMENTO
+ok('v974: aviso de edición por apartamento en vista TOTAL', /PARA CAMBIAR CANTIDADES ELEGÍ UN <b>APARTAMENTO<\/b>/.test(zona));
+// v975: AGREGAR de no-admin genera SOLICITUD y NUNCA aplica directo (pedido explícito)
+const zSol = (() => { const i = html.indexOf('window.recetaV2Solicitar = '); let d=0, j=html.indexOf('{', i); for(let k=j;k<html.length;k++){ if(html[k]==='{')d++; else if(html[k]==='}'){d--; if(!d) return html.slice(i,k+1);} } return ''; })();
+ok('v975: recetaV2Solicitar NO aplica el cambio (solo encola)', !!zSol && !/aplicarOperacionReceta/.test(zSol) && /estado:'PENDIENTE'/.test(zSol));
+ok('v975: el aviso al proponente dice que NO se aplica todavía', /EL CAMBIO NO SE APLICA TODAVÍA/.test(zSol));
 // el ejecutor volvió a ser PURO (los tests de _recetatest lo ejercitan directo)
 const iOpQ = html.indexOf("if (op.tipo === 'quitar'){");
 const zOpQ = html.slice(iOpQ, iOpQ + 400);

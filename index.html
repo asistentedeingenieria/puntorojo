@@ -2783,9 +2783,10 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
       <div id="mat-pedidos" style="display:none">
         <!-- Sub-tabs: Lista / Nuevo pedido -->
         <div style="display:flex;gap:0;margin-bottom:16px;border-bottom:1px solid var(--line)">
-          <button class="mat-tab active" data-pedtab="lista" onclick="setPedidoTab('lista')" style="color:var(--cafe);border-bottom-color:var(--cafe)">LISTA DE PEDIDOS</button>
-          <button class="mat-tab" data-pedtab="nuevo" onclick="setPedidoTab('nuevo')" data-perm="pedidos.create">+ NUEVO PEDIDO</button>
+          <!-- v975: orden pedido por Antonio — 1. PEDIR DE RECETA · 2. NUEVO PEDIDO · 3. LISTA -->
           <button class="mat-tab" data-pedtab="receta" onclick="setPedidoTab('receta')" data-perm="pedidos.create">PEDIR DE RECETA</button>
+          <button class="mat-tab" data-pedtab="nuevo" onclick="setPedidoTab('nuevo')" data-perm="pedidos.create">+ NUEVO PEDIDO</button>
+          <button class="mat-tab active" data-pedtab="lista" onclick="setPedidoTab('lista')" style="color:var(--cafe);border-bottom-color:var(--cafe)">LISTA DE PEDIDOS</button>
           <!-- v960: UN solo botón — ABASTECER vive DENTRO del panel. v963: entrada solo materiales.bodega|admin -->
           <button class="btn ghost sm" data-perm="materiales.bodega|users.manage" onclick="_abrirPanelBodega()" style="margin-left:auto;align-self:center" title="Bodega central GENERAL (todos los proyectos): existencias, recepción, ajustes y abastecimiento">BODEGA CENTRAL</button>
         </div>
@@ -3083,7 +3084,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v974</span>
+    <span style="opacity:.5;font-size:9px">v975</span>
   </footer>
 
 </div>
@@ -4798,6 +4799,15 @@ const PERMS_DISPONIBLES = [
   { key: 'receta.edit',      label: 'Proponer cambios a la receta de materiales (los autoriza el admin)',  group: 'EDICIÓN MATERIALES' },
   { key: 'receta.autorizar', label: 'Autorizar cambios propuestos a la receta de materiales', group: 'EDICIÓN MATERIALES' },
   { key: 'receta.verPrecios', label: 'Ver PRECIOS de la receta de materiales (P.U. y subtotales)', group: 'EDICIÓN MATERIALES' },
+  { key: 'inventario.crear', label: 'Iniciar tomas de inventario', group: 'EDICIÓN MATERIALES' },
+  // v975: sub-pestañas de MATERIALES ocultables POR USUARIO (por defecto se ven TODAS;
+  // Antonio marca las que quiere QUITAR). Prefijo ocultarmat. a propósito: un permiso
+  // 'materiales.*' abriría la pestaña MATERIALES por la regla implícita de can().
+  { key: 'ocultarmat.receta',      label: 'OCULTAR sub-pestaña RECETA DE MATERIAL',       group: 'OCULTAR EN MATERIALES' },
+  { key: 'ocultarmat.pedidos',     label: 'OCULTAR sub-pestaña PEDIDOS DE MATERIAL',      group: 'OCULTAR EN MATERIALES' },
+  { key: 'ocultarmat.ordenes',     label: 'OCULTAR sub-pestaña ÓRDENES DE COMPRA',        group: 'OCULTAR EN MATERIALES' },
+  { key: 'ocultarmat.inventarios', label: 'OCULTAR sub-pestaña INVENTARIOS',              group: 'OCULTAR EN MATERIALES' },
+  { key: 'ocultarmat.avance',      label: 'OCULTAR sub-pestaña AVANCE POR APARTAMENTO',   group: 'OCULTAR EN MATERIALES' },
   { key: 'compras.autorizar',label: 'Generar y gestionar Órdenes de Compra (Compras)',  group: 'EDICIÓN MATERIALES' },
   { key: 'compras.revisar',  label: 'Revisar y autorizar OC (visto bueno + firma digital)', group: 'EDICIÓN MATERIALES' },
   { key: 'materiales.bodega', label: 'Bodega central: existencias, recepción y OC de abastecimiento (Oficina)', group: 'EDICIÓN MATERIALES' },
@@ -5789,6 +5799,15 @@ function applyPermissions(){
       el.classList.remove('locked');
     }
   });
+  // v975: ocultar sub-pestañas de MATERIALES marcadas por usuario (corre DESPUÉS del
+  // pase data-perm para que el ocultado gane; las no-ocultas sin data-perm se restauran).
+  try {
+    const _ocMat = (typeof window._v975MatTabsOcultas === 'function') ? window._v975MatTabsOcultas() : [];
+    document.querySelectorAll('.mat-tab[data-mattab]').forEach(b => {
+      if (_ocMat.includes(b.dataset.mattab)) b.style.display = 'none';
+      else if (!b.hasAttribute('data-perm')) b.style.display = '';
+    });
+  } catch (e) {}
 
   // v822: la pestaña PLANILLAS también se muestra para el rol "solo ver estado de anticipos"
   // (no tiene view.planilla pero sí anticipos.verEstado). El filtro interno lo acota a ANTICIPOS.
@@ -11185,7 +11204,22 @@ window._lastPedidoTab = window._lastPedidoTab || null;
 window._lastCobroTab = window._lastCobroTab || null;
 window._lastPlanillaTab = window._lastPlanillaTab || null;
 
+/* v975: sub-pestañas de MATERIALES ocultas POR USUARIO (Antonio marca ocultarmat.* en
+   USUARIOS; por defecto se ven todas). Se lee el permiso LITERAL, no can(): el '*' del
+   admin haría can() true para ocultarmat.* y le esconderíamos todo justamente a él. */
+window._v975MatTabsOcultas = function(){
+  const u = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  const perms = Array.isArray(u.perms) ? u.perms : [];
+  if (perms.includes('*') || perms.includes('users.manage')) return [];
+  const MAP = { receta:'ocultarmat.receta', pedidos:'ocultarmat.pedidos', ordenes:'ocultarmat.ordenes', inventario:'ocultarmat.inventarios', avanceapto:'ocultarmat.avance' };
+  return Object.keys(MAP).filter(k => perms.includes(MAP[k]));
+};
 function setMatTab(t){
+  // v975: si la pestaña destino está oculta para este usuario, saltar a la primera visible
+  try {
+    const _oc = window._v975MatTabsOcultas();
+    if (_oc.includes(t)) t = ['receta','pedidos','ordenes','inventario','avanceapto'].find(k => !_oc.includes(k)) || t;
+  } catch (e) {}
   if (window._lastMatTab !== null && window._lastMatTab !== t && typeof _resetAllCollapsibles === 'function') {
     _resetAllCollapsibles();
   }
@@ -16845,7 +16879,9 @@ function _invRenderActual(p){
   if(!toma){
     return '<div style="padding:34px 16px;text-align:center">'+
       '<div style="font-size:13px;color:var(--mute);margin-bottom:18px">No hay ninguna toma de inventario en progreso.</div>'+
-      '<button class="btn primary" onclick="iniciarTomaInventario()">INICIAR NUEVA TOMA</button></div>';
+      ((can('inventario.crear') || can('users.manage'))
+        ? '<button class="btn primary" onclick="iniciarTomaInventario()">INICIAR NUEVA TOMA</button>'
+        : '<div style="font-size:11px;color:var(--mute)">SOLO PERSONAL AUTORIZADO PUEDE INICIAR TOMAS (permiso en USUARIOS)</div>') + '</div>';
   }
   var email=(window._getUserEmail&&window._getUserEmail())||'';
   var esAdmin=(typeof can==='function')&&can('users.manage');
@@ -16968,6 +17004,8 @@ function _invHistDetalle(t){
 }
 
 function iniciarTomaInventario(){
+  // v975 (pedido de Antonio): iniciar tomas es solo para quien él autorice
+  if (!can('inventario.crear') && !can('users.manage')) return showToast('SOLO PERSONAL AUTORIZADO PUEDE INICIAR TOMAS', 'red');
   var p=activeProj(); if(!p||!p.materiales) return;
   if(_invActiveToma()){ invUI.sub='actual'; invUI.view='root'; renderInventarios(); return; }
   var toma={ id:'toma-'+uid(), estado:'ABIERTA', fechaInicio:new Date().toISOString(), fechaCierre:'',
@@ -19229,7 +19267,7 @@ function _abrirPanelBodega(){
       <button class="btn ghost" onclick="_abrirCargaExistencias()" title="Anotar el total real que YA hay físicamente — sin pedido ni OC">CARGAR EXISTENCIAS</button>
       <button class="btn primary" onclick="_abrirModalBodega()" title="Generar pedido de abastecimiento (los faltantes van pre-llenados)">ABASTECER</button>
     </div>
-    <div style="font-size:11px;color:#78716C;margin:6px 0 12px;line-height:1.5">EXISTENCIA en <b style="color:#C62828">rojo</b> = faltante (hay que comprar). EN CAMINO = OCs de abastecimiento autorizadas que aún no se marcan recibidas. Para el conteo inicial o correcciones poné el AJUSTE (±) y el motivo.</div>
+    <div style="font-size:11px;color:#78716C;margin:6px 0 12px;line-height:1.5">EXISTENCIA en <b style="color:#C62828">rojo</b> = faltante (hay que comprar). EN CAMINO = OCs de abastecimiento autorizadas que aún no se marcan recibidas. <b>CARGAR EXISTENCIAS</b> anota lo que ya hay físicamente en la bodega; <b>ABASTECER</b> le compra stock al proveedor (los faltantes van pre-llenados); el AJUSTE (±) es solo para correcciones puntuales — merma, rotura o conteo — con su motivo.</div>
     <input id="_bodegaViewFiltro" class="pr-buscador" placeholder="BUSCAR MATERIAL EN LA BODEGA…" oninput="window._bodegaViewFiltrar(this.value)" style="width:100%;margin-bottom:10px">
     <div class="card" style="padding:4px 18px 8px">
       <div style="display:grid;grid-template-columns:minmax(0,1fr) 56px 84px 84px 100px;gap:10px;padding:10px 0 4px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700"><span>MATERIAL</span><span style="text-align:center">U</span><span style="text-align:right">EXISTENCIA</span><span style="text-align:right">EN CAMINO</span><span style="text-align:right">AJUSTE ±</span></div>
@@ -29438,7 +29476,8 @@ function _nombreCompraConMedida(nc, p, levelId){
 }
 window.configurarPostesMedida = async function(levelId, levelName){
   const p = activeProj();
-  if (!(can('receta.edit') || can('users.manage'))) return showToast('SIN PERMISO','red');
+  // v975: el cambio DIRECTO de la medida es solo admin — el proponente usa solicitarPostesMedida
+  if (!can('users.manage')) return showToast('CAMBIO DIRECTO SOLO ADMIN — USÁ LA SOLICITUD','red');
   const pm = _postesMedidaDe(p, levelId);
   window._postesMTmp = pm.modo === 'especial' ? String(pm.metros) : '';
   window._postesTodosTmp = false;
@@ -29528,12 +29567,13 @@ window.renderRecetaV2 = function(){
     + '<span>POSTES (' + esc(_pmNivelLbl) + '): ' + (_pm.modo === 'especial'
         ? '<strong>MEDIDA ESPECIAL ' + _pm.metros + ' m = ' + _metrosAPies(_pm.metros) + '\'</strong>' + (_pm.esDelNivel ? '' : ' <span style="color:#9CA3AF">(default del proyecto)</span>')
         : 'ESTÁNDAR (10\')') + '</span>'
-    + (esAdminReceta ? '<button class="btn ghost sm" style="font-size:10px;padding:2px 8px" onclick="configurarPostesMedida(\'' + recetaV2NivelSel + '\',\'' + esc(_pmNivelLbl) + '\')">CAMBIAR</button>' : '')
+    // v975 (pedido de Antonio): el proponente también puede pedir cambio de medida — por SOLICITUD
+    + (puedeVerControles ? '<button class="btn ghost sm" style="font-size:10px;padding:2px 8px" title="' + (esAdminReceta ? 'Cambiar la medida (directo)' : 'Proponer cambio de medida (lo aprueba quien autoriza)') + '" onclick="' + (esAdminReceta ? 'configurarPostesMedida' : 'solicitarPostesMedida') + '(\'' + recetaV2NivelSel + '\',\'' + esc(_pmNivelLbl) + '\')">' + (esAdminReceta ? 'CAMBIAR' : 'PROPONER CAMBIO') + '</button>' : '')
     + '</div>';
   // v974: en vista TOTAL no hay lápiz (la cantidad se edita POR APARTAMENTO y el total
   // se ajusta solo) — avisarlo para que nadie lo busque donde no está (duda real 25-jul).
   if (esTotal && puedeVerControles) {
-    html += '<div style="font-size:10.5px;color:#92400E;background:#FFFBEB;border:1px solid #FCD34D;border-radius:6px;padding:6px 10px;margin:0 0 8px">✎ Para cambiar cantidades elegí un <b>APARTAMENTO</b> arriba — el TOTAL del nivel se ajusta solo.</div>';
+    html += '<div style="font-size:10.5px;letter-spacing:.4px;color:#92400E;background:#FFFBEB;border:1px solid #FCD34D;border-radius:6px;padding:6px 10px;margin:0 0 8px">✎ PARA CAMBIAR CANTIDADES ELEGÍ UN <b>APARTAMENTO</b> ARRIBA — EL TOTAL DEL NIVEL SE AJUSTA SOLO.</div>';
   }
   const fills = ['#FDE9E7','#E7F0FD','#E9F7E9','#FBF4E1'];
   let totalNivel = 0;
@@ -29626,6 +29666,30 @@ window.recetaV2Op = async function(levelId, etapaIdx, tipo, material, aptoId){
   showToast('RECETA ACTUALIZADA','green');
   renderRecetaV2();
 };
+/* v975: el proponente pide el cambio de MEDIDA DE POSTES por solicitud (pedido de Antonio) */
+window.solicitarPostesMedida = async function(levelId, levelName){
+  const p = activeProj();
+  if (!can('receta.edit')) return showToast('SIN PERMISO', 'red');
+  const pm = _postesMedidaDe(p, levelId);
+  const v = await window.prPrompt({ title:'PROPONER MEDIDA DE POSTES · ' + (levelName || ''), body:'Medida especial en METROS para este nivel (vacío o 0 = quitar la medida especial).\nActual: ' + (pm.modo === 'especial' ? pm.metros + ' m' : 'estándar 10\''), placeholder:'ej: 2.8', defaultValue: pm.modo === 'especial' ? String(pm.metros) : '', required:false });
+  if (v === null) return;
+  const metros = parseFloat(String(v).replace(',', '.')) || 0;
+  if (!Array.isArray(p.solicitudesReceta)) p.solicitudesReceta = [];
+  p.solicitudesReceta.push({
+    id:'rec_'+Date.now()+'_'+Math.floor(Math.random()*100000),
+    tipo:'postes', levelId, etapaIdx:0, material:'MEDIDA DE POSTES · ' + (levelName || levelId), unidad:'m', aptoId:'',
+    cantidadActual: pm.modo === 'especial' ? pm.metros : 0, cantidadNueva: metros,
+    resumen: (levelName || levelId) + ' · MEDIDA DE POSTES · ' + (pm.modo === 'especial' ? pm.metros + ' m' : "10'") + ' → ' + (metros > 0 ? metros + ' m' : 'estándar'),
+    by:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''),
+    byNombre:(typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):''),
+    ts:Date.now(), estado:'PENDIENTE', procesadoPor:'', fechaProceso:'', motivoRechazo:''
+  });
+  try { if (typeof logActivity==='function') logActivity('request','Solicitud medida de postes', p.name+' · '+(levelName||levelId)+' · '+metros+' m'); } catch(e){}
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  await window.prAlert({ title:'SOLICITUD ENVIADA', body:'Tu solicitud fue enviada. EL CAMBIO NO SE APLICA TODAVÍA — queda pendiente hasta que quien autoriza lo apruebe o lo rechace.' });
+  if (typeof renderRecetaV2==='function') renderRecetaV2();
+};
 window.recetaV2Solicitar = async function(levelId, etapaIdx, tipo, material, aptoId){
   const p = activeProj();
   const datos = await window._recetaV2PedirDatos(levelId, etapaIdx, tipo, material, aptoId);
@@ -29648,7 +29712,7 @@ window.recetaV2Solicitar = async function(levelId, etapaIdx, tipo, material, apt
   try { if (typeof logActivity==='function') logActivity('request','Solicitud cambio receta', p.name+' · '+tipo+' · '+datos.material); } catch(e){}
   saveState();
   try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
-  await window.prAlert({ title:'SOLICITUD ENVIADA', body:'Tu solicitud de cambio fue enviada. Admin o gerente de proyectos la autorizará.' });
+  await window.prAlert({ title:'SOLICITUD ENVIADA', body:'Tu solicitud fue enviada. EL CAMBIO NO SE APLICA TODAVÍA — queda pendiente hasta que quien autoriza lo apruebe o lo rechace.' });
   renderRecetaV2();
 };
 window.autorizarReceta = async function(solId){
@@ -29660,8 +29724,16 @@ window.autorizarReceta = async function(solId){
   // v973: eliminar materiales es SOLO del admin — una solicitud vieja de QUITAR no se
   // puede autorizar por el gerente (rechazala; si de verdad va, lo quita el admin directo).
   if (sol.tipo === 'quitar' && !can('users.manage')){ showToast('QUITAR MATERIALES ES SOLO DEL ADMIN — RECHAZÁ ESTA SOLICITUD', 'red'); return; }
+  if (sol.tipo === 'postes'){
+    // v975: aplicar la medida de postes del nivel (misma escritura que configurarPostesMedida)
+    const m = Number(sol.cantidadNueva) || 0;
+    if (!p.materiales.postesMedidaNivel) p.materiales.postesMedidaNivel = {};
+    if (m > 0) p.materiales.postesMedidaNivel[sol.levelId] = Math.round(m * 100) / 100;
+    else delete p.materiales.postesMedidaNivel[sol.levelId];
+  } else {
   const res = aplicarOperacionReceta(p.materiales.recetaV2, p.materiales.precios, { tipo:sol.tipo, levelId:sol.levelId, etapaIdx:sol.etapaIdx, material:sol.material, unidad:sol.unidad, aptoId:sol.aptoId, cantidadNueva:sol.cantidadNueva });
   if (!res.ok){ showToast('NO SE PUDO APLICAR: '+(res.error||''),'red'); return; }
+  }
   sol.estado = 'APROBADA';
   sol.procesadoPor = (typeof window._getUserEmail==='function' ? window._getUserEmail() : '') || '';
   sol.fechaProceso = new Date().toISOString();
