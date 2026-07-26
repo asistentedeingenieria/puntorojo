@@ -3083,7 +3083,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v972</span>
+    <span style="opacity:.5;font-size:9px">v973</span>
   </footer>
 
 </div>
@@ -29561,9 +29561,11 @@ window.renderRecetaV2 = function(){
         + (puedeVerPrecios ? '<td style="text-align:center;padding:6px 8px;color:'+(tienePrecio?'#374151':'#D1D5DB')+'">'+puCell+'</td>' : '')
         + (puedeVerPrecios ? '<td style="text-align:center;font-variant-numeric:tabular-nums;padding:6px 8px">'+(tienePrecio?money(sub):'—')+'</td>' : '')
         + '<td style="text-align:center;white-space:nowrap;padding:6px 8px">'
+          // v973 (decisión final de Antonio): el ✕ de quitar es SOLO del admin (directo);
+          // quien propone puede cambiar cantidades y agregar, pero NUNCA quitar.
           + (puedeVerControles ? (
               (esTotal ? '' : '<button class="btn-icon" title="'+(esAdminReceta?'Editar cantidad del apto':'Proponer cambio de cantidad (lo aprueba quien autoriza)')+'" onclick="'+accion+'(\''+recetaV2NivelSel+'\','+ei+',\'cantidad\',\''+matArg+'\',\''+recetaV2AptoSel+'\')">✎</button>')
-              + '<button class="btn-icon danger" title="'+(esAdminReceta?'Quitar material del nivel':'Proponer quitar este material (lo aprueba quien autoriza)')+'" onclick="'+accion+'(\''+recetaV2NivelSel+'\','+ei+',\'quitar\',\''+matArg+'\')">✕</button>'
+              + (esAdminReceta ? '<button class="btn-icon danger" title="Quitar material del nivel (solo admin)" onclick="recetaV2Op(\''+recetaV2NivelSel+'\','+ei+',\'quitar\',\''+matArg+'\')">✕</button>' : '')
             ) : '')
         + '</td></tr>';
     });
@@ -29588,6 +29590,9 @@ window._recetaV2PedirDatos = async function(levelId, etapaIdx, tipo, material, a
     return { material, unidad: line ? line.u : 'U', cantidadNueva: c, cantidadActual: actual, aptoId };
   }
   if (tipo === 'quitar'){
+    // v973 (decisión final de Antonio 25-jul): eliminar materiales de la receta es SOLO
+    // del admin — ni siquiera como propuesta.
+    if (!can('users.manage')) { showToast('ELIMINAR MATERIALES DE LA RECETA ES SOLO DEL ADMIN', 'red'); return null; }
     const okq = await window.prConfirm({ title:'QUITAR MATERIAL', bodyHTML:'<div style="font-size:12px">¿Quitar <strong>'+material.replace(/[&<>]/g,'')+'</strong> de esta etapa (todos los aptos)?</div>', okText:'QUITAR', cancelText:'CANCELAR', danger:true });
     if (!okq) return null;
     return { material, unidad:'U', cantidadNueva:0, cantidadActual:0, aptoId:null };
@@ -29647,6 +29652,9 @@ window.autorizarReceta = async function(solId){
   if (!p || !Array.isArray(p.solicitudesReceta)) return;
   const sol = p.solicitudesReceta.find(s => s.id === solId);
   if (!sol || sol.estado !== 'PENDIENTE'){ showToast('SOLICITUD NO ENCONTRADA O YA PROCESADA','red'); return; }
+  // v973: eliminar materiales es SOLO del admin — una solicitud vieja de QUITAR no se
+  // puede autorizar por el gerente (rechazala; si de verdad va, lo quita el admin directo).
+  if (sol.tipo === 'quitar' && !can('users.manage')){ showToast('QUITAR MATERIALES ES SOLO DEL ADMIN — RECHAZÁ ESTA SOLICITUD', 'red'); return; }
   const res = aplicarOperacionReceta(p.materiales.recetaV2, p.materiales.precios, { tipo:sol.tipo, levelId:sol.levelId, etapaIdx:sol.etapaIdx, material:sol.material, unidad:sol.unidad, aptoId:sol.aptoId, cantidadNueva:sol.cantidadNueva });
   if (!res.ok){ showToast('NO SE PUDO APLICAR: '+(res.error||''),'red'); return; }
   sol.estado = 'APROBADA';

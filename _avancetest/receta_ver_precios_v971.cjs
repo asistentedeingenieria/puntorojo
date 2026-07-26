@@ -25,8 +25,18 @@ ok('TOTAL NIVEL condicionado', /puedeVerPrecios[^\n]*TOTAL NIVEL/.test(zona.repl
 ok('colspan dinámico según columnas visibles', /colspan="'\s*\+\s*\(puedeVerPrecios \? 6 : 4\)/.test(zona.replace(/\n/g, ' ')));
 
 // ── 3. blindaje del flujo v949 (que nadie lo rompa sin querer) ──
-ok('el proponente dispara SOLICITUD, no borrado directo', /accionReceta = esAdminReceta \? 'recetaV2Op' : 'recetaV2Solicitar'/.test(zona));
-ok('títulos del proponente dicen PROPONER', /Proponer quitar/.test(zona) && /Proponer cambio/.test(zona));
+ok('el proponente dispara SOLICITUD, no cambio directo', /accionReceta = esAdminReceta \? 'recetaV2Op' : 'recetaV2Solicitar'/.test(zona));
+ok('título del proponente dice PROPONER', /Proponer cambio/.test(zona));
+// v973 (decisión FINAL de Antonio 25-jul): quitar materiales es SOLO del admin —
+// directo, sin propuesta. El proponente solo cambia cantidades y agrega.
+ok('v973: el ✕ vive SOLO en la rama admin (recetaV2Op directo)', /esAdminReceta \? '<button class="btn-icon danger"[^']*solo admin[^']*onclick="recetaV2Op\(/.test(zona.replace(/\n/g, ' ')));
+ok('v973: el proponente NO tiene quitar (su única acción de fila es ✎)', !/accionReceta[^\n]*quitar/.test(zona) && !/accion\+'[^']*quitar/.test(zona));
+ok('v973: el prompt de quitar exige admin', /ELIMINAR MATERIALES DE LA RECETA ES SOLO DEL ADMIN/.test(html));
+ok('v973: una solicitud vieja de quitar NO se autoriza sin ser admin', /sol\.tipo === 'quitar' && !can\('users\.manage'\)/.test(html));
+// el ejecutor volvió a ser PURO (los tests de _recetatest lo ejercitan directo)
+const iOpQ = html.indexOf("if (op.tipo === 'quitar'){");
+const zOpQ = html.slice(iOpQ, iOpQ + 400);
+ok('v973: el ejecutor sigue puro (el gate va en las fronteras)', /lista\.filter\(l => l\.m !== material\)/.test(zOpQ));
 const zAut = extractFrom('function recetaV2Autorizar(') || html.slice(html.indexOf("can('receta.autorizar')") - 200, html.indexOf("can('receta.autorizar')") + 400);
 ok('autorizar sigue gateado a receta.autorizar|admin', /receta\.autorizar/.test(zAut));
 
