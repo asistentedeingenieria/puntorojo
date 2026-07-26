@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v978-multiplos-fulminantes-candado-orden';
+const CACHE_VERSION = 'v979-liberar-etapa-firma-solicitud';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 
 // Archivos básicos que se cachean al instalar

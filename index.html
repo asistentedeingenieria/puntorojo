@@ -3115,7 +3115,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v978</span>
+    <span style="opacity:.5;font-size:9px">v979</span>
   </footer>
 
 </div>
@@ -8562,6 +8562,13 @@ function migrateData(data){
           {id:'dir-oficina',label:'OFICINAS CENTRALES', direccion:'19 AVENIDA B, 0-03 VISTA HERMOSA 2, ZONA 15', contacto:'SUSANA MONROY', telefono:'4707 - 9414'}
         ];
       }
+      // v979 self-heal: candados de etapa huérfanos — pedidos de receta eliminados ANTES
+      // del fix de liberación dejaron etapas trabadas como PEDIDA para siempre.
+      try {
+        if (typeof _recetaRecalcularCandadoEtapa === 'function' && p.materiales.etapasPedidas) {
+          Object.keys(p.materiales.etapasPedidas).forEach(lid => (p.materiales.etapasPedidas[lid] || []).forEach((v, ei) => { if (v) _recetaRecalcularCandadoEtapa(p, lid, ei); }));
+        }
+      } catch(e){}
       // v978: dirección de OFICINAS actualizada (pedido de Antonio 26-jul) — self-heal de la
       // copia vieja que ya vive en los proyectos existentes. Solo si NADIE la editó a otra
       // cosa (compara contra la dirección vieja exacta); idempotente.
@@ -17609,6 +17616,15 @@ function _doDeletePedido(id){
     p.materiales.pedidos = p.materiales.pedidos.filter(x => x.id !== id);
     if (!p.materiales.pedidosEliminados || typeof p.materiales.pedidosEliminados !== 'object') p.materiales.pedidosEliminados = {};
     p.materiales.pedidosEliminados[id] = Date.now();
+    // v979: LIBERAR lo que este pedido trababa (queja de Antonio: eliminó el pedido y la
+    // etapa seguía "ETAPA · PEDIDA" sin dejar re-pedirla): el candado se recalcula y el
+    // metal a medida suelta el id del pedido eliminado.
+    if (pd.esDeReceta && pd.recetaLevelId) {
+      _recetaRecalcularCandadoEtapa(p, pd.recetaLevelId, pd.recetaEtapaIdx);
+      if (p.materiales.metalMedidaPedida && Array.isArray(p.materiales.metalMedidaPedida[pd.recetaLevelId])) {
+        p.materiales.metalMedidaPedida[pd.recetaLevelId] = p.materiales.metalMedidaPedida[pd.recetaLevelId].filter(x => x !== id);
+      }
+    }
   }
   logActivity('delete', `Pedido ${pd.numero} eliminado`, `${_ctx.nombre} · estaba en estado ${pd.status}`);
   saveState();
@@ -18107,6 +18123,10 @@ async function resetPedidoForm(){
 
 async function submitPedido(){
   if (!can('pedidos.create')) return showToast('SIN PERMISO', 'red');
+  // v979: la SOLICITUD siempre lleva la FIRMA del solicitante (pedido de Antonio) — la
+  // primera vez se le pide subirla; sin firma registrada el pedido NO se envía.
+  const _fOk = await _pedirFirmaSiFalta();
+  if (!_fOk && !_miFirmaImg()) return showToast('PARA ENVIAR EL PEDIDO REGISTRÁ TU FIRMA (HOJA EN BLANCO + LAPICERO NEGRO + BUENA FOTO)', 'red');
 
   // SIEMPRE usar el usuario actual como solicitante (no confiar en el input)
   const u = getCurrentUser();
@@ -20255,7 +20275,7 @@ function _abrirFirmaModal(onSaved){
     : '<div style="padding:16px 18px">'
       + '<label class="btn ghost" style="cursor:pointer;display:block;text-align:center;margin:0 0 12px">ELEGIR FOTO O PDF DE MI FIRMA<input type="file" id="_firmaArchivo" accept="image/*,application/pdf" style="display:none" onchange="_firmaArchivoElegido(this)"></label>'
       + '<div id="_firmaPreviewWrap" style="display:none;margin-bottom:12px"><img id="_firmaPreview" style="height:70px;max-width:100%;object-fit:contain;display:block;margin:0 auto;border:1px dashed #D1D5DB;border-radius:8px;padding:8px;background:#fff"></div>'
-      + '<div style="font-size:11px;color:#78716C;line-height:1.5">Subí una FOTO clara de tu firma sobre papel blanco, o un PDF (se toma la primera página). Se recorta y ajusta automáticamente. <b>Se registra UNA sola vez</b> — después solo un administrador puede cambiarla.</div>'
+      + '<div style="font-size:11px;color:#78716C;line-height:1.5">Hacé tu firma en una <b>hoja en blanco con lapicero negro</b>, tomale una buena foto y subila (también sirve un PDF — se toma la primera página). Se recorta y ajusta automáticamente. <b>Se registra UNA sola vez</b> — después solo un administrador puede cambiarla.</div>'
       + '</div>'
       + '<div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;justify-content:flex-end"><button class="btn ghost" onclick="_cerrarFirmaModal()">CANCELAR</button><button class="btn primary" id="_firmaGuardarBtn" onclick="_firmaGuardar()" disabled style="opacity:.5">GUARDAR FIRMA</button></div>';
   const html = '<div id="_firmaModal" style="position:fixed;inset:0;z-index:100400;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px">'
@@ -21231,11 +21251,17 @@ async function _compartirImg(){
       await new Promise(function(res, rej){ var s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
     }
     var canvas = await html2canvas(document.querySelector('.wrap'), { scale: 2, backgroundColor: '#ffffff' });
-    var blob = await new Promise(function(res){ canvas.toBlob(res, 'image/png'); });
-    var nombre = 'SOLICITUD ${pd.numero}'.replace(/[\\\\/:*?"<>|]/g, ' ').replace(/\\s+/g, ' ').trim() + '.png';
+    /* v979: margen blanco alrededor — la imagen quedaba justa al abrirla (foto de Antonio) */
+    var M = 72;
+    var c2 = document.createElement('canvas'); c2.width = canvas.width + M * 2; c2.height = canvas.height + M * 2;
+    var cx = c2.getContext('2d'); cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, c2.width, c2.height); cx.drawImage(canvas, M, M);
+    var blob = await new Promise(function(res){ c2.toBlob(res, 'image/png'); });
+    /* v979: descripción con SIGLAS del proyecto + fecha de entrega (pedido de Antonio) */
+    var desc = 'SOLICITUD DE PEDIDO - ${_projSiglas(pd.proyectoPedido || p.name)} - ${(String(pd.numero || '').match(/(\d+)\s*$/) || ['',''])[1]} - FECHA DE ENTREGA DESEADA ${pd.fechaEntrega || ''}'.replace(/\\s+/g, ' ').trim();
+    var nombre = desc.replace(/[\\\\/:*?"<>|]/g, '-') + '.png';
     var file = new File([blob], nombre, { type: 'image/png' });
     if (navigator.canShare && navigator.canShare({ files: [file] })){
-      await navigator.share({ files: [file], title: nombre });
+      await navigator.share({ files: [file], title: desc, text: desc });
     } else {
       var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nombre; a.click();
       alert('IMAGEN DESCARGADA — adjuntala en WhatsApp Web.');
@@ -21282,9 +21308,13 @@ async function _compartirImg(){
 
   ${pd.observaciones ? `<div style="background:#f8f6f0;padding:10px;margin-top:14px;font-size:11px;font-style:italic;border-left:3px solid #8B6343"><strong>OBSERVACIONES:</strong> ${esc(pd.observaciones)}</div>` : ''}
 
-  <!-- v978: solo SOLICITANTE — es una solicitud, no una entrega (pedido de Antonio 26-jul) -->
+  <!-- v978: solo SOLICITANTE — es una solicitud, no una entrega (pedido de Antonio 26-jul)
+       v979: con la FIRMA registrada del solicitante, como en las órdenes de compra -->
   <div class="signature" style="grid-template-columns:1fr;max-width:340px;margin-left:auto;margin-right:auto">
-    <div>SOLICITANTE<br><br>${pd.solicitante}</div>
+    <div style="border-top:none;padding-top:0">
+      <div style="height:64px;display:flex;align-items:flex-end;justify-content:center;margin-bottom:4px">${_miFirmaImg(pd.solicitanteUsername) ? `<img src="${_miFirmaImg(pd.solicitanteUsername)}" style="height:60px;max-width:240px;object-fit:contain;display:block">` : ''}</div>
+      <div style="border-top:1px solid #000;padding-top:4px;text-align:center;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666">SOLICITANTE<br><br>${pd.solicitante}</div>
+    </div>
   </div>
 
   <div class="foot">GUATEMALA</div>
@@ -28561,6 +28591,22 @@ function _recetaPropagarPorTipo(p, rv, op){
   }catch(e){}
   return out;
 }
+/* v979 PURO: candado de etapa PEDIDA — la etapa queda trabada solo si sigue vivo algún
+   pedido de receta a ESCALA DE NIVEL de ese nivel/etapa (los pedidos POR APTO no cierran
+   la etapa — v909). Se usa al ELIMINAR un pedido (liberar) y en el self-heal de carga
+   (candados huérfanos: el pedido se eliminó antes de este fix y la etapa quedó "PEDIDA"
+   para siempre — queja de Antonio 26-jul). Devuelve true si liberó. */
+function _recetaRecalcularCandadoEtapa(p, levelId, etapaIdx){
+  try{
+    const hayNivel = (((p || {}).materiales || {}).pedidos || []).some(x => x && x.esDeReceta && !x.recetaAptoId && x.recetaLevelId === levelId && x.recetaEtapaIdx === etapaIdx);
+    const ep = p.materiales.etapasPedidas;
+    if (!hayNivel && ep && Array.isArray(ep[levelId]) && ep[levelId][etapaIdx]) {
+      ep[levelId][etapaIdx] = false;
+      return true;
+    }
+  }catch(e){}
+  return false;
+}
 function matchKeyProducto(nombre){ return normProducto(nombre).trim().toUpperCase(); }
 function precioDeProductoReceta(proveedores, materialNombre, nombreCompra){
   // v908: el catálogo de proveedores suele tener el NOMBRE REAL DE COMPRA (item.nc de la
@@ -30948,6 +30994,10 @@ function showConfirmarPedidoModal(data){
 async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts){
   opts = opts || {}; // v909: { aptoId, aptoName, soloPostes }
   if (!can('pedidos.create')) return showToast('SIN PERMISO PARA CREAR PEDIDOS', 'red');
+  // v979: la SOLICITUD siempre lleva la FIRMA del solicitante — la primera vez se pide
+  // subirla ANTES de armar el pedido (el modal es rarísimo: solo una vez por usuario).
+  const _fOk = await _pedirFirmaSiFalta();
+  if (!_fOk && !_miFirmaImg()) return showToast('PARA ENVIAR EL PEDIDO REGISTRÁ TU FIRMA (HOJA EN BLANCO + LAPICERO NEGRO + BUENA FOTO)', 'red');
 
   const p = activeProj();
   const t = p.towers.find(x => x.id === towerId);
