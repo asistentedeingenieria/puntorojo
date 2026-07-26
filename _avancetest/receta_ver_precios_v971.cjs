@@ -15,7 +15,7 @@ ok('permiso receta.verPrecios en el catálogo', /key:\s*'receta\.verPrecios'/.te
 
 // ── 2. la zona del render de la receta (anclada al comentario v949) ──
 const i0 = html.indexOf('// v949: el admin APLICA cambios directo');
-const zona = html.slice(i0, i0 + 6000);
+const zona = html.slice(i0, i0 + 7000); // v974: el aviso de edición-por-apto agrandó el bloque
 ok('gate puedeVerPrecios definido', /puedeVerPrecios = can\('receta\.verPrecios'\) \|\| can\('users\.manage'\)/.test(zona));
 ok('columna P.U. condicionada', /puedeVerPrecios[^\n]*P\.U\./.test(zona.replace(/\n/g, ' ')) || /\(puedeVerPrecios \? '<th[^']*P\.U\./.test(zona));
 ok('columna SUBTOTAL condicionada', /\(puedeVerPrecios \? '<th[^']*SUBTOTAL/.test(zona));
@@ -33,6 +33,8 @@ ok('v973: el ✕ vive SOLO en la rama admin (recetaV2Op directo)', /esAdminRecet
 ok('v973: el proponente NO tiene quitar (su única acción de fila es ✎)', !/accionReceta[^\n]*quitar/.test(zona) && !/accion\+'[^']*quitar/.test(zona));
 ok('v973: el prompt de quitar exige admin', /ELIMINAR MATERIALES DE LA RECETA ES SOLO DEL ADMIN/.test(html));
 ok('v973: una solicitud vieja de quitar NO se autoriza sin ser admin', /sol\.tipo === 'quitar' && !can\('users\.manage'\)/.test(html));
+// v974: la vista TOTAL avisa que la edición es POR APARTAMENTO (duda real de Antonio)
+ok('v974: aviso de edición por apartamento en vista TOTAL', /Para cambiar cantidades elegí un <b>APARTAMENTO<\/b>/.test(zona));
 // el ejecutor volvió a ser PURO (los tests de _recetatest lo ejercitan directo)
 const iOpQ = html.indexOf("if (op.tipo === 'quitar'){");
 const zOpQ = html.slice(iOpQ, iOpQ + 400);
