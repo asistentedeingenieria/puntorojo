@@ -31,7 +31,8 @@ const zUpd = ex('function updateOcItemProveedor(');
 ok('updateOcItemProveedor blinda el candado (defensa de frontera)', /_ocProvLocked/.test(zUpd) && /_bodega/.test(zUpd));
 
 // ── 4. numeración en orden ──
-ok('el número de la OC nueva es su FOLIO correlativo (5 dígitos)', /\$\{esBodega \? 'DESP' : 'OC'\} \$\{String\(folio\)\.padStart\(5, '0'\)\}/.test(html));
+// v982: el prefijo ahora también distingue OP (orden de producción)
+ok('el número de la OC nueva es su FOLIO correlativo (5 dígitos)', /\$\{esBodega \? 'DESP' : \(esProduccion \? 'OP' : 'OC'\)\} \$\{String\(folio\)\.padStart\(5, '0'\)\}/.test(html));
 ok('el campo del modal muestra OC nnnnn · DEL PEDIDO (sin OC01/SIG. FOLIO)', /· DEL PEDIDO \$\{pd\.numero\}/.test(html) && !/OC\$\{String\(existingOcs\.length \+ 1\)\.padStart\(2,'0'\)\} \/ SIG\. FOLIO/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);

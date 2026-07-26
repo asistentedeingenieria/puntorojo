@@ -3115,7 +3115,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v981</span>
+    <span style="opacity:.5;font-size:9px">v982</span>
   </footer>
 
 </div>
@@ -16924,6 +16924,39 @@ function _invCatalogOptionsHtml(){
   return out;
 }
 function _invUpload(){ try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); } catch(e){} }
+/* v982: unidad AUTO del material (patrón v969: derivada del nombre). */
+function _invUnidadDe(nombre){
+  try{
+    var u = (typeof _bodegaUnidadDelNombre === 'function') ? _bodegaUnidadDelNombre(nombre) : '';
+    if (u) return (typeof _bodegaUFmt === 'function') ? _bodegaUFmt(u) : u;
+  }catch(e){}
+  return 'U';
+}
+/* v982: sugerencias minimalistas de la toma (reemplazan el datalist gigante). */
+function _invSugerir(q){
+  var box = document.getElementById('invSugPanel'); if (!box) return;
+  var s = String(q || '').trim().toUpperCase();
+  var all = (typeof _nmGetAllMaterials === 'function') ? _nmGetAllMaterials() : [];
+  var seen = {}, out = [];
+  for (var i = 0; i < all.length && out.length < 30; i++){
+    var nm = all[i] && all[i].name; if (!nm || seen[nm]) continue; seen[nm] = 1;
+    if (!s || nm.toUpperCase().indexOf(s) >= 0) out.push(nm);
+  }
+  if (!out.length){ box.style.display = 'none'; return; }
+  box.innerHTML = out.map(function(nm){
+    return '<div onmousedown="event.preventDefault();_invSugPick(this.dataset.nm)" data-nm="' + _invEscAttr(nm) + '" style="padding:8px 12px;font-size:12px;cursor:pointer;border-bottom:1px solid #F1F5F9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" onmouseover="this.style.background=\'#FFF4F4\'" onmouseout="this.style.background=\'\'">' + _invEsc(nm) + '</div>';
+  }).join('');
+  box.style.display = 'block';
+}
+function _invSugCerrar(){ var b = document.getElementById('invSugPanel'); if (b) b.style.display = 'none'; }
+window._invSugerir = _invSugerir; window._invSugCerrar = _invSugCerrar;
+window._invSugPick = function(nm){
+  var i = document.getElementById('invMatInput'); if (i) i.value = nm;
+  var u = document.getElementById('invUnidadInput'); if (u) u.value = _invUnidadDe(nm); // v982: unidad auto
+  _invSugCerrar();
+  var c = document.getElementById('invCantInput'); if (c) c.focus();
+};
+window._invUnidadDe = _invUnidadDe;
 
 function setInvSub(s){ invUI.sub=s; invUI.view='root'; invUI.loc=null; invUI.histId=null; renderInventarios(); }
 function invNavRoot(){ invUI.view='root'; invUI.loc=null; renderInventarios(); }
@@ -17030,9 +17063,12 @@ function _invCapture(p,toma){
     (loc.bodega?'':'<div style="font-size:11px;color:var(--mute);margin-bottom:10px">'+_invEsc(loc.locLabel)+'</div>');
   var inStyle='width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:6px;font:inherit;font-size:13px';
   var lblStyle='display:block;font-size:9px;letter-spacing:1px;color:var(--mute);font-weight:700;margin-bottom:3px';
-  var form='<datalist id="invCatalogo">'+_invCatalogOptionsHtml()+'</datalist>'+
+  /* v982: fuera el datalist nativo (desplegaba un listado gigante y feo — foto de Antonio):
+     panel de sugerencias MINIMALISTA + unidad AUTO al elegir/escribir el material. */
+  var form=''+
     '<div style="background:var(--cream);border-radius:8px;padding:10px;margin:6px 0 14px"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end">'+
-      '<div style="flex:2;min-width:150px"><label style="'+lblStyle+'">MATERIAL</label><input id="invMatInput" list="invCatalogo" autocomplete="off" placeholder="Elegí o escribí…" style="'+inStyle+'"></div>'+
+      '<div style="flex:2;min-width:150px;position:relative"><label style="'+lblStyle+'">MATERIAL</label><input id="invMatInput" autocomplete="off" placeholder="Elegí o escribí…" style="'+inStyle+'" oninput="_invSugerir(this.value)" onfocus="_invSugerir(this.value)" onblur="setTimeout(_invSugCerrar,180)" onchange="var u=document.getElementById(\'invUnidadInput\'); if(u&&(!u.value||u.value===\'U\')) u.value=_invUnidadDe(this.value)">'+
+      '<div id="invSugPanel" style="display:none;position:absolute;left:0;right:0;top:100%;margin-top:4px;z-index:5000;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 14px 40px rgba(15,23,42,.15);max-height:240px;overflow-y:auto"></div></div>'+
       '<div style="flex:0 0 66px"><label style="'+lblStyle+'">UNIDAD</label><input id="invUnidadInput" autocomplete="off" value="U" style="'+inStyle+';text-transform:uppercase"></div>'+
       '<div style="flex:0 0 78px"><label style="'+lblStyle+'">CANTIDAD</label><input id="invCantInput" type="number" inputmode="decimal" min="0" step="any" placeholder="0" style="'+inStyle+'"></div>'+
       '<button class="btn primary" style="flex:0 0 auto" onclick="invAgregarLinea()">AGREGAR</button>'+
@@ -17076,12 +17112,35 @@ function _invHistDetalle(t){
   var groups={}, order=[];
   (t.lineas||[]).forEach(function(l){ var key=l.locLabel||l.locKey; if(!(key in groups)){groups[key]=[];order.push(key);} groups[key].push(l); });
   if(!order.length) return back+hd+'<div style="padding:20px;text-align:center;color:var(--mute)">Esta toma no tiene materiales.</div>';
+  // v982 (pedido de Antonio): el reporte incluye el PRECIO de cada producto y el total en
+  // DINERO de lo que hay en obra. P.U. del catálogo de proveedores (misma fórmula de la
+  // receta: qty/rendimiento × precio). El dinero se gata como los precios de la receta.
+  var verQ = (typeof can==='function') && (can('receta.verPrecios') || can('users.manage'));
+  var money = function(n){ return 'Q' + (Number(n)||0).toLocaleString('es-GT',{minimumFractionDigits:2, maximumFractionDigits:2}); };
+  var granTotal = 0, sinPrecio = 0;
   var body=order.map(function(key){
-    var rows=groups[key].map(function(l){ return '<tr><td>'+_invEsc(l.material)+'</td><td style="width:60px">'+_invEsc(l.unidad||'')+'</td><td class="num" style="width:84px">'+(l.cantidad!=null?l.cantidad:0)+'</td></tr>'; }).join('');
-    return '<div style="margin-bottom:12px"><div style="font-weight:700;font-size:12px;background:var(--cream);padding:7px 10px;border-radius:6px;margin-bottom:4px">'+_invEsc(key)+'</div>'+
-      '<table class="tbl" style="margin:0"><thead><tr><th>MATERIAL</th><th>UNIDAD</th><th class="num">CANT.</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+    var totalLoc = 0;
+    var rows=groups[key].map(function(l){
+      var qcells = '';
+      if (verQ){
+        var info = (typeof precioDeProductoReceta==='function') ? precioDeProductoReceta(_getProveedores(), l.material, '') : null;
+        var rend = (info && info.rendimiento) ? info.rendimiento : 1;
+        var valor = (info && info.precio > 0) ? ((Number(l.cantidad)||0) / rend) * info.precio : null;
+        if (valor == null) sinPrecio++; else { totalLoc += valor; }
+        qcells = '<td class="num" style="width:84px">'+(info && info.precio>0 ? money(info.precio)+(rend>1?(' /'+rend):'') : '—')+'</td>'+
+          '<td class="num" style="width:96px">'+(valor != null ? money(valor) : '—')+'</td>';
+      }
+      return '<tr><td>'+_invEsc(l.material)+'</td><td style="width:60px">'+_invEsc(l.unidad||'')+'</td><td class="num" style="width:84px">'+(l.cantidad!=null?l.cantidad:0)+'</td>'+qcells+'</tr>';
+    }).join('');
+    granTotal += totalLoc;
+    return '<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;gap:8px;font-weight:700;font-size:12px;background:var(--cream);padding:7px 10px;border-radius:6px;margin-bottom:4px"><span>'+_invEsc(key)+'</span>'+(verQ?('<span>'+money(totalLoc)+'</span>'):'')+'</div>'+
+      '<table class="tbl" style="margin:0"><thead><tr><th>MATERIAL</th><th>UNIDAD</th><th class="num">CANT.</th>'+(verQ?'<th class="num">P.U.</th><th class="num">VALOR</th>':'')+'</tr></thead><tbody>'+rows+'</tbody></table></div>';
   }).join('');
-  return back+hd+body;
+  var resumen = verQ
+    ? '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;border:1px solid var(--line);border-left:3px solid var(--olive);border-radius:8px;padding:11px 14px;margin-bottom:12px;background:#fff"><div style="font-size:10px;letter-spacing:1.5px;font-weight:800;color:var(--mute)">VALOR TOTAL DEL INVENTARIO</div><div style="font-size:17px;font-weight:800;color:var(--olive)">'+money(granTotal)+'</div></div>'
+      + (sinPrecio > 0 ? '<div style="font-size:10.5px;color:#92400E;background:#FFFBEB;border:1px solid #FCD34D;border-radius:6px;padding:6px 10px;margin-bottom:10px">'+sinPrecio+' material'+(sinPrecio===1?'':'es')+' sin precio en el catálogo — no suman al total.</div>' : '')
+    : '';
+  return back+hd+resumen+body;
 }
 
 function iniciarTomaInventario(){
@@ -19496,7 +19555,7 @@ async function openOrdenCompra(){
     : Math.max(0, ...((p.materiales.ordenes || []).map(o => Number(o.folio) || 0)), 0) + 1; // v978: folio DERIVADO también en proyecto (sin saltos al eliminar)
   // v978: el número que se muestra ES el correlativo real (folio) — antes salía "OC01 / SIG.
   // FOLIO 2" y se leía como si fuera la primera OC del proyecto (queja de Antonio 26-jul).
-  document.getElementById('ocNumero').value = `${_ctx.esBodega ? 'DESP' : 'OC'} ${String(nextNum).padStart(5, '0')} · DEL PEDIDO ${pd.numero}`;
+  document.getElementById('ocNumero').value = `${_ctx.esBodega ? 'DESP' : (/SOLO POSTES A MEDIDA/.test(String(pd.observaciones || '')) ? 'OP' : 'OC')} ${String(nextNum).padStart(5, '0')} · DEL PEDIDO ${pd.numero}`; // v982: solo postes = ORDEN DE PRODUCCIÓN
   // v978: pedidos DE RECETA — compras NO cambia proveedores (vienen del catálogo v916/v918);
   // lo ÚNICO permitido por material es mandarlo a BODEGA CENTRAL. Admin conserva la mano.
   window._ocProvLocked = !!(pd.esDeReceta) && !can('users.manage');
@@ -20136,9 +20195,11 @@ async function generarOrdenCompra(){
       p.materiales.ordenCounter = folio; // compat: el contador queda alineado
     }
     const seq = existingForPedido + created.length + 1;
+    // v982: mandar a FABRICAR solo postes a la medida genera una ORDEN DE PRODUCCIÓN
+    const esProduccion = !esBodega && items.length > 0 && items.every(it => it.aMedida);
     // v978: el número de la OC ES su folio correlativo del proyecto/bodega (5 dígitos) —
     // antes era el índice DENTRO del pedido ("OC01") y no reflejaba el orden real.
-    const numero = `${pd.numero} - ${esBodega ? 'DESP' : 'OC'} ${String(folio).padStart(5, '0')}`;
+    const numero = `${pd.numero} - ${esBodega ? 'DESP' : (esProduccion ? 'OP' : 'OC')} ${String(folio).padStart(5, '0')}`;
 
     const oc = {
       id: 'oc-' + uid(),
@@ -20171,6 +20232,7 @@ async function generarOrdenCompra(){
       autorizadoTs: null,
       impreso: false,
       esDespacho: esBodega, // v921: sale de BODEGA CENTRAL (orden de despacho, no compra)
+      esProduccion, // v982: TODO el grupo es postes a medida → ORDEN DE PRODUCCIÓN
       status: 'PENDIENTE_AUTORIZACION'
     };
     oc._ts = oc.ts; // v972: TODAS las OC nacen selladas (proyecto y bodega van por union-merge)
@@ -20730,8 +20792,9 @@ ${showDraft ? '<div class="no-print" style="background:var(--red-soft);padding:1
     <!-- v948: solo el logo (el texto "APP" se movió al bloque del No., abajo de la sigla) -->
     <div style="display:flex;align-items:center;gap:8px"><img src="${_LOGO_PR}" style="height:62px;max-width:165px;object-fit:contain" alt="PUNTO ROJO"></div>
     <div class="oc-title-col">
-      <div class="oc-title">${esDespacho ? 'ORDEN DE DESPACHO' : 'ORDEN DE COMPRA'}</div>
+      <div class="oc-title">${esDespacho ? 'ORDEN DE DESPACHO' : (oc.esProduccion ? 'ORDEN DE PRODUCCIÓN' : 'ORDEN DE COMPRA')}</div>
       ${esDespacho ? '<div style="font-size:10px;color:#555;letter-spacing:2px;margin-top:4px;font-weight:700">BODEGA CENTRAL → OBRA</div>' : ''}
+      ${!esDespacho && oc.esProduccion ? '<div style="font-size:10px;color:#555;letter-spacing:2px;margin-top:4px;font-weight:700">FABRICACIÓN DE POSTES A LA MEDIDA</div>' : ''}
       ${showDraft ? '<div style="font-size:10px;color:var(--red-dark);letter-spacing:3px;margin-top:4px;font-weight:700">BORRADOR · PENDIENTE DE AUTORIZACIÓN</div>' : ''}
     </div>
     <div class="oc-num-col" style="position:relative">
@@ -29186,6 +29249,7 @@ window.recetaToggleMiles = async function(material, nombreCompra){
   }
   if (!p.materiales.recetaMiles) p.materiales.recetaMiles = {};
   p.materiales.recetaMiles[k] = { on: nuevo, ts: Date.now(), mult: mult };
+  try { if (typeof window._pedidosResyncReceta === 'function') window._pedidosResyncReceta(p); } catch(e){} // v982: los pedidos sin OC toman la aproximación
   saveState();
   try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
   showToast(nuevo ? ('SE APROXIMA EN MÚLTIPLOS DE '+mult+': '+k) : ('YA NO SE APROXIMA: '+k), 'info');
@@ -30055,6 +30119,7 @@ window.recetaV2Op = async function(levelId, etapaIdx, tipo, material, aptoId){
   if (!res.ok) return showToast('NO SE PUDO: '+(res.error||''),'red');
   // v977: el cambio de CANTIDAD se propaga a todos los aptos del mismo TIPO del proyecto
   const _prop = (tipo === 'cantidad') ? _recetaPropagarPorTipo(p, p.materiales.recetaV2, { tipo:'cantidad', levelId, etapaIdx, material:datos.material, aptoId:datos.aptoId, cantidadNueva:datos.cantidadNueva }) : { aplicados:0, tipo:'' };
+  try { if (typeof window._pedidosResyncReceta === 'function') window._pedidosResyncReceta(p); } catch(e){} // v982: los pedidos sin OC se actualizan con la receta
   try { if (typeof logActivity==='function') logActivity('update','Receta editada', p.name+' · '+tipo+' · '+datos.material+(_prop.aplicados?(' · +'+_prop.aplicados+' aptos tipo '+_prop.tipo):'')); } catch(e){}
   saveState();
   try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
@@ -30131,6 +30196,7 @@ window.autorizarReceta = async function(solId){
   if (!res.ok){ showToast('NO SE PUDO APLICAR: '+(res.error||''),'red'); return; }
   // v977: la solicitud de CANTIDAD aprobada también se propaga a los aptos del mismo TIPO
   if (sol.tipo === 'cantidad') try { _recetaPropagarPorTipo(p, p.materiales.recetaV2, { tipo:'cantidad', levelId:sol.levelId, etapaIdx:sol.etapaIdx, material:sol.material, aptoId:sol.aptoId, cantidadNueva:sol.cantidadNueva }); } catch(e){}
+  try { if (typeof window._pedidosResyncReceta === 'function') window._pedidosResyncReceta(p); } catch(e){} // v982: los pedidos sin OC se actualizan con la receta
   }
   sol.estado = 'APROBADA';
   sol.procesadoPor = (typeof window._getUserEmail==='function' ? window._getUserEmail() : '') || '';
@@ -31250,6 +31316,57 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
   try { renderPedidosList(); } catch(e){} // v981: que LISTA DE PEDIDOS ya lo tenga al entrar
   showToast(`PEDIDO ${numero} GENERADO AUTOMÁTICAMENTE`, 'green');
 }
+
+/* v982: AUTO-SINCRONIZAR pedidos DE RECETA que aún NO generaron su OC cuando la receta
+   cambia (pedido de Antonio 26-jul: "el pedido se actualice siempre con los cambios de
+   la receta"). Scope = las claves que el pedido ya traía (recetaKeys): cantidades al
+   día y materiales QUITADOS salen; agregar materiales nuevos exige pedido nuevo. Misma
+   matemática del generador: cobertura v909 SIN contar el propio pedido, aproximación
+   por múltiplo (v977/v978), fulminantes derivados (v978); recetaQty EXACTO; sella _ts
+   (union-merge v972). Con OCs generadas el pedido queda CONGELADO (v927). */
+function _pedidoResyncConReceta(p, pd){
+  try{
+    if (!pd || !pd.esDeReceta || !pd.recetaLevelId || !Array.isArray(pd.recetaKeys)) return false;
+    if ((getPedidoOrdenes(pd.id) || []).length > 0) return false;
+    const lid = pd.recetaLevelId, ei = pd.recetaEtapaIdx;
+    const fuente = pd.recetaAptoId
+      ? (_recetaV2EtapaNivelPorApto(p, lid, ei, pd.recetaAptoId) || {})
+      : (_recetaV2EtapaNivel(p, lid, ei) || {});
+    if (!Object.keys(fuente).length) return false; // sin receta estándar resuelta: no tocar
+    const otros = ((p.materiales && p.materiales.pedidos) || []).filter(x => x && x.id !== pd.id);
+    const cob = _coberturaAptosEtapa(otros, lid, ei) || {};
+    const items = {}, recetaQty = {}, keysVivas = [];
+    pd.recetaKeys.forEach(key => {
+      if (!(key in fuente)) return; // material quitado de la receta
+      let q = Math.ceil(Number(fuente[key]) || 0);
+      if (!pd.recetaAptoId && cob[key] && cob[key].total > 0) q -= cob[key].total;
+      if (q <= 0) return;
+      const finalKey = (typeof _nombreCompraConMedida === 'function') ? _nombreCompraConMedida(key, p, lid) : key;
+      items[finalKey] = _recetaEsMiles(p, key) ? _recetaAprox(q, _recetaMilesMult(p, key)) : q;
+      recetaQty[key] = q;
+      keysVivas.push(key);
+    });
+    if (!Object.keys(items).length) return false; // nunca dejar un pedido vacío
+    try {
+      const fd = _recetaDerivarFulminantes(Object.keys(items).map(k => ({ name: k, qty: items[k] })));
+      if (fd) Object.keys(items).forEach(k => { if (String(k).toUpperCase().indexOf('FULMINANTE') >= 0) items[k] = fd.tiras; });
+    } catch(e){}
+    const antes = JSON.stringify(pd.items) + '|' + JSON.stringify(pd.recetaQty);
+    const despues = JSON.stringify(items) + '|' + JSON.stringify(recetaQty);
+    if (antes === despues) return false;
+    pd.items = items;
+    pd.recetaQty = recetaQty;
+    pd.recetaKeys = keysVivas;
+    pd._ts = Date.now(); // v972: la mutación sella para ganar el union-merge
+    return true;
+  }catch(e){ return false; }
+}
+window._pedidosResyncReceta = function(p){
+  let n = 0;
+  try{ (((p || {}).materiales || {}).pedidos || []).forEach(pd => { if (_pedidoResyncConReceta(p, pd)) n++; }); }catch(e){}
+  if (n) { try { renderPedidosList(); } catch(e){} }
+  return n;
+};
 
 /* ════════════════ CATÁLOGO MAESTRO DE PROVEEDORES (SOLO ADMIN) ════════════════ */
 
