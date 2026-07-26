@@ -14,7 +14,7 @@ ok('#1 acciones (AUTORIZAR/IMPRIMIR) full-width y visibles en móvil', /\.oc-lis
 ok('#1 dentro de un @media de celular', /@media \(max-width:640px\)\{[\s\S]{0,260}\.oc-list-item\{grid-template-columns:1fr auto/.test(html));
 
 // #2 tabla receta envuelta en .tbl-scroll
-ok('#2 tabla RECETA envuelta en .tbl-scroll con min-width', /<div class="tbl-scroll"><table style="width:100%;min-width:520px/.test(html));
+ok('#2 tabla RECETA envuelta en .tbl-scroll con min-width', /<div class="tbl-scroll"><table style="width:100%;min-width:640px/.test(html)); // v976: 640 para que scrollee en vez de aplastarse
 ok('#2 la tabla envuelta se cierra bien (</table></div>)', /<\/tbody><\/table><\/div>/.test(html));
 
 // #3 modal PRESENTES POR OBRA auto-fit

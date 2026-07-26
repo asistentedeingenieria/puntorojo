@@ -47,7 +47,8 @@ ok('setMatTab salta a la primera visible', /_v975MatTabsOcultas/.test(extractFro
 
 // ── 5. texto de bodega reformulado (pedido: el ajuste ya no es el conteo inicial) ──
 const zVista = extractFrom('function _abrirPanelBodega(');
-ok('el header de bodega explica CARGAR/ABASTECER/AJUSTE-correcciones', /CARGAR EXISTENCIAS<\/b> anota lo que ya hay/.test(zVista) && /correcciones puntuales/.test(zVista) && !/Para el conteo inicial o correcciones poné el AJUSTE/.test(zVista));
+// v976: el header pasó a tarjetitas (pedido de Antonio: más ordenado y bonito) — las 3 definiciones siguen
+ok('el header de bodega explica CARGAR/ABASTECER/AJUSTE-correcciones', /ya hay físicamente/.test(zVista) && /correcciones puntuales/.test(zVista) && !/Para el conteo inicial o correcciones poné el AJUSTE/.test(zVista));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

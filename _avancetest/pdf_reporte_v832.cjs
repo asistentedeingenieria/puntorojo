@@ -18,7 +18,8 @@ ok('_pdfAvanceReporte(tipo) existe', /function _pdfAvanceReporte\(tipo\)/.test(h
 ok('generador usa _avReporteSnapshot(tipo, p)', /_avReporteSnapshot\(tipo, p\)/.test(html));
 ok('generador entrega con _pdfDescargar(doc, fn)', /_pdfDescargar\(doc, fn\)/.test(html));
 ok('el doc por torre pone el logo (_pdfLogo)', /function _pdfAvanceReporteTorreDoc[\s\S]{0,400}_pdfLogo\(doc\)/.test(html));
-ok('_pdfAvanceReporte hace UN PDF por torre (loop snap.torres)', /snap\.torres\.forEach\(function\(t\)\{ _pdfAvanceReporteTorreDoc\(tipo, p, snap, t\); \}\)/.test(html));
+// v976: cambió el requisito — ahora es UN SOLO ARCHIVO con todas las torres (una por página)
+ok('_pdfAvanceReporte junta TODAS las torres en un doc (loop snap.torres con addPage)', /snap\.torres\.forEach\(function\(t, i\)\{ if\(i>0\) doc\.addPage\(\); _pdfAvanceReporteTorreDoc\(tipo, p, snap, t, doc\); \}\)/.test(html));
 ok('la leyenda va AL FINAL (después de la grilla de niveles)', /t\.niveles\.forEach[\s\S]{0,1500}LEYENDA al final del documento[\s\S]{0,120}_pdfDrawLeyendaReporte/.test(html));
 ok('_pdfDrawCuadrito existe', /function _pdfDrawCuadrito\(doc, cx, cy, n, green\)/.test(html));
 ok('_pdfDrawLeyendaReporte existe', /function _pdfDrawLeyendaReporte\(/.test(html));
@@ -80,7 +81,8 @@ ok('botón material (string JS escapado)', /onclick="_pdfAvanceReporte\(\\'mater
   const run=new Function(...Object.keys(globals), src+'\nreturn _pdfAvanceReporte;')(...Object.values(globals));
   let threw=false; try{ run('fisico'); }catch(e){ threw=true; console.log('  generador lanzó:', e&&e.message); }
   ok('generador físico corre sin lanzar', !threw);
-  ok('entregó un PDF POR TORRE (nombre con la torre)', /AVANCE F[IÍ]SICO POR APARTAMENTO - TORELO - TORRE 1\.pdf/.test(captured.fn||''));
+  // v976: un solo archivo del proyecto (todas las torres adentro) — el nombre ya no lleva torre
+  ok('entregó UN PDF del proyecto (todas las torres adentro)', /AVANCE F[IÍ]SICO POR APARTAMENTO - TORELO\.pdf/.test(captured.fn||''));
   ok('dibujó texto (título/nombres) y figuras (cuadritos)', captured.text>0 && (captured.rect>0||captured.circle>0));
   // los 4 tipos corren sin lanzar
   let allOk=true; ['cobro','material','pago'].forEach(t=>{ try{ run(t); }catch(e){ allOk=false; } });
