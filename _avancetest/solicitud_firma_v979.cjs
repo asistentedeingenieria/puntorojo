@@ -24,10 +24,15 @@ const iSol = html.indexOf('FORMATO DE SOLICITUD');
 const zSol = html.slice(iSol - 8000, iSol + 10000);
 ok('la solicitud incrusta la firma del solicitante', /_miFirmaImg\(pd\.solicitanteUsername\)/.test(zSol));
 
-// ── 3. compartir: descripción con SIGLAS + fecha, y margen en la imagen ──
-ok('descripción SOLICITUD DE PEDIDO - SIGLAS - Nº - FECHA DE ENTREGA DESEADA', /SOLICITUD DE PEDIDO - \$\{_projSiglas\(/.test(zSol) && /FECHA DE ENTREGA DESEADA/.test(zSol));
-ok('el share manda la descripción como title y text (sin .png visible)', /navigator\.share\(\{ files: \[file\], title: desc, text: desc \}\)/.test(zSol));
-ok('la imagen lleva margen blanco alrededor', /drawImage\(canvas, M, M\)/.test(zSol));
+// ── 3. compartir DESDE LA APP (v980: como asistencia — compu/Android/iPhone/tablet) ──
+ok('descripción SOLICITUD DE PEDIDO - SIGLAS - Nº - FECHA DE ENTREGA DESEADA', /'SOLICITUD DE PEDIDO - ' \+ _projSiglas\(/.test(html) && /FECHA DE ENTREGA DESEADA/.test(html));
+ok('escalera de compartir de asistencia: nativo Capacitor → Web Share → descarga', /Filesystem\.writeFile/.test(ex('async function _imgCompartir(')) && /navigator\.share\(\{ files: \[file\], title: titulo \|\| filename, text: titulo \|\| '' \}\)/.test(ex('async function _imgCompartir(')));
+ok('la imagen lleva margen blanco alrededor', /drawImage\(canvas, M, M\)/.test(ex('window.compartirSolicitudImg = async function')));
+ok('captura en iframe oculto con el MISMO builder del doc', /_solicitudDocHTML\(pd, p, true\)/.test(html) && /_solicitudDocHTML\(_ctx\.pd, activeProj\(\), false\)/.test(html));
+ok('botón COMPARTIR IMAGEN en el detalle del pedido (app)', /compartirSolicitudImg\(\)"/.test(html));
+// ── 4. v980: Android dejaba el doc en modo oscuro ilegible y VOLVER no hacía nada ──
+ok('los DOS docs fuerzan luz (color-scheme only light)', (html.match(/name="color-scheme" content="only light"/g) || []).length >= 2 && (html.match(/color-scheme:only light/g) || []).length >= 2);
+ok('VOLVER con red final: navegar al origen si la ventana no cierra', (html.match(/if\(!window\.closed\) location\.replace\('\$\{location\.origin\}'\)/g) || []).length >= 2);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

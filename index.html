@@ -3115,7 +3115,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v979</span>
+    <span style="opacity:.5;font-size:9px">v980</span>
   </footer>
 
 </div>
@@ -3359,6 +3359,8 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
       <button class="btn ghost" id="pedDetalleDeleteBtn" onclick="deleteFromDetalle()" style="color:var(--red);border-color:var(--red);display:none">ELIMINAR PEDIDO</button>
       <button class="btn ghost" id="pedDetalleOCBtn" onclick="openOrdenCompra()" style="display:none">GENERAR ORDEN DE COMPRA</button>
       <button class="btn" onclick="printPedido()">IMPRIMIR SOLICITUD</button>
+      <!-- v980: compartir la solicitud como IMAGEN desde la app (funciona en compu/Android/iPhone/tablet) -->
+      <button class="btn" onclick="compartirSolicitudImg()" style="background:#25D366;border-color:#25D366;color:#fff">COMPARTIR IMAGEN</button>
     </div>
   </div>
 </div>
@@ -20504,8 +20506,9 @@ function printOrdenCompra(ocId, isDraft){
   const w = window.open('', '_blank');
   w.document.write(`
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Orden de Compra No. ${oc.numero}</title>
+<html><head><meta charset="utf-8"><meta name="color-scheme" content="only light"><title>Orden de Compra No. ${oc.numero}</title>
 <style>
+:root{color-scheme:only light} /* v980: Android forzaba modo oscuro sobre el documento */
 @page { size: letter; margin: 0; } /* v943: los márgenes viven ADENTRO de la hoja — así "Márgenes: Ninguno/Predeterminado" del diálogo dan lo mismo y las firmas quedan al fondo FÍSICO siempre */
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;color:#222;font-size:11px;padding:0;background:#fff}
@@ -20694,7 +20697,7 @@ html, body { overflow-x: hidden; max-width: 100vw; }
 ${showDraft ? '<div class="oc-watermark">BORRADOR</div>' : ''}
 <!-- v976: SIEMPRE hay vuelta a la app (en el celular la ventana de impresión dejaba atrapado al usuario) -->
 <div class="no-print" style="display:flex;gap:10px;justify-content:center;align-items:center;flex-wrap:wrap;padding:14px 12px 0">
-<button class="btn-print" style="margin:0;background:#0F172A" onclick="try{window.close()}catch(e){}; setTimeout(function(){ try{history.back()}catch(e){} },250);">&#8592; VOLVER A LA APP</button>
+<button class="btn-print" style="margin:0;background:#0F172A" onclick="try{window.close()}catch(e){}; setTimeout(function(){ try{ history.back(); }catch(e){} },250); setTimeout(function(){ try{ if(!window.closed) location.replace('${location.origin}'); }catch(e){} },700);">&#8592; VOLVER A LA APP</button>
 ${!showDraft ? '<button class="btn-print" style="margin:0" onclick="window.print()">IMPRIMIR / GUARDAR PDF</button>' : ''}
 </div>
 ${showDraft ? '<div class="no-print" style="background:var(--red-soft);padding:14px 20px;text-align:center;color:var(--red-dark);font-weight:700;letter-spacing:1px;font-size:11px;border-bottom:1px solid var(--red-dark);margin-top:12px">VISTA PRELIMINAR — ESTA ORDEN NO ESTÁ AUTORIZADA. AUTORIZAR DESDE LA LISTA DE ÓRDENES ANTES DE IMPRIMIR.</div>' : ''}
@@ -21194,12 +21197,11 @@ function _doDeleteOrden(id){
 }
 window.DELETION_EXECUTORS['orden'] = (payload) => _doDeleteOrden(payload.id);
 
-function printPedido(){
-  const _ctx = _findPedidoGlobal(currentPedidoDetalleId); // v964
-  if (!_ctx) return;
-  const p = activeProj();
-  const pd = _ctx.pd;
-
+/* v980: el documento de la SOLICITUD sale de UN builder — lo usan la ventana de imprimir
+   y el compartir-como-imagen DESDE LA APP (iframe oculto). paraCaptura omite la barra de
+   botones y el auto-print. color-scheme "only light": Android forzaba modo oscuro sobre
+   el documento y se veía ilegible (foto de Antonio 26-jul). */
+function _solicitudDocHTML(pd, p, paraCaptura){
   // Agrupar por categoría (con specs)
   const byCat = {};
   const specs = pd.specs || {};
@@ -21209,10 +21211,11 @@ function printPedido(){
     byCat[cat].push({ name, qty, spec: specs[key] || null });
   });
 
-  const win = window.open('', '_blank');
-  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${pd.numero} · ${pd.proyectoPedido || p.name}</title>
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="color-scheme" content="only light"><title>${pd.numero} · ${pd.proyectoPedido || p.name}</title>
 <style>
+  :root{color-scheme:only light}
   *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:#fff}
   body{font-family:Arial,sans-serif;font-size:11px;color:#222;padding:20px}
   .wrap{max-width:780px;margin:0 auto}
   .header{display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid #C8141C;padding-bottom:10px;margin-bottom:14px}
@@ -21233,43 +21236,13 @@ function printPedido(){
   .foot{margin-top:20px;text-align:center;font-size:8px;color:#aaa;letter-spacing:2px;text-transform:uppercase;border-top:1px solid #eee;padding-top:8px}
   @media print{body{padding:10px} .no-print{display:none!important} @page{size:letter;margin:10mm}}
 </style></head><body>
-<!-- v976: vuelta a la app desde la vista de impresión (el celular quedaba sin regreso) -->
-<div class="no-print" style="display:flex;gap:10px;justify-content:center;align-items:center;flex-wrap:wrap;margin-bottom:14px">
-<button style="background:#0F172A;color:#fff;padding:10px 20px;border:none;font-weight:700;letter-spacing:2px;cursor:pointer;border-radius:3px;font-family:Arial;font-size:11px" onclick="try{window.close()}catch(e){}; setTimeout(function(){ try{history.back()}catch(e){} },250);">&#8592; VOLVER A LA APP</button>
+<!-- v976/v980: vuelta a la app SIEMPRE — close (ventana hija), back (misma pestaña) y
+     como red final navegar al origen (WebView de Android sin historial). El compartir
+     como imagen se movió A LA APP (botón COMPARTIR IMAGEN del detalle del pedido). -->
+${paraCaptura ? '' : `<div class="no-print" style="display:flex;gap:10px;justify-content:center;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+<button style="background:#0F172A;color:#fff;padding:10px 20px;border:none;font-weight:700;letter-spacing:2px;cursor:pointer;border-radius:3px;font-family:Arial;font-size:11px" onclick="try{window.close()}catch(e){}; setTimeout(function(){ try{ history.back(); }catch(e){} },250); setTimeout(function(){ try{ if(!window.closed) location.replace('${location.origin}'); }catch(e){} },700);">&#8592; VOLVER A LA APP</button>
 <button style="background:#D0151C;color:#fff;padding:10px 20px;border:none;font-weight:700;letter-spacing:2px;cursor:pointer;border-radius:3px;font-family:Arial;font-size:11px" onclick="window.print()">IMPRIMIR / GUARDAR PDF</button>
-<button id="btnCompartirImg" style="background:#25D366;color:#fff;padding:10px 20px;border:none;font-weight:700;letter-spacing:2px;cursor:pointer;border-radius:3px;font-family:Arial;font-size:11px" onclick="_compartirImg()">COMPARTIR IMAGEN (WHATSAPP)</button>
-</div>
-<script>
-/* v978: compartir la solicitud como IMAGEN (pedido de Antonio: reenviarla por WhatsApp).
-   html2canvas se carga bajo demanda; en celular abre la hoja de compartir del sistema
-   (ahi aparece WhatsApp); en desktop descarga el PNG para adjuntarlo en WhatsApp Web. */
-async function _compartirImg(){
-  var b = document.getElementById('btnCompartirImg');
-  try{
-    if (b){ b.textContent = 'GENERANDO IMAGEN…'; b.disabled = true; }
-    if (!window.html2canvas){
-      await new Promise(function(res, rej){ var s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
-    }
-    var canvas = await html2canvas(document.querySelector('.wrap'), { scale: 2, backgroundColor: '#ffffff' });
-    /* v979: margen blanco alrededor — la imagen quedaba justa al abrirla (foto de Antonio) */
-    var M = 72;
-    var c2 = document.createElement('canvas'); c2.width = canvas.width + M * 2; c2.height = canvas.height + M * 2;
-    var cx = c2.getContext('2d'); cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, c2.width, c2.height); cx.drawImage(canvas, M, M);
-    var blob = await new Promise(function(res){ c2.toBlob(res, 'image/png'); });
-    /* v979: descripción con SIGLAS del proyecto + fecha de entrega (pedido de Antonio) */
-    var desc = 'SOLICITUD DE PEDIDO - ${_projSiglas(pd.proyectoPedido || p.name)} - ${(String(pd.numero || '').match(/(\d+)\s*$/) || ['',''])[1]} - FECHA DE ENTREGA DESEADA ${pd.fechaEntrega || ''}'.replace(/\\s+/g, ' ').trim();
-    var nombre = desc.replace(/[\\\\/:*?"<>|]/g, '-') + '.png';
-    var file = new File([blob], nombre, { type: 'image/png' });
-    if (navigator.canShare && navigator.canShare({ files: [file] })){
-      await navigator.share({ files: [file], title: desc, text: desc });
-    } else {
-      var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nombre; a.click();
-      alert('IMAGEN DESCARGADA — adjuntala en WhatsApp Web.');
-    }
-  }catch(e){ if (String(e && e.name) !== 'AbortError') alert('NO SE PUDO GENERAR LA IMAGEN: ' + (e && e.message ? e.message : e)); }
-  finally{ if (b){ b.textContent = 'COMPARTIR IMAGEN (WHATSAPP)'; b.disabled = false; } }
-}
-<\/script>
+</div>`}
 <div class="wrap">
   <div class="header">
     <!-- v920: logo incrustado en vez del texto -->
@@ -21319,10 +21292,68 @@ async function _compartirImg(){
 
   <div class="foot">GUATEMALA</div>
 </div>
-<script>window.onload = () => window.print();<\/script>
-</body></html>`);
+${paraCaptura ? '' : `<script>window.onload = () => window.print();<\/script>`}
+</body></html>`;
+}
+function printPedido(){
+  const _ctx = _findPedidoGlobal(currentPedidoDetalleId); // v964
+  if (!_ctx) return;
+  const win = window.open('', '_blank');
+  win.document.write(_solicitudDocHTML(_ctx.pd, activeProj(), false));
   win.document.close();
 }
+/* v980: compartir una IMAGEN por la hoja nativa — la MISMA escalera que _pdfCompartir
+   (v810, la que ya funciona en asistencia): plugin Capacitor (app de Android) → Web
+   Share API (PWA/celular) → descarga del PNG (desktop). */
+async function _imgCompartir(blob, dataUrl, filename, titulo){
+  var caps = null; try{ caps = (window.Capacitor && window.Capacitor.Plugins) || null; }catch(e){}
+  var file; try{ file = new File([blob], filename, { type: 'image/png' }); }catch(e){}
+  var modo = _pdfShareModo(caps, navigator, file);
+  if (modo === 'native'){
+    try{
+      var b64 = String(dataUrl || '').split(',').pop();
+      var w = await caps.Filesystem.writeFile({ path: filename, data: b64, directory: 'CACHE' });
+      await caps.Share.share({ title: titulo || filename, text: titulo || '', files: [ (w && w.uri) ? w.uri : filename ], dialogTitle: 'Compartir imagen' });
+    }catch(e){ var m = String((e && (e.message || e)) || '').toLowerCase(); if (m.indexOf('cancel') < 0 && m.indexOf('abort') < 0){ try{ showToast('NO SE PUDO COMPARTIR · TOMÁ UNA CAPTURA','red'); }catch(_e){} } }
+    return;
+  }
+  if (modo === 'web'){
+    try{ await navigator.share({ files: [file], title: titulo || filename, text: titulo || '' }); }
+    catch(e){ if (!(e && e.name === 'AbortError')){ try{ showToast('NO SE PUDO COMPARTIR · TOMÁ UNA CAPTURA','red'); }catch(_e){} } }
+    return;
+  }
+  try{ var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); showToast('IMAGEN DESCARGADA','green'); }catch(e){}
+}
+/* v980: COMPARTIR LA SOLICITUD COMO IMAGEN desde la APP (pedido de Antonio: como en
+   asistencia, que funcione en compu, Android, iPhone y tablets). El documento se pinta
+   en un iframe oculto (mismo builder que imprimir), html2canvas lo captura ADENTRO del
+   iframe (cero choques de estilos con la app) y se comparte con _imgCompartir. */
+window.compartirSolicitudImg = async function(){
+  const _ctx = _findPedidoGlobal(currentPedidoDetalleId); // v964
+  if (!_ctx) return;
+  const pd = _ctx.pd, p = activeProj();
+  try{ showToast('GENERANDO IMAGEN…','info'); }catch(e){}
+  const fr = document.createElement('iframe');
+  fr.style.cssText = 'position:fixed;left:-10000px;top:0;width:820px;height:1400px;border:0;visibility:hidden';
+  document.body.appendChild(fr);
+  try{
+    const cargado = new Promise(res => { fr.onload = res; });
+    fr.srcdoc = _solicitudDocHTML(pd, p, true);
+    await cargado;
+    const idoc = fr.contentDocument, iwin = fr.contentWindow;
+    await new Promise((res, rej) => { const s = idoc.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'; s.onload = res; s.onerror = rej; idoc.head.appendChild(s); });
+    const canvas = await iwin.html2canvas(idoc.querySelector('.wrap'), { scale: 2, backgroundColor: '#ffffff' });
+    // v979: margen blanco — la imagen quedaba justa al abrirla
+    const M = 72;
+    const c2 = document.createElement('canvas'); c2.width = canvas.width + M * 2; c2.height = canvas.height + M * 2;
+    const cx = c2.getContext('2d'); cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, c2.width, c2.height); cx.drawImage(canvas, M, M);
+    const blob = await new Promise(res => c2.toBlob(res, 'image/png'));
+    const num = (String(pd.numero || '').match(/(\d+)\s*$/) || ['',''])[1];
+    const desc = ('SOLICITUD DE PEDIDO - ' + _projSiglas(pd.proyectoPedido || p.name) + ' - ' + num + ' - FECHA DE ENTREGA DESEADA ' + (pd.fechaEntrega || '')).replace(/\s+/g, ' ').trim();
+    await _imgCompartir(blob, c2.toDataURL('image/png'), desc.replace(/[\\/:*?"<>|]/g, '-') + '.png', desc);
+  }catch(e){ try{ showToast('NO SE PUDO GENERAR LA IMAGEN','red'); }catch(_e){} try{ console.warn('compartirSolicitudImg', e); }catch(_e){} }
+  finally{ try{ fr.remove(); }catch(e){} }
+};
 
 /* ─────────────── PERSONAL ─────────────── */
 function todayKey(){

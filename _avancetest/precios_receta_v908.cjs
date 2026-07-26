@@ -64,8 +64,8 @@ if (srcOc && srcParts) {
 // ── 4. cableado ──
 ok('renderRecetaV2 pasa l.nc al precio', /precioDeProductoReceta\(_getProveedores\(\), l\.m, l\.nc\)/.test(html));
 ok('modal PRECIOS pasa el nombre real', /precioDeProductoReceta\(_getProveedores\(\), x\.nombre, x\.nc\)/.test(html));
-const srcPrint = extractFn('printPedido');
-ok('printPedido usa _pedidoKeyParts', /_pedidoKeyParts\(/.test(srcPrint));
+const srcPrint = extractFn('_solicitudDocHTML') /* v980: el doc vive en el builder */;
+ok('el doc de la solicitud usa _pedidoKeyParts', /_pedidoKeyParts\(/.test(srcPrint));
 const srcDet = extractFn('openPedidoDetalle');
 ok('openPedidoDetalle usa _pedidoKeyParts', /_pedidoKeyParts\(/.test(srcDet));
 

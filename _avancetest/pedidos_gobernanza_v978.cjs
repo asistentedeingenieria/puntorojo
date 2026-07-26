@@ -36,9 +36,10 @@ ok('la dirección vieja solo queda en el self-heal (comparación)', (html.match(
 const iSol = html.indexOf('FORMATO DE SOLICITUD');
 const zSol = html.slice(iSol - 7000, iSol + 9000);
 ok('la solicitud ya NO lleva RECIBIDO POR (es solo una solicitud)', !/RECIBIDO POR/.test(zSol) && /SOLICITANTE<br>/.test(zSol));
-ok('botón COMPARTIR IMAGEN (WHATSAPP) en la solicitud', /COMPARTIR IMAGEN \(WHATSAPP\)/.test(zSol));
-ok('comparte con Web Share (files) y html2canvas bajo demanda', /navigator\.canShare/.test(zSol) && /html2canvas/.test(zSol));
-ok('fallback desktop: descarga el PNG', /IMAGEN DESCARGADA/.test(zSol));
+// v980: el compartir se movió A LA APP (en Android la ventana de impresión no tiene share)
+ok('botón COMPARTIR IMAGEN en el detalle del pedido (app)', /compartirSolicitudImg\(\)"/.test(html));
+ok('comparte con la escalera de asistencia y html2canvas', /_imgCompartir/.test(html) && /html2canvas/.test(html));
+ok('fallback desktop: descarga el PNG', /IMAGEN DESCARGADA/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

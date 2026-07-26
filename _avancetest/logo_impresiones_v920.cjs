@@ -18,7 +18,7 @@ if (m) {
 }
 
 // ── 2. hoja de PEDIDO: logo en vez del texto ──
-const srcPed = extractFn('printPedido');
+const srcPed = extractFn('_solicitudDocHTML') /* v980: el doc vive en el builder */;
 ok('printPedido ya no dice PUNTO ROJO en texto', !/PUNTO<br>ROJO/.test(srcPed));
 ok('printPedido usa el logo incrustado', /\$\{_LOGO_PR\}/.test(srcPed));
 
