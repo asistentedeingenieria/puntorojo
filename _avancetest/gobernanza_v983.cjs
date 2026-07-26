@@ -40,5 +40,13 @@ const iBtns = html.indexOf('pedDetalleOCBtn');
 const zBtns = html.slice(iBtns - 800, iBtns + 800);
 ok('el detalle tiene UN solo botón COMPARTIR SOLICITUD', /COMPARTIR SOLICITUD/.test(zBtns) && !/printPedido\(\)/.test(zBtns) && !/COMPARTIR IMAGEN</.test(zBtns));
 
+// ── 4. v984: dirección sanada AL ABRIR EL MODAL + candado TODOS para todos ──
+const iModal = html.indexOf('const _dirs = p.materiales.direccionesEntrega');
+const zModal = html.slice(iModal - 1200, iModal + 200);
+ok('v984: el heal de la dirección corre al ABRIR el modal (por contenido)', /4TA AVENIDA 20-51\/i\.test\(String\(d\.direccion/.test(zModal) && /_dirFix/.test(zModal));
+ok('v984: si sanó, guarda y sube', /if \(_dirFix\) \{ saveState\(\);/.test(zModal.replace(/\n\s*/g,' ')));
+ok('v984: el botón TODOS se bloquea para TODOS en pedidos de receta', /_ocProvLockedTodos = !!\(pd\.esDeReceta\)/.test(html));
+ok('v984: el picker de TODOS respeta ambos candados', /window\._ocProvLocked \|\| window\._ocProvLockedTodos\) return/.test(html));
+
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

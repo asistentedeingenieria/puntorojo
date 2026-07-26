@@ -23,7 +23,8 @@ ok('el modal ya NO tiene el + de crear proveedor', !/openAddProveedor/.test(zMod
 ok('_ocProvLocked se arma con esDeReceta y respeta al admin', /_ocProvLocked = !!\(pd\.esDeReceta\) && !can\('users\.manage'\)/.test(html));
 ok('con candado, el botón TODOS dice PROVEEDORES SELECCIONADOS AUTOMÁTICAMENTE', /PROVEEDORES SELECCIONADOS AUTOMÁTICAMENTE/.test(html));
 const zTodos = ex('function _abrirPickerProveedorTodos(');
-ok('el picker de TODOS no abre con candado', /_ocProvLocked\) return/.test(zTodos.replace(/\n/g,' ')));
+// v984: el candado del TODOS aplica a TODOS (admin incluido) en pedidos de receta
+ok('el picker de TODOS no abre con candado', /_ocProvLocked \|\| window\._ocProvLockedTodos\) return/.test(zTodos.replace(/\n/g,' ')));
 const zItem = ex('function _abrirPickerProveedor(btn, idx)');
 ok('el picker por ítem solo ofrece AUTO ↔ BODEGA con candado', /_ocProvLocked/.test(zItem) && /_provAuto/.test(zItem) && /BODEGA CENTRAL \(DESPACHO\)/.test(zItem));
 ok('ítem SIN match de catálogo sigue eligiendo libre (no traba la OC)', /sin proveedor auto/i.test(zItem));
