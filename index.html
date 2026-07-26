@@ -3083,7 +3083,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v971</span>
+    <span style="opacity:.5;font-size:9px">v972</span>
   </footer>
 
 </div>
@@ -8690,7 +8690,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 911;
+const APP_SYNC_VERSION = 912;
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9495,6 +9495,35 @@ const CloudSync = {
         });
       }
     } catch(e){ console.warn('blindaje de tomas de inventario en applyRemote:', e); }
+
+    // v972 BLINDAJE DE PEDIDOS Y ÓRDENES DE COMPRA (incidente 24-jul: los pedidos de VLA
+    // desaparecieron — quedó solo el 00001). p.materiales.pedidos/ordenes eran el ÚLTIMO
+    // dato operativo en LWW puro: un teléfono con copia vieja pisaba los pedidos nuevos
+    // de otro. Mismo régimen que planillas (v891): unión por id + _ts (con ts de creación
+    // como fallback) y tombstones por proyecto — borrar sin lápida ⇒ revive.
+    try {
+      if (typeof _mergeById === 'function') {
+        const _locProj = {}; ((state && state.projects) || []).forEach(p => { if (p && p.id) _locProj[p.id] = p; });
+        (merged.projects || []).forEach(rp => {
+          if (!rp || !rp.materiales) return;
+          const lp = _locProj[rp.id];
+          const _tpd = Object.assign({},
+            (lp && lp.materiales && lp.materiales.pedidosEliminados) || {},
+            rp.materiales.pedidosEliminados || {});
+          rp.materiales.pedidosEliminados = _tpd;
+          const _mpd = _mergeById((lp && lp.materiales && lp.materiales.pedidos) || [], rp.materiales.pedidos || [], _tpd);
+          rp.materiales.pedidos = _mpd.list;
+          if (_mpd.changed) needsResync = true;
+          const _toc = Object.assign({},
+            (lp && lp.materiales && lp.materiales.ordenesEliminadas) || {},
+            rp.materiales.ordenesEliminadas || {});
+          rp.materiales.ordenesEliminadas = _toc;
+          const _moc = _mergeById((lp && lp.materiales && lp.materiales.ordenes) || [], rp.materiales.ordenes || [], _toc);
+          rp.materiales.ordenes = _moc.list;
+          if (_moc.changed) needsResync = true;
+        });
+      }
+    } catch(e){ console.warn('blindaje de pedidos/OCs en applyRemote:', e); }
 
     // v752 BLINDAJE DE PLATA: pólizas, anticipos y solicitudes (pol/ant/col) NUNCA se
     // pisan por last-write-wins. Antes state=merged reemplazaba el catálogo entero, así
@@ -17380,6 +17409,7 @@ async function advancePedido(id){
 
   const prevStatus = pd.status;
   pd.status = statusInfo.next;
+  pd._ts = Date.now(); // v972: pedidos van por union-merge — toda transición se sella
   pd.history = pd.history || [];
   pd.history.push({
     ts: Date.now(),
@@ -17462,8 +17492,11 @@ function _doDeletePedido(id){
     b.pedidos = b.pedidos.filter(x => x.id !== id);
     b.pedidosEliminados[id] = Date.now();
   } else {
+    // v972: los pedidos de proyecto TAMBIÉN van por union-merge — borrar exige lápida
     const p = activeProj();
     p.materiales.pedidos = p.materiales.pedidos.filter(x => x.id !== id);
+    if (!p.materiales.pedidosEliminados || typeof p.materiales.pedidosEliminados !== 'object') p.materiales.pedidosEliminados = {};
+    p.materiales.pedidosEliminados[id] = Date.now();
   }
   logActivity('delete', `Pedido ${pd.numero} eliminado`, `${_ctx.nombre} · estaba en estado ${pd.status}`);
   saveState();
@@ -18059,6 +18092,7 @@ async function submitPedido(){
     id: 'pd-' + uid(),
     numero,
     ts: Date.now(),
+    _ts: Date.now(), // v972: nace sellado — pedidos van por union-merge
     fecha,
     fechaEntrega,
     solicitante,
@@ -19922,7 +19956,7 @@ async function generarOrdenCompra(){
       esDespacho: esBodega, // v921: sale de BODEGA CENTRAL (orden de despacho, no compra)
       status: 'PENDIENTE_AUTORIZACION'
     };
-    if (_ctx.esBodega) oc._ts = oc.ts; // el store va por union-merge: nace sellado
+    oc._ts = oc.ts; // v972: TODAS las OC nacen selladas (proyecto y bodega van por union-merge)
     _ctx.cont.ordenes.push(oc); // v964: al contenedor del pedido (bodegaMat o proyecto)
     created.push(oc);
   });
@@ -19962,7 +19996,7 @@ async function generarOrdenCompra(){
 
   if (pd.status === 'SOLICITADO') {
     pd.status = 'APROBADO';
-    if (_ctx.esBodega) pd._ts = Date.now(); // el store va por union-merge: la mutación se sella
+    pd._ts = Date.now(); // v972: pedidos van por union-merge — TODA mutación se sella
     if (!Array.isArray(pd.history)) pd.history = [];
     pd.history.push({ ts: Date.now(), from: 'SOLICITADO', to: 'APROBADO', role: (getCurrentUser()?.username || 'unknown'), by: 'OC_MULTI_PROVEEDOR' });
   }
@@ -19979,7 +20013,7 @@ async function generarOrdenCompra(){
     });
     pd.fechaEntregaOriginal = fechaOriginal;
     pd.fechaEntrega = fechaEntregaNueva;
-    if (_ctx.esBodega) pd._ts = Date.now();
+    pd._ts = Date.now(); // v972
   }
 
   const proveedoresTxt = created.map(oc => oc.proveedorNombre).join(' · ');
@@ -20950,7 +20984,10 @@ function _doDeleteOrden(id){
     b.ordenes = b.ordenes.filter(x => x.id !== id);
     b.ordenesEliminadas[id] = Date.now();
   } else {
+    // v972: las OC de proyecto TAMBIÉN van por union-merge — borrar exige lápida
     p.materiales.ordenes = p.materiales.ordenes.filter(x => x.id !== id);
+    if (!p.materiales.ordenesEliminadas || typeof p.materiales.ordenesEliminadas !== 'object') p.materiales.ordenesEliminadas = {};
+    p.materiales.ordenesEliminadas[id] = Date.now();
   }
   logActivity('delete', `Orden de Compra No. ${oc.numero} eliminada`, `${_esDeBodegaMat ? 'BODEGA CENTRAL' : p.name} · ${oc.proveedorNombre} · Q ${fmtQ(oc.total)}`);
   saveState();
@@ -30662,6 +30699,7 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
     id: 'pd-' + uid(),
     numero,
     ts: Date.now(),
+    _ts: Date.now(), // v972: nace sellado — pedidos van por union-merge
     fecha,
     fechaEntrega,
     solicitante,
