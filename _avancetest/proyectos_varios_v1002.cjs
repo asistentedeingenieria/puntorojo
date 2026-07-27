@@ -120,10 +120,11 @@ ok('y no se apila sobre el contenido con z-index de modal', zPanel.includes('z-i
    son capas a pantalla completa con z-index 98000 y .modal-bg vale 100 — el detalle abría
    DEBAJO, invisible, y parecía que la app te sacaba. Abierto desde un panel va encima. */
 const zDet = ex('function openPedidoDetalle(');
-ok('el detalle ESCONDE el panel mientras está abierto', zDet.includes("_panelAbierto.style.display = 'none'"));
+// v1006: el panel NO se esconde — el modal va encima y el panel queda visible detrás
+ok('el detalle se abre ENCIMA del panel', zDet.includes("_panelAbierto ? '99000' : ''"));
 ok('detecta los dos paneles', zDet.includes('_bodegaPanelModal') && zDet.includes('_variosPanelModal'));
-ok('guarda cuál panel escondió', zDet.includes('window._panelOculto = _panelAbierto.id'));
-ok('al cerrar el modal se devuelve el panel', ex('function closeModal(').includes('window._panelOculto') && ex('function closeModal(').includes("_p.style.display = ''"));
+ok('el panel queda visible detrás', !zDet.includes("_panelAbierto.style.display = 'none'"));
+ok('al cerrar se devuelve el z-index', ex('function closeModal(').includes("_m.style.zIndex = ''"));
 
 /* v1004 (Antonio: '+ NUEVO PEDIDO me regresa a proyecto y no me deja hacer pedidos'): las
    funciones se llamaban showSection/setMaterialesTab, que no existen — el try se comía el

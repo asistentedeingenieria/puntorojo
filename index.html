@@ -3171,7 +3171,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1005</span>
+    <span style="opacity:.5;font-size:9px">v1006</span>
   </footer>
 
 </div>
@@ -19046,17 +19046,14 @@ function openPedidoDetalle(id){
     body.innerHTML += `<div style="background:var(--cream);padding:10px 14px;margin-top:14px;font-size:12px;font-style:italic;color:var(--mute)">"${esc(pd.observaciones)}"</div>`;
   }
 
-  /* v1004 (Antonio: "me sigue sacandooooo"): los paneles de BODEGA CENTRAL y PROYECTOS
-     VARIOS son capas OPACAS a pantalla completa. Subirle el z-index al modal (v1003) no
-     alcanzó: el modal vive dentro de un contenedor y su z-index no escapa de ese contexto
-     de apilamiento. Solución que no depende de eso: se ESCONDE el panel mientras el detalle
-     está abierto y closeModal lo devuelve — al cerrar seguís en bodega, no en el proyecto. */
+  /* v1006 (Antonio: "SIGUE SACÁNDOME DEL PANEL"): v1004 escondía el panel para que el modal
+     se viera, y así el fondo pasaba a ser el dashboard — se sentía igual de "sacado".
+     Verificado: #modalPedidoDetalle es hijo DIRECTO de <body> y nada crea un contexto de
+     apilamiento por encima, así que el z-index sí manda. El modal se pone sobre el panel
+     (98000) y el panel QUEDA VISIBLE detrás; al cerrar, el z-index vuelve a su valor. */
   const _mDet = document.getElementById('modalPedidoDetalle');
   const _panelAbierto = document.getElementById('_bodegaPanelModal') || document.getElementById('_variosPanelModal');
-  if (_panelAbierto) {
-    window._panelOculto = _panelAbierto.id;
-    _panelAbierto.style.display = 'none';
-  }
+  if (_mDet) _mDet.style.zIndex = _panelAbierto ? '99000' : '';
   _mDet.classList.add('show');
 
   // Mostrar/ocultar botón eliminar según permisos
@@ -20007,6 +20004,17 @@ function _variosPedidosTodos(){
    finanzas no la hubiera firmado. El chip ahora dice la verdad: mientras alguna de sus
    órdenes espere firma, PENDIENTE DE AUTORIZACIÓN; APROBADO recién cuando están todas.
    No cambia pd.status — es solo cómo se muestra. PURA. */
+/* v1006 (pedido de Antonio): en ÓRDENES DE COMPRA solo queda a la vista lo que TODAVÍA no
+   llegó a la obra; lo recibido se guarda en el historial. Una orden deja de estar pendiente
+   cuando se firmó SU entrega (v996) o cuando el pedido entero quedó RECIBIDO. PURA. */
+function _ocPendienteDeRecibir(oc, pd){
+  if (!oc) return false;
+  if ((oc.status || '') === 'CANCELADA' || oc.anulada) return false;
+  if (!pd) return true;                                   // sin pedido resuelto: sigue a la vista
+  if (String(pd.status || '') === 'RECIBIDO') return false;
+  const recs = pd.recepciones || {};
+  return !(recs[oc.id] && recs[oc.id].ts);
+}
 function _estadoPedidoMostrar(pd, ocs){
   const st = String((pd && pd.status) || 'SOLICITADO');
   const col = st === 'RECIBIDO' ? '#166534' : st === 'APROBADO' ? '#92400E' : '#B91C1C';
@@ -22179,7 +22187,16 @@ function renderOrdenesList(){
   const _esAdminOC = can('users.manage');
   const _userOC = String(((typeof getCurrentUser === 'function' && getCurrentUser()) || {}).username || '').toLowerCase();
 
-  cont.innerHTML = ordenes.map(oc => {
+  /* v1006 (pedido de Antonio): a la vista solo lo que TODAVÍA no llegó a la obra; lo
+     recibido se guarda en el historial colapsable. */
+  const _ocPend = [], _ocRecib = [];
+  ordenes.forEach(function(oc){
+    const _pdOc = (typeof _findPedidoGlobal === 'function' && oc && oc.pedidoId) ? _findPedidoGlobal(oc.pedidoId) : null;
+    (_ocPendienteDeRecibir(oc, _pdOc && _pdOc.pd) ? _ocPend : _ocRecib).push(oc);
+  });
+  const _hKeyOc = 'oc_historial_visible_' + ((p && p.id) || 'def');
+  const _hVisOc = (function(){ try { return localStorage.getItem(_hKeyOc) === '1'; } catch(e){ return false; } })();
+  const _filaOc = oc => {
     const st = oc.status || 'AUTORIZADA'; // fallback para OCs antiguas
     const isPending = st === 'PENDIENTE_AUTORIZACION';
     const isAuth = st === 'AUTORIZADA';
@@ -22266,8 +22283,28 @@ function renderOrdenesList(){
         ${canDeleteOC ? `<button class="btn-icon danger" onclick="deleteOrden('${oc.id}')" title="Eliminar orden">✕</button>` : ''}
       </div>
     </div>`;
-  }).join('');
+  };
+  let _htmlOc = _ocPend.map(_filaOc).join('');
+  if (!_ocPend.length && _ocRecib.length) {
+    _htmlOc += `<div class="empty" style="padding:26px 16px;text-align:center;color:var(--mute);font-size:12px;letter-spacing:.5px">TODAS LAS ÓRDENES FUERON RECIBIDAS EN OBRA.</div>`;
+  }
+  if (_ocRecib.length) {
+    _htmlOc += `<div style="border-top:2px solid #ddd;margin-top:8px;background:#FAFAFA">
+      <div onclick="window.toggleOcHistorial()" style="padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <strong style="font-size:11px;letter-spacing:.3px;color:#444">HISTORIAL DE ÓRDENES RECIBIDAS</strong>
+        <span style="font-size:11px;color:#666;font-weight:600">${_ocRecib.length} · ${_hVisOc ? '▼ OCULTAR' : '▶ MOSTRAR'}</span>
+      </div>
+      ${_hVisOc ? `<div style="padding:4px 0 12px">${_ocRecib.map(_filaOc).join('')}</div>` : ''}
+    </div>`;
+  }
+  cont.innerHTML = _htmlOc;
 }
+window.toggleOcHistorial = function(){
+  const p = activeProj();
+  const k = 'oc_historial_visible_' + ((p && p.id) || 'def');
+  try { localStorage.setItem(k, localStorage.getItem(k) === '1' ? '0' : '1'); } catch(e){}
+  try { renderOrdenesList(); } catch(e){}
+};
 
 /* v1000 (pedido de Antonio): una obra NUEVA o un proyecto pequeño no tiene dirección
    guardada — el modal propone solo el nombre ("OBRA TIFFANY") y así la orden le llegaba al
@@ -26643,14 +26680,9 @@ function closeModal(name){
   const _m = document.getElementById('modal' + name.charAt(0).toUpperCase() + name.slice(1));
   if (!_m) return;
   _m.classList.remove('show');
-  /* v1004: si el modal se abrió desde el panel de BODEGA CENTRAL o de PROYECTOS VARIOS, ese
-     panel se escondió para que el modal se viera. Al cerrar se devuelve — el usuario vuelve
-     a donde estaba, no al proyecto. */
-  if (window._panelOculto) {
-    const _p = document.getElementById(window._panelOculto);
-    if (_p) _p.style.display = '';
-    window._panelOculto = null;
-  }
+  /* v1006: si se abrió por encima del panel de BODEGA CENTRAL o PROYECTOS VARIOS, se le
+     devuelve su z-index normal (el panel nunca se escondió: quedó visible detrás). */
+  if (_m.style && _m.style.zIndex) _m.style.zIndex = '';
 }
 
 function closeModalBg(e, name){
