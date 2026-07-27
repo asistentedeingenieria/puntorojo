@@ -3171,7 +3171,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v998</span>
+    <span style="opacity:.5;font-size:9px">v999</span>
   </footer>
 
 </div>
@@ -19356,8 +19356,19 @@ function _puedeGestionarBodega(){
 /* v963 (pedido de Antonio): la ENTRADA a la bodega central la decide ÉL por usuario —
    solo quien tenga marcado el permiso de bodega (o admin) VE la entrada y la vista.
    Compras NO entra por defecto: si Antonio quiere, le marca el permiso. */
+/* v999 (decisión de Antonio): el abastecimiento no es de ningún proyecto — se maneja TODO
+   en BODEGA CENTRAL, incluida la autorización de sus órdenes. Por eso quien firma OCs
+   (compras.revisar) entra acá: es donde tiene que venir a autorizarlas. El permiso
+   materiales.bodega sigue siendo asignable a quien se quiera dar acceso. */
 function _puedeVerBodega(){
-  return can('materiales.bodega') || can('users.manage');
+  return can('materiales.bodega') || can('compras.revisar') || can('users.manage');
+}
+/* OCs de abastecimiento esperando visto bueno y firma — la bandeja de finanzas dentro de
+   bodega central. PURA. */
+function _bodegaOcsPorAutorizar(ordenes){
+  return (Array.isArray(ordenes) ? ordenes : []).filter(function(o){
+    return o && (o.status || 'AUTORIZADA') === 'PENDIENTE_AUTORIZACION';
+  });
 }
 function _toggleItemBodega(name){
   if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN ADMINISTRAN LA LISTA DE BODEGA', 'red');
@@ -20123,6 +20134,24 @@ function _abrirPanelBodega(){
   }).join('');
   // v960: OCs de abastecimiento pendientes de recibir (cualquier proyecto) — la recepción
   // vive en el panel para que no dependa del proyecto activo.
+  /* v999 (decisión de Antonio): la BANDEJA DE AUTORIZACIÓN de finanzas vive acá — el
+     abastecimiento no es de ningún proyecto, así que su circuito completo (pedido → OC →
+     autorización → recepción) se maneja dentro de BODEGA CENTRAL. */
+  const _porAutorizar = _bodegaOcsPorAutorizar(_bm.ordenes || []);
+  const _porAutorizarHTML = _porAutorizar.map(o => {
+    const _pdOc = (_bm.pedidos || []).find(x => x && x.id === o.pedidoId);
+    return `
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #FDE68A">
+      <div style="min-width:0">
+        <div style="font-size:11.5px"><b>${_numLimpio(o.numero)}</b> <span style="color:#78716C">· ${o.proveedorNombre || ''}</span></div>
+        <div style="font-size:10px;color:#92400E;margin-top:2px">${_pdOc ? 'DEL PEDIDO ' + _numLimpio(_pdOc.numero) + ' · ' : ''}Q ${fmtQ(o.total || 0)}${o.generadaPor ? ' · GENERÓ ' + o.generadaPor : ''}</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+        <button class="btn ghost sm" style="font-size:10px" onclick="previewOrden('${o.id}')">VER BORRADOR</button>
+        <button class="btn sm" style="background:var(--red-dark);border-color:var(--red-dark);color:#fff;font-size:10px" onclick="autorizarOrden('${o.id}')" title="Visto bueno + firma (quien la generó no puede)">AUTORIZAR Y FIRMAR</button>
+      </div>
+    </div>`;
+  }).join('');
   const porRecibir = _bodegaOcsPorRecibir();
   const porRecibirHTML = porRecibir.map(oc => `
     <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid #F9FAFB">
@@ -20197,6 +20226,11 @@ function _abrirPanelBodega(){
     ${pedAb.length ? `<div class="card" style="padding:12px 18px;margin-top:12px">
       <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:6px">PEDIDOS DE ABASTECIMIENTO (${pedAb.length})</div>
       ${pedAbHTML}
+    </div>` : ''}
+    ${(_porAutorizar.length && _puedeAutOc) ? `<div class="card" style="padding:12px 18px;margin-top:12px;background:#FFFBEB;border:1px solid #FCD34D">
+      <div style="font-size:8.5px;letter-spacing:1.5px;color:#B45309;font-weight:700;margin-bottom:6px">OC PENDIENTES DE AUTORIZAR (${_porAutorizar.length})</div>
+      <div style="font-size:10px;color:#92400E;margin-bottom:8px;line-height:1.5">Todo el abastecimiento se autoriza acá — no pertenece a ningún proyecto. Revisá y firmá para que compras pueda enviarla al proveedor.</div>
+      ${_porAutorizarHTML}
     </div>` : ''}
     ${porRecibir.length ? `<div class="card" style="padding:12px 18px;margin-top:12px;background:#F0FDF4">
       <div style="font-size:8.5px;letter-spacing:1.5px;color:#166534;font-weight:700;margin-bottom:6px">POR RECIBIR (${porRecibir.length})</div>
@@ -21832,20 +21866,10 @@ function renderOrdenesList(){
   const p = activeProj();
   const cont = document.getElementById('ordenesListContainer');
   if (!cont) return;
-  /* v998 (pedido de Antonio: "estas OC también las autoriza finanzas, los mismos que
-     autorizan las de los pedidos"): las órdenes de ABASTECIMIENTO viven en el store global
-     de bodega (v964) y por eso nunca aparecían acá — quedaban escondidas en el panel de
-     BODEGA CENTRAL, que finanzas no abre. Se concatenan marcadas, para que las revise y
-     firme en la misma pantalla donde ya trabaja. El gate de autorizarOrden ya era el mismo
-     (compras.revisar) y _bodegaFindOc ya las encuentra. */
-  const _ocsBod = (function(){
-    try {
-      return ((_bodegaMatStore() || {}).ordenes || []).map(function(o){
-        return Object.assign({}, o, { esAbastecimiento: true });
-      });
-    } catch(e){ return []; }
-  })();
-  const ordenes = [...(p.materiales.ordenes || []), ..._ocsBod].sort((a,b) => (b.ts || 0) - (a.ts || 0));
+  /* v999 (corrección de Antonio): las órdenes de ABASTECIMIENTO NO se mezclan acá — no son
+     de ningún proyecto, todo su circuito vive en BODEGA CENTRAL, incluida la autorización.
+     Quien firma entra a bodega (ver _puedeVerBodega) y las autoriza desde su bandeja. */
+  const ordenes = [...(p.materiales.ordenes || [])].sort((a,b) => (b.ts || 0) - (a.ts || 0));
 
   const countLbl = document.getElementById('ocCountLabel');
   if (countLbl) countLbl.textContent = `— ${ordenes.length} ÓRDEN${ordenes.length !== 1 ? 'ES' : ''}`;
@@ -21880,13 +21904,9 @@ function renderOrdenesList(){
       statusBadge = `<div style="display:inline-block;background:#F0FDF4;color:#15803D;padding:3px 9px;border-radius:10px;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border:1px solid #15803D">AUTORIZADA</div>`; // v993: autorizado = verde
     }
 
-    const autorizInfo = (isAuth && oc.autorizadoPor
+    const autorizInfo = isAuth && oc.autorizadoPor
       ? `<div style="font-size:9px;color:var(--mute);margin-top:3px">POR ${oc.autorizadoPor}</div>`
-      : '')
-      // v998: se distingue de un vistazo cuál viene de BODEGA CENTRAL (abastecimiento)
-      + (oc.esAbastecimiento
-        ? `<div style="display:inline-block;background:#EEF2FF;color:#3730A3;padding:2px 8px;border-radius:9px;font-size:8.5px;font-weight:700;letter-spacing:1px;margin-top:3px">ABASTECIMIENTO · BODEGA CENTRAL</div>`
-        : '');
+      : '';
 
     const printBtn = isAuth
       ? `<button class="btn sm" onclick="printOrdenCompra('${oc.id}')" title="Imprimir orden autorizada">IMPRIMIR</button>`

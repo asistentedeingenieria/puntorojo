@@ -17,10 +17,11 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 function ex(marker, from){ let m=html.indexOf(marker, from||0); if(m<0) return ''; let i=html.indexOf('{',m),d=0; for(;i<html.length;i++){ if(html[i]==='{')d++; else if(html[i]==='}'){ d--; if(d===0) return html.slice(m,i+1); } } return ''; }
 let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
-// ── 1. finanzas ve las OCs de abastecimiento donde ya trabaja ──
-const zL = ex('function renderOrdenesList(');
-ok('el listado de órdenes incluye las de bodega', /bodegaMat|_bodegaMatStore\(\)/.test(zL));
-ok('vienen marcadas como abastecimiento', /esAbastecimiento|ABASTECIMIENTO/.test(zL));
+/* v999 — CORRECCIÓN DE RUMBO (Antonio): v998 había llevado las OC de abastecimiento a la
+   pestaña del proyecto. Él prefirió lo contrario: que TODO el abastecimiento se maneje
+   dentro de BODEGA CENTRAL, porque no pertenece a ningún proyecto, y que quien autoriza
+   entre ahí. Esa parte se revirtió — la fija _avancetest/bodega_finanzas_v999.cjs.
+   Lo que sigue vigente de v998: el gate único de autorización y el orden ascendente. */
 ok('el gate de autorizar sigue siendo el del revisor', /can\('compras\.revisar'\)/.test(ex('async function autorizarOrden(')));
 ok('autorizarOrden encuentra las OC de bodega', /_bodegaFindOc\(id\)/.test(ex('async function autorizarOrden(')));
 
