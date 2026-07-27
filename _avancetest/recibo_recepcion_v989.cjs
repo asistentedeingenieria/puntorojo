@@ -20,14 +20,15 @@ ok('la lista filtra por el término', /_catProvTerm/.test(ex('function renderCat
 const zP = ex('function _provsDelProducto(');
 ok('_provsDelProducto existe', !!zP);
 let fP = null;
-try { fP = new Function('_getProveedores', 'findCatalogProductForProvider', 'return (' + zP + ')'); } catch(e){}
+// v990: la función pasó a match EXACTO con normOcName (el difuso abría el candado mal)
+try { fP = new Function('_getProveedores', 'normOcName', 'return (' + zP + ')'); } catch(e){}
 if (fP) {
   const PRV = [
     { id:'p1', nombre:'SISTEGUA, S.A.', productos:[{ nombre:'CIENTO DE TORNILLO DE 1" PUNTA FINA', precio:8.5 }] },
     { id:'p2', nombre:'DISTRIBUIDORA FERRETERA', productos:[{ nombre:'CIENTO DE TORNILLO DE 1" PUNTA FINA', precio:4.66 }] },
     { id:'p3', nombre:'OTRO', productos:[{ nombre:'CLAVO', precio:1 }] }
   ];
-  const f = fP(() => PRV, (n, prv) => (prv.productos || []).find(x => x.nombre === n && Number(x.precio) > 0) || null);
+  const f = fP(() => PRV, s => String(s || '').toUpperCase().trim());
   const r = f('CIENTO DE TORNILLO DE 1" PUNTA FINA');
   ok('devuelve los DOS proveedores que lo tienen, con su precio', r.length === 2 && r[0].precio === 8.5 && r[1].precio === 4.66);
   ok('el que no lo tiene queda fuera', !r.some(x => x.id === 'p3'));
@@ -42,7 +43,8 @@ ok('la defensa de frontera acepta cualquiera de esos proveedores', /_provsDelPro
 const zAdv = ex('async function advancePedido(');
 ok('marcar RECIBIDO abre el modal de recepción (no el confirm genérico)', /_abrirRecepcion\(/.test(zAdv));
 const zRec = ex('window._abrirRecepcion = async function');
-ok('el modal exige firma del que recibe', /_pedirFirmaSiFalta\(\)/.test(zRec) && /_miFirmaImg\(\)/.test(zRec));
+// v990: la firma se pide en el CONFIRMAR (después de ver el detalle), no al abrir
+ok('el flujo exige firma del que recibe', /_pedirFirmaSiFalta\(\)/.test(ex('window._recepcionConfirmar = async function')));
 ok('cantidades editables (recepción parcial)', /data-recx/.test(zRec));
 const zConf = ex('window._recepcionConfirmar = async function');
 ok('guarda pd.recepcion con quién, cuándo y qué recibió', /recepcion = \{/.test(zConf) && /porNombre/.test(zConf) && /\bitems\b/.test(zConf) && /fecha:/.test(zConf));
