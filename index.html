@@ -3171,7 +3171,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1004</span>
+    <span style="opacity:.5;font-size:9px">v1005</span>
   </footer>
 
 </div>
@@ -17869,6 +17869,8 @@ function renderPedidoCard(pd, p){
                  + extras.reduce((s,e) => s + (Number(e.qty)||0), 0);
   const statusClass = pd.status.replace(/\s+/g,'-');
   const statusInfo = PEDIDO_ESTADOS.find(s => s.key === pd.status) || PEDIDO_ESTADOS[0];
+  // v1005: APROBADO solo cuando finanzas firmó TODAS sus órdenes
+  const _estCard = _estadoPedidoMostrar(pd, getPedidoOrdenes(pd.id));
   const stepIdx = PEDIDO_ESTADOS.findIndex(s => s.key === pd.status);
 
   // Primeros 6 items (catálogo primero, después extras si queda espacio)
@@ -17944,7 +17946,8 @@ function renderPedidoCard(pd, p){
         <div><dt>Fecha pedido</dt><dd>${pd.fecha || '—'}</dd></div>
         ${pd.fechaEntrega ? `<div><dt>Entrega</dt><dd>${pd.fechaEntrega}</dd></div>` : ''}
       </dl>
-      <div class="pedido-status ${statusClass}">${statusInfo.label}</div>
+      <!-- v1005: APROBADO solo si finanzas ya firmó; si no, PENDIENTE DE AUTORIZACIÓN -->
+      <div class="pedido-status ${statusClass}" ${_estCard.texto !== statusInfo.label ? 'style="background:#B45309"' : ''}>${_estCard.texto === 'PENDIENTE DE AUTORIZACIÓN' ? _estCard.texto : statusInfo.label}</div>
     </div>
     <div class="pedido-body">
       <div class="pedido-items-summary"><strong>${totalItemCount}</strong> material${totalItemCount!==1?'es':''} · <strong>${totalQty}</strong> unidad${totalQty!==1?'es':''}${extraItemCount > 0 ? ` · <span style="color:var(--cafe);font-weight:700">${extraItemCount} EXTRAORDINARIO${extraItemCount!==1?'S':''}</span>` : ''}${pd.ordenCambio ? ' · <span style="color:var(--amber);font-weight:700">ORDEN DE CAMBIO</span>' : ''}</div>
@@ -20000,6 +20003,19 @@ function _variosPedidosTodos(){
   } catch (e) {}
   return out;
 }
+/* v1005 (pedido de Antonio): el pedido pasaba a APROBADO al GENERARSE la orden, aunque
+   finanzas no la hubiera firmado. El chip ahora dice la verdad: mientras alguna de sus
+   órdenes espere firma, PENDIENTE DE AUTORIZACIÓN; APROBADO recién cuando están todas.
+   No cambia pd.status — es solo cómo se muestra. PURA. */
+function _estadoPedidoMostrar(pd, ocs){
+  const st = String((pd && pd.status) || 'SOLICITADO');
+  const col = st === 'RECIBIDO' ? '#166534' : st === 'APROBADO' ? '#92400E' : '#B91C1C';
+  if (st !== 'APROBADO') return { texto: st, color: col };
+  const lista = Array.isArray(ocs) ? ocs : [];
+  const pendientes = lista.filter(function(o){ return o && (o.status || 'AUTORIZADA') === 'PENDIENTE_AUTORIZACION'; });
+  if (!pendientes.length) return { texto: 'APROBADO', color: col };
+  return { texto: 'PENDIENTE DE AUTORIZACIÓN', color: '#B45309' };
+}
 function _puedeVerVarios(){
   try { return can('pedidos.create') || can('compras.autorizar') || can('compras.revisar') || can('users.manage'); }
   catch(e){ return false; }
@@ -20215,8 +20231,10 @@ function _abrirPanelBodega(){
   const _puedeAutOc = _puedeAutorizarOc(); // v998: el botón AUTORIZAR solo a quien autoriza
   const pedAbHTML = pedAb.map(pd => {
     const ocsPd = _bm.ordenes.filter(o => o && o.pedidoId === pd.id);
-    const st = pd.status || 'SOLICITADO';
-    const stCol = st === 'RECIBIDO' ? '#166534' : st === 'APROBADO' ? '#92400E' : '#B91C1C';
+    // v1005: el chip dice PENDIENTE DE AUTORIZACIÓN mientras finanzas no firme sus órdenes
+    const _estMost = _estadoPedidoMostrar(pd, ocsPd);
+    const st = _estMost.texto;
+    const stCol = _estMost.color;
     const nItems = Object.keys(pd.items || {}).length;
     const botonesOc = ocsPd.map(o => {
       const pend = (o.status || 'AUTORIZADA') === 'PENDIENTE_AUTORIZACION';
@@ -20225,8 +20243,8 @@ function _abrirPanelBodega(){
       /* v1000 (reporte de Antonio: "me salen dos por cada orden"): la autorización vive en
          UN solo lugar — la bandeja OC PENDIENTES DE AUTORIZAR de abajo. Acá solo se informa
          el estado y se deja ver el borrador. */
-      return `<span style="font-size:9px;font-weight:700;letter-spacing:.8px;color:#B45309">${_nOc} · PENDIENTE FINANZAS</span>
-           <button class="btn ghost sm" style="font-size:10px" onclick="previewOrden('${o.id}')">VER</button>`;
+      // v1005: el estado ya lo dice el chip del pedido — acá solo queda ver el borrador
+      return `<button class="btn ghost sm" style="font-size:10px" onclick="previewOrden('${o.id}')">VER ${_nOc}</button>`;
     }).join(' ');
     const btnGenerar = (!ocsPd.length)
       ? `<button class="btn sm" style="font-size:10px" onclick="_cerrarPanelBodegaDom(); currentPedidoDetalleId='${pd.id}'; openOrdenCompra()">GENERAR OC</button>`
@@ -20395,7 +20413,9 @@ window._abrirPanelVarios = function(){
     const filas = porCliente[cli].map(pd => {
       const ocs = getPedidoOrdenes(pd.id);
       const nItems = Object.keys(pd.items || {}).length + ((pd.extras || []).length);
-      const st = pd.status || 'SOLICITADO';
+      // v1005: el estado refleja si finanzas ya firmó
+      const _estV = _estadoPedidoMostrar(pd, ocs);
+      const st = _estV.texto;
       const btnOc = (!ocs.length && (can('compras.autorizar') || can('users.manage')))
         ? `<button class="btn sm" style="font-size:10px" onclick="_cerrarPanelVariosDom(); currentPedidoDetalleId='${pd.id}'; openOrdenCompra()">GENERAR OC</button>` : '';
       const chipsOc = ocs.map(o => {
@@ -20404,11 +20424,11 @@ window._abrirPanelVarios = function(){
         if (!pend) return `<button class="btn ghost sm" style="font-size:10px" onclick="printOrdenCompra('${o.id}')">IMPRIMIR ${esc(n)}</button>`;
         return _puedeAut
           ? `<button class="btn sm" style="background:var(--red-dark);border-color:var(--red-dark);color:#fff;font-size:10px" onclick="autorizarOrden('${o.id}')">AUTORIZAR ${esc(n)}</button>`
-          : `<span style="font-size:9px;font-weight:700;letter-spacing:.8px;color:#B45309">${esc(n)} · PENDIENTE FINANZAS</span>`;
+          : `<button class="btn ghost sm" style="font-size:10px" onclick="previewOrden('${o.id}')">VER ${esc(n)}</button>`; // v1005: el estado lo dice el chip del pedido
       }).join(' ');
       return `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
         <div style="min-width:0">
-          <div style="font-size:11.5px"><b>${esc(_numLimpio(pd.numero))}</b> <span style="font-size:9px;font-weight:700;color:${_estadoCol(st)};letter-spacing:.8px;margin-left:6px">${esc(st)}</span></div>
+          <div style="font-size:11.5px"><b>${esc(_numLimpio(pd.numero))}</b> <span style="font-size:9px;font-weight:700;color:${_estV.color};letter-spacing:.8px;margin-left:6px">${esc(st)}</span></div>
           <div style="font-size:10px;color:#78716C;margin-top:2px">${nItems} material${nItems !== 1 ? 'es' : ''} · ${esc(pd.solicitante || '')}${pd.fechaEntrega ? ' · ENTREGA ' + esc(pd.fechaEntrega) : ''}${pd.apto ? ' · ' + esc(pd.apto) : ''}</div>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
