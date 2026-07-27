@@ -36,7 +36,8 @@ ok('el nombre de un poste a medida NO se reemplaza por el del catálogo', /_ocMe
 ok('se guarda matchName para la resolución automática', /matchName/.test(zBuild));
 let fBuild = null;
 try {
-  fBuild = new Function('_pedidoKeyParts', '_ncDeCompra', '_ocMedidaEspecialMetros', '_ocNombreBaseMedida',
+  // v997: además consulta las VARIANTES de compra — stubs neutros (sin variantes)
+  fBuild = new Function('_pedidoKeyParts', '_ncDeCompra', '_ocMedidaEspecialMetros', '_ocNombreBaseMedida', '_variantesDeCompra', '_varianteRecordada', 'activeProj',
                         'return (' + zBuild + ')');
 } catch(e){}
 if (fBuild) {
@@ -44,7 +45,8 @@ if (fBuild) {
     k => ({ cat: 'PERFILERÍA', name: k }),                       // clave = nombre en el test
     n => (n === BASE ? 'POSTE 2½" 10 PIES CAL 26 (NOMBRE DEL EXCEL)' : null),
     n => { const m = String(n).match(/\(MEDIDA ESPECIAL\s+([\d.]+)\s*M\)/i); return m ? Number(m[1]) : null; },
-    fB || (n => n)
+    fB || (n => n),
+    () => [], () => '', () => ({})
   );
   const outEsp = f({ items: { [ESP]: 434 } })[0];
   ok('la OC muestra la medida REAL que pidió la obra', outEsp && outEsp.name === ESP);

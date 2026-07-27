@@ -56,7 +56,11 @@ if (srcOc && srcParts) {
   const h = new Function(srcParts
     + '\nfunction _ncDeCompra(){ return null; }'
     + '\nfunction _ocMedidaEspecialMetros(n){ const m = String(n||"").match(/\\(MEDIDA ESPECIAL\\s+([\\d.]+)\\s*m\\)/i); return m ? Number(m[1]) : null; }'
-    + '\nfunction _ocNombreBaseMedida(n){ return String(n||"").replace(/\\s*\\(MEDIDA ESPECIAL[^)]*\\)/i, "").trim(); }\n'
+    + '\nfunction _ocNombreBaseMedida(n){ return String(n||"").replace(/\\s*\\(MEDIDA ESPECIAL[^)]*\\)/i, "").trim(); }'
+    // v997: además consulta las VARIANTES de compra — stubs neutros (material sin variantes)
+    + '\nfunction _variantesDeCompra(){ return []; }'
+    + '\nfunction _varianteRecordada(){ return ""; }'
+    + '\nfunction activeProj(){ return {}; }\n'
     + srcOc + '\nreturn buildPedidoOcItems;')();
   const pd = { items: { "POSTE DE 2½\" X 9.19' (0.35) CAL. 26 (MEDIDA ESPECIAL 2.8 m)": 424, 'PLANCHAS::Plancha 1/2': 10 }, specs: {} };
   const arr = h(pd);

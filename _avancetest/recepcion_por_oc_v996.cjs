@@ -52,20 +52,20 @@ let fC = null;
 try { fC = new Function(zE + '\nreturn (' + zC + ')')(); } catch(e){}
 if (fC) {
   const pdA = { id:'p1', recepciones:{
-    o1:{ ts:10, por:'rony', porNombre:'RONY RIVERA', entregoNombre:'SISTEGUA', recetaRecibido:{ A:60, B:10 }, items:[{name:'A',qty:60}], parcial:true },
-    o2:{ ts:20, por:'rony', porNombre:'RONY RIVERA', entregoNombre:'NOVEX',    recetaRecibido:{ A:40 },       items:[{name:'B',qty:10}], parcial:false }
+    o1:{ ts:10, por:'rony', porNombre:'RONY RIVERA', entregoNombre:'SISTEGUA', recetaRecibido:{ A:60, B:10 }, items:{'A':60}, parcial:true },
+    o2:{ ts:20, por:'rony', porNombre:'RONY RIVERA', entregoNombre:'NOVEX',    recetaRecibido:{ A:40 },       items:{'B':10}, parcial:false }
   }};
   const c = fC(pdA, OCS);
   ok('suma lo recibido de todas las entregas por clave de receta', c && c.recetaRecibido.A === 100 && c.recetaRecibido.B === 10);
   ok('se queda con la fecha/hora de la ÚLTIMA entrega', c && c.ts === 20);
-  ok('junta las líneas de todas las entregas', c && c.items.length === 2);
-  const pdB = { id:'p1', recepciones:{ o1:{ ts:10, recetaRecibido:{ A:60 }, items:[], parcial:true } } };
-  ok('falta una entrega ⇒ el consolidado es PARCIAL (libera el candado v991)', fC(pdB, OCS).parcial === true);
+  ok('junta las líneas de todas las entregas (MAPA, como lo graba la app)', c && Object.keys(c.items).length === 2 && c.items.A === 60);
+  const pdB = { id:'p1', recepciones:{ o1:{ ts:10, recetaRecibido:{ A:60 }, items:{}, parcial:true } } };
+  ok('falta una entrega ⇒ faltanEntregas (NO parcial: ese material ya está comprado)', fC(pdB, OCS).faltanEntregas === true);
   const pdC = { id:'p1', recepciones:{
-    o1:{ ts:10, recetaRecibido:{ A:100 }, items:[], parcial:false },
-    o2:{ ts:11, recetaRecibido:{ B:10 },  items:[], parcial:false }
+    o1:{ ts:10, recetaRecibido:{ A:100 }, items:{}, parcial:false },
+    o2:{ ts:11, recetaRecibido:{ B:10 },  items:{}, parcial:false }
   }};
-  ok('todas completas ⇒ el consolidado NO es parcial', fC(pdC, OCS).parcial === false);
+  ok('todas completas ⇒ ni parcial ni faltantes', fC(pdC, OCS).parcial === false && fC(pdC, OCS).faltanEntregas === false);
   ok('sin ninguna entrega devuelve null', fC({ id:'p1' }, OCS) === null);
 }
 
@@ -94,6 +94,13 @@ const zCard = ex('function renderPedidoCard(');
 ok('la tarjeta muestra el avance de entregas', /DE \$\{_e\.total\} ENTREGAS RECIBIDAS/.test(zCard) && /_pedidoEntregas\(/.test(zCard));
 ok('cada entrega recibida tiene su propio comprobante en la tarjeta', /imprimirRecibo\('\$\{pd\.id\}','\$\{x\.id\}'\)/.test(zCard));
 ok('con un solo proveedor no cambia nada (botón de siempre)', /_ent\.total > 1/.test(zCard) && /YA RECIBÍ EL MATERIAL/.test(zCard));
+/* compatibilidad: un pedido recibido ANTES de v996 tiene pd.recepcion sin pd.recepciones —
+   no puede decir "0 DE 2 ENTREGAS" contradiciendo su propio badge RECIBIDO EN OBRA */
+ok('un pedido recibido con el modelo viejo no muestra el contador de entregas', /if \(!pd\.recepciones && pd\.recepcion\) return '';/.test(zCard));
+// el ocId se fija antes de cualquier salida temprana (si no, se hereda el de la apertura previa)
+const zAbrir = ex('window._abrirRecepcion = async function');
+const _iSet = zAbrir.indexOf('_recepcionOcId = ocId'), _iRet = zAbrir.indexOf('return false');
+ok('el ocId de la recepción no se hereda de una apertura anterior', _iSet > 0 && _iSet < _iRet);
 ok('el comprobante numera la entrega (REC 2-1)', /_reciboDocHTML\(pd, p, paraCaptura, ocId\)|entregaSeq/.test(html));
 ok('el recibo de una entrega muestra SU proveedor como quien entregó', /entregoNombre/.test(ex('function _reciboDocHTML(')));
 

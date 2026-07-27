@@ -1,39 +1,47 @@
-v996: recepción por proveedor, historial de recibidos, proyecto manual y correlativos limpios
+v997: variantes de compra, solicitudes ordenadas y 31 defectos de la revisión de v996
 
-RECEPCIÓN POR ORDEN DE COMPRA (pedido de Antonio: "son varios proveedores los que van a entregar")
-- Cada OC se recibe y se firma por separado, con su comprobante REC <pedido>-<n>, su fecha
-  y su ENTREGÓ (pre-llenado con el proveedor de esa orden).
-- pd.recepciones[ocId] guarda cada entrega. Va DENTRO del pedido, que ya viaja por
-  union-merge con sello _ts (v972): dos supervisores firmando a la vez no se pisan.
-- pd.recepcion queda como CONSOLIDADO de todas las entregas, así _pedidoCubre, la cobertura
-  de receta y el candado de etapa (v991) siguen funcionando sin tocarlos.
-- El pedido pasa a RECIBIDO EN OBRA solo cuando llegaron TODAS sus OCs vivas; mientras tanto
-  la tarjeta muestra "1 DE 2 ENTREGAS RECIBIDAS" y el comprobante de cada una.
-- Firma el solicitante O el encargado de esa obra (o admin) — decisión de Antonio.
+Una revisión adversarial de v996 (4 lentes + verificación independiente) encontró 31
+defectos; los críticos afectaban a la versión YA desplegada.
 
-CORRELATIVOS (queja: "siguen saliendo con los ceros")
-- Los pedidos y OCs emitidos antes de v994 quedaron GUARDADOS con ceros. _numLimpio() los
-  limpia al MOSTRAR (tarjeta, detalle, listado de OCs, planillas OC, título del PDF). El dato
-  no se toca: el vínculo pedido↔OC sigue intacto y no hace falta migrar nada.
+CRÍTICOS DE v996 CORREGIDOS
+- _consolidarRecepcionPedido trataba rec.items como ARRAY, pero la recepción lo graba como
+  MAPA nombre→cantidad: la primera entrega tiraba TypeError y toda la recepción por
+  proveedor moría en el primer clic. Ahora suma por clave y sigue siendo un mapa.
+- _healPedidosRecibidos (v995) cerraba el pedido como RECIBIDO con la PRIMERA entrega,
+  matando los botones "RECIBÍ DE X" de los proveedores que faltaban. Ahora respeta las
+  entregas pendientes y además re-consolida cuando una entrega entra por sync o cambia el
+  número de órdenes.
+- 'parcial' mezclaba "lo que llegó vino incompleto" (libera el candado, v991) con "falta
+  llegar otra OC" (ese material ya está comprado). Con la mezcla la receta re-ofrecía
+  material en camino. Ahora son campos separados: parcial y faltanEntregas.
+- pd.recepciones se perdía en el union-merge (resuelve el pedido entero por _ts). Nuevo
+  _mergeRecepciones: las entregas se unen por OC y gana la firma más reciente.
+  APP_SYNC_VERSION 913 → 914.
+- El número del comprobante salía de la posición en el array: un recibo firmado podía
+  renumerarse. Ahora se congela al firmar (entrega.seq).
+- El filtro de OC vivas miraba `estatus` (campo de otro módulo) en vez de `status`.
+- _numLimpio corría global y podía comerse los ceros del NOMBRE de un proyecto manual
+  ('CASA 007'); ahora solo toca el correlativo. El número impreso de la OC también se limpia.
+- El proyecto y el apto (texto libre del formulario) se inyectaban sin escapar en la tarjeta.
 
-PEDIDOS DE PROYECTO MANUAL (reporte: "NO DEBERÍA DE SER ASÍ")
-- Un pedido para PROYECTO PEQUEÑO / REPARACIÓN se titula y numera con SU proyecto
-  (TIFFANY – 1, 2, 3…), no con el proyecto activo. Cada cliente lleva su propia serie: el
-  primer número libre se busca solo entre los pedidos de ESE prefijo.
+VARIANTES DE COMPRA (pedido de Antonio: match exacto con DATOS_COMPRAS)
+- 50 materiales del catálogo interno son VARIOS productos en el Excel ("SELLADOR
+  MULTIFUNCIONAL" son 4, de Q475 a Q672). El modal de OC deja elegir la presentación exacta;
+  al elegir se corrige nombre Y precio, la elección se recuerda y al generar avisa (sin
+  bloquear) si quedó alguna sin elegir.
+- No convierte en compra un material de BODEGA CENTRAL, conserva la especificación
+  obligatoria del pedido y, sin match, limpia precio y proveedor en vez de dejar los de la
+  presentación anterior.
 
-ENVIAR A COMPRAS (reporte: "el pedido no se va y no me borra todo")
-- CAUSA: submitPedido limpiaba las variables pero NUNCA repintaba el catálogo, así que los
-  chips y el contador "2 MATERIALES SELECCIONADOS" seguían en pantalla. Además leía
-  pfNivel/pfApto sin guarda — en pedidos MANUALES van ocultos — y una excepción ahí se
-  saltaba el toast y el cambio de pestaña.
-- Ahora repinta el formulario, avisa "PEDIDO N ENVIADO A COMPRAS" y el cierre está blindado.
-  Mismas guardas en resetPedidoForm.
+SOLICITUDES DE ANTICIPO (pedido de Antonio)
+- Orden por etapa del flujo: falta cotizar → falta autorizar → falta factura → falta
+  entregar; las pausadas no encabezan. Las ENTREGADAS van a un historial colapsable.
 
-HISTORIAL DE PEDIDOS RECIBIDOS (pedido de Antonio)
-- Los pedidos RECIBIDO EN OBRA se guardan y se esconden en un bloque colapsable al final,
-  con el mismo patrón de HISTORIAL DE PLANILLAS CERRADAS (conteo + MOSTRAR/OCULTAR,
-  preferencia recordada por proyecto).
+BODEGA
+- La numeración de pedidos de abastecimiento toma el PRIMER NÚMERO LIBRE: al eliminar un
+  pedido su número vuelve a estar disponible (quedaba "BODEGA – 2" siendo el único).
 
-Tests: 3240 avancetest (4 suites nuevas) + 115 recetatest. Validador en baseline.
+Tests: 3312 avancetest (3 suites nuevas; se corrigieron las fixtures de v996 que usaban la
+forma equivocada de items y por eso no detectaron el bug) + 115 recetatest.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>

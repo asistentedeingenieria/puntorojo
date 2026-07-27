@@ -22,11 +22,12 @@ ok('logo más grande (62px, flex centrado)', /display:flex;align-items:center[^>
 const srcPartes = extractFn('_ocNumeroPartes');
 ok('_ocNumeroPartes existe', !!srcPartes);
 if (srcPartes) {
-  const f = new Function(srcPartes + '\nreturn _ocNumeroPartes;')();
+  // v997: _ocNumeroPartes limpia los ceros con _numLimpio — se inyecta la implementación real
+  const f = new Function(extractFn('_numLimpio') + '\n' + srcPartes + '\nreturn _ocNumeroPartes;')();
   const r = f({ numero: 'VICINIA LAS AMÉRICAS – 00003 - OC01' });
-  ok('separa proyecto / pedido / OC', r.proyecto === 'VICINIA LAS AMÉRICAS' && r.pedido === '00003' && r.oc === 'OC01');
+  ok('separa proyecto / pedido / OC (v997: sin ceros)', r.proyecto === 'VICINIA LAS AMÉRICAS' && r.pedido === '3' && r.oc === 'OC 1');
   const d = f({ numero: 'VICINIA LAS AMÉRICAS – 00002 - DESP01' });
-  ok('también para despachos', d.oc === 'DESP01' && d.pedido === '00002');
+  ok('también para despachos (v997: sin ceros)', d.oc === 'DESP 1' && d.pedido === '2');
   const s = f({ numero: 'ALGO SIN FORMATO', proyecto: 'X' });
   ok('sin formato no revienta', typeof s.proyecto === 'string' && s.oc === '');
 }

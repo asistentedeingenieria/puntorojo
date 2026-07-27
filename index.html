@@ -3171,7 +3171,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v996</span>
+    <span style="opacity:.5;font-size:9px">v997</span>
   </footer>
 
 </div>
@@ -8947,7 +8947,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 913; // v977: merge por clave/ts de p.materiales.recetaMiles en applyRemote
+const APP_SYNC_VERSION = 914; // v977: merge por clave/ts de p.materiales.recetaMiles en applyRemote
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9771,6 +9771,8 @@ const CloudSync = {
           const _mpd = _mergeById((lp && lp.materiales && lp.materiales.pedidos) || [], rp.materiales.pedidos || [], _tpd);
           rp.materiales.pedidos = _mpd.list;
           if (_mpd.changed) needsResync = true;
+          // v997: las ENTREGAS de un pedido se unen por OC (ver _mergeRecepciones)
+          if (_mergeRecepciones((lp && lp.materiales && lp.materiales.pedidos) || [], rp.materiales.pedidos)) needsResync = true;
           const _toc = Object.assign({},
             (lp && lp.materiales && lp.materiales.ordenesEliminadas) || {},
             rp.materiales.ordenesEliminadas || {});
@@ -13529,6 +13531,10 @@ function _primerNumeroLibre(usados){
 }
 function _pedidoCubre(pd){
   var rec = pd && pd.recepcion;
+  /* v996: mientras FALTE llegar alguna orden de compra, el pedido sigue cubriendo lo
+     PEDIDO — ese material ya está comprado y en camino, no se puede volver a pedir. Recién
+     cuando llegaron todas manda lo efectivamente recibido (v991). */
+  if (rec && rec.faltanEntregas) return (pd && pd.recetaQty) || {};
   if (rec && rec.recetaRecibido && typeof rec.recetaRecibido === 'object') return rec.recetaRecibido;
   return (pd && pd.recetaQty) || {};
 }
@@ -13575,10 +13581,12 @@ function _itemsYaPedidosEtapa(pedidos, levelId, stageIdx){
       // v909: los pedidos POR APARTAMENTO no cierran la clave a escala de nivel;
       // su cobertura se resta con _coberturaAptosEtapa.
       if (pd.recetaAptoId) return;
-      // v991: si la recepción fue PARCIAL, este pedido NO cierra sus claves — lo que de
-      // verdad llegó se descuenta por cantidades en _coberturaAptosEtapa y el faltante
-      // queda disponible para volver a pedirse (decisión de Antonio 27-jul).
-      if (pd.recepcion && pd.recepcion.parcial) return;
+      /* v991: si la recepción fue PARCIAL, este pedido NO cierra sus claves — lo que de
+         verdad llegó se descuenta por cantidades en _coberturaAptosEtapa y el faltante
+         queda disponible para volver a pedirse (decisión de Antonio 27-jul).
+         v996: solo cuenta el faltante REAL (llegó incompleto). Que todavía no haya llegado
+         otra OC del mismo pedido no libera nada: ese material ya está comprado. */
+      if (pd.recepcion && pd.recepcion.parcial && !pd.recepcion.faltanEntregas) return;
       Object.keys(pd.items||{}).forEach(function(k){ keys[k]=true; });
       // v906: claves ORIGINALES de receta (los POSTES se guardan renombrados con su medida)
       (pd.recetaKeys||[]).forEach(function(k){ keys[k]=true; });
@@ -17655,11 +17663,19 @@ function setPedidoTab(tab){
    Las tres son PURAS (hay test que las evalúa suelta). */
 function _pedidoEntregas(pd, ocs){
   const recs = (pd && pd.recepciones) || {};
-  const vivas = (ocs || []).filter(function(o){ return o && o.pedidoId === (pd || {}).id && o.estatus !== 'CANCELADA'; });
+  // las OC de materiales usan `status` (PENDIENTE_AUTORIZACION / AUTORIZADA); `estatus` es
+  // el campo de otro módulo — se miran los dos para no contar una orden dada de baja
+  const vivas = (ocs || []).filter(function(o){
+    return o && o.pedidoId === (pd || {}).id && o.estatus !== 'CANCELADA' && o.status !== 'CANCELADA' && !o.anulada;
+  });
   const pendientes = [], recibidasList = [];
   vivas.forEach(function(o, i){
-    const e = { oc: o, id: o.id, seq: i + 1, numero: o.numero, proveedorNombre: o.proveedorNombre || o.proveedor || '', rec: recs[o.id] || null };
-    if (e.rec && e.rec.ts) recibidasList.push(e); else pendientes.push(e);
+    const r = recs[o.id] || null;
+    /* El número del comprobante (REC <pedido>-<n>) se CONGELA al firmar: si saliera de la
+       posición en el array, un papel ya firmado cambiaría de número al borrarse otra orden
+       o al reordenarse la lista en el sync. Solo las pendientes usan la posición. */
+    const e = { oc: o, id: o.id, seq: (r && r.seq) ? r.seq : (i + 1), numero: o.numero, proveedorNombre: o.proveedorNombre || o.proveedor || '', rec: r };
+    if (r && r.ts) recibidasList.push(e); else pendientes.push(e);
   });
   return {
     total: vivas.length,
@@ -17672,14 +17688,18 @@ function _pedidoEntregas(pd, ocs){
 function _consolidarRecepcionPedido(pd, ocs){
   const ent = _pedidoEntregas(pd, ocs);
   if (!ent.recibidas) return null;
-  const recetaRecibido = {}, items = [];
+  /* items es un MAPA nombre→cantidad (así lo arma _recepcionConfirmar y así lo lee
+     _reciboDocHTML): se SUMAN las cantidades de todas las entregas, no se concatena. */
+  const recetaRecibido = {}, items = {};
   let ultima = null, algunaParcial = false;
   ent.recibidasList.forEach(function(e){
     const r = e.rec || {};
     Object.keys(r.recetaRecibido || {}).forEach(function(k){
       recetaRecibido[k] = (Number(recetaRecibido[k]) || 0) + (Number(r.recetaRecibido[k]) || 0);
     });
-    (r.items || []).forEach(function(it){ items.push(it); });
+    Object.keys(r.items || {}).forEach(function(k){
+      items[k] = (Number(items[k]) || 0) + (Number(r.items[k]) || 0);
+    });
     if (r.parcial) algunaParcial = true;
     if (!ultima || (Number(r.ts) || 0) > (Number(ultima.ts) || 0)) ultima = r;
   });
@@ -17689,8 +17709,13 @@ function _consolidarRecepcionPedido(pd, ocs){
     entregoNombre: ultima.entregoNombre || '',
     ts: Number(ultima.ts) || 0, fecha: ultima.fecha || '', hora: ultima.hora || '',
     items: items,
-    // PARCIAL si alguna entrega vino incompleta O si todavía falta que llegue alguna OC
-    parcial: algunaParcial || !ent.completo,
+    /* PARCIAL es solo "lo que llegó vino incompleto" — eso es lo que libera el candado y
+       deja re-pedir el faltante (v991). Que todavía falte llegar OTRA OC es distinto: ese
+       material YA está comprado y no se puede volver a pedir. Van en campos separados. */
+    parcial: algunaParcial,
+    faltanEntregas: !ent.completo,
+    entregasTotal: ent.total,
+    entregasRecibidas: ent.recibidas,
     recetaRecibido: recetaRecibido,
     porEntregas: true
   };
@@ -17713,8 +17738,28 @@ function _puedeRecibirEntrega(pd, user, obraId, esAdmin){
 function _healPedidosRecibidos(pedidos){
   let n = 0;
   (pedidos || []).forEach(function(pd){
+    /* v997: si una entrega entró por SYNC (otro supervisor la firmó en su dispositivo), el
+       consolidado local quedó viejo — se recalcula acá, que corre en cada pintado. */
+    if (pd && pd.recepciones && typeof getPedidoOrdenes === 'function') {
+      try {
+        const _ocsH = getPedidoOrdenes(pd.id);
+        const _entH = _pedidoEntregas(pd, _ocsH);
+        /* Se recalcula si cambió el número de entregas recibidas (llegó una por sync) o el
+           TOTAL de órdenes (se generó una OC nueva o se dio de baja una): si no, el flag
+           faltanEntregas queda viejo y el pedido nunca se cierra —o se cierra de más—. */
+        if (_entH.total && (!pd.recepcion || pd.recepcion.entregasRecibidas !== _entH.recibidas || pd.recepcion.entregasTotal !== _entH.total)) {
+          const _cons = _consolidarRecepcionPedido(pd, _ocsH);
+          if (_cons) { pd.recepcion = _cons; pd._ts = Date.now(); n++; }
+        }
+      } catch(e){}
+    }
     if (!pd || pd.status !== 'APROBADO') return;
     if (!pd.recepcion || !pd.recepcion.ts) return;
+    /* v996: un pedido multi-proveedor con solo ALGUNAS entregas firmadas está APROBADO a
+       propósito — cerrarlo acá mataría los botones "RECIBÍ DE X" que faltan y dejaría
+       material sin comprobante. Solo se corrige el caso que este heal vino a arreglar:
+       recepción registrada y nada pendiente de llegar. */
+    if (pd.recepcion.faltanEntregas) return;
     pd.status = 'RECIBIDO';
     pd._ts = Date.now();                   // v972: union-merge — toda transición se sella
     pd.history = pd.history || [];
@@ -17827,7 +17872,7 @@ function renderPedidoCard(pd, p){
            comprobante. Con una sola OC se mantiene el botón de siempre. */
         const _ent = _pedidoEntregas(pd, ocsPedido);
         const _escB = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-        if (_ent.total > 1) {
+        if (_ent.total > 1 || (pd.recepciones && Object.keys(pd.recepciones).length)) {
           actionBtn = _ent.pendientes.map(e => {
             const _corto = String(e.proveedorNombre || 'PROVEEDOR').split(',')[0].split(' ').slice(0, 2).join(' ');
             return `<button class="btn sm" onclick="advancePedido('${pd.id}','${e.id}')" title="Recibir la entrega de ${_escB(e.proveedorNombre)}">RECIBÍ DE ${_escB(_corto)}</button>`;
@@ -17857,9 +17902,9 @@ function renderPedidoCard(pd, p){
     <div class="pedido-hd">
       <div class="pedido-num">${_numLimpio(pd.numero)}<small>PEDIDO N°</small></div>
       <dl class="pedido-meta">
-        <div><dt>Proyecto</dt><dd>${pd.proyectoPedido || p.name}${pd.proyectoManual ? ' · MANUAL' : ''}</dd></div>
+        <div><dt>Proyecto</dt><dd>${esc(pd.proyectoPedido || p.name)}${pd.proyectoManual ? ' · MANUAL' : ''}</dd></div>
         <div><dt>Solicitante</dt><dd>${pd.solicitante || '—'}</dd></div>
-        <div><dt>Ubicación</dt><dd>${pd.nivel || '—'}${pd.apto ? ' · ' + pd.apto : ''}</dd></div>
+        <div><dt>Ubicación</dt><dd>${esc(pd.nivel || '—')}${pd.apto ? ' · ' + esc(pd.apto) : ''}</dd></div>
         <div><dt>Fecha pedido</dt><dd>${pd.fecha || '—'}</dd></div>
         ${pd.fechaEntrega ? `<div><dt>Entrega</dt><dd>${pd.fechaEntrega}</dd></div>` : ''}
       </dl>
@@ -17876,7 +17921,11 @@ function renderPedidoCard(pd, p){
         /* v996: con varios proveedores se ve el avance de ENTREGAS y el comprobante de
            cada una (cada proveedor firma la suya, en el día que llega). */
         const _e = _pedidoEntregas(pd, getPedidoOrdenes(pd.id));
-        if (_e.total < 2) return '';
+        if (_e.total < 2 && !(pd.recepciones && Object.keys(pd.recepciones).length)) return '';
+        /* Compatibilidad: los pedidos recibidos ANTES de v996 tienen una sola recepción del
+           pedido entero (pd.recepcion sin pd.recepciones). Para ellos no hay entregas que
+           contar — mostrar "0 DE 2 ENTREGAS" contradiría su badge RECIBIDO EN OBRA. */
+        if (!pd.recepciones && pd.recepcion) return '';
         const _eEsc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
         const _chips = _e.recibidasList.map(x =>
           `<button class="btn ghost sm" style="padding:3px 9px;font-size:9.5px;border-color:#86EFAC;color:#15803D" onclick="imprimirRecibo('${pd.id}','${x.id}')" title="Comprobante de la entrega de ${_eEsc(x.proveedorNombre)}">REC ${_solNum(pd)}-${x.seq} · ${_eEsc(String(x.proveedorNombre || '').split(',')[0])}</button>`
@@ -19127,6 +19176,34 @@ function _ocNombreBaseMedida(name){
   if (!/\(MEDIDA ESPECIAL/i.test(s)) return s;
   return s.replace(/\s*\(MEDIDA ESPECIAL[^)]*\)/i, '').replace(/X\s*[\d.]+\s*'/i, "X 10'").trim();
 }
+/* v997 (reporte de Antonio): un material del catálogo interno puede ser VARIOS productos
+   distintos en el Excel de compras —"SELLADOR MULTIFUNCIONAL" son cuatro, de Q475 a Q672—.
+   _ncDeCompra solo renombra cuando hay una sola compra; con varias, la OC salía con el
+   nombre genérico y un precio que podía no ser el del producto real. Acá se listan para que
+   compras elija la exacta al generar la orden. */
+function _variantesDeCompra(nombreInterno){
+  if (typeof CATALOGO_COMPRAS === 'undefined') return [];
+  const n = String(nombreInterno == null ? '' : nombreInterno).trim();
+  if (!n) return [];
+  const k = _ocItemMemKey(n);
+  for (let i = 0; i < CATALOGO_COMPRAS.length; i++) {
+    const g = CATALOGO_COMPRAS[i];
+    if (_ocItemMemKey(g.interno) === k) {
+      const c = g.compras || [];
+      return c.length > 1 ? c.slice() : [];
+    }
+  }
+  return [];
+}
+/* Memoria de la variante elegida (mismo patrón que ocProvPorItem, v916): la próxima OC del
+   mismo material ya viene con la que compras usó la última vez. */
+function _varianteRecordada(p, nombreInterno){
+  try {
+    const m = (p && p.materiales && p.materiales.ocVariantePorItem) || {};
+    const v = m[_ocItemMemKey(nombreInterno)];
+    return v ? String(v) : '';
+  } catch (e) { return ''; }
+}
 function buildPedidoOcItems(pd){
   const arr = [];
   const specs = pd.specs || {};
@@ -19140,9 +19217,23 @@ function buildPedidoOcItems(pd){
        que usa la resolución automática de bodega/proveedor/precio. */
     const esMedida = _ocMedidaEspecialMetros(name) != null;
     const nc = _ncDeCompra(esMedida ? _ocNombreBaseMedida(name) : name);
-    const fullName = (esMedida ? name : (nc || name)) + (spec ? ` [${spec}]` : '');
+    /* v997: si el material tiene VARIAS presentaciones en el Excel, se ofrecen para elegir.
+       Se pre-selecciona la que compras usó la última vez; si no hay memoria, queda el
+       nombre genérico y el selector marcado como "— ELEGIR PRESENTACIÓN —". */
+    const variantes = esMedida ? [] : _variantesDeCompra(name);
+    const recordada = variantes.length ? _varianteRecordada(activeProj(), name) : '';
+    const elegida = (recordada && variantes.indexOf(recordada) >= 0) ? recordada : '';
+    const base = esMedida ? name : (elegida || nc || name);
+    const fullName = base + (spec ? ` [${spec}]` : '');
     const it = { sourceKey:key, cat, name: fullName, qty: Number(qty) || 0, precio: 0, proveedorId: '', autoAssigned:false };
     if (esMedida) it.matchName = nc || _ocNombreBaseMedida(name);
+    if (variantes.length) {
+      it.variantes = variantes;
+      it.varianteBase = name;                 // nombre interno (clave de memoria)
+      it.varianteNombreBase = nc || name;     // nombre a mostrar si NO se elige presentación
+      it.varianteSpec = spec || '';           // la especificación del pedido va aparte
+      it.variante = elegida;
+    }
     arr.push(it);
   });
   (pd.extras || []).forEach((e, i) => {
@@ -19804,11 +19895,17 @@ function _bodegaMatStore(){
   if (!b.postesPrecioMedida || typeof b.postesPrecioMedida !== 'object') b.postesPrecioMedida = {};
   return b;
 }
+/* v997 (queja de Antonio: quedó "BODEGA – 2" siendo el único pedido): la numeración de
+   bodega también toma el PRIMER NÚMERO LIBRE, no el máximo+1 — al eliminar un pedido su
+   número vuelve a estar disponible y la serie no deja huecos. Misma regla que los pedidos
+   de proyecto (v992). Los ya emitidos conservan el suyo: renumerarlos rompería las órdenes
+   de compra que los citan. */
 function _bodegaNextNum(lista){
-  return Math.max(0, ...((Array.isArray(lista) ? lista : []).map(x => {
+  const usados = (Array.isArray(lista) ? lista : []).map(x => {
     const m = String((x || {}).numero || '').match(/–\s*(\d+)/);
     return m ? Number(m[1]) : 0;
-  }))) + 1;
+  });
+  return _primerNumeroLibre(usados);
 }
 /* Resolución GLOBAL de un pedido: bodega PRIMERO (store global), luego el proyecto
    activo (pedidos de obra). Devuelve el contenedor uniforme: cont.pedidos/cont.ordenes. */
@@ -20466,7 +20563,16 @@ function renderOcItems(){
 
   html += ocWorkingItems.map((it, idx) => `
     <div class="oc-item-row multi${!it.proveedorId ? ' oc-row-warn' : ''}">
-      <div class="oc-name">${it.name}${it.aMedida ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#DBEAFE;color:#1D4ED8;margin-left:6px">A MEDIDA · PRECIO MANUAL</span>' + (it.precioRecordado ? '<div style="font-size:8px;color:var(--mute);letter-spacing:.5px;margin-top:2px">ÚLTIMO PRECIO USADO — VERIFICALO</div>' : '') : (it.eventual ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#FEF3C7;color:#92400E;margin-left:6px">EVENTUAL</span><button type="button" onclick="_promoverEventual(' + idx + ')" style="background:none;border:none;color:var(--cafe);font-size:9px;font-weight:700;letter-spacing:.3px;cursor:pointer;text-decoration:underline;padding:0;margin-left:6px">PROMOVER AL CATÁLOGO</button>' : '')}${it.autoAssigned ? '<div style="font-size:8px;color:var(--red-dark);letter-spacing:1px;margin-top:2px">ASIGNADO POR CATÁLOGO</div>' : ''}${it.provRecordado ? '<div style="font-size:8px;color:var(--mute);letter-spacing:1px;margin-top:2px">PROVEEDOR RECORDADO DEL ÚLTIMO PEDIDO</div>' : ''}</div>
+      <div class="oc-name">${it.name}${it.aMedida ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#DBEAFE;color:#1D4ED8;margin-left:6px">A MEDIDA · PRECIO MANUAL</span>' + (it.precioRecordado ? '<div style="font-size:8px;color:var(--mute);letter-spacing:.5px;margin-top:2px">ÚLTIMO PRECIO USADO — VERIFICALO</div>' : '') : (it.eventual ? '<span style="display:inline-block;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:8px;background:#FEF3C7;color:#92400E;margin-left:6px">EVENTUAL</span><button type="button" onclick="_promoverEventual(' + idx + ')" style="background:none;border:none;color:var(--cafe);font-size:9px;font-weight:700;letter-spacing:.3px;cursor:pointer;text-decoration:underline;padding:0;margin-left:6px">PROMOVER AL CATÁLOGO</button>' : '')}${it.autoAssigned ? '<div style="font-size:8px;color:var(--red-dark);letter-spacing:1px;margin-top:2px">ASIGNADO POR CATÁLOGO</div>' : ''}${it.provRecordado ? '<div style="font-size:8px;color:var(--mute);letter-spacing:1px;margin-top:2px">PROVEEDOR RECORDADO DEL ÚLTIMO PEDIDO</div>' : ''}${
+        /* v997: el material tiene varias presentaciones en el Excel de compras (precios
+           distintos) — compras elige la exacta y con eso se corrige nombre y precio. */
+        it.variantes && it.variantes.length > 1
+          ? `<select data-ocvar="${idx}" onchange="updateOcItemVariante(${idx}, this.value)" style="width:100%;margin-top:4px;padding:5px 7px;border:1px solid ${it.variante ? '#E5E7EB' : '#FCA5A5'};border-radius:6px;font-family:inherit;font-size:10px;background:${it.variante ? '#fff' : '#FEF2F2'}">
+              <option value="">— ELEGIR PRESENTACIÓN (${it.variantes.length}) —</option>
+              ${it.variantes.map(v => `<option value="${String(v).replace(/"/g,'&quot;')}"${v === it.variante ? ' selected' : ''}>${String(v).replace(/[<>]/g,'')}</option>`).join('')}
+            </select>`
+          : ''
+      }</div>
       <div class="oc-qty">${it.qty}</div>
       <div><button type="button" onclick="_abrirPickerProveedor(this, ${idx})" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 10px;border:1px solid ${it.proveedorId ? '#D1D5DB' : '#FCA5A5'};border-radius:8px;background:#fff;font-family:inherit;font-size:11px;cursor:pointer;text-align:left"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${it.proveedorId === '_bodega' ? 'BODEGA CENTRAL (DESPACHO)' : ((proveedores.find(pv => pv.id === it.proveedorId)||{}).nombre || '— ASIGNAR —')}</span><span style="color:#9CA3AF">▾</span></button></div>
       <div>${it.aMedida
@@ -20493,6 +20599,40 @@ function fmtQ(n){
   return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+/* v997: compras elige la presentación exacta del Excel. Cambia el nombre que se le pide al
+   proveedor y RE-RESUELVE el precio con ese nombre (cada variante tiene el suyo: el sellador
+   va de Q475 a Q672). Sin elección vuelve al nombre genérico del pedido. */
+window.updateOcItemVariante = function(idx, valor){
+  const item = ocWorkingItems[idx];
+  if (!item || !item.variantes) return;
+  const v = String(valor || '');
+  item.variante = (v && item.variantes.indexOf(v) >= 0) ? v : '';
+  /* El nombre se rearma conservando la ESPECIFICACIÓN del pedido ([TALLA], [MEDIDA]…), que
+     es obligatoria y va aparte del producto. Sin variante se vuelve al nombre que traía el
+     ítem (el de compra si el catálogo lo renombró, si no el interno). */
+  const _spec = item.varianteSpec ? ` [${item.varianteSpec}]` : '';
+  const _base = item.variante || item.varianteNombreBase || item.varianteBase || item.name;
+  item.name = _base + _spec;
+  /* Los materiales que salen de BODEGA CENTRAL (despacho, v921/v936) no se compran: elegir
+     presentación no puede convertirlos en una compra al proveedor. */
+  if (item.esBodega || item.proveedorId === '_bodega') { renderOcItems(); return; }
+  // el precio y el proveedor se recalculan con el nombre REAL de compra
+  const best = findBestProviderForItem(item.name);
+  if (best) {
+    item.proveedorId = best.proveedor.id;
+    item.precio = best.precio;
+    item.autoAssigned = true;
+    item.eventual = false;
+  } else {
+    /* Sin match en el catálogo: no se puede dejar el precio ni el proveedor de la
+       presentación anterior — sería cobrar una cosa por otra. */
+    item.precio = 0;
+    item.proveedorId = '';
+    item.autoAssigned = false;
+    item.eventual = true;
+  }
+  renderOcItems();
+};
 function updateOcItemProveedor(idx, provId){
   const item = ocWorkingItems[idx];
   if (!item) return;
@@ -20797,6 +20937,23 @@ async function generarOrdenCompra(){
     return showToast(`ASIGNAR PROVEEDOR A ${sinProveedor.length} MATERIAL${sinProveedor.length!==1?'ES':''}`, 'red');
   }
 
+  /* v997: materiales con VARIAS presentaciones en el Excel y ninguna elegida — la orden le
+     llegaría al proveedor con la descripción genérica. No se bloquea (puede ser a propósito),
+     pero se avisa con los nombres a la vista. */
+  const sinVariante = ocWorkingItems.filter(it => it.variantes && it.variantes.length > 1 && !it.variante);
+  if (sinVariante.length > 0) {
+    const _lista = sinVariante.slice(0, 4).map(it => '<li style="margin:2px 0">' + String(it.name).replace(/[<>]/g,'') + '</li>').join('');
+    const _okSinVar = await window.prConfirm({
+      title: 'FALTA ELEGIR LA PRESENTACIÓN',
+      bodyHTML: `<div><strong>${sinVariante.length}</strong> material${sinVariante.length===1?'':'es'} de este pedido ${sinVariante.length===1?'tiene':'tienen'} varias presentaciones en el catálogo de compras y no se eligió cuál:</div>
+                 <ul style="margin:10px 0 0 18px;font-size:12px;color:#444">${_lista}${sinVariante.length>4?'<li>…</li>':''}</ul>
+                 <div style="margin-top:12px">Si seguís, la orden va a decir el nombre genérico y el precio puede no ser el del producto real.</div>`,
+      okText: 'GENERAR IGUAL',
+      cancelText: 'ELEGIR PRESENTACIÓN'
+    });
+    if (!_okSinVar) return;
+  }
+
   // v921: lo que sale de BODEGA CENTRAL es despacho interno — no exige precio
   const sinPrecio = ocWorkingItems.filter(it => it.proveedorId !== '_bodega' && !(Number(it.precio) > 0));
   if (sinPrecio.length > 0) {
@@ -20940,6 +21097,15 @@ async function generarOrdenCompra(){
       _memDest.ocProvPorItem[_ocItemMemKey(it.name)] = it.proveedorId;
     });
   }
+  /* v997: recordar la PRESENTACIÓN elegida (aplica a todos los pedidos, no solo receta):
+     la próxima OC del mismo material ya viene con la que compras usó la última vez. */
+  ocWorkingItems.forEach(it => {
+    if (!it.variante || !it.varianteBase) return;
+    const _mp = activeProj();
+    if (!_mp || !_mp.materiales) return;
+    if (!_mp.materiales.ocVariantePorItem) _mp.materiales.ocVariantePorItem = {};
+    _mp.materiales.ocVariantePorItem[_ocItemMemKey(it.varianteBase)] = it.variante;
+  });
 
   // v919: avisar al REVISOR que hay OC(s) pendientes de visto bueno y firma
   try {
@@ -21191,7 +21357,8 @@ function _fechaSelloCorta(ts){
 
 // v926: partes del número de la OC para mostrarlas ordenadas (proyecto / pedido / OC). PURA.
 function _ocNumeroPartes(oc){
-  const full = String((oc && oc.numero) || '');
+  // v997: también acá se limpian los ceros — es el número que se IMPRIME en la orden
+  const full = _numLimpio(String((oc && oc.numero) || ''));
   const seg = full.split(' - ');
   const suf = seg.length > 1 ? seg[seg.length - 1] : '';
   const cab = seg.length > 1 ? seg.slice(0, -1).join(' - ') : full;
@@ -21216,10 +21383,17 @@ function _projSiglas(name){
    no se toca, así que el vínculo pedido↔OC sigue intacto y no hace falta migrar nada.
    PURA. */
 function _numLimpio(numero){
-  return String(numero == null ? '' : numero)
-    .replace(/(–\s*)0+(\d)/g, '$1$2')                 // 'VLA – 00002'  → 'VLA – 2'
-    .replace(/\b(OC|DESP|OP)\s*0+(\d)/g, '$1 $2')     // 'OC 00002'     → 'OC 2'
-    .replace(/\b(OC|DESP|OP)(\d)/g, '$1 $2');         // 'OC01'         → 'OC 1'
+  /* Los ceros se quitan SOLO del correlativo, nunca del nombre del proyecto: el nombre de un
+     proyecto manual puede tener ceros propios ('CASA 007') y va delante del guion largo. Por
+     eso el primer replace corre una sola vez y anclado al ÚLTIMO ' – ' de la cadena. */
+  const s = String(numero == null ? '' : numero);
+  const i = s.lastIndexOf('–');
+  const cab = i >= 0 ? s.slice(0, i + 1) : '';
+  const col = i >= 0 ? s.slice(i + 1) : s;
+  return cab + col
+    .replace(/(^\s*)0+(\d)/, '$1$2')                  // ' 00002 - OC 00002' → ' 2 - OC 00002'
+    .replace(/\b(OC|DESP|OP)\s*0+(\d)/g, '$1 $2')     // 'OC 00002'          → 'OC 2'
+    .replace(/\b(OC|DESP|OP)(\d)/g, '$1 $2');         // 'OC01'              → 'OC 1'
 }
 /* Correlativo del pedido para los documentos (solicitud, recibo, mensaje de WhatsApp).
    v994: SIN ceros a la izquierda — los pedidos emitidos antes de v994 quedaron guardados
@@ -22307,6 +22481,9 @@ window.compartirReciboImg = async function(id, ocId){
 /* Modal de RECEPCIÓN: cantidades editables (parcial) + firma obligatoria. Resuelve
    true si el supervisor confirmó (advancePedido sigue con el cambio de estado). */
 window._abrirRecepcion = async function(id, ocId){
+  /* v996: se fija ANTES de cualquier salida temprana — si una apertura aborta, el ocId de
+     la anterior quedaría vivo y la próxima recepción se guardaría en la orden equivocada. */
+  window._recepcionOcId = ocId || '';
   const _ctx = _findPedidoGlobal(id);
   if (!_ctx) return false;
   const pd2 = _ctx.pd;
@@ -22329,7 +22506,6 @@ window._abrirRecepcion = async function(id, ocId){
       : (typeof buildPedidoOcItems === 'function' ? buildPedidoOcItems(pd2) : []).map(x => ({ k: x.name, q: Number(x.qty) || 0, src: x.sourceKey }))
     ).filter(x => x.k);
   if (!lineas.length) return 'sin-detalle'; // v990: no bloquea el pedido
-  window._recepcionOcId = ocId || '';
   const esc2 = s => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
   const filas = lineas.map((ln, i) => `
     <div style="display:grid;grid-template-columns:minmax(0,1fr) 100px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
@@ -22426,6 +22602,10 @@ window._recepcionConfirmar = async function(){
   let _completo = true;
   if (_ocIdRec) {
     if (!pd.recepciones || typeof pd.recepciones !== 'object') pd.recepciones = {};
+    // v997: congelar el número de la entrega — el comprobante firmado no puede renumerarse
+    const _entPrev = _pedidoEntregas(pd, (typeof getPedidoOrdenes === 'function') ? getPedidoOrdenes(pd.id) : []);
+    const _hitSeq = _entPrev.pendientes.concat(_entPrev.recibidasList).find(function(x){ return x.id === _ocIdRec; });
+    _entrega.seq = (_hitSeq && _hitSeq.seq) || (_entPrev.recibidas + 1);
     pd.recepciones[_ocIdRec] = _entrega;
     const _ocsPd = (typeof getPedidoOrdenes === 'function') ? getPedidoOrdenes(pd.id) : [];
     const _ent = _pedidoEntregas(pd, _ocsPd);
@@ -22436,8 +22616,10 @@ window._recepcionConfirmar = async function(){
     pd.recepcion = _entrega;
   }
   pd._ts = Date.now(); // v972: pedidos van por union-merge
-  // v991: con faltante, la etapa vuelve a estar disponible → soltar el candado
-  if (parcial && pd.esDeReceta && pd.recetaLevelId && typeof _recetaLiberarCandadoEtapa === 'function') {
+  /* v991: con faltante, la etapa vuelve a estar disponible → soltar el candado.
+     v996: NO se suelta mientras falte llegar otra OC del mismo pedido — ese material ya
+     está comprado; liberar ahí haría que la receta lo re-ofrezca y se pediría dos veces. */
+  if (parcial && !(pd.recepcion && pd.recepcion.faltanEntregas) && pd.esDeReceta && pd.recetaLevelId && typeof _recetaLiberarCandadoEtapa === 'function') {
     try { _recetaLiberarCandadoEtapa(_p991, pd.recetaLevelId, pd.recetaEtapaIdx); } catch(e){}
   }
   saveState();
@@ -30751,6 +30933,30 @@ function _dedupCatalogoSeeds(list, tombSet, prefix, keyOf){
   return { list: out, removed: removed };
 }
 
+/* v997: las ENTREGAS de un pedido multi-proveedor (pd.recepciones[ocId]) se unen POR OC.
+   _mergeById resuelve el pedido ENTERO por _ts, así que si dos supervisores firman entregas
+   distintas del mismo pedido al mismo tiempo, la versión con _ts menor —con su entrega— se
+   perdía entera. Acá se conservan las dos: por cada OC gana la firma más reciente.
+   PURA: muta la lista final y devuelve true si agregó algo. */
+function _mergeRecepciones(localList, finalList){
+  var loc = {};
+  (Array.isArray(localList) ? localList : []).forEach(function(p){ if (p && p.id) loc[p.id] = p; });
+  var cambio = false;
+  (Array.isArray(finalList) ? finalList : []).forEach(function(pd){
+    if (!pd || !pd.id) return;
+    var lp = loc[pd.id];
+    var lr = (lp && lp.recepciones) || null;
+    if (!lr) return;
+    var dst = pd.recepciones || {};
+    Object.keys(lr).forEach(function(ocId){
+      var a = lr[ocId], b = dst[ocId];
+      if (!a) return;
+      if (!b || (Number(a.ts) || 0) > (Number(b.ts) || 0)) { dst[ocId] = a; cambio = true; }
+    });
+    if (Object.keys(dst).length) pd.recepciones = dst;
+  });
+  return cambio;
+}
 function _mergeById(localList, remoteList, tombSet){
   var _ver = function(o){ if(!o) return 0; if(typeof o._ts==='number') return o._ts; if(typeof o.ts==='number') return o.ts; return 0; };
   var byId = {};
@@ -52569,9 +52775,29 @@ async function _anulAnularReal(){
     _antSolicSave();
     showT('COMENTARIO GUARDADO Y NOTIFICADO','green');
   };
+  /* v997 (pedido de Antonio): la lista se ordena por ETAPA DEL FLUJO, no solo por fecha —
+     primero lo que espera una acción suya. Rango más bajo = más arriba. PURA. */
+  function _antSolicRango(s){
+    const e = String((s && s.estado) || '');
+    if (s && s.pausada) return 50;                       // v976: en pausa, no espera acción
+    if (e === 'pendiente_cotizacion')   return 10;       // compras tiene que cotizar
+    if (e === 'pendiente_autorizacion') return 20;       // gerencia tiene que autorizar
+    if (e === 'autorizada') return (s && s.facturaUrl) ? 40 : 30;  // 30 falta factura · 40 falta entregar
+    if (e === 'entregada')  return 60;
+    if (e === 'cancelada' || e === 'rechazada') return 70;
+    return 45;                                           // estados nuevos: entre medio, nunca primero
+  }
+  window._antToggleHistorial = function(){
+    try { localStorage.setItem('ant_hist_visible', localStorage.getItem('ant_hist_visible') === '1' ? '0' : '1'); } catch(e){}
+    try { window.renderPlanillaAnticipos(); } catch(e){}
+  };
   // Render de la vista SOLICITUDES
   function _antSolicRender(cont){
-    const all = _antSolics().slice().sort((a,b)=>(Number(b._ts)||0)-(Number(a._ts)||0));
+    const _todas = _antSolics().slice().sort((a,b)=>(_antSolicRango(a) - _antSolicRango(b)) || ((Number(b._ts)||0)-(Number(a._ts)||0)));
+    // v997: las ENTREGADAS ya no esperan nada — se guardan en el historial colapsable
+    const all = _todas.filter(s => s && s.estado !== 'entregada');
+    const _entregadas = _todas.filter(s => s && s.estado === 'entregada');
+    const _histVis = (() => { try { return localStorage.getItem('ant_hist_visible') === '1'; } catch(e){ return false; } })();
     const my = _antMyEmail();
     const puedeSolicitar = _antSolicPerm('anticipos.solicitar') || _antEsGerente();
     const puedeCotizar = _antSolicPerm('anticipos.cotizar') || _antEsGerente();
@@ -52593,9 +52819,20 @@ async function _anulAnularReal(){
     }
     html += '<button style="'+tabBtn+_tabBtnAct+'">SOLICITUDES</button>';
     html += '</div>';
-    if(!all.length){ html += '<div class="empty" style="padding:30px">SIN SOLICITUDES TODAVÍA</div></div>'; cont.innerHTML=html; return; }
+    if(!all.length && !_entregadas.length){ html += '<div class="empty" style="padding:30px">SIN SOLICITUDES TODAVÍA</div></div>'; cont.innerHTML=html; return; }
+    if(!all.length){ html += '<div class="empty" style="padding:22px">NO HAY SOLICITUDES PENDIENTES — TODAS FUERON ENTREGADAS</div>'; }
     html += '<div style="display:grid;gap:10px">';
-    all.forEach(s => {
+    /* v997: las ENTREGADAS van al final, dentro del historial colapsable. Se recorren en la
+       misma pasada (misma tarjeta) y se abre el bloque justo antes de la primera. */
+    const _visibles = all.concat(_histVis ? _entregadas : []);
+    _visibles.forEach((s, _iSol) => {
+      if(_entregadas.length && _histVis && _iSol === all.length){
+        html += '</div><div style="border-top:2px solid #ddd;margin-top:12px;background:#FAFAFA">'
+          + '<div onclick="window._antToggleHistorial()" style="padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px">'
+          + '<strong style="font-size:11px;letter-spacing:.3px;color:#444">HISTORIAL DE SOLICITUDES ENTREGADAS</strong>'
+          + '<span style="font-size:11px;color:#666;font-weight:600">'+_entregadas.length+' · ▼ OCULTAR</span></div>'
+          + '<div style="display:grid;gap:10px;padding:4px 10px 12px">';
+      }
       const meta = s.pausada ? {t:'EN PAUSA · SIN EXISTENCIAS',c:'#475569',bg:'#E2E8F0'} : _antSolicEstadoMeta(s.estado); // v976: la pausa manda sobre el estado en el chip
       const esCreador = (String(s.solicitadoPor||'').toLowerCase()===my);
       let acciones='', gateHTML='', docsVer='';
@@ -52666,7 +52903,16 @@ async function _anulAnularReal(){
         + gateHTML
         + '</div>';
     });
-    html += '</div></div>';
+    html += '</div>';
+    // v997: cierre del historial (abierto) o su encabezado plegado al final de la lista
+    if(_entregadas.length){
+      if(_histVis) html += '</div>';
+      else html += '<div style="border-top:2px solid #ddd;margin-top:12px;background:#FAFAFA">'
+        + '<div onclick="window._antToggleHistorial()" style="padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px">'
+        + '<strong style="font-size:11px;letter-spacing:.3px;color:#444">HISTORIAL DE SOLICITUDES ENTREGADAS</strong>'
+        + '<span style="font-size:11px;color:#666;font-weight:600">'+_entregadas.length+' · ▶ MOSTRAR</span></div></div>';
+    }
+    html += '</div>';
     cont.innerHTML = html;
   }
 

@@ -23,11 +23,14 @@ ok('APP_SYNC_VERSION >= 911', !!mVer && Number(mVer[1]) >= 911);
 const sSrc = extractFrom('function _bodegaMatStore(');
 ok('_bodegaMatStore existe y asegura la forma', !!sSrc && /pedidos/.test(sSrc) && /ordenes/.test(sSrc));
 const nSrc = extractFrom('function _bodegaNextNum(');
-ok('_bodegaNextNum existe (numeración DERIVADA, sin contador)', !!sSrc && !!nSrc && /Math\.max/.test(nSrc));
+// v997 (queja de Antonio): pasó de max+1 al PRIMER NÚMERO LIBRE — al eliminar un pedido su
+// número vuelve a estar disponible y la serie de bodega no deja huecos (regla v992).
+ok('_bodegaNextNum existe (numeración DERIVADA, sin contador)', !!sSrc && !!nSrc && /_primerNumeroLibre/.test(nSrc));
 let nFn = null;
-try { nFn = new Function('return (' + nSrc + ')')(); } catch(e){}
+try { nFn = new Function(extractFrom('function _primerNumeroLibre(') + '\nreturn (' + nSrc + ')')(); } catch(e){}
 if (typeof nFn === 'function') {
-  ok('deriva max+1 de los números existentes', nFn([{ numero: 'BODEGA – 00003' }, { numero: 'BODEGA – 00001' }]) === 4);
+  ok('sigue la serie cuando está completa', nFn([{ numero: 'BODEGA – 00001' }, { numero: 'BODEGA – 00002' }]) === 3);
+  ok('rellena el hueco que dejó un pedido eliminado', nFn([{ numero: 'BODEGA – 00003' }, { numero: 'BODEGA – 00001' }]) === 2);
   ok('lista vacía arranca en 1', nFn([]) === 1);
 } else { ok('_bodegaNextNum evaluable', false); }
 ok('el store NO usa contador mutable propio', !/bodegaMat\.pedidoCounter\s*=|bodegaMat\.ordenCounter\s*=/.test(html));

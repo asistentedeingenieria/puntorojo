@@ -80,7 +80,8 @@ ok('D4: recetaV2Solicitar también', zSol2.indexOf('activeProj()') > zSol2.index
 // D5: el flag viaja seguro — merge por clave/ts en applyRemote + versión de sync
 const iV972 = html.indexOf('v972 BLINDAJE DE PEDIDOS');
 ok('D5: applyRemote une recetaMiles por clave/ts', iV972 > 0 && /recetaMiles/.test(html.slice(iV972, iV972 + 7000)));
-ok('D5: APP_SYNC_VERSION subió a 913', /const APP_SYNC_VERSION = 913;/.test(html));
+// v997: la versión de sync volvió a subir (merge de entregas por OC) — se fija el MÍNIMO
+ok('D5: APP_SYNC_VERSION va en 913 o más', (function(){ const m = html.match(/const APP_SYNC_VERSION = (\d+);/); return !!m && Number(m[1]) >= 913; })());
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
