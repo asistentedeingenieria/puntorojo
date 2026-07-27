@@ -45,7 +45,8 @@ const iModal = html.indexOf('const _dirs = p.materiales.direccionesEntrega');
 const zModal = html.slice(iModal - 1200, iModal + 200);
 ok('v984: el heal de la dirección corre al ABRIR el modal (por contenido)', /4TA AVENIDA 20-51\/i\.test\(String\(d\.direccion/.test(zModal) && /_dirFix/.test(zModal));
 ok('v984: si sanó, guarda y sube', /if \(_dirFix\) \{ saveState\(\);/.test(zModal.replace(/\n\s*/g,' ')));
-ok('v984: el botón TODOS se bloquea para TODOS en pedidos de receta', /_ocProvLockedTodos = !!\(pd\.esDeReceta\)/.test(html));
+// v992: el candado se universalizó — aplica a TODOS los pedidos (pedido de Antonio)
+ok('v984/v992: el botón TODOS se bloquea siempre', /_ocProvLockedTodos = true/.test(html));
 ok('v984: el picker de TODOS respeta ambos candados', /window\._ocProvLocked \|\| window\._ocProvLockedTodos\) return/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);

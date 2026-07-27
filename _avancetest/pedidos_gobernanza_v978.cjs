@@ -16,14 +16,15 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 // ── 1. numeración derivada ──
 const zNum = ex('window.nextPedidoCode = function');
 let fN = null;
-try { fN = new Function('return (' + zNum.slice(zNum.indexOf('function')) + ')')(); } catch(e){}
+// v992: la numeración pasó de "máximo + 1" a PRIMER NÚMERO LIBRE (rellena huecos)
+try { fN = new Function(ex('function _primerNumeroLibre(') + '\nreturn (' + zNum.slice(zNum.indexOf('function')) + ')')(); } catch(e){}
 if (fN) {
-  const mk = pedidos => ({ name:'VICINIA LAS AMÉRICAS', materiales:{ pedidoCounter: 7, pedidos } });
-  ok('deriva del máximo existente (ignora el contador)', fN(mk([{numero:'VICINIA LAS AMÉRICAS – 00001'},{numero:'VICINIA LAS AMÉRICAS – 00003'}])) === 'VICINIA LAS AMÉRICAS – 00004');
+  const mk = pedidos => ({ name:'VICINIA LAS AMÉRICAS', materiales:{ pedidoCounter: 7, pedidos, ordenes: [] } });
+  ok('rellena el hueco (ignora el contador)', fN(mk([{numero:'VICINIA LAS AMÉRICAS – 00001'},{numero:'VICINIA LAS AMÉRICAS – 00003'}])) === 'VICINIA LAS AMÉRICAS – 00002');
   ok('si se borra el 00003, el siguiente ES el 00002 (sin saltos)', fN(mk([{numero:'VICINIA LAS AMÉRICAS – 00001'}])) === 'VICINIA LAS AMÉRICAS – 00002');
   ok('proyecto sin pedidos arranca en 00001', fN(mk([])) === 'VICINIA LAS AMÉRICAS – 00001');
 } else ok('nextPedidoCode evaluable', false);
-ok('el folio de OC del proyecto también se deriva', /_folioProj/.test(html) && /Math\.max\(0, \.\.\.\(\(p\.materiales\.ordenes \|\| \[\]\)\.map\(o => Number\(o\.folio\) \|\| 0\)\)/.test(html));
+ok('el folio de OC del proyecto también se deriva', /_folioProj/.test(html) && /_primerNumeroLibre\(\(p\.materiales\.ordenes \|\| \[\]\)\.map/.test(html));
 
 // ── 2. gate duro de eliminar pedidos ──
 ok('deletePedido exige users.manage', /SOLO EL ADMIN PUEDE ELIMINAR PEDIDOS/.test(ex('function deletePedido(')));

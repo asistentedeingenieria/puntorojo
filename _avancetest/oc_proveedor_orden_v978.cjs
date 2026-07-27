@@ -20,7 +20,8 @@ const zModal = html.slice(iModal - 200, iModal + 1200);
 ok('el modal ya NO tiene el + de crear proveedor', !/openAddProveedor/.test(zModal));
 
 // ── 1/3. el candado ──
-ok('_ocProvLocked se arma con esDeReceta y respeta al admin', /_ocProvLocked = !!\(pd\.esDeReceta\) && !can\('users\.manage'\)/.test(html));
+// v992: el candado aplica a TODOS los pedidos (pedido de Antonio); el admin conserva la mano por ítem
+ok('_ocProvLocked respeta al admin', /_ocProvLocked = !can\('users\.manage'\)/.test(html));
 ok('con candado, el botón TODOS dice PROVEEDORES SELECCIONADOS AUTOMÁTICAMENTE', /PROVEEDORES SELECCIONADOS AUTOMÁTICAMENTE/.test(html));
 const zTodos = ex('function _abrirPickerProveedorTodos(');
 // v984: el candado del TODOS aplica a TODOS (admin incluido) en pedidos de receta

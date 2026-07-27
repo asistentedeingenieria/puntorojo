@@ -3171,7 +3171,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v991</span>
+    <span style="opacity:.5;font-size:9px">v992</span>
   </footer>
 
 </div>
@@ -13446,6 +13446,15 @@ function _recetaV2EtapaNivelPorApto(p, levelId, etapaIdx, aptoId){
 /* v991 (decisión de Antonio): lo que un pedido REALMENTE cubre. Con recepción PARCIAL
    cubre lo RECIBIDO (no lo pedido), y así el faltante vuelve a estar disponible para
    pedirse. Sin recepción registrada, cubre lo pedido como siempre. PURA. */
+/* v992: primer número LIBRE de una serie (1, 2, 3…) — rellena los huecos que dejan los
+   borrados en vez de seguir desde el máximo. PURA. */
+function _primerNumeroLibre(usados){
+  var set = {};
+  (usados || []).forEach(function(n){ var v = parseInt(n, 10); if (v > 0) set[v] = true; });
+  var i = 1;
+  while (set[i]) i++;
+  return i;
+}
 function _pedidoCubre(pd){
   var rec = pd && pd.recepcion;
   if (rec && rec.recetaRecibido && typeof rec.recetaRecibido === 'object') return rec.recetaRecibido;
@@ -19779,17 +19788,20 @@ async function openOrdenCompra(){
   // Mostrar rango estimado de OCs; el número final se asigna por proveedor al generar.
   // v964: en bodega el folio se DERIVA del máximo existente (sin contador mutable).
   const nextNum = _ctx.esBodega
-    ? Math.max(0, ...(_bodegaMatStore().ordenes.map(o => Number(o.folio) || 0)), 0) + 1
-    : Math.max(0, ...((p.materiales.ordenes || []).map(o => Number(o.folio) || 0)), 0) + 1; // v978: folio DERIVADO también en proyecto (sin saltos al eliminar)
+    ? _primerNumeroLibre(_bodegaMatStore().ordenes.map(o => Number(o.folio) || 0))
+    : _primerNumeroLibre((p.materiales.ordenes || []).map(o => Number(o.folio) || 0)); // v978/v992: folio DERIVADO y sin huecos
   // v978: el número que se muestra ES el correlativo real (folio) — antes salía "OC01 / SIG.
   // FOLIO 2" y se leía como si fuera la primera OC del proyecto (queja de Antonio 26-jul).
   document.getElementById('ocNumero').value = `${_ctx.esBodega ? 'DESP' : (/SOLO POSTES A MEDIDA/.test(String(pd.observaciones || '')) ? 'OP' : 'OC')} ${String(nextNum).padStart(5, '0')} · DEL PEDIDO ${pd.numero}`; // v982: solo postes = ORDEN DE PRODUCCIÓN
   // v978: pedidos DE RECETA — compras NO cambia proveedores (vienen del catálogo v916/v918);
   // lo ÚNICO permitido por material es mandarlo a BODEGA CENTRAL. Admin conserva la mano.
-  window._ocProvLocked = !!(pd.esDeReceta) && !can('users.manage');
-  // v984: el botón TODOS se bloquea para TODOS (admin incluido) en pedidos de receta —
+  // v992 (pedido de Antonio: "quiero que funcione igual que el pedido de receta"): el
+  // candado aplica a TODOS los pedidos, no solo a los de receta. Compras no inventa
+  // proveedores: elige entre los que SÍ venden el material (v989) o manda a bodega.
+  window._ocProvLocked = !can('users.manage');
+  // v984: el botón TODOS se bloquea para TODOS (admin incluido) —
   // los proveedores YA vienen del catálogo; el admin conserva la mano POR ÍTEM.
-  window._ocProvLockedTodos = !!(pd.esDeReceta);
+  window._ocProvLockedTodos = true;
   try {
     const _btnTodos = document.getElementById('ocProveedorBtn');
     if (_btnTodos){
@@ -20444,9 +20456,12 @@ async function generarOrdenCompra(){
   pd = _ctx.pd;
   if (getPedidoOrdenes(pd.id).length > 0) return showToast('ESTE PEDIDO YA TIENE SUS ÓRDENES GENERADAS', 'red');
   // v964: en bodega el folio se DERIVA (sin contador mutable); base antes del loop.
-  let _folioBodega = _ctx.esBodega ? Math.max(0, ...(_ctx.cont.ordenes.map(o => Number(o.folio) || 0)), 0) : 0;
+  // v992: y RELLENA huecos — el primer folio libre, igual que el correlativo de pedidos.
+  const _foliosBodega = _ctx.esBodega ? _ctx.cont.ordenes.map(o => Number(o.folio) || 0) : [];
+  const _foliosProj = _ctx.esBodega ? [] : _primerNumeroLibre((p.materiales.ordenes || []).map(o => Number(o.folio) || 0));
+  let _folioBodega = _ctx.esBodega ? _primerNumeroLibre(_foliosBodega) - 1 : 0;
   // v978: el folio del PROYECTO también se deriva (el contador saltaba al eliminar OCs)
-  let _folioProj = _ctx.esBodega ? 0 : Math.max(0, ...((p.materiales.ordenes || []).map(o => Number(o.folio) || 0)), 0);
+  let _folioProj = _ctx.esBodega ? 0 : _foliosProj - 1;
 
   const groups = {};
   ocWorkingItems.forEach(it => {
@@ -21887,7 +21902,8 @@ window.compartirReciboImg = async function(id){
     const c2 = document.createElement('canvas'); c2.width = canvas.width + M * 2; c2.height = canvas.height + M * 2;
     const cx = c2.getContext('2d'); cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, c2.width, c2.height); cx.drawImage(canvas, M, M);
     const blob = await new Promise(res => c2.toBlob(res, 'image/png'));
-    const desc = ('RECIBO DE MATERIALES - ' + _projSiglas(pd.proyectoPedido || p.name) + ' - ' + _solNum(pd) + ' - RECIBIÓ ' + ((pd.recepcion || {}).porNombre || '')).replace(/\s+/g, ' ').trim();
+    // v992 (pedido de Antonio): el mensaje que acompaña la imagen al compartirla
+    const desc = ('HE RECIBIDO EL MATERIAL DEL PEDIDO No. ' + _solNum(pd)).replace(/\s+/g, ' ').trim();
     await _imgCompartir(blob, c2.toDataURL('image/png'), desc.replace(/[\\/:*?"<>|]/g, '-') + '.png', desc);
   }catch(e){ try{ showToast('NO SE PUDO GENERAR LA IMAGEN','red'); }catch(_e){} }
   finally{ try{ fr.remove(); }catch(e){} }
@@ -32316,12 +32332,16 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   window.nextPedidoCode = function(p){
     const raw = String(p?.pedidoPrefix || p?.name || 'PROYECTO').toUpperCase();
     const prefix = raw.replace(/FASE\s*(\d+)/g,'F$1').replace(/\s+/g,' ').trim();
-    // v978: numeración DERIVADA del máximo existente (regla v964) — el contador mutable
-    // saltaba números al eliminar pedidos (quedó 00001 y 00003 sin 00002; pedido de
-    // Antonio 26-jul: "todo debe llevar un orden numérico"). Si se borra el último,
-    // su número se reusa y la secuencia no salta.
-    const nums = (((p || {}).materiales || {}).pedidos || []).map(x => { const m = String((x && x.numero) || '').match(/(\d+)\s*$/); return m ? parseInt(m[1], 10) : 0; });
-    return `${prefix} – ${String(Math.max(0, ...nums, 0) + 1).padStart(5,'0')}`;
+    /* v978: numeración DERIVADA (sin contador mutable) — el contador saltaba al eliminar.
+       v992 (queja de Antonio 27-jul): derivar del MÁXIMO tampoco alcanza — al eliminar el
+       00003 quedaba el hueco para siempre (00001, 00002, 00004). Ahora se toma el PRIMER
+       NÚMERO LIBRE. No se reusa un número que una OC viva todavía cita como pedido origen
+       (esa OC dice "PEDIDO 00003" y no puede quedar apuntando a otro pedido). */
+    const _mat = ((p || {}).materiales) || {};
+    const _num = s => { const m = String(s || '').match(/(\d+)\s*$/); return m ? parseInt(m[1], 10) : 0; };
+    const usados = (_mat.pedidos || []).map(x => _num(x && x.numero))
+      .concat((_mat.ordenes || []).map(o => _num(o && o.pedidoNumero)));
+    return `${prefix} – ${String(_primerNumeroLibre(usados)).padStart(5,'0')}`;
   };
 
   window.isErlinUser = function(){
