@@ -3171,7 +3171,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v995</span>
+    <span style="opacity:.5;font-size:9px">v996</span>
   </footer>
 
 </div>
@@ -17645,6 +17645,67 @@ function setPedidoTab(tab){
   }
 }
 
+/* ── v996: RECEPCIÓN POR ORDEN DE COMPRA ────────────────────────────────────────────
+   Un pedido se reparte entre varios proveedores y cada uno entrega por su cuenta, otro
+   día. Cada entrega se firma y se comprueba por separado: pd.recepciones[ocId] guarda su
+   firma, fecha, hora, ENTREGÓ y cantidades. Vive DENTRO del pedido —que ya viaja por
+   union-merge con sello _ts (v972)— para que dos supervisores firmando a la vez en
+   dispositivos distintos no se pisen. pd.recepcion sigue existiendo como CONSOLIDADO:
+   de ahí comen _pedidoCubre, la cobertura de receta y el candado de etapa (v991).
+   Las tres son PURAS (hay test que las evalúa suelta). */
+function _pedidoEntregas(pd, ocs){
+  const recs = (pd && pd.recepciones) || {};
+  const vivas = (ocs || []).filter(function(o){ return o && o.pedidoId === (pd || {}).id && o.estatus !== 'CANCELADA'; });
+  const pendientes = [], recibidasList = [];
+  vivas.forEach(function(o, i){
+    const e = { oc: o, id: o.id, seq: i + 1, numero: o.numero, proveedorNombre: o.proveedorNombre || o.proveedor || '', rec: recs[o.id] || null };
+    if (e.rec && e.rec.ts) recibidasList.push(e); else pendientes.push(e);
+  });
+  return {
+    total: vivas.length,
+    recibidas: recibidasList.length,
+    pendientes: pendientes,
+    recibidasList: recibidasList,
+    completo: vivas.length > 0 && pendientes.length === 0
+  };
+}
+function _consolidarRecepcionPedido(pd, ocs){
+  const ent = _pedidoEntregas(pd, ocs);
+  if (!ent.recibidas) return null;
+  const recetaRecibido = {}, items = [];
+  let ultima = null, algunaParcial = false;
+  ent.recibidasList.forEach(function(e){
+    const r = e.rec || {};
+    Object.keys(r.recetaRecibido || {}).forEach(function(k){
+      recetaRecibido[k] = (Number(recetaRecibido[k]) || 0) + (Number(r.recetaRecibido[k]) || 0);
+    });
+    (r.items || []).forEach(function(it){ items.push(it); });
+    if (r.parcial) algunaParcial = true;
+    if (!ultima || (Number(r.ts) || 0) > (Number(ultima.ts) || 0)) ultima = r;
+  });
+  ultima = ultima || {};
+  return {
+    por: ultima.por || '', porNombre: ultima.porNombre || '',
+    entregoNombre: ultima.entregoNombre || '',
+    ts: Number(ultima.ts) || 0, fecha: ultima.fecha || '', hora: ultima.hora || '',
+    items: items,
+    // PARCIAL si alguna entrega vino incompleta O si todavía falta que llegue alguna OC
+    parcial: algunaParcial || !ent.completo,
+    recetaRecibido: recetaRecibido,
+    porEntregas: true
+  };
+}
+/* Quién firma una entrega: el solicitante del pedido, el encargado asignado a ESA obra,
+   o el admin (decisión de Antonio 27-jul). */
+function _puedeRecibirEntrega(pd, user, obraId, esAdmin){
+  if (esAdmin) return true;
+  if (!user) return false;
+  const u = String(user.username || '').toLowerCase();
+  if (!u) return false;
+  if (pd && pd.solicitanteUsername && u === String(pd.solicitanteUsername).toLowerCase()) return true;
+  const oa = String(user.obraAsignada || '');
+  return !!(oa && obraId && oa === String(obraId));
+}
 /* v995: SELF-HEAL de los pedidos que quedaron con recibo pero en APROBADO (el segundo
    gate de permiso los rebotaba después de grabar la recepción). Matchea por CONTENIDO
    —hay recepción registrada— y corre AL PINTAR, no en ensureDataV9 (regla v983).
@@ -17687,9 +17748,35 @@ function renderPedidosList(){
     return;
   }
 
-  list.innerHTML = pedidos.map(pd => renderPedidoCard(pd, p)).join('');
+  /* v996 (pedido de Antonio: "las que ya fueron entregadas guardalas y escondelas como el
+     historial de planillas"): los pedidos RECIBIDO EN OBRA se van a un bloque colapsable
+     al final. No se borra nada — se guardan y se muestran cuando se pide. */
+  const _act = pedidos.filter(pd => pd && pd.status !== 'RECIBIDO');
+  const _hist = pedidos.filter(pd => pd && pd.status === 'RECIBIDO');
+  const _hKey = 'pedidos_historial_visible_' + ((p && p.id) || 'def');
+  const _hVis = (() => { try { return localStorage.getItem(_hKey) === '1'; } catch(e){ return false; } })();
+  let _html = _act.map(pd => renderPedidoCard(pd, p)).join('');
+  if (!_act.length && _hist.length) {
+    _html += `<div class="empty" style="padding:22px 12px"><p style="margin:0">No hay pedidos activos — todos fueron recibidos en obra.</p></div>`;
+  }
+  if (_hist.length) {
+    _html += `<div style="border-top:2px solid #ddd;margin-top:8px;background:#FAFAFA">
+      <div onclick="window.togglePedidosHistorial()" style="padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:nowrap">
+        <strong style="font-size:11px;letter-spacing:.3px;color:#444;white-space:nowrap">HISTORIAL DE PEDIDOS RECIBIDOS</strong>
+        <span style="font-size:11px;color:#666;font-weight:600;white-space:nowrap;flex-shrink:0">${_hist.length} · ${_hVis ? '▼ OCULTAR' : '▶ MOSTRAR'}</span>
+      </div>
+      ${_hVis ? `<div style="padding:4px 0 12px">${_hist.map(pd => renderPedidoCard(pd, p)).join('')}</div>` : ''}
+    </div>`;
+  }
+  list.innerHTML = _html;
   applyPermissions();
 }
+window.togglePedidosHistorial = function(){
+  const p = activeProj();
+  const k = 'pedidos_historial_visible_' + ((p && p.id) || 'def');
+  try { localStorage.setItem(k, localStorage.getItem(k) === '1' ? '0' : '1'); } catch(e){}
+  try { renderPedidosList(); } catch(e){}
+};
 
 function renderPedidoCard(pd, p){
   const items = pd.items || {};
@@ -17732,8 +17819,22 @@ function renderPedidoCard(pd, p){
       const ocAuth = allPedidoOcsAuthorized(pd.id);
       const u = getCurrentUser();
       const isOwner = u && pd.solicitanteUsername && (u.username || '').toLowerCase() === pd.solicitanteUsername;
-      if (ocAuth && (isOwner || can('users.manage'))) {
-        actionBtn = `<button class="btn sm" onclick="advancePedido('${pd.id}')">YA RECIBÍ EL MATERIAL</button>`;
+      // v996: recibe el solicitante o el encargado de esa obra (o admin)
+      const _puedeRec = _puedeRecibirEntrega(pd, u, (p || {}).id, can('users.manage'));
+      if (ocAuth && (isOwner || _puedeRec || can('users.manage'))) {
+        /* v996 (pedido de Antonio: "son varios proveedores los que van a entregar"): con más
+           de una OC se recibe UNA POR UNA — cada proveedor firma su propia entrega y su
+           comprobante. Con una sola OC se mantiene el botón de siempre. */
+        const _ent = _pedidoEntregas(pd, ocsPedido);
+        const _escB = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+        if (_ent.total > 1) {
+          actionBtn = _ent.pendientes.map(e => {
+            const _corto = String(e.proveedorNombre || 'PROVEEDOR').split(',')[0].split(' ').slice(0, 2).join(' ');
+            return `<button class="btn sm" onclick="advancePedido('${pd.id}','${e.id}')" title="Recibir la entrega de ${_escB(e.proveedorNombre)}">RECIBÍ DE ${_escB(_corto)}</button>`;
+          }).join('');
+        } else {
+          actionBtn = `<button class="btn sm" onclick="advancePedido('${pd.id}')">YA RECIBÍ EL MATERIAL</button>`;
+        }
       } else if (!ocAuth) {
         actionBtn = `<span style="font-size:9px;color:var(--amber);letter-spacing:1px;text-transform:uppercase;font-weight:700">${pedidoOcsResumen(pd.id)}</span>`;
       }
@@ -17754,7 +17855,7 @@ function renderPedidoCard(pd, p){
 
   return `<div class="pedido-card">
     <div class="pedido-hd">
-      <div class="pedido-num">${pd.numero}<small>PEDIDO N°</small></div>
+      <div class="pedido-num">${_numLimpio(pd.numero)}<small>PEDIDO N°</small></div>
       <dl class="pedido-meta">
         <div><dt>Proyecto</dt><dd>${pd.proyectoPedido || p.name}${pd.proyectoManual ? ' · MANUAL' : ''}</dd></div>
         <div><dt>Solicitante</dt><dd>${pd.solicitante || '—'}</dd></div>
@@ -17771,6 +17872,20 @@ function renderPedidoCard(pd, p){
         ${extraCount > 0 ? `<div class="pedido-item-chip" style="background:var(--cream);border-style:dashed;justify-content:center"><span class="chip-name" style="color:var(--mute)">+ ${extraCount} MÁS</span></div>` : ''}
       </div>
       ${getPedidoOrdenes(pd.id).length ? `<div style="font-size:10px;color:var(--cafe);margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;font-weight:700">${pedidoOcsResumen(pd.id)}</div>` : ''}
+      ${(() => {
+        /* v996: con varios proveedores se ve el avance de ENTREGAS y el comprobante de
+           cada una (cada proveedor firma la suya, en el día que llega). */
+        const _e = _pedidoEntregas(pd, getPedidoOrdenes(pd.id));
+        if (_e.total < 2) return '';
+        const _eEsc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+        const _chips = _e.recibidasList.map(x =>
+          `<button class="btn ghost sm" style="padding:3px 9px;font-size:9.5px;border-color:#86EFAC;color:#15803D" onclick="imprimirRecibo('${pd.id}','${x.id}')" title="Comprobante de la entrega de ${_eEsc(x.proveedorNombre)}">REC ${_solNum(pd)}-${x.seq} · ${_eEsc(String(x.proveedorNombre || '').split(',')[0])}</button>`
+        ).join('');
+        return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <span style="font-size:10px;letter-spacing:1px;font-weight:700;text-transform:uppercase;color:${_e.completo ? '#15803D' : '#B45309'}">${_e.recibidas} DE ${_e.total} ENTREGAS RECIBIDAS</span>
+          ${_chips}
+        </div>`;
+      })()}
       ${pd.ordenCambio ? `<div style="font-size:11px;color:var(--amber);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px"><strong>ORDEN DE CAMBIO:</strong> ${esc(pd.ordenCambio)}</div>` : ''}
       ${pd.observaciones ? `<div style="font-size:11px;color:var(--mute);margin-bottom:8px;font-style:italic">"${esc(pd.observaciones)}"</div>` : ''}
       <div class="pedido-actions">
@@ -17786,7 +17901,7 @@ function renderPedidoCard(pd, p){
   </div>`;
 }
 
-async function advancePedido(id){
+async function advancePedido(id, ocId){
   const _ctx = _findPedidoGlobal(id); // v964
   if (!_ctx) return;
   const p = activeProj();
@@ -17803,8 +17918,10 @@ async function advancePedido(id){
   const _u0 = getCurrentUser();
   const _isOwner0 = !!(_u0 && pd.solicitanteUsername && String(_u0.username || '').toLowerCase() === pd.solicitanteUsername);
   const _esRecep = (pd.status === 'APROBADO' && statusInfo.next === 'RECIBIDO');
+  // v996 (decisión de Antonio): recibe el solicitante O el encargado de ESA obra
+  const _puedeEntrega = _puedeRecibirEntrega(pd, _u0, (activeProj() || {}).id, can('users.manage'));
   const _puede = _esRecep
-    ? (_isOwner0 || can('users.manage') || can('pedidos.advance') || can('pedidos.receive'))
+    ? (_isOwner0 || _puedeEntrega || can('users.manage') || can('pedidos.advance') || can('pedidos.receive'))
     : (pd.status === 'SOLICITADO')
       ? (can('compras.autorizar') || can('users.manage'))
       : ((statusInfo.role === 'supervisor' && (can('pedidos.create') || can('pedidos.receive'))) ||
@@ -17832,17 +17949,16 @@ async function advancePedido(id){
       return showToast('NO SE PUEDE MARCAR RECIBIDO — HAY OC PENDIENTES DE AUTORIZACIÓN', 'red');
     }
 
-    // Solo el solicitante original (o admin) puede marcar recibido
+    // v996: recibe el solicitante O el encargado de esa obra (o admin)
     const u = getCurrentUser();
-    const isOwner = u && pd.solicitanteUsername && (u.username || '').toLowerCase() === pd.solicitanteUsername;
-    if (!isOwner && !can('users.manage')) {
-      return showToast('SOLO EL SOLICITANTE PUEDE CONFIRMAR LA RECEPCIÓN', 'red');
+    if (!_puedeRecibirEntrega(pd, u, (activeProj() || {}).id, can('users.manage'))) {
+      return showToast('SOLO EL SOLICITANTE O EL ENCARGADO DE LA OBRA PUEDE CONFIRMAR LA RECEPCIÓN', 'red');
     }
     // v989: en vez del confirm genérico, el modal de RECEPCIÓN (cantidades editables =
     // entrega parcial) + firma; deja pd.recepcion listo para el comprobante.
     // v990: 'sin-detalle' = el pedido no tiene líneas que confirmar (solo extras raros) →
     // NO se bloquea: sigue el confirm genérico de siempre.
-    const _okRec = await window._abrirRecepcion(pd.id);
+    const _okRec = await window._abrirRecepcion(pd.id, ocId);
     if (!_okRec) return;
     if (_okRec !== 'sin-detalle') {
       _recepcionHecha = true;
@@ -17852,6 +17968,14 @@ async function advancePedido(id){
       if (!_ctx3) return showToast('EL PEDIDO YA NO EXISTE (CAMBIÓ EN OTRO DISPOSITIVO) — RECARGÁ', 'red');
       pd = _ctx3.pd;
       if (pd.status !== 'APROBADO') { try { renderPedidosList(); } catch(e){} return showToast('EL PEDIDO YA CAMBIÓ DE ESTADO', 'red'); }
+      /* v996: con varias órdenes de compra, el pedido NO pasa a RECIBIDO EN OBRA hasta que
+         llegan TODAS las entregas. La que se acaba de firmar ya quedó guardada con su
+         comprobante; acá solo se corta el avance de estado. */
+      const _entAdv = _pedidoEntregas(pd, (typeof getPedidoOrdenes === 'function') ? getPedidoOrdenes(pd.id) : []);
+      if (_entAdv.total > 1 && !_entAdv.completo) {
+        try { renderPedidosList(); } catch(e){}
+        return showToast('ENTREGA REGISTRADA · FALTAN ' + (_entAdv.total - _entAdv.recibidas) + ' DE ' + _entAdv.total + ' ENTREGAS', 'green');
+      }
     }
   }
 
@@ -18487,11 +18611,12 @@ async function resetPedidoForm(){
   pedidoFormSpecs = {};
   pedidoExtraMaterials = [];
   pedidoMetalMedida = [];
-  ['pfSolicitante','pfOrdenCambio','pfObservaciones','pfProyectoManual'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  ['pfSolicitante','pfOrdenCambio','pfObservaciones','pfProyectoManual','pfAptoManual'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   const pft = document.getElementById('pfProyectoTipo'); if (pft) pft.value = 'ACTIVO';
   togglePedidoProyectoManual();
-  document.getElementById('pfNivel').value = '';
-  document.getElementById('pfApto').innerHTML = '<option value="">— SIN APTO ESPECÍFICO —</option>';
+  // v996: mismas guardas que en submitPedido (en pedidos MANUALES estos campos van ocultos)
+  const _nvR = document.getElementById('pfNivel'); if (_nvR) _nvR.value = '';
+  const _apR = document.getElementById('pfApto'); if (_apR) _apR.innerHTML = '<option value="">— SIN APTO ESPECÍFICO —</option>';
   renderPedidoForm();
 }
 
@@ -18570,7 +18695,8 @@ async function submitPedido(){
 
   // Generar correlativo por proyecto
   p.materiales.pedidoCounter = (p.materiales.pedidoCounter || 0) + 1;
-  const numero = nextPedidoCode(p);
+  // v996: un pedido de proyecto MANUAL se numera con SU proyecto (TIFFANY – 1, 2, 3…)
+  const numero = nextPedidoCode(p, proyectoTipo === 'MANUAL' ? proyectoPedido : '');
 
   const n = new Date();
   const fecha = `${String(n.getDate()).padStart(2,'0')}/${String(n.getMonth()+1).padStart(2,'0')}/${n.getFullYear()}`;
@@ -18651,7 +18777,7 @@ async function submitPedido(){
 
   const extraLabel = validExtras.length > 0 ? ` (${validExtras.length} extraordinario${validExtras.length!==1?'s':''})` : '';
   const metalLabel = validMetal.length > 0 ? ` · ${validMetal.length} fabricación${validMetal.length!==1?'es':''} metal` : '';
-  logActivity('create', `Pedido ${numero} creado`, `${p.name} · ${totalCount} materiales${extraLabel}${metalLabel} · ${solicitante}`);
+  try { logActivity('create', `Pedido ${numero} creado`, `${p.name} · ${totalCount} materiales${extraLabel}${metalLabel} · ${solicitante}`); } catch(e){ console.warn('[v996] logActivity submitPedido', e); }
 
   // Notificar a Compras: hay pedido nuevo pendiente de aprobación / OC
   try {
@@ -18672,14 +18798,26 @@ async function submitPedido(){
   pedidoFormItems = {};
   pedidoFormSpecs = {};
   pedidoExtraMaterials = [];
-  ['pfSolicitante','pfOrdenCambio','pfObservaciones','pfProyectoManual'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-  const pft2 = document.getElementById('pfProyectoTipo'); if (pft2) pft2.value = 'ACTIVO';
-  togglePedidoProyectoManual();
-  document.getElementById('pfNivel').value = '';
-  document.getElementById('pfApto').innerHTML = '<option value="">— SIN APTO ESPECÍFICO —</option>';
+  /* v996 (reporte de Antonio: "le doy enviar a compras y el pedido no se va ni me borra
+     todo"): el pedido ya está GUARDADO; el cierre de pantalla no puede depender de que
+     cada elemento exista. Antes, un getElementById nulo —pfNivel/pfApto están ocultos en
+     los pedidos de proyecto MANUAL— tiraba y se saltaba el toast y el cambio de pestaña:
+     el pedido se había creado pero en pantalla no pasaba nada. */
+  try {
+    ['pfSolicitante','pfOrdenCambio','pfObservaciones','pfProyectoManual','pfAptoManual'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    const pft2 = document.getElementById('pfProyectoTipo'); if (pft2) pft2.value = 'ACTIVO';
+    if (typeof togglePedidoProyectoManual === 'function') togglePedidoProyectoManual();
+    const _nv = document.getElementById('pfNivel'); if (_nv) _nv.value = '';
+    const _ap = document.getElementById('pfApto'); if (_ap) _ap.innerHTML = '<option value="">— SIN APTO ESPECÍFICO —</option>';
+    /* v996 — LA CAUSA de "no me borra todo": submitPedido limpiaba las VARIABLES pero
+       nunca repintaba el catálogo, así que los chips marcados y el contador
+       "2 MATERIALES SELECCIONADOS" seguían en pantalla como si nada se hubiera enviado. */
+    if (typeof renderPedidoForm === 'function') renderPedidoForm();
+    if (typeof renderExtraMaterials === 'function') renderExtraMaterials();
+  } catch(e){ console.warn('[v996] limpieza del formulario de pedido', e); }
 
-  showToast(`PEDIDO ${numero} CREADO`, 'green');
-  setPedidoTab('lista');
+  showToast(`PEDIDO ${numero} ENVIADO A COMPRAS`, 'green');
+  try { setPedidoTab('lista'); } catch(e){ console.warn('[v996] setPedidoTab', e); }
 }
 
 /* Modal de detalle */
@@ -18692,7 +18830,7 @@ function openPedidoDetalle(id){
   const pd = _ctx.pd;
   currentPedidoDetalleId = id;
 
-  document.getElementById('pedDetalleNum').textContent = pd.numero;
+  document.getElementById('pedDetalleNum').textContent = _numLimpio(pd.numero);
   const statusInfo = PEDIDO_ESTADOS.find(s => s.key === pd.status);
   const statusLabel = statusInfo ? statusInfo.label : pd.status;
   document.getElementById('pedDetalleMeta').innerHTML =
@@ -18724,7 +18862,7 @@ function openPedidoDetalle(id){
       const ocStatus = (oc.status || 'AUTORIZADA') === 'AUTORIZADA'
         ? `<span style="color:var(--red-dark);font-weight:700">AUTORIZADA</span>`
         : `<span style="color:var(--amber);font-weight:700">PENDIENTE FINANZAS</span>`;
-      return `<div style="padding:4px 0;border-bottom:1px dotted var(--line-soft)"><strong>${oc.numero}</strong> · ${oc.proveedorNombre} · Q ${fmtQ(oc.total)}<br>${ocStatus}</div>`;
+      return `<div style="padding:4px 0;border-bottom:1px dotted var(--line-soft)"><strong>${_numLimpio(oc.numero)}</strong> · ${oc.proveedorNombre} · Q ${fmtQ(oc.total)}<br>${ocStatus}</div>`;
     }).join('');
     trackingHtml += `<div class="pd-track-row">
       <span class="pd-track-lbl">ÓRDENES DE COMPRA</span>
@@ -19726,7 +19864,7 @@ function _ocAbrirRecibido(id){
   wrap.style.cssText = 'position:fixed;inset:0;z-index:100070;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
   wrap.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:640px;width:100%;max-height:88vh;display:flex;flex-direction:column;overflow:hidden">
     <div style="padding:14px 18px;border-bottom:1px solid rgba(0,0,0,.08)">
-      <b style="font-size:13px;letter-spacing:.5px">MARCAR RECIBIDO · ${oc.numero}</b>
+      <b style="font-size:13px;letter-spacing:.5px">MARCAR RECIBIDO · ${_numLimpio(oc.numero)}</b>
       <div style="font-size:11px;color:#78716C;margin-top:4px;line-height:1.5">Anotá la cantidad que LLEGÓ DE VERDAD de cada material (viene prellenada con lo pedido). Esto suma existencias a la bodega central.</div>
     </div>
     <div style="display:grid;grid-template-columns:minmax(0,1fr) 90px 110px;gap:10px;padding:10px 18px 4px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700"><span>MATERIAL</span><span style="text-align:right">PEDIDO</span><span style="text-align:right">RECIBIDO</span></div>
@@ -19862,7 +20000,7 @@ function _abrirPanelBodega(){
     return `
     <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #F3F4F6">
       <div style="min-width:0">
-        <div style="font-size:11.5px"><b>${pd.numero}</b> <span style="font-size:9px;font-weight:700;color:${stCol};letter-spacing:.8px;margin-left:6px">${st}</span></div>
+        <div style="font-size:11.5px"><b>${_numLimpio(pd.numero)}</b> <span style="font-size:9px;font-weight:700;color:${stCol};letter-spacing:.8px;margin-left:6px">${st}</span></div>
         <div style="font-size:10px;color:#78716C;margin-top:2px">${nItems} material${nItems !== 1 ? 'es' : ''} · ${pd.solicitante || ''}${pd.fechaEntrega ? ' · ENTREGA ' + pd.fechaEntrega : ''}</div>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
@@ -19878,7 +20016,7 @@ function _abrirPanelBodega(){
   const porRecibir = _bodegaOcsPorRecibir();
   const porRecibirHTML = porRecibir.map(oc => `
     <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid #F9FAFB">
-      <div style="font-size:11px"><b>${oc.numero}</b> <span style="color:#78716C">· ${oc.proveedorNombre || ''}${oc.fechaEntrega ? ' · ENTREGA ' + oc.fechaEntrega : ''}</span></div>
+      <div style="font-size:11px"><b>${_numLimpio(oc.numero)}</b> <span style="color:#78716C">· ${oc.proveedorNombre || ''}${oc.fechaEntrega ? ' · ENTREGA ' + oc.fechaEntrega : ''}</span></div>
       <button class="btn sm" style="background:#166534;border-color:#166534;color:#fff;font-size:10px" onclick="_ocAbrirRecibido('${oc.id}')">MARCAR RECIBIDO</button>
     </div>`).join('');
   const ult = (Array.isArray(state.bodegaMovs) ? state.bodegaMovs.slice() : []).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 40);
@@ -21073,6 +21211,16 @@ function _projSiglas(name){
 
 // v988: correlativo del pedido (los últimos dígitos de su número) — el doc de la solicitud
 // titula con SIGLA + número ("VLA - 00003") en vez del nombre completo del proyecto. PURA.
+/* v996 (queja de Antonio: "los correlativos siguen saliendo con los ceros"): los pedidos y
+   OCs emitidos ANTES de v994 quedaron GUARDADOS con ceros. Se limpian al MOSTRAR — el dato
+   no se toca, así que el vínculo pedido↔OC sigue intacto y no hace falta migrar nada.
+   PURA. */
+function _numLimpio(numero){
+  return String(numero == null ? '' : numero)
+    .replace(/(–\s*)0+(\d)/g, '$1$2')                 // 'VLA – 00002'  → 'VLA – 2'
+    .replace(/\b(OC|DESP|OP)\s*0+(\d)/g, '$1 $2')     // 'OC 00002'     → 'OC 2'
+    .replace(/\b(OC|DESP|OP)(\d)/g, '$1 $2');         // 'OC01'         → 'OC 1'
+}
 /* Correlativo del pedido para los documentos (solicitud, recibo, mensaje de WhatsApp).
    v994: SIN ceros a la izquierda — los pedidos emitidos antes de v994 quedaron guardados
    como '– 00002' y Antonio los quiere ver "1, 2, 3, 4" igual que los nuevos, así que la
@@ -21144,7 +21292,7 @@ function printOrdenCompra(ocId, isDraft){
   const w = window.open('', '_blank');
   w.document.write(`
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="color-scheme" content="only light"><title>Orden de Compra No. ${oc.numero}</title>
+<html><head><meta charset="utf-8"><meta name="color-scheme" content="only light"><title>Orden de Compra No. ${_numLimpio(oc.numero)}</title>
 <style>
 :root{color-scheme:only light} /* v980: Android forzaba modo oscuro sobre el documento */
 @page { size: letter; margin: 0; } /* v943: los márgenes viven ADENTRO de la hoja — así "Márgenes: Ninguno/Predeterminado" del diálogo dan lo mismo y las firmas quedan al fondo FÍSICO siempre */
@@ -22035,9 +22183,18 @@ window.compartirSolicitudImg = async function(){
    editables = recepción PARCIAL) y firma; queda pd.recepcion y se genera un comprobante
    SIN montos, imprimible y compartible como imagen. Mismo builder para imprimir y para
    la captura (regla v980) y color-scheme only light (Android invertía los docs). */
-function _reciboDocHTML(pd, p, paraCaptura){
+/* v996: con ocId el comprobante es de ESA entrega (REC <pedido>-<n>, con el proveedor que
+   entregó y solo sus materiales). Sin ocId sale el del pedido completo, como hasta v995. */
+function _reciboDocHTML(pd, p, paraCaptura, ocId){
   const esc2 = s => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
-  const rec = pd.recepcion || {};
+  let _entSeq = 0;
+  if (ocId) {
+    const _ocsR = (typeof getPedidoOrdenes === 'function') ? getPedidoOrdenes(pd.id) : [];
+    const _e = _pedidoEntregas(pd, _ocsR);
+    const _hit = _e.recibidasList.concat(_e.pendientes).find(function(x){ return x.id === ocId; });
+    if (_hit) _entSeq = _hit.seq;
+  }
+  const rec = (ocId && pd.recepciones && pd.recepciones[ocId]) ? pd.recepciones[ocId] : (pd.recepcion || {});
   const items = rec.items || {};
   const nombres = Object.keys(items).filter(k => Number(items[k]) > 0);
   const totalUnid = nombres.reduce((s, k) => s + (Number(items[k]) || 0), 0);
@@ -22075,7 +22232,7 @@ ${paraCaptura ? '' : `<div class="no-print" style="display:flex;gap:10px;justify
     </div>
     <div style="text-align:right;white-space:nowrap">
       <div style="font-size:10px;color:#666">No.</div>
-      <div style="font-size:16px;font-weight:700;color:#C8141C;line-height:1.3">REC ${esc2(_solNum(pd))}</div>
+      <div style="font-size:16px;font-weight:700;color:#C8141C;line-height:1.3">REC ${esc2(_solNum(pd))}${_entSeq ? '-' + _entSeq : ''}</div>
       <div style="font-size:10.5px;font-weight:700;color:#444;line-height:1.35">PEDIDO ${esc2(_solNum(pd))}</div>
       <div style="font-size:9.5px;color:#888;line-height:1.35">${esc2(_projSiglas(pd.proyectoPedido || p.name))} - APP</div>
     </div>
@@ -22115,14 +22272,14 @@ ${paraCaptura ? '' : `<div class="no-print" style="display:flex;gap:10px;justify
 </div>
 </body></html>`;
 }
-window.imprimirRecibo = function(id){
+window.imprimirRecibo = function(id, ocId){
   const _ctx = _findPedidoGlobal(id || currentPedidoDetalleId);
   if (!_ctx || !_ctx.pd.recepcion) return showToast('ESTE PEDIDO AÚN NO TIENE RECEPCIÓN REGISTRADA', 'red');
   const w = window.open('', '_blank');
-  w.document.write(_reciboDocHTML(_ctx.pd, activeProj(), false));
+  w.document.write(_reciboDocHTML(_ctx.pd, activeProj(), false, ocId));
   w.document.close();
 };
-window.compartirReciboImg = async function(id){
+window.compartirReciboImg = async function(id, ocId){
   const _ctx = _findPedidoGlobal(id || currentPedidoDetalleId);
   if (!_ctx || !_ctx.pd.recepcion) return showToast('ESTE PEDIDO AÚN NO TIENE RECEPCIÓN REGISTRADA', 'red');
   const pd = _ctx.pd, p = activeProj();
@@ -22132,7 +22289,7 @@ window.compartirReciboImg = async function(id){
   document.body.appendChild(fr);
   try{
     const cargado = new Promise(res => { fr.onload = res; });
-    fr.srcdoc = _reciboDocHTML(pd, p, true);
+    fr.srcdoc = _reciboDocHTML(pd, p, true, ocId);
     await cargado;
     const idoc = fr.contentDocument, iwin = fr.contentWindow;
     await new Promise((res, rej) => { const s = idoc.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'; s.onload = res; s.onerror = rej; idoc.head.appendChild(s); });
@@ -22149,18 +22306,30 @@ window.compartirReciboImg = async function(id){
 };
 /* Modal de RECEPCIÓN: cantidades editables (parcial) + firma obligatoria. Resuelve
    true si el supervisor confirmó (advancePedido sigue con el cambio de estado). */
-window._abrirRecepcion = async function(id){
+window._abrirRecepcion = async function(id, ocId){
   const _ctx = _findPedidoGlobal(id);
   if (!_ctx) return false;
   const pd2 = _ctx.pd;
+  /* v996: si viene ocId, se recibe SOLO esa orden de compra (su proveedor, sus materiales)
+     y el ENTREGÓ se pre-llena con el proveedor de esa OC. Sin ocId (pedidos viejos o de un
+     solo proveedor) se recibe el pedido entero, como hasta v995. */
+  let _ocRec = null;
+  if (ocId) {
+    _ocRec = (typeof getPedidoOrdenes === 'function' ? getPedidoOrdenes(id) : []).find(function(o){ return o && o.id === ocId; });
+    if (!_ocRec) { showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red'); return false; }
+  }
   /* v990 (revisión de v989): el detalle sale de la MISMA fuente que la OC —
      buildPedidoOcItems trae las TRES fuentes (items del catálogo + MATERIAL
      EXTRAORDINARIO + METAL A MEDIDA) con el nombre ya limpio (sin el prefijo 'CAT::')
      y con su spec entre corchetes. Antes solo se leía pd.items: el recibo omitía
      material, el TOTAL mentía y un pedido de solo extras no se podía recibir NUNCA. */
   // v991: src = la clave del pedido, para mapear lo recibido a las claves de RECETA
-  const lineas = (typeof buildPedidoOcItems === 'function' ? buildPedidoOcItems(pd2) : []).map(x => ({ k: x.name, q: Number(x.qty) || 0, src: x.sourceKey })).filter(x => x.k);
+  const lineas = (_ocRec
+      ? (_ocRec.items || []).map(x => ({ k: x.name, q: Number(x.qty) || 0, src: x.sourceKey }))
+      : (typeof buildPedidoOcItems === 'function' ? buildPedidoOcItems(pd2) : []).map(x => ({ k: x.name, q: Number(x.qty) || 0, src: x.sourceKey }))
+    ).filter(x => x.k);
   if (!lineas.length) return 'sin-detalle'; // v990: no bloquea el pedido
+  window._recepcionOcId = ocId || '';
   const esc2 = s => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
   const filas = lineas.map((ln, i) => `
     <div style="display:grid;grid-template-columns:minmax(0,1fr) 100px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
@@ -22174,14 +22343,14 @@ window._abrirRecepcion = async function(id){
   wrap.style.cssText = 'position:fixed;inset:0;z-index:100075;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
   wrap.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:640px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
     <div style="padding:14px 18px;border-bottom:1px solid rgba(0,0,0,.08)">
-      <b style="font-size:13px;letter-spacing:.5px">CONFIRMAR RECEPCIÓN EN OBRA</b>
+      <b style="font-size:13px;letter-spacing:.5px">CONFIRMAR RECEPCIÓN EN OBRA</b>${_ocRec ? `<div style="font-size:11px;color:#15803D;font-weight:700;margin-top:3px">ENTREGA DE ${esc2(_ocRec.proveedorNombre || _ocRec.proveedor || 'PROVEEDOR')} · ${esc2(_ocRec.numero || '')}</div>` : ''}
       <div style="font-size:11px;color:#78716C;margin-top:4px;line-height:1.5">Revisá lo que llegó. Si la entrega fue <b>PARCIAL</b>, corregí las cantidades — el recibo sale con lo que de verdad recibiste y con tu firma.</div>
     </div>
     <div style="overflow:auto;flex:1;padding:8px 18px">${filas}</div>
     <!-- v991 (pedido de Antonio): quién ENTREGÓ el material — sale en el recibo con su línea de firma -->
     <div style="padding:10px 18px;border-top:1px solid rgba(0,0,0,.06)">
       <label style="display:block;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700">ENTREGÓ (PILOTO O PROVEEDOR) · OPCIONAL
-        <input id="_recepEntrego" class="pr-buscador" placeholder="NOMBRE DE QUIEN ENTREGÓ" style="width:100%;margin-top:4px">
+        <input id="_recepEntrego" class="pr-buscador" placeholder="NOMBRE DE QUIEN ENTREGÓ" value="${_ocRec ? esc2(_ocRec.proveedorNombre || _ocRec.proveedor || '') : ''}" style="width:100%;margin-top:4px">
       </label>
     </div>
     <div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
@@ -22239,17 +22408,33 @@ window._recepcionConfirmar = async function(){
     if (Object.prototype.hasOwnProperty.call(_recQtyPorLinea, fk)) recetaRecibido[k] = _recQtyPorLinea[fk];
     else if (Object.prototype.hasOwnProperty.call(_recQtyPorLinea, k)) recetaRecibido[k] = _recQtyPorLinea[k];
   });
-  pd.recepcion = {
+  const _entrega = {
     por: String(u.username || '').toLowerCase(),
     porNombre: String(u.displayName || u.username || '').toUpperCase(),
-    entregoNombre: _entrego, // v991: quién entregó (piloto/proveedor) — firma a mano en el recibo
+    entregoNombre: _entrego, // v991: quién entregó (piloto/proveedor)
     ts: Date.now(),
     fecha: String(n.getDate()).padStart(2,'0') + '/' + String(n.getMonth()+1).padStart(2,'0') + '/' + n.getFullYear(),
     hora: String(n.getHours()).padStart(2,'0') + ':' + String(n.getMinutes()).padStart(2,'0'),
     items,
     parcial
   };
-  if (Object.keys(recetaRecibido).length) pd.recepcion.recetaRecibido = recetaRecibido;
+  if (Object.keys(recetaRecibido).length) _entrega.recetaRecibido = recetaRecibido;
+  /* v996: si la recepción es de UNA orden de compra, se guarda como su entrega y el pedido
+     consolida todas. Sin ocId (pedido de un solo proveedor o recibido como antes) la
+     recepción es del pedido entero, igual que hasta v995. */
+  const _ocIdRec = window._recepcionOcId || '';
+  let _completo = true;
+  if (_ocIdRec) {
+    if (!pd.recepciones || typeof pd.recepciones !== 'object') pd.recepciones = {};
+    pd.recepciones[_ocIdRec] = _entrega;
+    const _ocsPd = (typeof getPedidoOrdenes === 'function') ? getPedidoOrdenes(pd.id) : [];
+    const _ent = _pedidoEntregas(pd, _ocsPd);
+    _completo = _ent.completo;
+    pd.recepcion = _consolidarRecepcionPedido(pd, _ocsPd) || _entrega;
+    parcial = !!pd.recepcion.parcial;
+  } else {
+    pd.recepcion = _entrega;
+  }
   pd._ts = Date.now(); // v972: pedidos van por union-merge
   // v991: con faltante, la etapa vuelve a estar disponible → soltar el candado
   if (parcial && pd.esDeReceta && pd.recetaLevelId && typeof _recetaLiberarCandadoEtapa === 'function') {
@@ -32587,8 +32772,12 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     pushPerm({ key:'ia.usar', label:'Usar asistente IA (Preguntá)', group:'VISTAS' });
   } catch(e) { console.warn(e); }
 
-  window.nextPedidoCode = function(p){
-    const raw = String(p?.pedidoPrefix || p?.name || 'PROYECTO').toUpperCase();
+  /* v996 (reporte de Antonio): un pedido para un PROYECTO PEQUEÑO / REPARACIÓN se titula y
+     numera con SU proyecto (TIFFANY – 1, 2, 3…), no con el proyecto activo. Cada cliente
+     lleva su propia serie: su correlativo solo cuenta los pedidos de ESE proyecto. */
+  window.nextPedidoCode = function(p, proyectoManual){
+    const _man = String(proyectoManual || '').replace(/\s+/g,' ').trim().toUpperCase();
+    const raw = _man || String(p?.pedidoPrefix || p?.name || 'PROYECTO').toUpperCase();
     const prefix = raw.replace(/FASE\s*(\d+)/g,'F$1').replace(/\s+/g,' ').trim();
     /* v978: numeración DERIVADA (sin contador mutable) — el contador saltaba al eliminar.
        v992 (queja de Antonio 27-jul): derivar del MÁXIMO tampoco alcanza — al eliminar el
@@ -32597,8 +32786,11 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
        (esa OC dice "PEDIDO 00003" y no puede quedar apuntando a otro pedido). */
     const _mat = ((p || {}).materiales) || {};
     const _num = s => { const m = String(s || '').match(/(\d+)\s*$/); return m ? parseInt(m[1], 10) : 0; };
-    const usados = (_mat.pedidos || []).map(x => _num(x && x.numero))
-      .concat((_mat.ordenes || []).map(o => _num(o && o.pedidoNumero)));
+    /* La serie es la del PREFIJO: los pedidos de TIFFANY no cuentan para VICINIA y al
+       revés. Se compara por el prefijo del número, que es lo que se ve impreso. */
+    const _mismoPrefijo = s => String(s || '').toUpperCase().indexOf(prefix + ' ') === 0;
+    const usados = (_mat.pedidos || []).filter(x => _mismoPrefijo(x && x.numero)).map(x => _num(x && x.numero))
+      .concat((_mat.ordenes || []).filter(o => _mismoPrefijo(o && o.pedidoNumero)).map(o => _num(o && o.pedidoNumero)));
     return `${prefix} – ${_primerNumeroLibre(usados)}`;
   };
 
@@ -53890,7 +54082,7 @@ async function _anulAnularReal(){
         html += '<div style="border-bottom:1px solid var(--line)">';
         // Línea 1: # + ESTADO + (derecha) TOTAL Q
         html += '<div style="display:flex;align-items:center;gap:12px;padding:11px 16px;background:'+headerBg+';border-bottom:1px solid '+headerBr+'">';
-        html += '<div style="font-size:14px;font-weight:800;color:#0F172A;letter-spacing:.3px">PLANILLA OC #'+_h(g.numero||'?')+'</div>';
+        html += '<div style="font-size:14px;font-weight:800;color:#0F172A;letter-spacing:.3px">PLANILLA OC #'+_h(_numLimpio(g.numero||'?'))+'</div>';
         html += _ocPlBadge(estado);
         html += '<div style="flex:1;font-size:11px;color:#475569"><strong>'+persona+'</strong> · '+renglonesTotal+' RENGLÓN'+(renglonesTotal!==1?'ES':'')+(renglonesActivos<renglonesTotal?' · '+renglonesActivos+' ACTIVO'+(renglonesActivos!==1?'S':''):'')+'</div>';
         html += '<div style="font-size:14px;font-weight:800;color:#0F172A">'+_money(total)+'</div>';

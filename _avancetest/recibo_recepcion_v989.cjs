@@ -47,7 +47,8 @@ const zRec = ex('window._abrirRecepcion = async function');
 ok('el flujo exige firma del que recibe', /_pedirFirmaSiFalta\(\)/.test(ex('window._recepcionConfirmar = async function')));
 ok('cantidades editables (recepción parcial)', /data-recx/.test(zRec));
 const zConf = ex('window._recepcionConfirmar = async function');
-ok('guarda pd.recepcion con quién, cuándo y qué recibió', /recepcion = \{/.test(zConf) && /porNombre/.test(zConf) && /\bitems\b/.test(zConf) && /fecha:/.test(zConf));
+// v996: la entrega se arma en _entrega y se asigna a pd.recepcion (o al consolidado por OC)
+ok('guarda la recepción con quién, cuándo y qué recibió', /_entrega = \{/.test(zConf) && /pd\.recepcion = /.test(zConf) && /porNombre/.test(zConf) && /\bitems\b/.test(zConf) && /fecha:/.test(zConf));
 ok('marca si fue PARCIAL', /parcial/.test(zConf));
 ok('sella _ts (union-merge v972) y sube', /_ts = Date\.now\(\)/.test(zConf) && /forceUploadNow/.test(zConf));
 ok('el modal de recepción está en isUserBusy (regla v769)', /#_recepcionModal/.test(html));

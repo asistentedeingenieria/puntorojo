@@ -16,7 +16,8 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 const zAdv = ex('async function advancePedido(');
 // A1: permiso ANTES de abrir la recepción
 ok('A1: el gate de permiso corre ANTES del modal de recepción', zAdv.indexOf('SIN PERMISO PARA ESTA ACCIÓN') < zAdv.indexOf('_abrirRecepcion('));
-ok('A1: el dueño (o admin/advance/receive) puede recibir', /_esRecep/.test(zAdv) && /_isOwner0 \|\| can\('users\.manage'\) \|\| can\('pedidos\.advance'\) \|\| can\('pedidos\.receive'\)/.test(zAdv));
+// v996: además del dueño, recibe el ENCARGADO de esa obra (_puedeEntrega)
+ok('A1: el dueño (o encargado/admin/advance/receive) puede recibir', /_esRecep/.test(zAdv) && /_isOwner0 \|\| _puedeEntrega \|\| can\('users\.manage'\) \|\| can\('pedidos\.advance'\) \|\| can\('pedidos\.receive'\)/.test(zAdv));
 // A2: re-leer tras el await
 ok('A2: re-lee el pedido del state vivo tras el modal', /_ctx3 = _findPedidoGlobal\(id\)/.test(zAdv) && /YA NO EXISTE/.test(zAdv));
 ok('A2: pd deja de ser const (se re-asigna con el vivo)', /let pd = _ctx\.pd/.test(zAdv));
