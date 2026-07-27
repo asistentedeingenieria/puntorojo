@@ -3171,7 +3171,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v993</span>
+    <span style="opacity:.5;font-size:9px">v995</span>
   </footer>
 
 </div>
@@ -6833,8 +6833,53 @@ function renderEncargadosList(){
     const ctrl = isAdmin
       ? '<span style="font-size:11px;color:var(--mute);white-space:nowrap">Admin · ve todo</span>'
       : '<select class="colab-obra-sel" onchange="_asignarObraUsuario(\''+u.uid+'\', this.value)">'+opts(cur)+'</select>';
-    return '<div class="user-row"><div class="u-info"><div class="u-name">'+_esc(u.displayName||ident)+'</div><div class="u-meta">'+_esc(ident)+(u.cargo?(' · '+_esc(u.cargo)):'')+'</div></div><div class="u-actions">'+ctrl+'</div></div>';
+    /* v995: avisar cuando la ficha de COLABORADOR (la que manda en ASISTENCIA) está en otra
+       obra que la del usuario. Pasó con Julio Charvac: se cambió acá y la asistencia lo
+       seguía mostrando en ESSENZA. Se muestra la diferencia y se iguala con un clic —
+       la app no elige sola cuál de las dos es la buena. */
+    let _aviso = '';
+    if (!isAdmin){
+      try{
+        const _p = _personaPorNombreUnica(u.displayName, (typeof _getPersonal==='function') ? _getPersonal() : []);
+        const _pObra = _p ? (_p.multiObra || _p.multiSesion ? '__VARIAS__' : String(_p.obraAsignada||'')) : null;
+        if (_p && _pObra !== cur){
+          const _nomP = _pObra === '__VARIAS__' ? 'VARIAS OBRAS'
+            : (_pObra ? String(((projs.find(x=>x.id===_pObra))||{}).name||'—').toUpperCase() : 'SIN OBRA');
+          _aviso = '<div style="font-size:10.5px;color:#B45309;margin-top:3px">EN ASISTENCIA ESTÁ EN: <b>'+_esc(_nomP)+'</b>'
+            + (cur ? ' · <a href="#" onclick="event.preventDefault();_igualarObraColaborador(\''+u.uid+'\')" style="color:#B45309;text-decoration:underline;font-weight:700">IGUALAR</a>' : '')
+            + '</div>';
+        }
+      }catch(e){}
+    }
+    return '<div class="user-row"><div class="u-info"><div class="u-name">'+_esc(u.displayName||ident)+'</div><div class="u-meta">'+_esc(ident)+(u.cargo?(' · '+_esc(u.cargo)):'')+'</div>'+_aviso+'</div><div class="u-actions">'+ctrl+'</div></div>';
   }).join('') || '<div style="padding:24px;text-align:center;color:var(--mute)">No hay usuarios.</div>';
+}
+/* v995 (reporte de Antonio: cambió la obra de Julio Charvac y la ASISTENCIA lo seguía
+   mostrando en la anterior): la obra de una persona vive en DOS registros —el doc del
+   USUARIO (qué ve y escanea) y su ficha de COLABORADOR (dónde sale en asistencia)— y cada
+   pantalla lee el suyo. Estas dos funciones emparejan por NOMBRE y solo cuando identifica
+   a UNA sola persona: con homónimos no se adivina, se deja como está. PURAS. */
+function _personaPorNombreUnica(nombre, personal){
+  const norm = s => String(s == null ? '' : s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+  const k = norm(nombre);
+  if (!k) return null;
+  const hits = (personal || []).filter(function(p){ return p && norm(p.nombre) === k; });
+  return hits.length === 1 ? hits[0] : null;
+}
+function _usuarioPorNombreUnico(nombre, usuarios){
+  const norm = s => String(s == null ? '' : s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+  const k = norm(nombre);
+  if (!k) return null;
+  const hits = (usuarios || []).filter(function(u){ return u && u.uid && norm(u.displayName) === k; });
+  return hits.length === 1 ? hits[0] : null;
+}
+/* v995: iguala la ficha de COLABORADOR a la obra que ya tiene el USUARIO (botón IGUALAR
+   del modal de encargados). Reusa la misma propagación de _asignarObraUsuario. */
+async function _igualarObraColaborador(uid){
+  if (!can('users.manage')){ showToast('SIN PERMISO','red'); return; }
+  const u = (loadUsers() || []).find(x => x && x.uid === uid);
+  if (!u || !u.obraAsignada){ showToast('EL USUARIO NO TIENE OBRA ASIGNADA','red'); return; }
+  await _asignarObraUsuario(uid, u.obraAsignada);
 }
 async function _asignarObraUsuario(uid, obraId){
   if (!can('users.manage')){ showToast('SIN PERMISO','red'); return; }
@@ -6843,7 +6888,24 @@ async function _asignarObraUsuario(uid, obraId){
     if (currentUser && currentUser.uid === uid){ currentUser.obraAsignada = obraId || ''; }
     try{ await refreshUsersCache(); }catch(e){}
     const _nom = obraId ? String(((state.projects||[]).find(x=>x.id===obraId)||{}).name||'') : '';
-    showToast(obraId ? ('ENCARGADO DE: '+_nom.toUpperCase()) : 'SIN RESTRICCIÓN DE OBRA', 'green');
+    // v995: propagar a la ficha de colaborador — si no, la asistencia lo sigue mostrando
+    // en la obra vieja (fue exactamente el caso de Julio Charvac).
+    let _tambien = false;
+    try{
+      const _u = (loadUsers() || []).find(x => x && x.uid === uid);
+      const _pers = (typeof _getPersonal === 'function') ? _getPersonal() : [];
+      const _p = _u ? _personaPorNombreUnica(_u.displayName, _pers) : null;
+      if (_p && obraId && (_p.obraAsignada !== obraId || _p.multiObra || _p.multiSesion)){
+        _p.obraAsignada = obraId;
+        _p.multiObra = false;
+        _p.multiSesion = false;
+        _p._ts = Date.now();   // v673: sellar o el merge entre dispositivos revierte la obra
+        saveState();
+        try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+        _tambien = true;
+      }
+    }catch(e){ console.warn('[v995] propagar obra a colaborador', e); }
+    showToast(obraId ? ('ENCARGADO DE: '+_nom.toUpperCase()+(_tambien ? ' · TAMBIÉN EN ASISTENCIA' : '')) : 'SIN RESTRICCIÓN DE OBRA', 'green');
     renderEncargadosList();
     if (typeof renderPersonal==='function') renderPersonal();
   }catch(e){ console.error('asignar obra usuario:', e); showToast('ERROR AL ASIGNAR OBRA','red'); }
@@ -17583,9 +17645,27 @@ function setPedidoTab(tab){
   }
 }
 
+/* v995: SELF-HEAL de los pedidos que quedaron con recibo pero en APROBADO (el segundo
+   gate de permiso los rebotaba después de grabar la recepción). Matchea por CONTENIDO
+   —hay recepción registrada— y corre AL PINTAR, no en ensureDataV9 (regla v983).
+   PURA: recibe la lista, devuelve cuántos corrigió. */
+function _healPedidosRecibidos(pedidos){
+  let n = 0;
+  (pedidos || []).forEach(function(pd){
+    if (!pd || pd.status !== 'APROBADO') return;
+    if (!pd.recepcion || !pd.recepcion.ts) return;
+    pd.status = 'RECIBIDO';
+    pd._ts = Date.now();                   // v972: union-merge — toda transición se sella
+    pd.history = pd.history || [];
+    pd.history.push({ ts: Date.now(), from: 'APROBADO', to: 'RECIBIDO', by: String((pd.recepcion.porNombre) || 'RECEPCIÓN') });
+    n++;
+  });
+  return n;
+}
 function renderPedidosList(){
   const p = activeProj();
   const pedidos = (p.materiales.pedidos || []).slice().sort((a,b) => (b.ts||0) - (a.ts||0));
+  if (_healPedidosRecibidos(pedidos)) { try { saveState(); } catch(e){} }
 
   // KPIs de pedidos
   const total = pedidos.length;
@@ -17775,14 +17855,12 @@ async function advancePedido(id){
     }
   }
 
-  // Verificar permiso para cambios de estado.
-  // SOLICITADO → APROBADO solo lo puede disparar quien autoriza OC (genera OCs).
-  // Los demás siguen la lógica clásica de roles.
-  const canAdvance = (pd.status === 'SOLICITADO')
-    ? (can('compras.autorizar') || can('users.manage'))
-    : ((statusInfo.role === 'supervisor' && (can('pedidos.create') || can('pedidos.receive'))) ||
-       (statusInfo.role === 'oficina' && can('pedidos.advance')));
-  if (!canAdvance) return showToast('SIN PERMISO PARA ESTA ACCIÓN', 'red');
+  /* v995 (bug reportado por Antonio: pedido con recibo y estado APROBADO): acá vivía un
+     SEGUNDO gate con la regla vieja (APROBADO tiene role 'oficina' ⇒ exigía
+     pedidos.advance). El supervisor DUEÑO pasaba el gate de arriba, firmaba, subía el
+     recibo y grababa pd.recepcion… y este lo rebotaba con "SIN PERMISO", dejando el
+     pedido recibido pero clavado en APROBADO. El permiso ya se evaluó ARRIBA (_puede),
+     antes de cualquier escritura — no se vuelve a evaluar después de la recepción. */
 
   // v314: modal elegante en vez del confirm() nativo.
   const _okAdvPed = _recepcionHecha ? true : await window.prConfirm({
@@ -18902,16 +18980,32 @@ function _ncDeCompra(nombreInterno){
   }
   return null;
 }
+/* v995: nombre BASE de un poste a medida — el producto de catálogo del que sale
+   (el de 10', que el proveedor corta). Es el mismo colapso que hace _ocItemMemKey,
+   pero devolviendo el nombre legible: sirve para BUSCAR proveedor y precio sin
+   tocar el nombre que se le pide al proveedor. */
+function _ocNombreBaseMedida(name){
+  const s = String(name == null ? '' : name);
+  if (!/\(MEDIDA ESPECIAL/i.test(s)) return s;
+  return s.replace(/\s*\(MEDIDA ESPECIAL[^)]*\)/i, '').replace(/X\s*[\d.]+\s*'/i, "X 10'").trim();
+}
 function buildPedidoOcItems(pd){
   const arr = [];
   const specs = pd.specs || {};
   Object.entries(pd.items || {}).forEach(([key, qty]) => {
     const { cat, name } = _pedidoKeyParts(key);
     const spec = specs[key] || '';
-    // v968: si el catálogo de compras tiene match único, la OC sale con ese nombre
-    const nc = _ncDeCompra(name);
-    const fullName = (nc || name) + (spec ? ` [${spec}]` : '');
-    arr.push({ sourceKey:key, cat, name: fullName, qty: Number(qty) || 0, precio: 0, proveedorId: '', autoAssigned:false });
+    /* v968: si el catálogo de compras tiene match único, la OC sale con ese nombre.
+       v995 (bug reportado por Antonio): un POSTE A MEDIDA conserva SU medida — el
+       catálogo devolvería el poste de 10' y la OC terminaba pidiendo una medida que
+       no es la de la obra. El nombre del catálogo se guarda en matchName, que es lo
+       que usa la resolución automática de bodega/proveedor/precio. */
+    const esMedida = _ocMedidaEspecialMetros(name) != null;
+    const nc = _ncDeCompra(esMedida ? _ocNombreBaseMedida(name) : name);
+    const fullName = (esMedida ? name : (nc || name)) + (spec ? ` [${spec}]` : '');
+    const it = { sourceKey:key, cat, name: fullName, qty: Number(qty) || 0, precio: 0, proveedorId: '', autoAssigned:false };
+    if (esMedida) it.matchName = nc || _ocNombreBaseMedida(name);
+    arr.push(it);
   });
   (pd.extras || []).forEach((e, i) => {
     const fullName = e.name + (e.unit ? ` (${e.unit})` : '');
@@ -18938,17 +19032,21 @@ function autoAssignOcProviders(pd){
   const _memProv = Object.assign({}, (_p && _p.materiales && _p.materiales.ocProvPorItem) || {}, (_bmMem && _bmMem.ocProvPorItem) || {});
   const _esReceta = !!(pd && pd.esDeReceta);
   ocWorkingItems.forEach(it => {
+    /* v995: el nombre que se RESUELVE puede no ser el que se MUESTRA — un poste a medida
+       se le pide al proveedor con su medida real, pero hereda bodega/proveedor/precio del
+       producto base de 10' (it.matchName). Para todo lo demás son el mismo string. */
+    const _mn = it.matchName || it.name;
     // v936: material en la LISTA DE BODEGA → DESPACHO automático desde la bodega central.
     // Va ANTES del catálogo de precios: estos materiales SÍ tienen precio de catálogo
     // (para que la receta muestre costos) y por eso antes se iban al proveedor del
     // catálogo en vez de salir de bodega ("no quedó bien" — reporte de Antonio).
-    if (!_esAbasto && _esItemBodega(it.name)) {
+    if (!_esAbasto && _esItemBodega(_mn)) {
       it.proveedorId = '_bodega';
       it.eventual = false;
       it.esBodega = true;
       return;
     }
-    const best = findBestProviderForItem(it.name);
+    const best = findBestProviderForItem(_mn);
     if (best) {
       it.proveedorId = best.proveedor.id;
       it.precio = best.precio;
@@ -18958,10 +19056,10 @@ function autoAssignOcProviders(pd){
        eligió uno en una OC anterior, se respeta esa elección (antes se re-asignaba
        siempre al más barato y había que volver a elegirlo en cada pedido). */
     if (best && _esReceta) {
-      const _memId = _memProv[_ocItemMemKey(it.name)];
+      const _memId = _memProv[_ocItemMemKey(_mn)];
       const _memProvObj = (_memId && _memId !== '_bodega') ? _getProveedores().find(x => x.id === _memId) : null;
-      if (_memProvObj && _memProvObj.id !== it.proveedorId && _provsDelProducto(it.name).some(x => x.id === _memProvObj.id)) {
-        const _pr = findCatalogProductForProvider(it.name, _memProvObj);
+      if (_memProvObj && _memProvObj.id !== it.proveedorId && _provsDelProducto(_mn).some(x => x.id === _memProvObj.id)) {
+        const _pr = findCatalogProductForProvider(_mn, _memProvObj);
         it.proveedorId = _memProvObj.id;
         it.provRecordado = true;
         if (_pr && Number(_pr.precio) > 0) it.precio = Number(_pr.precio);
@@ -18974,7 +19072,7 @@ function autoAssignOcProviders(pd){
     // proveedor si existe; si no, queda para digitación como siempre).
     // v918: si la memoria no tiene la entrada, buscar en las OCs ya generadas.
     if (!best && _esReceta) {
-      const _memKey = _ocItemMemKey(it.name);
+      const _memKey = _ocItemMemKey(_mn);
       const _provId = _memProv[_memKey] || _provHistoricoPorItem(_p, _memKey);
       // v921: BODEGA CENTRAL recordada — origen interno, sin proveedor del catálogo
       if (_provId === '_bodega') {
@@ -18987,7 +19085,7 @@ function autoAssignOcProviders(pd){
         it.proveedorId = _prov.id;
         it.eventual = false;
         it.provRecordado = true;
-        const _prod = findCatalogProductForProvider(it.name, _prov);
+        const _prod = findCatalogProductForProvider(_mn, _prov);
         if (_prod && Number(_prod.precio) > 0 && !(Number(it.precio) > 0)) {
           it.precio = Number(_prod.precio);
           it.autoAssigned = true;
@@ -18997,8 +19095,10 @@ function autoAssignOcProviders(pd){
     // v909: postes a medida = fabricación → precio manual; pre-llenar el último precio
     // usado para esa medida (siempre editable).
     const _mts = _ocMedidaEspecialMetros(it.name);
+    // v995: el badge A MEDIDA se pinta SIEMPRE que el material lleve medida especial
+    // (antes el nombre ya venía colapsado a 10' y nunca se marcaba).
+    if (_mts != null) it.aMedida = true;
     if (!best && _mts != null) {
-      it.aMedida = true;
       const _prev = Number(_memPostes[String(_mts)]) || 0;
       if (_prev > 0 && !(Number(it.precio) > 0)) {
         it.precio = _prev;
@@ -19169,7 +19269,7 @@ function _bodegaGenerarPedido(){
   // v964: el abastecimiento nace en el STORE GLOBAL de bodega — no en ningún proyecto.
   // Numeración propia DERIVADA del máximo existente (sin contador mutable, lección v953).
   const b = _bodegaMatStore();
-  const numero = 'BODEGA – ' + String(_bodegaNextNum(b.pedidos)).padStart(5, '0');
+  const numero = 'BODEGA – ' + String(_bodegaNextNum(b.pedidos)); // v994: correlativos SIN ceros
   const hoy = new Date();
   const _t = Date.now();
   const pedido = {
@@ -19247,19 +19347,82 @@ function _bodegaUFmt(u){
   if (/^(U|UN|UNI|UND|UNIDAD(ES)?|PZA?S?|PIEZAS?)$/.test(s)) return 'UND';
   return s;
 }
+/* v994 (pedido de Antonio: "la unidad la colocás vos, clasificá TODOS los materiales
+   correctamente"): clasificador de la unidad de compra a partir del nombre. El Excel
+   DATOS_COMPRAS trae 658 materiales SIN columna de unidad, así que se deriva acá.
+   El ORDEN DE LAS REGLAS ES LA LÓGICA: primero las presentaciones inequívocas
+   (CIENTO, RESMA, PAR), después las EXCEPCIONES de objetos que se llaman como su
+   envase (una CUBETA plástica se compra por unidad, no "por cubeta"), y recién
+   después las presentaciones por envase/granel. Mover una regla de lugar cambia
+   clasificaciones — hay test que lo fija (_avancetest/unidades_catalogo_v994.cjs). */
 function _bodegaUnidadDelNombre(name){
-  const s = ' ' + String(name || '').toUpperCase() + ' ';
-  if (/\bCAJA\b/.test(s)) return 'CAJA';
+  const raw = String(name || '').toUpperCase().replace(/\s+/g, ' ').trim();
+  const s = ' ' + raw + ' ';
+
+  // ── 1. presentaciones que se nombran solas ──
+  if (/\bCIENTOS?\b/.test(s)) return 'CIENTO';
+  if (/\bMILLAR(ES)?\b/.test(s)) return 'MILLAR';
+  if (/\bRESMAS?\b/.test(s)) return 'RESMA';
+
+  /* ── 2. EXCEPCIONES: el nombre trae un envase o una medida que NO es su presentación ──
+     "CUBETA PLASTICA 5 GALONES" es el bote (UND), no 5 galones de algo; un MAZO DE 5 LBS
+     pesa 5 libras pero se compra de a uno; una CINTA DE MEDIR no es cinta adhesiva. */
+  if (/^CUBETAS?\b/.test(raw)) return 'UND';
+  if (/^ENVASES?\b/.test(raw)) return 'UND';
+  if (/^(MEDIO )?TONEL(ES)?\b/.test(raw)) return 'UND';
+  if (/^COSTAL(ES)?\b/.test(raw)) return 'UND';
+  if (/^CAJAS? (RECTANGULAR|FUERTE|DE HERRAMIENTA)/.test(raw)) return 'UND';
+  if (/\bY CAJA\s*$/.test(raw)) return 'UND';           // "… C/CUERDA Y CAJA" (viene con su caja)
+  if (/^BOLSAS? PARA BASURA\b/.test(raw)) return 'UND';
+  // otros recipientes vacíos que se venden por su capacidad en galones
+  if (/^(BOTES?|BALDES?|PICHINGAS?|GARRAF[OÓ]N(ES)?|BID[OÓ]N(ES)?|TAMBOS?)\b/.test(raw)) return 'UND';
+  // herramienta de golpe: las libras son su peso, no la presentación
+  if (/^(MAZOS?|ALMADANAS?|MARTILLOS?|COMBOS?|MANDARRIAS?|MACETAS?)\b/.test(raw)) return 'UND';
+  // instrumentos de medición: los metros son su alcance
+  if (/\bCINTAS? (DE )?MEDIR\b|\bCINTA MEDIDORA\b|\bCINTAS? M[EÉ]TRICAS?\b|\bFLEX[OÓ]METRO\b/.test(s)) return 'UND';
+  if (/^NIVEL(ES)?\b/.test(raw)) return 'UND';
+
+  /* ── 3. CAJA explícita: si el nombre dice CAJA, se compra por caja (va ANTES de PAR y
+     de CINTA/ROLLO — "GUANTES … CAJA DE 100" y "CAJA DE CINTA DE PAPEL" son cajas). ── */
+  if (/\bCAJAS?\b/.test(s)) return 'CAJA';
+
+  // ── 4. calzado y guantes se compran por par ──
+  if (/^GUANTES?\b/.test(raw) || /^BOTAS? DE SEGURIDAD\b/.test(raw) || /^ZAPATOS?\b/.test(raw) || /^ZAPATILLAS?\b/.test(raw)) return 'PAR';
+  if (/\bPAR DE\b/.test(s)) return 'PAR';
+
+  // ── 5. fulminantes: se compran por tira (10 tiros) — v978 ──
+  if (/\bFULMINANTE/.test(s) && /\bTIRAS?\b/.test(s)) return 'TIRA';
+
+  // ── 6. cintas y rollos (antes de YARDA: la medida es el largo del rollo) ──
+  if (/\bROLLOS?\b/.test(s)) return 'ROLLO';
+  if (/\bMASKING\b/.test(s)) return 'ROLLO';
+  if (/\bCINTAS?\b/.test(s)) return 'ROLLO';
+
+  // ── 7. granel en saco (polvos de construcción) ──
   if (/\bSACOS?\b/.test(s)) return 'SACO';
-  if (/\bCUBETA\b|\bCUB\b/.test(s)) return 'CUBETA';
-  if (/\bGALON\b|\bGALÓN\b|\bGAL\b|\bGL\b/.test(s)) return 'GALÓN';
-  if (/\bROLLO\b/.test(s)) return 'ROLLO';
-  if (/\bLBS?\.?\s|\bLIBRAS?\b/.test(s)) return 'LIBRA';
-  if (/\bPAR\b/.test(s)) return 'PAR';
-  if (/\bCIENTO\b/.test(s)) return 'CIENTO';
-  if (/\bBOLSA\b/.test(s)) return 'BOLSA';
-  if (/\bTONEL\b/.test(s)) return 'TONEL';
-  if (/\bYARDA\b/.test(s)) return 'YARDA';
+  if (/^BOLSAS? DE (CONCRETO|MEZCLA|CEMENTO|CAL)\b/.test(raw)) return 'SACO';
+  // "CEMENTO" también nombra líquidos (solvente PVC, de contacto): esos NO son saco
+  if (/^CEMENTOS?\b/.test(raw) && !/ASF[AÁ]LTICO|SOLVENTE|CONTACTO|PVC|\bGAL|\bLITRO/.test(raw)) return 'SACO';
+  if (/^(CAL|CERNIDO|REPELLO|MONOCAPA|BASECOAT|MEZCLA|CONCRETO|ACABADO|PEGA|PEGATABLA|PASTA EN POLVO|MASILLA PLAKAFINISH|CARBONATO|M[AÁ]RMOL|CALCIO|TILOSA)\b/.test(raw)) return 'SACO';
+
+  // ── 8. envases ──
+  if (/\bCUBETAS?\b|\bCUB\b|\bCANECA\b/.test(s)) return 'CUBETA';
+  if (/\bGALONE?S?\b|\bGAL[OÓ]N\b|\bGAL\.?\b|\bGL\b|\d\s?GL\b/.test(s)) return 'GALÓN';
+  if (/\b3\.78[05]?\s?L\b/.test(s)) return 'GALÓN';      // 3.785 L = 1 galón
+  if (/\bLITROS?\b|\bLTS?\b/.test(s)) return 'LITRO';
+  if (/\bBOLSAS?\b/.test(s)) return 'BOLSA';
+  /* LA ROCA es una MARCA, no una presentación: fabrica polvos (basecoat, repello) pero
+     también selladores en cubeta y galón — por eso va DESPUÉS de los envases. */
+  if (/\bLA ROCA\b/.test(s)) return 'SACO';
+
+  // ── 9. peso y medida ──
+  if (/\bLIBRAS?\b|\bLBS?\.?\b/.test(s)) return 'LIBRA';
+  // METRO = material a granel (m³). El "X metros" de un cable o una extensión es su largo.
+  if (/^(ARENA|PIEDR[IÍ]N|SELECTO|MATERIAL|BALASTO|TALPETATE|RIPIO)\b/.test(raw) || /\bM3\b|M³/.test(s)) return 'METRO';
+  if (/\bYARDAS?\b/.test(s)) return 'YARDA';
+  if (/\bTONEL(ES)?\b/.test(s)) return 'TONEL';
+
+  // perfilería, tablas, herramienta, EPP y todo lo que se cuenta de a uno
   return 'UND';
 }
 /* Unidad por clave canónica: los items de OC no guardan unidad — se busca en las
@@ -19286,6 +19449,48 @@ function _bodegaUnidadDe(name){
   } catch (e) {}
   return _bodegaUnidadDelNombre(name); // v969: sin receta, la presentación del nombre manda
 }
+/* ── v994: UNIDAD AUTOMÁTICA DEL CATÁLOGO DE PROVEEDORES ──────────────────────
+   El Excel DATOS_COMPRAS no trae unidad, así que los 658 productos entraron con
+   el campo vacío. Se llena solo: primero con la unidad REAL que ya usan las
+   recetas/bodega (esa manda: es la que Antonio escribió), y si el material no
+   está en ninguna, con la clasificación por nombre.
+   El índice se arma UNA vez por render — _bodegaUnidadDe() recorre todas las
+   recetas de todos los proyectos y llamarlo 658 veces congelaba el modal. */
+let _catUIdxCache = null;
+/* El índice se CACHEA: renderCatProvProductos corre en cada tecleo del buscador del
+   catálogo y _bodegaProductosGlobal() recorre las recetas de todos los proyectos —
+   reconstruirlo por keystroke laguea el modal. Se invalida al abrir el catálogo y al
+   importar el Excel (que son los momentos en que el catálogo puede haber cambiado). */
+function _catUnidadIndexReset(){ _catUIdxCache = null; }
+function _catUnidadIndex(){
+  if (_catUIdxCache) return _catUIdxCache;
+  const m = new Map();
+  try {
+    const all = (typeof _bodegaProductosGlobal === 'function') ? _bodegaProductosGlobal() : [];
+    all.forEach(function(x){
+      if (!x || !x.name || !x.u) return;
+      const k = _ocItemMemKey(x.name);
+      if (!m.has(k)) m.set(k, _bodegaUFmt(x.u) || String(x.u).toUpperCase());
+    });
+  } catch (e) {}
+  _catUIdxCache = m;
+  return m;
+}
+function _catUnidadAuto(nombre, idx){
+  if (!String(nombre || '').trim()) return '';
+  try {
+    if (idx && typeof idx.get === 'function') {
+      const hit = idx.get(_ocItemMemKey(nombre));
+      if (hit) return hit;
+    }
+  } catch (e) {}
+  return _bodegaUnidadDelNombre(nombre);
+}
+/* La unidad automática NO se persiste al abrir el catálogo: state.proveedoresGlobales
+   viaja por LAST-WRITE-WINS (no tiene union-merge), así que escribir + subir el state
+   por el solo hecho de ABRIR un modal podía pisar el catálogo editado en otro
+   dispositivo. Se MUESTRA derivada (todos la ven, admin o no) y solo se graba cuando
+   el admin la edita a mano o importa el Excel, que son acciones explícitas suyas. */
 function _bodegaMov(tipo, name, qty, ref){
   const u0 = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
   const t = Date.now();
@@ -19358,7 +19563,7 @@ function _abrirCargaExistencias(){
            cuál es el que se está cargando — el inventario se valoriza con SU precio. */
         const _pvs = (typeof _provsDelProducto === 'function') ? _provsDelProducto(x.name) : [];
         if (_pvs.length < 2) return '';
-        return `<div style="grid-column:1/-1;margin-top:2px"><select data-nativo data-cprov="${i}" style="width:100%;padding:5px 7px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:10.5px;box-sizing:border-box"><option value="">— PROVEEDOR (para el costo) —</option>${_pvs.map(pv => `<option value="${pv.id}">${_invEscAttr(pv.nombre)} · Q${fmtQ(pv.precio)}</option>`).join('')}</select></div>`;
+        return `<div style="grid-column:1/-1;margin-top:2px"><select data-nativo data-cprov="${i}" style="width:100%;padding:5px 7px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:10.5px;box-sizing:border-box"><option value="">— PROVEEDOR —</option>${_pvs.map(pv => `<option value="${pv.id}">${_invEscAttr(pv.nombre)} · Q${fmtQ(pv.precio)}</option>`).join('')}</select></div>`;
       })()}
     </div>`).join('') || '<div style="padding:20px;text-align:center;color:#9CA3AF;font-size:11px">SIN MATERIALES EN LAS RECETAS — USÁ OTRO MATERIAL ABAJO</div>';
   const wrap = document.createElement('div');
@@ -19824,7 +20029,7 @@ async function openOrdenCompra(){
   const nextNum = _primerNumeroLibre(_ordPrev.filter(o => _ocSerieDe(o) === _seriePrev).map(o => Number(o.folio) || 0));
   // v978: el número que se muestra ES el correlativo real (folio) — antes salía "OC01 / SIG.
   // FOLIO 2" y se leía como si fuera la primera OC del proyecto (queja de Antonio 26-jul).
-  document.getElementById('ocNumero').value = `${_seriePrev} ${String(nextNum).padStart(5, '0')} · DEL PEDIDO ${pd.numero}`; // v982/v993: serie propia (OC/DESP/OP)
+  document.getElementById('ocNumero').value = `${_seriePrev} ${nextNum} · DEL PEDIDO ${pd.numero}`; // v982/v993: serie propia (OC/DESP/OP)
   // v978: pedidos DE RECETA — compras NO cambia proveedores (vienen del catálogo v916/v918);
   // lo ÚNICO permitido por material es mandarlo a BODEGA CENTRAL. Admin conserva la mano.
   // v992 (pedido de Antonio: "quiero que funcione igual que el pedido de receta"): el
@@ -20387,11 +20592,14 @@ async function _importarPreciosExcel(event){
     let creados=0, prodNuevos=0, prodUpd=0;
     const ensureProv=nom=>{ let pr=findProv(nom); if(!pr){ pr={id:'prv-'+uid(),nombre:String(nom).toUpperCase(),contacto:'',telefono:'',productos:[]}; provs.push(pr); creados++; } if(!pr.productos)pr.productos=[]; return pr; };
     const REF='SIN PROVEEDOR FIJO / REFERENCIA';
+    _catUnidadIndexReset(); const _uIdxImp=_catUnidadIndex(); // v994: índice de unidades UNA vez para todo el import
     parsed.items.forEach(it=>{
       const pr=ensureProv(it.proveedor? it.proveedor : REF);
       const k=matchKeyProducto(it.material);
       const ex=pr.productos.find(q=>matchKeyProducto(q.nombre)===k);
-      if(ex){ ex.precio=it.precio; prodUpd++; } else { pr.productos.push({nombre:it.material.toUpperCase(),unidad:'',precio:it.precio,rendimiento:1}); prodNuevos++; }
+      // v994: la unidad se clasifica sola al importar (el Excel no trae columna de unidad)
+      if(ex){ ex.precio=it.precio; if(!String(ex.unidad||'').trim()) ex.unidad=_catUnidadAuto(ex.nombre,_uIdxImp); prodUpd++; }
+      else { pr.productos.push({nombre:it.material.toUpperCase(),unidad:_catUnidadAuto(it.material,_uIdxImp),precio:it.precio,rendimiento:1}); prodNuevos++; }
     });
     let pagoSet=0;
     pagos.forEach(pg=>{ const pr=findProv(pg.nombre); if(pr){ pr.pago=Object.assign({},pr.pago,{numeroCuenta:pg.numeroCuenta,tipoCuenta:pg.tipoCuenta,banco:pg.banco}); pagoSet++; } });
@@ -20528,7 +20736,7 @@ async function generarOrdenCompra(){
     if (!_ctx.esBodega) p.materiales.ordenCounter = folio; // compat: el contador queda alineado
     // v978: el número de la OC ES su folio correlativo (5 dígitos) — antes era el índice
     // DENTRO del pedido ("OC01") y no reflejaba el orden real.
-    const numero = `${pd.numero} - ${serie} ${String(folio).padStart(5, '0')}`;
+    const numero = `${pd.numero} - ${serie} ${folio}`;
 
     const oc = {
       id: 'oc-' + uid(),
@@ -20865,9 +21073,15 @@ function _projSiglas(name){
 
 // v988: correlativo del pedido (los últimos dígitos de su número) — el doc de la solicitud
 // titula con SIGLA + número ("VLA - 00003") en vez del nombre completo del proyecto. PURA.
+/* Correlativo del pedido para los documentos (solicitud, recibo, mensaje de WhatsApp).
+   v994: SIN ceros a la izquierda — los pedidos emitidos antes de v994 quedaron guardados
+   como '– 00002' y Antonio los quiere ver "1, 2, 3, 4" igual que los nuevos, así que la
+   limpieza se hace al MOSTRAR (el dato guardado no se toca). */
 function _solNum(pd){
   const m = String((pd && pd.numero) || '').match(/(\d+)\s*$/);
-  return m ? m[1] : String((pd && pd.numero) || '');
+  if (!m) return String((pd && pd.numero) || '');
+  const n = parseInt(m[1], 10);
+  return isNaN(n) ? m[1] : String(n);
 }
 // v948: teléfonos SIEMPRE con guion (Antonio): 42375385 -> 4237-5385. Con código de país
 // 502 -> +502 4237-5385. Si no parece teléfono (largo distinto), se deja tal cual. PURA.
@@ -22523,7 +22737,22 @@ function _asignarObraColaborador(personaId, obraId){
   const _nom = p.multiSesion ? 'VARIAS OBRAS (MARCA POR OBRA)' : (p.multiObra ? 'VARIAS OBRAS' : (p.obraAsignada ? (String(((state.projects||[]).find(x=>x.id===p.obraAsignada)||{}).name||'')) : ''));
   try{ if(typeof logActivity==='function') logActivity('update','Obra de colaborador asignada', (p.nombre||'')+' → '+(_nom||'sin obra')); }catch(e){}
   saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
-  showToast('OBRA ASIGNADA: '+(_nom?_nom.toUpperCase():'(SIN OBRA)'),'green');
+  /* v995: propagar al doc del USUARIO (el que decide qué ve y a quién escanea). Solo una
+     obra FIJA: "varias obras" no se traduce a una obra concreta del usuario. */
+  let _tambienUsr = false;
+  try{
+    if (p.obraAsignada && !p.multiObra && !p.multiSesion && typeof loadUsers === 'function'){
+      const _u = _usuarioPorNombreUnico(p.nombre, loadUsers() || []);
+      const _esAdminU = _u && _u.perms && (_u.perms.includes('*') || _u.perms.includes('users.manage'));
+      if (_u && !_esAdminU && _u.obraAsignada !== p.obraAsignada && typeof saveUserDoc === 'function'){
+        saveUserDoc(_u.uid, { obraAsignada: p.obraAsignada })
+          .then(function(){ try{ if(typeof refreshUsersCache==='function') refreshUsersCache(); }catch(e){} })
+          .catch(function(e){ console.warn('[v995] propagar obra a usuario', e); });
+        _tambienUsr = true;
+      }
+    }
+  }catch(e){ console.warn('[v995] propagar obra a usuario', e); }
+  showToast('OBRA ASIGNADA: '+(_nom?_nom.toUpperCase():'(SIN OBRA)')+(_tambienUsr?' · TAMBIÉN COMO ENCARGADO':''),'green');
   if(typeof renderPersonal==='function') renderPersonal();
 }
 // v821: marca/desmarca si la persona COBRA EN LIQUIDACIÓN DE OBRA (opt-in). Solo los marcados
@@ -32004,6 +32233,7 @@ function openCatalogoProveedores(){
   if (!(can('users.manage')||can('precios.autorizar')||can('precios.proponer'))) return showToast('SIN ACCESO AL CATÁLOGO DE PRECIOS', 'red');
   currentCatProvId = null;
   catProvSearchTerm = '';
+  _catUnidadIndexReset(); // v994: índice de unidades fresco al abrir
   renderCatProvList();
   document.getElementById('catProvEmpty').style.display = 'block';
   document.getElementById('catProvEditor').style.display = 'none';
@@ -32060,11 +32290,14 @@ function renderCatProvProductos(){
   const _esAdminCat = can('users.manage');
   const cont = document.getElementById('catProvProductos');
   if (!Array.isArray(prv.productos)) prv.productos = [];
+  const _uIdx = _catUnidadIndex(); // v994: unidad automática (solo para MOSTRAR)
 
   const term = (catProvSearchTerm || '').toUpperCase();
+  // v994: buscar también por la unidad DERIVADA — es la que ve el usuario en la fila
+  const _uDe = prod => String(prod.unidad || _catUnidadAuto(prod.nombre, _uIdx) || '').toUpperCase();
   const filtered = prv.productos
     .map((prod, origIdx) => ({ prod, origIdx }))
-    .filter(({prod}) => !term || (prod.nombre || '').toUpperCase().includes(term) || (prod.unidad || '').toUpperCase().includes(term));
+    .filter(({prod}) => !term || (prod.nombre || '').toUpperCase().includes(term) || _uDe(prod).includes(term));
 
   if (prv.productos.length === 0) {
     cont.innerHTML = `<div class="cat-prov-empty-productos">SIN PRODUCTOS EN EL CATÁLOGO${_esAdminCat ? ' · PULSAR "+ AGREGAR PRODUCTO" PARA EMPEZAR' : ''}</div>`;
@@ -32081,7 +32314,7 @@ function renderCatProvProductos(){
   cont.innerHTML = _hint + filtered.map(({prod, origIdx}) => `
     <div class="cat-prov-producto-row">
       <input type="text" value="${(prod.nombre || '').replace(/"/g,'&quot;')}" placeholder="NOMBRE DEL PRODUCTO" oninput="updateCatProvProducto(${origIdx}, 'nombre', this.value)"${_esAdminCat ? '' : ' disabled'}>
-      <input type="text" value="${(prod.unidad || '').replace(/"/g,'&quot;')}" placeholder="UNIDAD" oninput="updateCatProvProducto(${origIdx}, 'unidad', this.value)"${_esAdminCat ? '' : ' disabled'}>
+      <input type="text" value="${(prod.unidad || _catUnidadAuto(prod.nombre, _uIdx) || '').replace(/"/g,'&quot;')}" placeholder="UNIDAD" oninput="updateCatProvProducto(${origIdx}, 'unidad', this.value)"${_esAdminCat ? '' : ' disabled'}>
       <input type="number" step="0.01" min="0" class="precio" value="${prod.precio || ''}" placeholder="0.00" oninput="updateCatProvProducto(${origIdx}, 'precio', this.value)">
       ${_esAdminCat ? `<button class="btn-icon" onclick="deleteCatProvProducto(${origIdx})" title="Eliminar">✕</button>` : '<span></span>'}
     </div>
@@ -32366,7 +32599,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     const _num = s => { const m = String(s || '').match(/(\d+)\s*$/); return m ? parseInt(m[1], 10) : 0; };
     const usados = (_mat.pedidos || []).map(x => _num(x && x.numero))
       .concat((_mat.ordenes || []).map(o => _num(o && o.pedidoNumero)));
-    return `${prefix} – ${String(_primerNumeroLibre(usados)).padStart(5,'0')}`;
+    return `${prefix} – ${_primerNumeroLibre(usados)}`;
   };
 
   window.isErlinUser = function(){
@@ -32387,7 +32620,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
         if (pd.numero && /^[-A-Z0-9]{3,12}-\d{3,5}$/.test(String(pd.numero))) {
           const m = String(pd.numero).match(/(\d{3,5})$/);
           const raw = String(p.pedidoPrefix || p.name || 'PROYECTO').toUpperCase().replace(/FASE\s*(\d+)/g,'F$1').replace(/\s+/g,' ').trim();
-          pd.numero = `${raw} – ${String(m ? m[1] : '1').padStart(5,'0')}`;
+          pd.numero = `${raw} – ${parseInt(m ? m[1] : '1', 10) || 1}`;
         }
         if (!pd.history) pd.history = [{ts:pd.ts||Date.now(), from:null, to:pd.status||'SOLICITADO', by:'MIGRACIÓN'}];
       });
@@ -51780,16 +52013,27 @@ async function _anulAnularReal(){
     if(!prov){ showT('ESCRIBÍ EL PROVEEDOR','red'); return; }
     if(!(monto>0)){ showT('ESCRIBÍ EL MONTO DE LA COTIZACIÓN','red'); return; }
     let url='', nombreArch='';
+    /* v995 (reporte de Antonio: "ya no puedo ver las cotizaciones"): si compras adjuntó un
+       archivo y la subida FALLA, la cotización NO se envía. Antes el error se tragaba con un
+       console.warn y la solicitud quedaba guardada con cotArchivoUrl vacío mientras compras
+       veía "COTIZACIÓN ENVIADA" en verde — así se perdieron los archivos cuando Storage
+       estaba con la cuota agotada. */
     if(file){
+      let _subioOk = false;
       try {
         if(typeof firebase!=='undefined' && firebase.storage){
           try{ window._prUploadShow && window._prUploadShow('SUBIENDO COTIZACIÓN…'); }catch(e){}
           const ref = firebase.storage().ref('anticipos-cotizaciones/'+sol.id+'-'+Date.now());
           await ref.put(file, { contentType: file.type || 'application/octet-stream' });
           url = await ref.getDownloadURL(); nombreArch = file.name||'';
+          _subioOk = !!url;
           try{ window._prUploadHide && window._prUploadHide(); }catch(e){}
         }
       } catch(e){ console.warn('[v777] cotizacion file', e); try{ window._prUploadHide && window._prUploadHide(); }catch(e2){} }
+      if(!_subioOk){
+        showT('NO SE PUDO SUBIR LA COTIZACIÓN · REVISÁ LA CONEXIÓN Y REINTENTÁ','red');
+        return; // el modal queda abierto: se reintenta sin volver a escribir todo
+      }
     }
     sol.cotProveedor=prov; sol.cotMonto=monto; sol.cotNota=nota; sol.cotItem=item; sol.cotArchivoUrl=url; sol.cotArchivoNombre=nombreArch;
     sol.cotizadoPor=(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''); sol.cotizadoEn=(typeof nowStr==='function'?nowStr():'');
@@ -52063,6 +52307,48 @@ async function _anulAnularReal(){
   // v937: COMENTARIO DE COMPRAS — para avisar "no existe / no está el producto" sin
   // rechazar la solicitud. Notifica a quien PIDIÓ (email) y a gerencia (campanita +
   // push en tiempo real, ambos sistemas vía _antSolicNotif). Sella s._ts (union merge).
+  /* v995: ADJUNTAR LA COTIZACIÓN DESPUÉS. Recupera las solicitudes que quedaron sin
+     archivo porque la subida a Storage falló en silencio (cuota agotada). Mismo gate que
+     cotizar; no toca el monto ni el estado, solo agrega el archivo que faltaba. */
+  window._antAdjuntarCotizacion = async function(solId){
+    if(!_antSolicPerm('anticipos.cotizar') && !_antEsGerente()){ showT('SOLO COMPRAS O GERENTE','red'); return; }
+    const sol = _antSolics().find(s=>s.id===solId);
+    if(!sol){ showT('SOLICITUD NO DISPONIBLE','red'); return; }
+    if(sol.cotArchivoUrl){ showT('ESTA COTIZACIÓN YA TIENE ARCHIVO','red'); return; }
+    _antModalWrap('antAdjModal','ADJUNTAR COTIZACIÓN',
+      '<div style="background:#FFFBEB;border:1px solid #FCD34D;border-radius:8px;padding:11px 12px;margin-bottom:14px;font-size:12px;color:#92400E;line-height:1.5">'
+      +'Esta cotización se guardó SIN archivo. Subí acá el documento que le mandó '+esc(sol.cotProveedor||'el proveedor')+'.'
+      +'</div>'
+      +'<label style="display:block;margin-bottom:14px"><span style="'+_antLbl+'">Archivo de la cotización (PDF o foto)</span>'
+      +'<input type="file" id="antAdjFile" accept="image/*,application/pdf" style="'+_antInp+'"></label>'
+      +'<button class="btn" onclick="window._antAdjuntarCotizacionGuardar(\''+esc(sol.id)+'\')" style="width:100%;background:#1565C0;border-color:#1565C0;color:#fff;padding:11px;font-size:12.5px;font-weight:700">SUBIR ARCHIVO</button>');
+  };
+  window._antAdjuntarCotizacionGuardar = async function(solId){
+    if(!_antSolicPerm('anticipos.cotizar') && !_antEsGerente()){ showT('SOLO COMPRAS O GERENTE','red'); return; }
+    const inp = document.getElementById('antAdjFile');
+    const file = inp && inp.files && inp.files[0];
+    if(!file){ showT('ELEGÍ EL ARCHIVO','red'); return; }
+    let url='', nombreArch='';
+    try {
+      if(typeof firebase!=='undefined' && firebase.storage){
+        try{ window._prUploadShow && window._prUploadShow('SUBIENDO COTIZACIÓN…'); }catch(e){}
+        const ref = firebase.storage().ref('anticipos-cotizaciones/'+solId+'-'+Date.now());
+        await ref.put(file, { contentType: file.type || 'application/octet-stream' });
+        url = await ref.getDownloadURL(); nombreArch = file.name||'';
+        try{ window._prUploadHide && window._prUploadHide(); }catch(e){}
+      }
+    } catch(e){ console.warn('[v995] adjuntar cotizacion', e); try{ window._prUploadHide && window._prUploadHide(); }catch(e2){} }
+    if(!url){ showT('NO SE PUDO SUBIR EL ARCHIVO · REINTENTÁ','red'); return; }
+    // regla v769/v770: re-leer del state VIVO después del await de red
+    const sol2 = _antSolics().find(s=>s.id===solId);
+    if(!sol2){ showT('LA SOLICITUD YA NO EXISTE — RECARGÁ','red'); return; }
+    sol2.cotArchivoUrl = url;
+    sol2.cotArchivoNombre = nombreArch;
+    sol2._ts = Date.now(); // solicitudes van por union-merge
+    var m=document.getElementById('antAdjModal'); if(m) m.remove();
+    _antSolicSave();
+    showT('COTIZACIÓN ADJUNTADA','green');
+  };
   window._antAbrirComentar = function(solId){
     if(!_antSolicPerm('anticipos.cotizar') && !_antEsGerente()){ showT('SOLO COMPRAS O GERENTE','red'); return; }
     const sol = _antSolics().find(s=>s.id===solId); if(!sol){ return; }
@@ -52157,7 +52443,15 @@ async function _anulAnularReal(){
       if((s.estado==='pendiente_cotizacion'||s.estado==='pendiente_autorizacion') && (esCreador||esGer)) acciones += '<button class="btn ghost sm" onclick="window.cancelarSolicitudAnticipo(\''+esc(s.id)+'\')" style="border-color:#C62828;color:#C62828;padding:6px 14px;font-size:11px">CANCELAR</button>';
       if(s.estado==='cancelada' && _antEsAdmin()) acciones += '<button class="btn ghost sm" onclick="window.eliminarSolicitudAnticipo(\''+esc(s.id)+'\')" style="border-color:#B91C1C;color:#B91C1C;padding:6px 14px;font-size:11px">ELIMINAR</button>'; // v844: admin borra canceladas (con tombstone)
       const _cu = (Number(s.cuotas)>0) ? Number(s.cuotas) : ((s.cotMonto && typeof window._v416CuotasPorMonto==='function') ? window._v416CuotasPorMonto(Number(s.cotMonto)||0) : 0); // v822: cuántas cuotas (sol.cuotas o regla v416 por monto)
-      const cot = (s.cotProveedor||s.cotMonto) ? ('<div style="font-size:11px;color:#1565C0;margin-top:3px">Cotización: '+esc(s.cotProveedor||'—')+' · '+_money(Number(s.cotMonto)||0)+(s.cotArchivoUrl?(' · <a href="'+esc(s.cotArchivoUrl)+'" target="_blank" style="color:#1565C0;text-decoration:underline">ver</a>'):'')+(_cu>0?(' · '+_cu+' cuota'+(_cu===1?'':'s')):'')+'</div>') : '';
+      /* v995: cuando la cotización NO tiene archivo se dice EXPLÍCITAMENTE (antes solo
+         faltaba el link "ver" y parecía que la app había perdido el archivo). Compras o
+         gerencia pueden adjuntarlo después con ADJUNTAR COTIZACIÓN. */
+      const _cotSinArch = (s.cotProveedor||s.cotMonto) && !s.cotArchivoUrl;
+      const _cotArchHTML = s.cotArchivoUrl
+        ? (' · <a href="'+esc(s.cotArchivoUrl)+'" target="_blank" style="color:#1565C0;text-decoration:underline">ver</a>')
+        : (' · <span style="color:#B45309;font-weight:700">SIN ARCHIVO</span>'
+           + ((puedeCotizar||esGer) ? (' · <a href="#" onclick="event.preventDefault();window._antAdjuntarCotizacion(\''+esc(s.id)+'\')" style="color:#B45309;text-decoration:underline;font-weight:700">ADJUNTAR COTIZACIÓN</a>') : ''));
+      const cot = (s.cotProveedor||s.cotMonto) ? ('<div style="font-size:11px;color:#1565C0;margin-top:3px">Cotización: '+esc(s.cotProveedor||'—')+' · '+_money(Number(s.cotMonto)||0)+_cotArchHTML+(_cu>0?(' · '+_cu+' cuota'+(_cu===1?'':'s')):'')+'</div>') : '';
       const mot = s.motivoRechazo ? ('<div style="font-size:11px;color:#B91C1C;margin-top:3px">Motivo: '+esc(s.motivoRechazo)+'</div>') : '';
       const pausaInfo = s.pausada ? ('<div style="font-size:11px;color:#475569;margin-top:3px;font-weight:700">EN PAUSA'+(s.pausadaPor?(' POR '+esc(s.pausadaPor)):'')+(s.pausadaEn?(' · '+esc(s.pausadaEn)):'')+' — SE REANUDA CUANDO HAYA EXISTENCIAS</div>') : ''; // v976
       // v937: comentarios de compras visibles en la tarjeta
@@ -53532,7 +53826,11 @@ async function _anulAnularReal(){
     const filtroEstatus = window._ocFiltroEstatus || 'todas';
     const filtroNumero = String(window._ocFiltroNumero || '').trim().toLowerCase();
     const itemsFiltrados = ocs.filter(oc => { if (filtroEstatus !== 'todas' && oc.estatus !== filtroEstatus) return false; if (filtroNumero && !String(oc.numero||'').toLowerCase().includes(filtroNumero)) return false; return true; });
-    const grupos = _agruparPorOC(itemsFiltrados).sort((a,b) => { const na=parseInt(a.numero,10), nb=parseInt(b.numero,10); if (!isNaN(na)&&!isNaN(nb)) return na-nb; return String(a.numero||'').localeCompare(String(b.numero||'')); });
+    /* v994: ordenar por el CORRELATIVO NUMÉRICO del final ('… OC 2' < '… OC 10'). Antes se
+       intentaba parseInt del número completo — con 'OC 00002' daba NaN y caía al orden
+       alfabético, que al quitar los ceros pondría la 10 antes que la 2. */
+    const _ocOrdNum = s => { const m = String(s || '').match(/(\d+)\s*$/); return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER; };
+    const grupos = _agruparPorOC(itemsFiltrados).sort((a,b) => { const d = _ocOrdNum(a.numero) - _ocOrdNum(b.numero); return d || String(a.numero||'').localeCompare(String(b.numero||'')); });
     const todosGrupos = _agruparPorOC(ocs);
     const ocsActivas = todosGrupos.filter(g => g.renglones.some(r=>r.estatus==='ACTIVA')).length;
     const ocsCanceladas = todosGrupos.filter(g => g.renglones.every(r=>r.estatus==='CANCELADA')).length;

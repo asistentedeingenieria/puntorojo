@@ -25,7 +25,7 @@ if (fS) {
 const zGen = html.slice(html.indexOf('providerIds.forEach((provId, idx)'), html.indexOf('providerIds.forEach((provId, idx)') + 2500);
 ok('el folio se toma de la serie que corresponde', /_primerNumeroLibre\(_usadosSerie\[serie\] \|\| \[\]\)/.test(zGen));
 ok('cada OC guarda su serie', /serie, \/\/ v993/.test(html));
-ok('el número usa la serie', /\$\{pd\.numero\} - \$\{serie\} \$\{String\(folio\)\.padStart\(5, '0'\)\}/.test(zGen));
+ok('el número usa la serie', zGen.includes('${pd.numero} - ${serie} ${folio}')); // v994: sin ceros
 ok('el número previsto del modal también', /_seriePrev/.test(html) && /_ocSerieDe\(o\) === _seriePrev/.test(html));
 
 // ── 2. fotos ──

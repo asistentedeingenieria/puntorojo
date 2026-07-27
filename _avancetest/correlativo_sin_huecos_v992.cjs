@@ -29,11 +29,13 @@ if (fN) {
   const f = fN(fL);
   const mk = (pedidos, ordenes) => ({ name:'VICINIA LAS AMÉRICAS', materiales:{ pedidos, ordenes } });
   const P = n => ({ numero: 'VICINIA LAS AMÉRICAS – ' + String(n).padStart(5,'0') });
-  ok('caso de Antonio: 00001, 00002, 00004 → sale 00003', f(mk([P(1),P(2),P(4)], [])) === 'VICINIA LAS AMÉRICAS – 00003');
-  ok('consecutivos → sigue la serie', f(mk([P(1),P(2),P(3)], [])) === 'VICINIA LAS AMÉRICAS – 00004');
+  /* v994 (pedido de Antonio: "eliminemos los ceros"): los pedidos VIEJOS conservan su
+     formato con ceros — el parseo los sigue leyendo — y el número NUEVO sale pelado. */
+  ok('caso de Antonio: 00001, 00002, 00004 → sale el 3', f(mk([P(1),P(2),P(4)], [])) === 'VICINIA LAS AMÉRICAS – 3');
+  ok('consecutivos → sigue la serie', f(mk([P(1),P(2),P(3)], [])) === 'VICINIA LAS AMÉRICAS – 4');
   // el hueco NO se reusa si una OC viva todavía cita ese pedido
   const ocs = [{ pedidoNumero: 'VICINIA LAS AMÉRICAS – 00003' }];
-  ok('no reusa un número citado por una OC viva', f(mk([P(1),P(2),P(4)], ocs)) === 'VICINIA LAS AMÉRICAS – 00005');
+  ok('no reusa un número citado por una OC viva', f(mk([P(1),P(2),P(4)], ocs)) === 'VICINIA LAS AMÉRICAS – 5');
 } else ok('nextPedidoCode evaluable', false);
 
 // ── folio de OC: mismo criterio (v993: además POR SERIE — OC / DESP / OP) ──

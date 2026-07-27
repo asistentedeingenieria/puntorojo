@@ -52,7 +52,12 @@ if (srcParts) {
 const srcOc = extractFn('buildPedidoOcItems');
 if (srcOc && srcParts) {
   // v968: buildPedidoOcItems consulta _ncDeCompra (nombre de compra) — stub neutro acá
-  const h = new Function(srcParts + '\nfunction _ncDeCompra(){ return null; }\n' + srcOc + '\nreturn buildPedidoOcItems;')();
+  // v995: además consulta _ocMedidaEspecialMetros / _ocNombreBaseMedida (postes a medida)
+  const h = new Function(srcParts
+    + '\nfunction _ncDeCompra(){ return null; }'
+    + '\nfunction _ocMedidaEspecialMetros(n){ const m = String(n||"").match(/\\(MEDIDA ESPECIAL\\s+([\\d.]+)\\s*m\\)/i); return m ? Number(m[1]) : null; }'
+    + '\nfunction _ocNombreBaseMedida(n){ return String(n||"").replace(/\\s*\\(MEDIDA ESPECIAL[^)]*\\)/i, "").trim(); }\n'
+    + srcOc + '\nreturn buildPedidoOcItems;')();
   const pd = { items: { "POSTE DE 2½\" X 9.19' (0.35) CAL. 26 (MEDIDA ESPECIAL 2.8 m)": 424, 'PLANCHAS::Plancha 1/2': 10 }, specs: {} };
   const arr = h(pd);
   const poste = arr.find(x => /POSTE/.test(x.name));

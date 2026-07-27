@@ -34,7 +34,7 @@ ok('updateOcItemProveedor blinda el candado (defensa de frontera)', /_ocProvLock
 
 // ── 4. numeración en orden ──
 // v982: el prefijo ahora también distingue OP (orden de producción)
-ok('el número de la OC nueva es su FOLIO correlativo (5 dígitos)', html.includes("- ${serie} ${String(folio).padStart(5, '0')}")); // v993: prefijo por serie
+ok('el número de la OC nueva es su FOLIO correlativo', html.includes('- ${serie} ${folio}')); // v993: prefijo por serie · v994: sin ceros
 ok('el campo del modal muestra OC nnnnn · DEL PEDIDO (sin OC01/SIG. FOLIO)', /· DEL PEDIDO \$\{pd\.numero\}/.test(html) && !/OC\$\{String\(existingOcs\.length \+ 1\)\.padStart\(2,'0'\)\} \/ SIG\. FOLIO/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);

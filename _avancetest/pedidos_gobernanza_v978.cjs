@@ -20,9 +20,10 @@ let fN = null;
 try { fN = new Function(ex('function _primerNumeroLibre(') + '\nreturn (' + zNum.slice(zNum.indexOf('function')) + ')')(); } catch(e){}
 if (fN) {
   const mk = pedidos => ({ name:'VICINIA LAS AMÉRICAS', materiales:{ pedidoCounter: 7, pedidos, ordenes: [] } });
-  ok('rellena el hueco (ignora el contador)', fN(mk([{numero:'VICINIA LAS AMÉRICAS – 00001'},{numero:'VICINIA LAS AMÉRICAS – 00003'}])) === 'VICINIA LAS AMÉRICAS – 00002');
-  ok('si se borra el 00003, el siguiente ES el 00002 (sin saltos)', fN(mk([{numero:'VICINIA LAS AMÉRICAS – 00001'}])) === 'VICINIA LAS AMÉRICAS – 00002');
-  ok('proyecto sin pedidos arranca en 00001', fN(mk([])) === 'VICINIA LAS AMÉRICAS – 00001');
+  // v994: el número nuevo sale SIN ceros (1, 2, 3…); los viejos se siguen leyendo igual
+  ok('rellena el hueco (ignora el contador)', fN(mk([{numero:'VICINIA LAS AMÉRICAS – 00001'},{numero:'VICINIA LAS AMÉRICAS – 00003'}])) === 'VICINIA LAS AMÉRICAS – 2');
+  ok('si se borra el 00003, el siguiente ES el 2 (sin saltos)', fN(mk([{numero:'VICINIA LAS AMÉRICAS – 00001'}])) === 'VICINIA LAS AMÉRICAS – 2');
+  ok('proyecto sin pedidos arranca en 1', fN(mk([])) === 'VICINIA LAS AMÉRICAS – 1');
 } else ok('nextPedidoCode evaluable', false);
 ok('el folio de OC del proyecto también se deriva', /_usadosSerie/.test(html) && html.includes('_primerNumeroLibre(_usadosSerie')); // v993: por serie
 
