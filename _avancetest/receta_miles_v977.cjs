@@ -72,7 +72,7 @@ const zItems = ex('function _etapaItemsParaPedir(');
 ok('D3: _etapaItemsParaPedir calcula mil/qtyMostrar', /qtyMostrar/.test(zItems) && /_recetaEsMiles/.test(zItems));
 ok('D3: los dos selectores pintan el ≈', (html.match(/it\.mil \? '≈ ' : ''/g) || []).length >= 2);
 // D4: dos capas anti-ref-huérfana (regla v769/v770) en el flujo de prompts de receta
-ok('D4: isUserBusy cubre los prompts (.prModal-backdrop)', /#_bodegaCargaModal, \.prModal-backdrop/.test(html));
+ok('D4: isUserBusy cubre los prompts (.prModal-backdrop)', /\.prModal-backdrop'\)\) return true/.test(html)); // v989: la lista creció (#_recepcionModal)
 const zOp = ex('window.recetaV2Op = async function');
 ok('D4: recetaV2Op lee p DESPUÉS del await del prompt', zOp.indexOf('activeProj()') > zOp.indexOf('_recetaV2PedirDatos'));
 const zSol2 = ex('window.recetaV2Solicitar = async function');

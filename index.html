@@ -3171,7 +3171,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v988</span>
+    <span style="opacity:.5;font-size:9px">v989</span>
   </footer>
 
 </div>
@@ -3666,6 +3666,8 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
           <span>PROVEEDORES</span>
           <button class="btn-icon" onclick="openAddProveedorFromCatalog()" data-perm="users.manage" title="Agregar proveedor">+</button>
         </div>
+        <!-- v989 (pedido de Antonio): buscador de proveedores del catálogo maestro -->
+        <div style="padding:8px 10px 6px"><input id="catProvBuscar" class="pr-buscador" placeholder="BUSCAR PROVEEDOR…" oninput="_catProvBuscar(this.value)" style="width:100%"></div>
         <div id="catProvList"></div>
       </div>
       <div class="cat-prov-main">
@@ -9984,7 +9986,7 @@ const CloudSync = {
     // referencia queda huerfana y el cambio (push/Object.assign/splice) no persiste. Esto
     // arregla de raiz toda la familia "await modal -> escribir" (aprobar/rechazar/procesar/
     // anular planilla, editar/eliminar anticipos y polizas, etc.).
-    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal, #_bodegaCargaModal, .prModal-backdrop')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO; v977: prPrompt/prAlert (.prModal-backdrop) — recetaV2Op escribía sobre un p tomado antes del await del prompt. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo.
+    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal, #_bodegaCargaModal, #_recepcionModal, .prModal-backdrop')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO; v977: prPrompt/prAlert (.prModal-backdrop) — recetaV2Op escribía sobre un p tomado antes del await del prompt. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo.
     const focused = document.activeElement;
     if (focused && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)) return true;
     return false;
@@ -17658,6 +17660,8 @@ function renderPedidoCard(pd, p){
       <div class="pedido-actions">
         <div class="timeline">${timelineDots}</div>
         <button class="btn ghost sm" onclick="openPedidoDetalle('${pd.id}')">VER DETALLE</button>
+        ${pd.recepcion ? `<button class="btn ghost sm" onclick="imprimirRecibo('${pd.id}')" title="Comprobante de recepción firmado">VER RECIBO</button>
+        <button class="btn sm" onclick="compartirReciboImg('${pd.id}')" style="background:#25D366;border-color:#25D366;color:#fff">COMPARTIR RECIBO</button>` : ''}
         ${actionBtn}
         ${canDelete ? `<button class="btn-icon danger" onclick="deletePedido('${pd.id}')" title="ELIMINAR">✕</button>` : ''}
       </div>
@@ -17672,6 +17676,7 @@ async function advancePedido(id){
   const pd = _ctx.pd;
   const statusInfo = PEDIDO_ESTADOS.find(s => s.key === pd.status);
   if (!statusInfo || !statusInfo.next) return;
+  let _recepcionHecha = false; // v989: el modal de recepción reemplaza el confirm genérico
 
   // CASO ESPECIAL: pasar de SOLICITADO → APROBADO requiere generar Orden de Compra.
   // SOLO los usuarios con permiso 'Autorizar Órdenes de Compra' (compras.autorizar)
@@ -17700,6 +17705,11 @@ async function advancePedido(id){
     if (!isOwner && !can('users.manage')) {
       return showToast('SOLO EL SOLICITANTE PUEDE CONFIRMAR LA RECEPCIÓN', 'red');
     }
+    // v989: en vez del confirm genérico, el modal de RECEPCIÓN (cantidades editables =
+    // entrega parcial) + firma; deja pd.recepcion listo para el comprobante.
+    const _okRec = await window._abrirRecepcion(pd.id);
+    if (!_okRec) return;
+    _recepcionHecha = true;
   }
 
   // Verificar permiso para cambios de estado.
@@ -17712,7 +17722,7 @@ async function advancePedido(id){
   if (!canAdvance) return showToast('SIN PERMISO PARA ESTA ACCIÓN', 'red');
 
   // v314: modal elegante en vez del confirm() nativo.
-  const _okAdvPed = await window.prConfirm({
+  const _okAdvPed = _recepcionHecha ? true : await window.prConfirm({
     title: `¿${String(statusInfo.nextLabel||'').toUpperCase()}?`,
     bodyHTML: `<div style="font-size:11.5px;color:#666;margin-bottom:10px;letter-spacing:.4px">PEDIDO ${String(pd.numero||'').toUpperCase()}</div>
                <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12.5px;color:#444;padding:12px 14px;background:#F1F5F9;border-radius:4px">
@@ -18701,6 +18711,17 @@ function findCatalogProductForProvider(itemName, proveedor){
   }) || null;
 }
 
+/* v989 (pedido de Antonio): TODOS los proveedores del catálogo que tienen este producto,
+   con su precio. Si hay más de uno, compras SÍ puede elegir en pedidos de receta (el
+   candado v978 solo evita inventar proveedores, no elegir entre los que ya lo venden). */
+function _provsDelProducto(itemName){
+  const out = [];
+  (_getProveedores() || []).forEach(prv => {
+    const prod = findCatalogProductForProvider(itemName, prv);
+    if (prod) out.push({ id: prv.id, nombre: prv.nombre, precio: Number(prod.precio) || 0 });
+  });
+  return out;
+}
 function findBestProviderForItem(itemName){
   const p = activeProj();
   const proveedores = _getProveedores();
@@ -19901,6 +19922,17 @@ function _abrirPickerProveedor(btn, idx){
   // v978: pedido DE RECETA — compras solo alterna PROVEEDOR DEL CATÁLOGO ↔ BODEGA CENTRAL
   if (window._ocProvLocked){
     if (it._provAuto === undefined) it._provAuto = (it.autoAssigned && it.proveedorId && it.proveedorId !== '_bodega') ? it.proveedorId : '';
+    // v989: si el material lo venden VARIOS proveedores, compras elige entre ELLOS
+    // (el precio se actualiza con el del proveedor elegido).
+    const _multi = _provsDelProducto(it.name);
+    if (_multi.length > 1){
+      _abrirPicker(btn, {
+        items: _multi.map(x => ({ id: x.id, label: x.nombre + (x.precio > 0 ? ('  ·  Q' + x.precio) : '') })).concat([{ id: '_bodega', label: 'BODEGA CENTRAL (DESPACHO)' }]),
+        selectedId: it.proveedorId || '',
+        onPick: function(id){ updateOcItemProveedor(idx, id); }
+      });
+      return;
+    }
     if (it._provAuto){
       const provA = _getProveedores().find(x => x.id === it._provAuto);
       _abrirPicker(btn, {
@@ -20008,8 +20040,10 @@ function fmtQ(n){
 function updateOcItemProveedor(idx, provId){
   const item = ocWorkingItems[idx];
   if (!item) return;
-  // v978: defensa de frontera del candado — en pedidos de receta solo AUTO ↔ BODEGA
-  if (window._ocProvLocked && item._provAuto && provId && provId !== '_bodega' && provId !== item._provAuto) return showToast('EN PEDIDOS DE RECETA EL PROVEEDOR VIENE DEL CATÁLOGO — SOLO PODÉS MANDARLO A BODEGA', 'red');
+  // v978: defensa de frontera del candado — en pedidos de receta solo AUTO ↔ BODEGA.
+  // v989: … o cualquiera de los proveedores que SÍ venden ese material (varios en catálogo).
+  if (window._ocProvLocked && item._provAuto && provId && provId !== '_bodega' && provId !== item._provAuto
+      && !_provsDelProducto(item.name).some(x => x.id === provId)) return showToast('EN PEDIDOS DE RECETA EL PROVEEDOR VIENE DEL CATÁLOGO — SOLO PODÉS ELEGIR ENTRE LOS QUE VENDEN ESE MATERIAL O MANDARLO A BODEGA', 'red');
   item.proveedorId = provId || '';
   item.autoAssigned = false;
   // v_pcat: con proveedor real ya no es eventual; sin proveedor (SIN PROVEEDOR) sí lo es
@@ -21664,6 +21698,194 @@ window.compartirSolicitudImg = async function(){
     await _imgCompartir(blob, c2.toDataURL('image/png'), desc.replace(/[\\/:*?"<>|]/g, '-') + '.png', desc);
   }catch(e){ try{ showToast('NO SE PUDO GENERAR LA IMAGEN','red'); }catch(_e){} try{ console.warn('compartirSolicitudImg', e); }catch(_e){} }
   finally{ try{ fr.remove(); }catch(e){} }
+};
+
+/* ═══════════ v989: RECIBO DE RECEPCIÓN EN OBRA (pedido de Antonio 27-jul) ═══════════
+   Al marcar YA RECIBÍ EL MATERIAL, el supervisor confirma QUÉ recibió (cantidades
+   editables = recepción PARCIAL) y firma; queda pd.recepcion y se genera un comprobante
+   SIN montos, imprimible y compartible como imagen. Mismo builder para imprimir y para
+   la captura (regla v980) y color-scheme only light (Android invertía los docs). */
+function _reciboDocHTML(pd, p, paraCaptura){
+  const esc2 = s => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  const rec = pd.recepcion || {};
+  const items = rec.items || {};
+  const nombres = Object.keys(items).filter(k => Number(items[k]) > 0);
+  const totalUnid = nombres.reduce((s, k) => s + (Number(items[k]) || 0), 0);
+  const filas = nombres.map(k => `<tr><td style="padding:6px 10px;border-bottom:1px solid #eee">${esc2(k)}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right;font-weight:700;width:90px">${Number(items[k]) || 0}</td></tr>`).join('');
+  const firma = _miFirmaImg(rec.por || '');
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="color-scheme" content="only light"><title>RECIBO ${esc2(pd.numero)}</title>
+<style>
+  :root{color-scheme:only light}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:#fff}
+  body{font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#222;padding:20px}
+  .wrap{max-width:780px;margin:0 auto}
+  .hd{display:grid;grid-template-columns:150px 1fr 150px;gap:14px;align-items:center;border-bottom:2px solid #D0151C;padding-bottom:12px}
+  .tt{font-size:20px;font-weight:700;letter-spacing:1px;line-height:1.15;text-align:center}
+  .sub{font-size:9px;color:#555;letter-spacing:2px;margin-top:5px;font-weight:700;text-align:center}
+  .datos{display:grid;grid-template-columns:1fr 1fr;gap:7px 18px;border:1px solid #ccc;background:#f8f6f0;padding:11px 13px;margin:16px 0}
+  .k{font-size:8px;color:#888;letter-spacing:1.5px;font-weight:700}
+  .v{font-size:12px;font-weight:700;text-transform:uppercase}
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  .cat{background:#1C1917;color:#fff;padding:6px 10px;font-size:10px;letter-spacing:1.5px;font-weight:700}
+  .nota{background:#f8f6f0;border-left:3px solid #8B6343;padding:9px 11px;margin-top:14px;font-size:10.5px;font-style:italic;line-height:1.5}
+  .foot{margin-top:22px;text-align:center;font-size:8px;color:#aaa;letter-spacing:2px;text-transform:uppercase;border-top:1px solid #eee;padding-top:8px}
+  @media print{body{padding:10px} .no-print{display:none!important} @page{size:letter;margin:10mm}}
+</style></head><body>
+${paraCaptura ? '' : `<div class="no-print" style="display:flex;gap:10px;justify-content:center;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+<button style="background:#0F172A;color:#fff;padding:10px 20px;border:none;font-weight:700;letter-spacing:2px;cursor:pointer;border-radius:3px;font-family:Arial;font-size:11px" onclick="try{window.close()}catch(e){}; setTimeout(function(){ try{ history.back(); }catch(e){} },250); setTimeout(function(){ try{ if(!window.closed) location.replace('${location.origin}'); }catch(e){} },700);">&#8592; VOLVER A LA APP</button>
+<button style="background:#D0151C;color:#fff;padding:10px 20px;border:none;font-weight:700;letter-spacing:2px;cursor:pointer;border-radius:3px;font-family:Arial;font-size:11px" onclick="window.print()">IMPRIMIR / GUARDAR PDF</button>
+</div>`}
+<div class="wrap">
+  <div class="hd">
+    <img src="${_LOGO_PR}" style="height:48px;max-width:140px;object-fit:contain" alt="">
+    <div>
+      <div class="tt">COMPROBANTE<br>DE RECEPCIÓN</div>
+      <div class="sub">MATERIALES ENTREGADOS EN OBRA</div>
+    </div>
+    <div style="text-align:right;white-space:nowrap">
+      <div style="font-size:10px;color:#666">No.</div>
+      <div style="font-size:16px;font-weight:700;color:#C8141C;line-height:1.3">REC ${esc2(_solNum(pd))}</div>
+      <div style="font-size:10.5px;font-weight:700;color:#444;line-height:1.35">PEDIDO ${esc2(_solNum(pd))}</div>
+      <div style="font-size:9.5px;color:#888;line-height:1.35">${esc2(_projSiglas(pd.proyectoPedido || p.name))} - APP</div>
+    </div>
+  </div>
+
+  <div class="datos">
+    <div><div class="k">PROYECTO</div><div class="v">${esc2(_projSiglas(pd.proyectoPedido || p.name))}</div></div>
+    <div><div class="k">RECIBIÓ EN OBRA</div><div class="v">${esc2(rec.porNombre || '')}</div></div>
+    <div><div class="k">UBICACIÓN</div><div class="v">${esc2(pd.nivel || '')}${pd.apto ? ' · ' + esc2(pd.apto) : ''}</div></div>
+    <div><div class="k">FECHA DE RECEPCIÓN</div><div class="v">${esc2(rec.fecha || '')}${rec.hora ? ' · ' + esc2(rec.hora) : ''}</div></div>
+  </div>
+
+  <div class="cat">MATERIAL RECIBIDO${rec.parcial ? ' · ENTREGA PARCIAL' : ''}</div>
+  <table>${filas}
+    <tr><td style="padding:8px 10px;font-weight:700;letter-spacing:.5px">TOTAL</td>
+      <td style="padding:8px 10px;text-align:right;font-weight:700;line-height:1.5">
+        <div>${nombres.length} materiales</div>
+        <div>${totalUnid.toLocaleString('es-GT')} unidades</div>
+      </td></tr>
+  </table>
+
+  <div class="nota">Recibí en obra los materiales detallados en este comprobante, en las cantidades indicadas y en buen estado.${rec.parcial ? ' La entrega fue PARCIAL respecto a lo solicitado en el pedido.' : ''}</div>
+
+  <div style="margin-top:34px;text-align:center">
+    <div style="height:62px;display:flex;align-items:flex-end;justify-content:center">${firma ? `<img src="${firma}" style="height:58px;max-width:240px;object-fit:contain;display:block">` : ''}</div>
+    <div style="border-top:1px solid #000;max-width:320px;margin:0 auto;padding-top:5px">
+      <div style="font-size:12px;font-weight:700;letter-spacing:.5px">${esc2(rec.porNombre || '')}</div>
+      <div style="font-size:8.5px;color:#666;letter-spacing:1.5px;margin-top:2px">RECIBIÓ EN OBRA · ${esc2(rec.fecha || '')}</div>
+    </div>
+  </div>
+
+  <div class="foot">GUATEMALA</div>
+</div>
+</body></html>`;
+}
+window.imprimirRecibo = function(id){
+  const _ctx = _findPedidoGlobal(id || currentPedidoDetalleId);
+  if (!_ctx || !_ctx.pd.recepcion) return showToast('ESTE PEDIDO AÚN NO TIENE RECEPCIÓN REGISTRADA', 'red');
+  const w = window.open('', '_blank');
+  w.document.write(_reciboDocHTML(_ctx.pd, activeProj(), false));
+  w.document.close();
+};
+window.compartirReciboImg = async function(id){
+  const _ctx = _findPedidoGlobal(id || currentPedidoDetalleId);
+  if (!_ctx || !_ctx.pd.recepcion) return showToast('ESTE PEDIDO AÚN NO TIENE RECEPCIÓN REGISTRADA', 'red');
+  const pd = _ctx.pd, p = activeProj();
+  try{ showToast('GENERANDO IMAGEN…','info'); }catch(e){}
+  const fr = document.createElement('iframe');
+  fr.style.cssText = 'position:fixed;left:-10000px;top:0;width:820px;height:1400px;border:0;visibility:hidden';
+  document.body.appendChild(fr);
+  try{
+    const cargado = new Promise(res => { fr.onload = res; });
+    fr.srcdoc = _reciboDocHTML(pd, p, true);
+    await cargado;
+    const idoc = fr.contentDocument, iwin = fr.contentWindow;
+    await new Promise((res, rej) => { const s = idoc.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'; s.onload = res; s.onerror = rej; idoc.head.appendChild(s); });
+    const canvas = await iwin.html2canvas(idoc.querySelector('.wrap'), { scale: 2, backgroundColor: '#ffffff' });
+    const M = 72;
+    const c2 = document.createElement('canvas'); c2.width = canvas.width + M * 2; c2.height = canvas.height + M * 2;
+    const cx = c2.getContext('2d'); cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, c2.width, c2.height); cx.drawImage(canvas, M, M);
+    const blob = await new Promise(res => c2.toBlob(res, 'image/png'));
+    const desc = ('RECIBO DE MATERIALES - ' + _projSiglas(pd.proyectoPedido || p.name) + ' - ' + _solNum(pd) + ' - RECIBIÓ ' + ((pd.recepcion || {}).porNombre || '')).replace(/\s+/g, ' ').trim();
+    await _imgCompartir(blob, c2.toDataURL('image/png'), desc.replace(/[\\/:*?"<>|]/g, '-') + '.png', desc);
+  }catch(e){ try{ showToast('NO SE PUDO GENERAR LA IMAGEN','red'); }catch(_e){} }
+  finally{ try{ fr.remove(); }catch(e){} }
+};
+/* Modal de RECEPCIÓN: cantidades editables (parcial) + firma obligatoria. Resuelve
+   true si el supervisor confirmó (advancePedido sigue con el cambio de estado). */
+window._abrirRecepcion = async function(id){
+  const _ctx = _findPedidoGlobal(id);
+  if (!_ctx) return false;
+  const pd = _ctx.pd;
+  // la firma se pide ANTES (el recibo la lleva sí o sí)
+  const _fOk = await _pedirFirmaSiFalta();
+  if (!_fOk && !_miFirmaImg()) { showToast('PARA CONFIRMAR LA RECEPCIÓN REGISTRÁ TU FIRMA (HOJA EN BLANCO + LAPICERO NEGRO + BUENA FOTO)', 'red'); return false; }
+  const _ctx2 = _findPedidoGlobal(id); // regla v769/v770: re-leer tras el await
+  if (!_ctx2) return false;
+  const pd2 = _ctx2.pd;
+  const nombres = Object.keys(pd2.items || {});
+  const esc2 = s => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  const filas = nombres.map((k, i) => `
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) 100px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
+      <div style="font-size:11.5px">${esc2(k)}<div style="font-size:9px;color:#9CA3AF">PEDIDO: ${Number(pd2.items[k]) || 0}</div></div>
+      <input type="number" data-recx="${i}" min="0" step="any" value="${Number(pd2.items[k]) || 0}" style="width:100%;padding:6px 8px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:12px;text-align:right;box-sizing:border-box">
+    </div>`).join('');
+  window._recepcionNombres = nombres;
+  window._recepcionPedidoId = id;
+  const wrap = document.createElement('div');
+  wrap.id = '_recepcionModal';
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:100075;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+  wrap.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:640px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid rgba(0,0,0,.08)">
+      <b style="font-size:13px;letter-spacing:.5px">CONFIRMAR RECEPCIÓN EN OBRA</b>
+      <div style="font-size:11px;color:#78716C;margin-top:4px;line-height:1.5">Revisá lo que llegó. Si la entrega fue <b>PARCIAL</b>, corregí las cantidades — el recibo sale con lo que de verdad recibiste y con tu firma.</div>
+    </div>
+    <div style="overflow:auto;flex:1;padding:8px 18px">${filas}</div>
+    <div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
+      <button class="btn ghost" onclick="_recepcionCerrar(false)">CANCELAR</button>
+      <button class="btn primary" onclick="_recepcionConfirmar()">CONFIRMAR Y FIRMAR RECIBO</button>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap);
+  return await new Promise(res => { window._recepcionResolve = res; });
+};
+window._recepcionCerrar = function(val){
+  const m = document.getElementById('_recepcionModal'); if (m) m.remove();
+  const r = window._recepcionResolve; window._recepcionResolve = null;
+  if (r) r(!!val);
+};
+window._recepcionConfirmar = async function(){
+  const id = window._recepcionPedidoId;
+  const nombres = window._recepcionNombres || [];
+  const modal = document.getElementById('_recepcionModal');
+  const items = {};
+  let parcial = false;
+  const _ctx = _findPedidoGlobal(id);
+  if (!_ctx) return window._recepcionCerrar(false);
+  const pd = _ctx.pd;
+  nombres.forEach((k, i) => {
+    const inp = modal && modal.querySelector('[data-recx="' + i + '"]');
+    const q = inp ? (Number(inp.value) || 0) : (Number(pd.items[k]) || 0);
+    if (q > 0) items[k] = q;
+    if (q < (Number(pd.items[k]) || 0)) parcial = true;
+  });
+  if (!Object.keys(items).length) return showToast('NO PODÉS CONFIRMAR UNA RECEPCIÓN VACÍA', 'red');
+  const u = getCurrentUser() || {};
+  const n = new Date();
+  pd.recepcion = {
+    por: String(u.username || '').toLowerCase(),
+    porNombre: String(u.displayName || u.username || '').toUpperCase(),
+    ts: Date.now(),
+    fecha: String(n.getDate()).padStart(2,'0') + '/' + String(n.getMonth()+1).padStart(2,'0') + '/' + n.getFullYear(),
+    hora: String(n.getHours()).padStart(2,'0') + ':' + String(n.getMinutes()).padStart(2,'0'),
+    items,
+    parcial
+  };
+  pd._ts = Date.now(); // v972: pedidos van por union-merge
+  saveState();
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch(e){}
+  window._recepcionCerrar(true);
 };
 
 /* ─────────────── PERSONAL ─────────────── */
@@ -31635,9 +31857,11 @@ function renderCatProvList(){
   _refreshBtnSolicitudesPrecio && _refreshBtnSolicitudesPrecio();
   const p = activeProj();
   const cont = document.getElementById('catProvList');
-  const proveedores = _getProveedores();
+  // v989: buscador de proveedores (la lista ya pasa de 50 y había que scrollear a ciegas)
+  const _term = String(window._catProvTerm || '').trim().toUpperCase();
+  const proveedores = _getProveedores().filter(prv => !_term || String(prv.nombre || '').toUpperCase().includes(_term));
   if (proveedores.length === 0) {
-    cont.innerHTML = `<div style="padding:20px 14px;text-align:center;color:var(--mute);font-size:10px;letter-spacing:1px;text-transform:uppercase">Sin proveedores — Pulsar + arriba</div>`;
+    cont.innerHTML = `<div style="padding:20px 14px;text-align:center;color:var(--mute);font-size:10px;letter-spacing:1px;text-transform:uppercase">${_term ? 'Sin resultados para ' + _term.replace(/[&<>]/g,'') : 'Sin proveedores — Pulsar + arriba'}</div>`;
     return;
   }
   cont.innerHTML = proveedores.map(prv => {
@@ -31650,6 +31874,7 @@ function renderCatProvList(){
   }).join('');
 }
 
+window._catProvBuscar = function(t){ window._catProvTerm = t || ''; try { renderCatProvList(); } catch(e){} };
 function selectCatProv(provId){
   currentCatProvId = provId;
   catProvSearchTerm = '';
