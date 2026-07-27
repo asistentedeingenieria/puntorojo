@@ -3171,7 +3171,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v997</span>
+    <span style="opacity:.5;font-size:9px">v998</span>
   </footer>
 
 </div>
@@ -3665,6 +3665,8 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
         <div class="cat-prov-sidebar-head">
           <span>PROVEEDORES</span>
           <button class="btn-icon" onclick="openAddProveedorFromCatalog()" data-perm="users.manage" title="Agregar proveedor">+</button>
+          <!-- v998: quien PROPONE pide el alta; la crea el autorizador -->
+          <button class="btn-icon" onclick="_catProponerProveedor()" data-perm="precios.proponer" title="Proponer un proveedor nuevo (lo autoriza el administrador)" style="color:#1565C0">+</button>
         </div>
         <!-- v989 (pedido de Antonio): buscador de proveedores del catálogo maestro -->
         <div style="padding:8px 10px 6px"><input id="catProvBuscar" class="pr-buscador" placeholder="BUSCAR PROVEEDOR…" oninput="_catProvBuscar(this.value)" style="width:100%"></div>
@@ -3688,6 +3690,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
           <div class="cat-prov-search-row">
             <input id="catProvSearch" type="search" class="pr-buscador" placeholder="Buscar producto en el catálogo..." oninput="filterCatProvProductos(this.value)">
             <button class="btn cafe sm" onclick="addProductoToProveedor()" data-perm="users.manage">+ AGREGAR PRODUCTO</button>
+            <button class="btn ghost sm" onclick="_catProponerProducto()" data-perm="precios.proponer" style="border-color:#1565C0;color:#1565C0" title="Proponer un producto nuevo (lo autoriza el administrador)">PROPONER PRODUCTO</button>
           </div>
           <div class="cat-prov-productos-head">
             <div>PRODUCTO / DESCRIPCIÓN</div>
@@ -20077,8 +20080,12 @@ function _abrirPanelBodega(){
   // v964: PEDIDOS DE ABASTECIMIENTO del store global — se gestionan COMPLETOS acá
   // (generar OC, autorizar v919, imprimir); ya no viven en ningún proyecto.
   const _bm = _bodegaMatStore();
-  const pedAb = _bm.pedidos.slice().sort((a, b2) => (b2.ts || 0) - (a.ts || 0));
+  /* v998 (queja de Antonio: la lista salía 4, 3, 2): los pedidos de abastecimiento van por
+     CORRELATIVO ASCENDENTE, que es como se leen. Antes se ordenaban por fecha descendente. */
+  const _numPedidoOrd = pd => { const m = String((pd && pd.numero) || '').match(/(\d+)\s*$/); return m ? parseInt(m[1], 10) : 0; };
+  const pedAb = _bm.pedidos.slice().sort((a, b2) => (_numPedidoOrd(a) - _numPedidoOrd(b2)) || ((a.ts || 0) - (b2.ts || 0)));
   const _esAdminBod = can('users.manage');
+  const _puedeAutOc = _puedeAutorizarOc(); // v998: el botón AUTORIZAR solo a quien autoriza
   const pedAbHTML = pedAb.map(pd => {
     const ocsPd = _bm.ordenes.filter(o => o && o.pedidoId === pd.id);
     const st = pd.status || 'SOLICITADO';
@@ -20086,10 +20093,16 @@ function _abrirPanelBodega(){
     const nItems = Object.keys(pd.items || {}).length;
     const botonesOc = ocsPd.map(o => {
       const pend = (o.status || 'AUTORIZADA') === 'PENDIENTE_AUTORIZACION';
-      return pend
-        ? `<button class="btn sm" style="background:var(--red-dark);border-color:var(--red-dark);color:#fff;font-size:10px" onclick="autorizarOrden('${o.id}')" title="Visto bueno + firma (quien la generó no puede)">AUTORIZAR ${o.numero.split(' - ').pop()}</button>
+      const _nOc = _numLimpio(o.numero).split(' - ').pop();
+      if (!pend) return `<button class="btn ghost sm" style="font-size:10px" onclick="printOrdenCompra('${o.id}')">IMPRIMIR ${_nOc}</button>`;
+      /* v998: la autorización es de FINANZAS (compras.revisar), la misma que firma las OC de
+         los pedidos. A quien no autoriza se le dice que está esperando, en vez de mostrarle
+         un botón que le va a rebotar. */
+      return _puedeAutOc
+        ? `<button class="btn sm" style="background:var(--red-dark);border-color:var(--red-dark);color:#fff;font-size:10px" onclick="autorizarOrden('${o.id}')" title="Visto bueno + firma (quien la generó no puede)">AUTORIZAR ${_nOc}</button>
            <button class="btn ghost sm" style="font-size:10px" onclick="previewOrden('${o.id}')">VER</button>`
-        : `<button class="btn ghost sm" style="font-size:10px" onclick="printOrdenCompra('${o.id}')">IMPRIMIR ${o.numero.split(' - ').pop()}</button>`;
+        : `<span style="font-size:9px;font-weight:700;letter-spacing:.8px;color:#B45309">${_nOc} · PENDIENTE FINANZAS</span>
+           <button class="btn ghost sm" style="font-size:10px" onclick="previewOrden('${o.id}')">VER</button>`;
     }).join(' ');
     const btnGenerar = (!ocsPd.length)
       ? `<button class="btn sm" style="font-size:10px" onclick="_cerrarPanelBodegaDom(); currentPedidoDetalleId='${pd.id}'; openOrdenCompra()">GENERAR OC</button>`
@@ -21819,7 +21832,20 @@ function renderOrdenesList(){
   const p = activeProj();
   const cont = document.getElementById('ordenesListContainer');
   if (!cont) return;
-  const ordenes = [...(p.materiales.ordenes || [])].sort((a,b) => (b.ts || 0) - (a.ts || 0));
+  /* v998 (pedido de Antonio: "estas OC también las autoriza finanzas, los mismos que
+     autorizan las de los pedidos"): las órdenes de ABASTECIMIENTO viven en el store global
+     de bodega (v964) y por eso nunca aparecían acá — quedaban escondidas en el panel de
+     BODEGA CENTRAL, que finanzas no abre. Se concatenan marcadas, para que las revise y
+     firme en la misma pantalla donde ya trabaja. El gate de autorizarOrden ya era el mismo
+     (compras.revisar) y _bodegaFindOc ya las encuentra. */
+  const _ocsBod = (function(){
+    try {
+      return ((_bodegaMatStore() || {}).ordenes || []).map(function(o){
+        return Object.assign({}, o, { esAbastecimiento: true });
+      });
+    } catch(e){ return []; }
+  })();
+  const ordenes = [...(p.materiales.ordenes || []), ..._ocsBod].sort((a,b) => (b.ts || 0) - (a.ts || 0));
 
   const countLbl = document.getElementById('ocCountLabel');
   if (countLbl) countLbl.textContent = `— ${ordenes.length} ÓRDEN${ordenes.length !== 1 ? 'ES' : ''}`;
@@ -21854,9 +21880,13 @@ function renderOrdenesList(){
       statusBadge = `<div style="display:inline-block;background:#F0FDF4;color:#15803D;padding:3px 9px;border-radius:10px;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border:1px solid #15803D">AUTORIZADA</div>`; // v993: autorizado = verde
     }
 
-    const autorizInfo = isAuth && oc.autorizadoPor
+    const autorizInfo = (isAuth && oc.autorizadoPor
       ? `<div style="font-size:9px;color:var(--mute);margin-top:3px">POR ${oc.autorizadoPor}</div>`
-      : '';
+      : '')
+      // v998: se distingue de un vistazo cuál viene de BODEGA CENTRAL (abastecimiento)
+      + (oc.esAbastecimiento
+        ? `<div style="display:inline-block;background:#EEF2FF;color:#3730A3;padding:2px 8px;border-radius:9px;font-size:8.5px;font-weight:700;letter-spacing:1px;margin-top:3px">ABASTECIMIENTO · BODEGA CENTRAL</div>`
+        : '');
 
     const printBtn = isAuth
       ? `<button class="btn sm" onclick="printOrdenCompra('${oc.id}')" title="Imprimir orden autorizada">IMPRIMIR</button>`
@@ -21932,6 +21962,12 @@ function renderOrdenesList(){
   }).join('');
 }
 
+/* v998: quién puede dar el visto bueno y firmar una OC — FINANZAS (compras.revisar), la
+   misma regla para las órdenes de proyecto y las de abastecimiento (v919). Un solo lugar,
+   así el botón que se pinta y el gate que se aplica no pueden separarse. */
+function _puedeAutorizarOc(){
+  try { return can('compras.revisar') || can('users.manage'); } catch(e){ return false; }
+}
 async function autorizarOrden(id){
   // v919: autoriza el REVISOR (compras.revisar) — compras genera pero no autoriza
   if (!can('compras.revisar') && !can('users.manage')) return showToast('SOLO EL REVISOR AUTORIZADO PUEDE DAR EL VISTO BUENO Y FIRMAR', 'red');
@@ -32717,6 +32753,78 @@ function filterCatProvProductos(term){
   renderCatProvProductos();
 }
 
+/* ── v998 (pedido de Antonio): PROPONER altas al catálogo ─────────────────────────────
+   Quien tiene 'precios.proponer' puede pedir que se agregue un producto a un proveedor, o
+   un proveedor nuevo con su primer producto. NO toca el catálogo: crea una SOLICITUD que
+   Antonio (o quien tenga precios.autorizar) aprueba o rechaza — el mismo circuito que ya
+   usan los cambios de precio, así todo queda en la misma bandeja. */
+window._catProponerProducto = async function(){
+  if (!(can('precios.proponer') || can('precios.autorizar') || can('users.manage'))) return showToast('SIN PERMISO PARA PROPONER','red');
+  const prv = _getProveedores().find(x => x.id === currentCatProvId);
+  if (!prv) return showToast('ELEGÍ PRIMERO UN PROVEEDOR','red');
+  const nombre = await window.prPrompt({
+    title: 'PROPONER PRODUCTO NUEVO',
+    body: 'Se va a pedir el alta en ' + (prv.nombre || '') + '. Lo autoriza el administrador.',
+    placeholder: 'NOMBRE DEL PRODUCTO (COMO LO FACTURA EL PROVEEDOR)',
+    required: true
+  });
+  if (nombre === null) return;
+  const precioTxt = await window.prPrompt({
+    title: 'PRECIO UNITARIO',
+    body: String(nombre).toUpperCase(),
+    placeholder: 'ej: 125.50',
+    required: true
+  });
+  if (precioTxt === null) return;
+  const precio = Number(String(precioTxt).replace(/[^\d.]/g, '')) || 0;
+  if (!(precio > 0)) return showToast('ESCRIBÍ UN PRECIO VÁLIDO','red');
+  const motivo = await window.prPrompt({
+    title: '¿POR QUÉ SE NECESITA?',
+    body: 'Queda en la solicitud para que el autorizador lo revise.',
+    placeholder: 'ej: lo pide la obra y no está en el catálogo',
+    required: true
+  });
+  if (motivo === null) return;
+  const _u = _bodegaUnidadDelNombre(nombre);
+  _crearSolicitudPrecio('ALTA', currentCatProvId, String(nombre).toUpperCase(), _u, 0, precio, motivo);
+  showToast('PROPUESTA ENVIADA · ESPERA AUTORIZACIÓN','green');
+};
+window._catProponerProveedor = async function(){
+  if (!(can('precios.proponer') || can('precios.autorizar') || can('users.manage'))) return showToast('SIN PERMISO PARA PROPONER','red');
+  const _nomProv = await window.prPrompt({
+    title: 'PROPONER PROVEEDOR NUEVO',
+    body: 'El proveedor se crea cuando el administrador autorice la propuesta.',
+    placeholder: 'NOMBRE COMPLETO DEL PROVEEDOR',
+    required: true
+  });
+  if (_nomProv === null) return;
+  const prod = await window.prPrompt({
+    title: 'PRIMER PRODUCTO',
+    body: String(_nomProv).toUpperCase() + ' — con qué producto entra al catálogo.',
+    placeholder: 'NOMBRE DEL PRODUCTO',
+    required: true
+  });
+  if (prod === null) return;
+  const precioTxt = await window.prPrompt({
+    title: 'PRECIO UNITARIO',
+    body: String(prod).toUpperCase(),
+    placeholder: 'ej: 125.50',
+    required: true
+  });
+  if (precioTxt === null) return;
+  const precio = Number(String(precioTxt).replace(/[^\d.]/g, '')) || 0;
+  if (!(precio > 0)) return showToast('ESCRIBÍ UN PRECIO VÁLIDO','red');
+  const motivo = await window.prPrompt({
+    title: '¿POR QUÉ ESTE PROVEEDOR?',
+    body: 'Queda en la solicitud para que el autorizador lo revise.',
+    placeholder: 'ej: es el único que tiene el material / mejor precio',
+    required: true
+  });
+  if (motivo === null) return;
+  // sin proveedorId: el alta lo crea al autorizarse, usando el nombre propuesto
+  _crearSolicitudPrecio('ALTA', '', String(prod).toUpperCase(), _bodegaUnidadDelNombre(prod), 0, precio, motivo, String(_nomProv).toUpperCase());
+  showToast('PROPUESTA ENVIADA · ESPERA AUTORIZACIÓN','green');
+};
 function addProductoToProveedor(){
   if (!can('users.manage')) return;
   const p = activeProj();
