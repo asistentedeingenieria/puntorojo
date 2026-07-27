@@ -44,7 +44,11 @@ const sheet = iSheet > -1 ? html.slice(iSheet, iSheet + 4000) : '';
 const logoLine = (sheet.match(/<div[^>]*><img src="\$\{_LOGO_PR\}"[^>]*>[^\n]*/) || [''])[0];
 ok('el texto APP ya no está al lado del logo', !!logoLine && !/>APP</.test(logoLine));
 ok('bloque No.: sigla del proyecto + " - APP"', /\$\{_projSiglas\(_ocNumeroPartes\(oc\)\.proyecto\)\} - APP/.test(sheet));
-ok('fila Proyecto: usa la sigla', /<dt>Proyecto:<\/dt><dd>\$\{_projSiglas\(oc\.proyecto\)\}<\/dd>/.test(sheet));
+/* v1001: la fila pasa por _ocProyectoLabel — sigue dando la SIGLA para los proyectos, pero
+   una orden de abastecimiento imprime BODEGA CENTRAL en vez de "OC—A" (las siglas de
+   "OFICINA CENTRAL — ABASTECIMIENTO"). La línea de Área se quitó: no hay torre ni apto. */
+ok('fila Proyecto: usa la etiqueta (sigla o BODEGA CENTRAL)', /<dt>Proyecto:<\/dt><dd>\$\{_ocProyectoLabel\(oc\)\}<\/dd>/.test(sheet));
+ok('la sigla sigue viva para los proyectos', /_projSiglas\(p\)/.test(html));
 ok('ENTREGAR A pasa por el formato de teléfono', /\$\{_ocTelGuiones\(oc\.entregarA\)\}/.test(html.slice(iSheet, iSheet + 8000)));
 
 // ── 4. captura y lista ──
