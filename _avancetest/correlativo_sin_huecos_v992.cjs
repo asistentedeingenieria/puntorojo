@@ -36,9 +36,9 @@ if (fN) {
   ok('no reusa un número citado por una OC viva', f(mk([P(1),P(2),P(4)], ocs)) === 'VICINIA LAS AMÉRICAS – 00005');
 } else ok('nextPedidoCode evaluable', false);
 
-// ── folio de OC: mismo criterio ──
-ok('el folio de OC del proyecto también rellena huecos', /_primerNumeroLibre\(\(p\.materiales\.ordenes \|\| \[\]\)\.map/.test(html));
-ok('el folio de bodega también', /_primerNumeroLibre\(_bodegaMatStore\(\)\.ordenes\.map|_primerNumeroLibre\(\(_ctx\.cont\.ordenes/.test(html));
+// ── folio de OC: mismo criterio (v993: además POR SERIE — OC / DESP / OP) ──
+ok('el folio de OC rellena huecos dentro de su serie', /_primerNumeroLibre\(_usadosSerie\[serie\] \|\| \[\]\)/.test(html));
+ok('la serie se deduce de cada orden', /_ocSerieDe\(o\)/.test(html) && /_usadosSerie\[s\] = _usadosSerie\[s\] \|\| \[\]/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

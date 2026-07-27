@@ -3171,7 +3171,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v992</span>
+    <span style="opacity:.5;font-size:9px">v993</span>
   </footer>
 
 </div>
@@ -13448,6 +13448,16 @@ function _recetaV2EtapaNivelPorApto(p, levelId, etapaIdx, aptoId){
    pedirse. Sin recepción registrada, cubre lo pedido como siempre. PURA. */
 /* v992: primer número LIBRE de una serie (1, 2, 3…) — rellena los huecos que dejan los
    borrados en vez de seguir desde el máximo. PURA. */
+/* v993: serie de una orden — OC (compra), DESP (despacho de bodega) u OP (producción).
+   Cada una lleva su PROPIO correlativo (pedido de Antonio 27-jul). Las órdenes viejas no
+   tienen el campo `serie`: se deduce de sus flags. PURA. */
+function _ocSerieDe(oc){
+  if (!oc) return 'OC';
+  if (oc.serie) return String(oc.serie);
+  if (oc.esDespacho) return 'DESP';
+  if (oc.esProduccion) return 'OP';
+  return 'OC';
+}
 function _primerNumeroLibre(usados){
   var set = {};
   (usados || []).forEach(function(n){ var v = parseInt(n, 10); if (v > 0) set[v] = true; });
@@ -14584,7 +14594,7 @@ function renderPhotosModal(){
     const photoTiles = photos.map((src, photoIdx) => {
       if(!src) return '';
       return `<div class="photo-slot has-img">
-        <img src="${src}" onclick="viewPhoto('${src.replace(/'/g,"\\'")}')">
+        <img src="${src}" loading="lazy" decoding="async" onclick="viewPhoto('${src.replace(/'/g,"\\'")}')">
         <div class="photo-slot-lbl">FOTO ${photoIdx+1}</div>
         ${(typeof _fotoEstaPendiente==='function' && _fotoEstaPendiente(src)) ? `<div style="position:absolute;top:6px;left:6px;background:#B45309;color:#fff;font-size:9px;font-weight:800;letter-spacing:.6px;padding:3px 7px;border-radius:999px;z-index:2" title="Guardada en este teléfono; esperando confirmación de la nube">POR COMPARTIR</div>` : ''}
         ${!_ro ? `<div class="photo-slot-actions">
@@ -19311,7 +19321,15 @@ window._bodegaMovsDeCarga = function(filas, saldos){
     const actual = (saldos && saldos[k] && Number(saldos[k].saldo)) || 0;
     const delta = total - actual;
     if (!delta) return;
-    const mv = _bodegaMov('AJUSTE', f.name, delta, { motivo: 'CARGA DE EXISTENCIAS' });
+    /* v993 (pedido de Antonio): el movimiento guarda de QUÉ PROVEEDOR es el material y a
+       qué precio — así el inventario se valoriza con el costo real de ese proveedor y no
+       con el primero que aparezca en el catálogo. */
+    const mv = _bodegaMov('AJUSTE', f.name, delta, {
+      motivo: 'CARGA DE EXISTENCIAS',
+      proveedorId: f.proveedorId || '',
+      proveedorNombre: f.proveedorNombre || '',
+      precio: Number(f.precio) || 0
+    });
     if (f.u && !mv.u) mv.u = String(f.u).toUpperCase();
     out.push(mv);
   });
@@ -19335,6 +19353,13 @@ function _abrirCargaExistencias(){
       <div style="text-align:center;font-size:10px;color:#6B7280">${x.u || ''}</div>
       <div style="text-align:right;font-size:11.5px;color:#78716C;font-variant-numeric:tabular-nums">${x.saldo}</div>
       <input type="number" data-cx="${i}" min="0" step="any" placeholder="—" style="width:100%;padding:6px 8px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:12px;text-align:right;box-sizing:border-box">
+      ${(function(){
+        /* v993 (pedido de Antonio): si el material lo venden VARIOS proveedores, elegir de
+           cuál es el que se está cargando — el inventario se valoriza con SU precio. */
+        const _pvs = (typeof _provsDelProducto === 'function') ? _provsDelProducto(x.name) : [];
+        if (_pvs.length < 2) return '';
+        return `<div style="grid-column:1/-1;margin-top:2px"><select data-nativo data-cprov="${i}" style="width:100%;padding:5px 7px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:10.5px;box-sizing:border-box"><option value="">— PROVEEDOR (para el costo) —</option>${_pvs.map(pv => `<option value="${pv.id}">${_invEscAttr(pv.nombre)} · Q${fmtQ(pv.precio)}</option>`).join('')}</select></div>`;
+      })()}
     </div>`).join('') || '<div style="padding:20px;text-align:center;color:#9CA3AF;font-size:11px">SIN MATERIALES EN LAS RECETAS — USÁ OTRO MATERIAL ABAJO</div>';
   const wrap = document.createElement('div');
   wrap.id = '_bodegaCargaModal';
@@ -19378,7 +19403,12 @@ function _bodegaConfirmarCarga(){
   m.querySelectorAll('input[data-cx]').forEach(inp => {
     if (inp.value === '') return;
     const f = filas[Number(inp.dataset.cx)];
-    if (f) entradas.push({ name: f.name, u: f.u, total: Number(inp.value) });
+    if (!f) return;
+    // v993: proveedor elegido para ESTE material (si lo venden varios) → costo real
+    const _sel = m.querySelector('[data-cprov="' + inp.dataset.cx + '"]');
+    const _pid = _sel ? String(_sel.value || '') : '';
+    const _pv = _pid ? (_provsDelProducto(f.name) || []).find(x => x.id === _pid) : null;
+    entradas.push({ name: f.name, u: f.u, total: Number(inp.value), proveedorId: _pid, proveedorNombre: _pv ? _pv.nombre : '', precio: _pv ? _pv.precio : 0 });
   });
   const _ln = String((document.getElementById('_cargaLibreNombre') || {}).value || '').trim();
   const _lu = String((document.getElementById('_cargaLibreUnidad') || {}).value || '').trim();
@@ -19787,12 +19817,14 @@ async function openOrdenCompra(){
 
   // Mostrar rango estimado de OCs; el número final se asigna por proveedor al generar.
   // v964: en bodega el folio se DERIVA del máximo existente (sin contador mutable).
-  const nextNum = _ctx.esBodega
-    ? _primerNumeroLibre(_bodegaMatStore().ordenes.map(o => Number(o.folio) || 0))
-    : _primerNumeroLibre((p.materiales.ordenes || []).map(o => Number(o.folio) || 0)); // v978/v992: folio DERIVADO y sin huecos
+  // v993: el número previsto usa la SERIE que le tocará (OC / DESP / OP), cada una con su
+  // propio correlativo — antes compartían la serie y salían OC 00002 y DESP 00003.
+  const _seriePrev = _ctx.esBodega ? 'DESP' : (/SOLO POSTES A MEDIDA/.test(String(pd.observaciones || '')) ? 'OP' : 'OC');
+  const _ordPrev = _ctx.esBodega ? (_bodegaMatStore().ordenes || []) : (p.materiales.ordenes || []);
+  const nextNum = _primerNumeroLibre(_ordPrev.filter(o => _ocSerieDe(o) === _seriePrev).map(o => Number(o.folio) || 0));
   // v978: el número que se muestra ES el correlativo real (folio) — antes salía "OC01 / SIG.
   // FOLIO 2" y se leía como si fuera la primera OC del proyecto (queja de Antonio 26-jul).
-  document.getElementById('ocNumero').value = `${_ctx.esBodega ? 'DESP' : (/SOLO POSTES A MEDIDA/.test(String(pd.observaciones || '')) ? 'OP' : 'OC')} ${String(nextNum).padStart(5, '0')} · DEL PEDIDO ${pd.numero}`; // v982: solo postes = ORDEN DE PRODUCCIÓN
+  document.getElementById('ocNumero').value = `${_seriePrev} ${String(nextNum).padStart(5, '0')} · DEL PEDIDO ${pd.numero}`; // v982/v993: serie propia (OC/DESP/OP)
   // v978: pedidos DE RECETA — compras NO cambia proveedores (vienen del catálogo v916/v918);
   // lo ÚNICO permitido por material es mandarlo a BODEGA CENTRAL. Admin conserva la mano.
   // v992 (pedido de Antonio: "quiero que funcione igual que el pedido de receta"): el
@@ -20455,13 +20487,13 @@ async function generarOrdenCompra(){
   p = activeProj();
   pd = _ctx.pd;
   if (getPedidoOrdenes(pd.id).length > 0) return showToast('ESTE PEDIDO YA TIENE SUS ÓRDENES GENERADAS', 'red');
-  // v964: en bodega el folio se DERIVA (sin contador mutable); base antes del loop.
-  // v992: y RELLENA huecos — el primer folio libre, igual que el correlativo de pedidos.
-  const _foliosBodega = _ctx.esBodega ? _ctx.cont.ordenes.map(o => Number(o.folio) || 0) : [];
-  const _foliosProj = _ctx.esBodega ? [] : _primerNumeroLibre((p.materiales.ordenes || []).map(o => Number(o.folio) || 0));
-  let _folioBodega = _ctx.esBodega ? _primerNumeroLibre(_foliosBodega) - 1 : 0;
-  // v978: el folio del PROYECTO también se deriva (el contador saltaba al eliminar OCs)
-  let _folioProj = _ctx.esBodega ? 0 : _foliosProj - 1;
+  /* v964/v978/v992: folio DERIVADO (sin contador mutable) y que rellena huecos.
+     v993 (pedido de Antonio): CADA SERIE lleva su propio correlativo — las órdenes de
+     compra (OC), los despachos de bodega (DESP) y las órdenes de producción (OP) ya no
+     comparten la numeración. Base de folios usados por serie, antes del loop. */
+  const _ordExistentes = _ctx.esBodega ? (_ctx.cont.ordenes || []) : (p.materiales.ordenes || []);
+  const _usadosSerie = {};
+  _ordExistentes.forEach(o => { const s = _ocSerieDe(o); (_usadosSerie[s] = _usadosSerie[s] || []).push(Number(o.folio) || 0); });
 
   const groups = {};
   ocWorkingItems.forEach(it => {
@@ -20484,20 +20516,19 @@ async function generarOrdenCompra(){
     // v922: precios CON IVA — total = suma directa; el desglose (base/IVA) es informativo
     const { total, subtotal, ivaMonto } = _ocTotalesIvaIncluido(items);
 
-    let folio;
-    if (_ctx.esBodega) {
-      _folioBodega += 1; folio = _folioBodega; // v964: derivado, sin contador en el store
-    } else {
-      _folioProj += 1; folio = _folioProj; // v978: derivado (regla v964) — siempre en orden
-      p.materiales.ordenCounter = folio; // compat: el contador queda alineado
-    }
     const seq = existingForPedido + created.length + 1;
     const _pp = (window._ocPorProv || {})[provId] || {}; // v985: fecha/pago de ESTE proveedor
     // v982: mandar a FABRICAR solo postes a la medida genera una ORDEN DE PRODUCCIÓN
     const esProduccion = !esBodega && items.length > 0 && items.every(it => it.aMedida);
-    // v978: el número de la OC ES su folio correlativo del proyecto/bodega (5 dígitos) —
-    // antes era el índice DENTRO del pedido ("OC01") y no reflejaba el orden real.
-    const numero = `${pd.numero} - ${esBodega ? 'DESP' : (esProduccion ? 'OP' : 'OC')} ${String(folio).padStart(5, '0')}`;
+    // v993 (pedido de Antonio): cada SERIE con su propio correlativo — OC, DESP y OP ya
+    // no comparten numeración.
+    const serie = esBodega ? 'DESP' : (esProduccion ? 'OP' : 'OC');
+    const folio = _primerNumeroLibre(_usadosSerie[serie] || []);
+    (_usadosSerie[serie] = _usadosSerie[serie] || []).push(folio);
+    if (!_ctx.esBodega) p.materiales.ordenCounter = folio; // compat: el contador queda alineado
+    // v978: el número de la OC ES su folio correlativo (5 dígitos) — antes era el índice
+    // DENTRO del pedido ("OC01") y no reflejaba el orden real.
+    const numero = `${pd.numero} - ${serie} ${String(folio).padStart(5, '0')}`;
 
     const oc = {
       id: 'oc-' + uid(),
@@ -20533,6 +20564,7 @@ async function generarOrdenCompra(){
       impreso: false,
       esDespacho: esBodega, // v921: sale de BODEGA CENTRAL (orden de despacho, no compra)
       esProduccion, // v982: TODO el grupo es postes a medida → ORDEN DE PRODUCCIÓN
+      serie, // v993: OC | DESP | OP — cada una con su correlativo
       status: 'PENDIENTE_AUTORIZACION'
     };
     oc._ts = oc.ts; // v972: TODAS las OC nacen selladas (proyecto y bodega van por union-merge)
@@ -21281,9 +21313,9 @@ function renderOrdenesList(){
 
     let statusBadge = '';
     if (isPending) {
-      statusBadge = `<div style="display:inline-block;background:var(--red-soft);color:var(--red-dark);padding:3px 9px;border-radius:10px;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border:1px solid var(--red-dark)">PENDIENTE FINANZAS</div>`;
+      statusBadge = `<div style="display:inline-block;background:#FFFBEB;color:#B45309;padding:3px 9px;border-radius:10px;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border:1px solid #B45309">PENDIENTE FINANZAS</div>`; // v993: pendiente = naranja
     } else if (isAuth) {
-      statusBadge = `<div style="display:inline-block;background:var(--red-soft);color:var(--red-dark);padding:3px 9px;border-radius:10px;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border:1px solid var(--red-dark)">AUTORIZADA</div>`;
+      statusBadge = `<div style="display:inline-block;background:#F0FDF4;color:#15803D;padding:3px 9px;border-radius:10px;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border:1px solid #15803D">AUTORIZADA</div>`; // v993: autorizado = verde
     }
 
     const autorizInfo = isAuth && oc.autorizadoPor
@@ -21840,6 +21872,8 @@ ${paraCaptura ? '' : `<div class="no-print" style="display:flex;gap:10px;justify
     <div><div class="k">RECIBIÓ EN OBRA</div><div class="v">${esc2(rec.porNombre || '')}</div></div>
     <div><div class="k">UBICACIÓN</div><div class="v">${esc2(pd.nivel || '')}${pd.apto ? ' · ' + esc2(pd.apto) : ''}</div></div>
     <div><div class="k">FECHA DE RECEPCIÓN</div><div class="v">${esc2(rec.fecha || '')}${rec.hora ? ' · ' + esc2(rec.hora) : ''}</div></div>
+    <!-- v993 (pedido de Antonio): quien ENTREGÓ va acá, sin línea de firma, en verde -->
+    ${rec.entregoNombre ? `<div style="grid-column:1/-1;border-top:1px dotted #ccc;padding-top:7px;margin-top:2px"><div class="k">ENTREGÓ</div><div class="v" style="color:#15803D">${esc2(rec.entregoNombre)}</div></div>` : ''}
   </div>
 
   <div class="cat">MATERIAL RECIBIDO${rec.parcial ? ' · ENTREGA PARCIAL' : ''}</div>
@@ -21853,22 +21887,13 @@ ${paraCaptura ? '' : `<div class="no-print" style="display:flex;gap:10px;justify
 
   <div class="nota">Recibí en obra los materiales detallados en este comprobante, en las cantidades indicadas y en buen estado.${rec.parcial ? ' La entrega fue PARCIAL respecto a lo solicitado en el pedido.' : ''}</div>
 
-  <!-- v991 (pedido de Antonio): DOS firmas — quien recibe (firma registrada) y quien
-       entrega (piloto/proveedor: línea en blanco para firmar a mano). -->
-  <div style="margin-top:34px;display:grid;grid-template-columns:1fr 1fr;gap:40px;max-width:640px;margin-left:auto;margin-right:auto">
-    <div style="text-align:center">
-      <div style="height:62px;display:flex;align-items:flex-end;justify-content:center">${firma ? `<img src="${firma}" style="height:58px;max-width:230px;object-fit:contain;display:block">` : ''}</div>
-      <div style="border-top:1px solid #000;padding-top:5px">
-        <div style="font-size:12px;font-weight:700;letter-spacing:.5px">${esc2(rec.porNombre || '')}</div>
-        <div style="font-size:8.5px;color:#666;letter-spacing:1.5px;margin-top:2px">RECIBIÓ EN OBRA · ${esc2(rec.fecha || '')}</div>
-      </div>
-    </div>
-    <div style="text-align:center">
-      <div style="height:62px"></div>
-      <div style="border-top:1px solid #000;padding-top:5px">
-        <div style="font-size:12px;font-weight:700;letter-spacing:.5px">${esc2(rec.entregoNombre || '________________________')}</div>
-        <div style="font-size:8.5px;color:#666;letter-spacing:1.5px;margin-top:2px">ENTREGÓ</div>
-      </div>
+  <!-- v991/v993: UNA sola firma — la de quien recibe, con fecha Y HORA. Quien entregó va
+       arriba en el bloque de datos (sin línea de firma), como pidió Antonio. -->
+  <div style="margin-top:34px;text-align:center">
+    <div style="height:62px;display:flex;align-items:flex-end;justify-content:center">${firma ? `<img src="${firma}" style="height:58px;max-width:240px;object-fit:contain;display:block">` : ''}</div>
+    <div style="border-top:1px solid #000;max-width:340px;margin:0 auto;padding-top:5px">
+      <div style="font-size:12px;font-weight:700;letter-spacing:.5px">${esc2(rec.porNombre || '')}</div>
+      <div style="font-size:8.5px;color:#666;letter-spacing:1.5px;margin-top:2px">RECIBIÓ EN OBRA · ${esc2(rec.fecha || '')}${rec.hora ? ' · ' + esc2(rec.hora) : ''}</div>
     </div>
   </div>
 

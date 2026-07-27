@@ -7,8 +7,12 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v992-correlativo-sin-huecos-candado';
+const CACHE_VERSION = 'v993-series-fotos-costo-colores';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
+/* v993: cache APARTE para las fotos de Firebase Storage. NO lleva la versión en el
+   nombre: sobrevive a cada despliegue (si se limpiara con cada versión, la flota
+   volvería a bajarse todas las fotos y el ahorro se perdería). */
+const FOTOS_CACHE = 'puntorojo-fotos';
 
 // Archivos básicos que se cachean al instalar
 const CORE_ASSETS = [
@@ -66,7 +70,8 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((k) => k.startsWith('puntorojo-') && k !== CACHE_NAME)
+          // v993: el cache de FOTOS no se borra al actualizar (si no, se re-descargan todas)
+          .filter((k) => k.startsWith('puntorojo-') && k !== CACHE_NAME && k !== FOTOS_CACHE)
           .map((k) => caches.delete(k))
       )
     )
@@ -82,6 +87,27 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
 
   const url = new URL(req.url);
+
+  /* v993 (pedido de Antonio: bajar el consumo de descarga tras pasar a Blaze): las FOTOS
+     de Firebase Storage se cachean cache-first en su propio cache. Cada URL trae su token
+     (?alt=media&token=…) y el contenido es inmutable, así que servirlas del disco es
+     seguro: una foto se baja UNA vez por dispositivo en vez de en cada apertura de
+     AVANCE FÍSICO. Antes caían en el `return` de googleapis.com y se re-descargaban
+     siempre. Va ANTES del corte de googleapis para ganarle. */
+  if (url.hostname === 'firebasestorage.googleapis.com' && url.pathname.indexOf('/o/') > -1) {
+    event.respondWith(
+      caches.open(FOTOS_CACHE).then((cache) =>
+        cache.match(req).then((hit) => {
+          if (hit) return hit;
+          return fetch(req).then((res) => {
+            if (res && res.status === 200) cache.put(req, res.clone()).catch(() => {});
+            return res;
+          });
+        })
+      )
+    );
+    return;
+  }
 
   // NO interferir con llamadas a Cloud Functions (siempre van a la red, frescas).
   if (url.hostname.endsWith('cloudfunctions.net') ||

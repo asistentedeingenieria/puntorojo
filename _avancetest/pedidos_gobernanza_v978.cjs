@@ -24,7 +24,7 @@ if (fN) {
   ok('si se borra el 00003, el siguiente ES el 00002 (sin saltos)', fN(mk([{numero:'VICINIA LAS AMÉRICAS – 00001'}])) === 'VICINIA LAS AMÉRICAS – 00002');
   ok('proyecto sin pedidos arranca en 00001', fN(mk([])) === 'VICINIA LAS AMÉRICAS – 00001');
 } else ok('nextPedidoCode evaluable', false);
-ok('el folio de OC del proyecto también se deriva', /_folioProj/.test(html) && /_primerNumeroLibre\(\(p\.materiales\.ordenes \|\| \[\]\)\.map/.test(html));
+ok('el folio de OC del proyecto también se deriva', /_usadosSerie/.test(html) && html.includes('_primerNumeroLibre(_usadosSerie')); // v993: por serie
 
 // ── 2. gate duro de eliminar pedidos ──
 ok('deletePedido exige users.manage', /SOLO EL ADMIN PUEDE ELIMINAR PEDIDOS/.test(ex('function deletePedido(')));

@@ -59,7 +59,8 @@ ok('la línea guarda su sourceKey para el mapeo', /src: x\.sourceKey/.test(ex('w
 ok('el modal pide quién entregó', /_recepEntrego/.test(ex('window._abrirRecepcion = async function')));
 ok('se guarda entregoNombre', /entregoNombre/.test(zConf));
 const zDoc = ex('function _reciboDocHTML(');
-ok('el recibo lleva DOS firmas (recibió y entregó)', /RECIBIÓ EN OBRA/.test(zDoc) && /ENTREGÓ/.test(zDoc));
+// v993: UNA firma (recibió, con fecha y hora); ENTREGÓ va en los datos, en verde, sin firma
+ok('el recibo lleva la firma de quien recibe y el nombre de quien entregó', /RECIBIÓ EN OBRA/.test(zDoc) && /ENTREGÓ/.test(zDoc) && /color:#15803D/.test(zDoc));
 ok('la tarjeta marca el pedido como RECIBIDO PARCIAL', /RECIBIDO PARCIAL/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
