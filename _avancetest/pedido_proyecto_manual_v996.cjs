@@ -38,7 +38,11 @@ else {
 
 // el submit pasa el proyecto manual al generador
 const zS = ex('async function submitPedido(');
-ok('submitPedido numera con el proyecto del pedido', /nextPedidoCode\(p, proyectoTipo === 'MANUAL' \? proyectoPedido : ''\)|nextPedidoCode\(p, _proyManualNum\)/.test(zS));
+/* v1002: el pedido manual se guarda en PROYECTOS VARIOS, así que su serie se cuenta sobre
+   ESE contenedor (más los manuales viejos que quedaron en proyectos) — si no, TIFFANY – 2
+   se numeraría contra los pedidos de la obra abierta. */
+ok('submitPedido numera con el proyecto del pedido', zS.includes("nextPedidoCode(_contNum, proyectoTipo === 'MANUAL' ? proyectoPedido : '')"));
+ok('y la base de esa serie es el contenedor de varios', zS.includes('_variosPedidosTodos()'));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

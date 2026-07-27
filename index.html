@@ -3171,7 +3171,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1001</span>
+    <span style="opacity:.5;font-size:9px">v1002</span>
   </footer>
 
 </div>
@@ -8952,7 +8952,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 914; // v977: merge por clave/ts de p.materiales.recetaMiles en applyRemote
+const APP_SYNC_VERSION = 915; // v977: merge por clave/ts de p.materiales.recetaMiles en applyRemote
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9883,6 +9883,29 @@ const CloudSync = {
           });
         }
 
+        /* v1002: STORE de PROYECTOS VARIOS (variosMat.pedidos/ordenes) — pedidos de proyectos
+           pequeños y reparaciones, fuera de los proyectos grandes. Mismo régimen que la
+           bodega: union-merge por id + tombstones + entregas por OC. */
+        {
+          const _vmL = (state && state.variosMat) || {};
+          if (!merged.variosMat || typeof merged.variosMat !== 'object') merged.variosMat = {};
+          const _vmR = merged.variosMat;
+          const _vpTomb = Object.assign({}, _vmL.pedidosEliminados || {}, _vmR.pedidosEliminados || {});
+          _vmR.pedidosEliminados = _vpTomb;
+          const _mVp = _mergeById(_vmL.pedidos || [], _vmR.pedidos || [], _vpTomb);
+          _vmR.pedidos = _mVp.list; if (_mVp.changed) needsResync = true;
+          if (_mergeRecepciones(_vmL.pedidos || [], _vmR.pedidos)) needsResync = true;
+          const _voTomb = Object.assign({}, _vmL.ordenesEliminadas || {}, _vmR.ordenesEliminadas || {});
+          _vmR.ordenesEliminadas = _voTomb;
+          const _mVo = _mergeById(_vmL.ordenes || [], _vmR.ordenes || [], _voTomb);
+          _vmR.ordenes = _mVo.list; if (_mVo.changed) needsResync = true;
+          ['ocProvPorItem', 'postesPrecioMedida', 'ocVariantePorItem'].forEach(k => {
+            const _loc = _vmL[k] || {}, _rem = _vmR[k] || {};
+            _vmR[k] = Object.assign({}, _rem);
+            Object.keys(_loc).forEach(kk => { if (!(kk in _vmR[k])) { _vmR[k][kk] = _loc[kk]; needsResync = true; } });
+          });
+        }
+
         // v959: lista DE BODEGA global (bodegaItemsGlobal) — era LWW puro y un toggle sin subir
         // se perdía ante cualquier snapshot. Merge tipo v944 (firmas): mapa clave→1 con timestamps
         // por clave (bodegaItemsTs) y tombstones (bodegaItemsEliminados) que solo borran si son
@@ -10055,7 +10078,7 @@ const CloudSync = {
     // referencia queda huerfana y el cambio (push/Object.assign/splice) no persiste. Esto
     // arregla de raiz toda la familia "await modal -> escribir" (aprobar/rechazar/procesar/
     // anular planilla, editar/eliminar anticipos y polizas, etc.).
-    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal, #_bodegaCargaModal, #_recepcionModal, .prModal-backdrop')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO; v977: prPrompt/prAlert (.prModal-backdrop) — recetaV2Op escribía sobre un p tomado antes del await del prompt. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo.
+    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal, #_bodegaCargaModal, #_recepcionModal, #_variosPanelModal, .prModal-backdrop')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO; v977: prPrompt/prAlert (.prModal-backdrop) — recetaV2Op escribía sobre un p tomado antes del await del prompt. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo.
     const focused = document.activeElement;
     if (focused && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)) return true;
     return false;
@@ -11553,6 +11576,14 @@ function renderProjectSelect(){
           <span class="pr-proj-dot" aria-hidden="true" style="background:#166534"></span>
           <span>BODEGA CENTRAL</span>
           <span aria-hidden="true" style="margin-left:auto;font-size:10px;color:#166534">■</span>
+        </div>`;
+      }
+      // v1002 (pedido de Antonio): PROYECTOS VARIOS — pedidos de obras pequeñas y reparaciones
+      if (typeof _puedeVerVarios === 'function' && _puedeVerVarios()) {
+        list.innerHTML += `<div class="pr-proj-item" role="option" onclick="window.prToggleProjDropdown(); window._abrirPanelVarios()">
+          <span class="pr-proj-dot" aria-hidden="true" style="background:#1D4ED8"></span>
+          <span>PROYECTOS VARIOS</span>
+          <span aria-hidden="true" style="margin-left:auto;font-size:10px;color:#1D4ED8">■</span>
         </div>`;
       }
     } catch(e){}
@@ -18163,6 +18194,13 @@ function _doDeletePedido(id){
     const b = _bodegaMatStore();
     b.pedidos = b.pedidos.filter(x => x.id !== id);
     b.pedidosEliminados[id] = Date.now();
+  } else if (_ctx.esVarios) {
+    /* v1002: PROYECTOS VARIOS — mismo régimen. Sin esta rama el pedido caía al else, se
+       filtraba sobre el proyecto ABIERTO (no borraba nada), la lápida se escribía en el
+       proyecto equivocado y el pedido revivía en el próximo sync. */
+    const v = _variosMatStore();
+    v.pedidos = v.pedidos.filter(x => x.id !== id);
+    v.pedidosEliminados[id] = Date.now();
   } else {
     // v972: los pedidos de proyecto TAMBIÉN van por union-merge — borrar exige lápida
     const p = activeProj();
@@ -18750,7 +18788,13 @@ async function submitPedido(){
   // Generar correlativo por proyecto
   p.materiales.pedidoCounter = (p.materiales.pedidoCounter || 0) + 1;
   // v996: un pedido de proyecto MANUAL se numera con SU proyecto (TIFFANY – 1, 2, 3…)
-  const numero = nextPedidoCode(p, proyectoTipo === 'MANUAL' ? proyectoPedido : '');
+  /* v1002: la serie del cliente se cuenta sobre PROYECTOS VARIOS (donde ahora viven),
+     más los manuales viejos que quedaron en el proyecto — así TIFFANY – 2 sigue a TIFFANY – 1
+     aunque el primero se haya hecho antes del cambio. */
+  const _contNum = (proyectoTipo === 'MANUAL')
+    ? { materiales: { pedidos: _variosPedidosTodos(), ordenes: (_variosMatStore().ordenes || []).concat(((p.materiales || {}).ordenes) || []) }, name: p.name, pedidoPrefix: p.pedidoPrefix }
+    : p;
+  const numero = nextPedidoCode(_contNum, proyectoTipo === 'MANUAL' ? proyectoPedido : '');
 
   const n = new Date();
   const fecha = `${String(n.getDate()).padStart(2,'0')}/${String(n.getMonth()+1).padStart(2,'0')}/${n.getFullYear()}`;
@@ -18810,7 +18854,15 @@ async function submitPedido(){
     history: [{ ts: Date.now(), from: null, to: 'SOLICITADO', role: (getCurrentUser()?.username || 'unknown') }]
   };
 
-  p.materiales.pedidos.push(pedido);
+  /* v1002 (pedido de Antonio): un pedido de PROYECTO PEQUEÑO / REPARACIÓN ya no se guarda
+     dentro del proyecto que estuviera abierto — va a su propio contenedor, PROYECTOS VARIOS,
+     que tiene su vista en el desplegable. Los de la obra siguen igual. */
+  if (proyectoTipo === 'MANUAL') {
+    pedido.esVarios = true;
+    _variosMatStore().pedidos.push(pedido);
+  } else {
+    p.materiales.pedidos.push(pedido);
+  }
 
   // M5: marcar bloqueo bidireccional. Si este pedido contiene metal a la medida
   // para algun nivel, ese nivel no puede pedir su etapa 1 después (el metal ya
@@ -19085,7 +19137,9 @@ function getPedidoOrdenes(pdId){
   // v927, allPedidoOcsAuthorized, advancePedido) ven las OCs de abastecimiento.
   const p = activeProj();
   const b = (state && state.bodegaMat) || {};
-  return [...(((p || {}).materiales || {}).ordenes || []), ...(b.ordenes || [])].filter(o => o && o.pedidoId === pdId);
+  // v1002: + PROYECTOS VARIOS (tercer contenedor)
+  const v = (state && state.variosMat) || {};
+  return [...(((p || {}).materiales || {}).ordenes || []), ...(b.ordenes || []), ...(v.ordenes || [])].filter(o => o && o.pedidoId === pdId);
 }
 
 function allPedidoOcsAuthorized(pdId){
@@ -19900,6 +19954,45 @@ function _pedidoEsAbastecimiento(pd){
    state.bodegaMat {pedidos, ordenes} (union-merge por id + tombstones en applyRemote)
    con numeración propia DERIVADA (sin contador mutable — lección v953: dos
    dispositivos generando a la vez se pisan el correlativo). */
+/* ── v1002 (pedido de Antonio): PROYECTOS VARIOS ──────────────────────────────────────
+   Los pedidos de proyectos pequeños / reparaciones (TIFFANY, una casa suelta, un cliente)
+   no son de ninguna obra grande y quedaban guardados DENTRO del proyecto que estuviera
+   abierto, mezclados con el suyo. Ahora tienen su propio contenedor, con el mismo patrón
+   probado de la bodega central (v964): store global + union-merge por id + tombstones +
+   su entrada en el desplegable de PROYECTO. */
+function _variosMatStore(){
+  if (!state.variosMat || typeof state.variosMat !== 'object') state.variosMat = {};
+  const v = state.variosMat;
+  if (!Array.isArray(v.pedidos)) v.pedidos = [];
+  if (!Array.isArray(v.ordenes)) v.ordenes = [];
+  if (!v.pedidosEliminados || typeof v.pedidosEliminados !== 'object') v.pedidosEliminados = {};
+  if (!v.ordenesEliminadas || typeof v.ordenesEliminadas !== 'object') v.ordenesEliminadas = {};
+  if (!v.ocProvPorItem || typeof v.ocProvPorItem !== 'object') v.ocProvPorItem = {};
+  if (!v.postesPrecioMedida || typeof v.postesPrecioMedida !== 'object') v.postesPrecioMedida = {};
+  return v;
+}
+/* Todos los pedidos de proyectos varios: los del contenedor nuevo MÁS los manuales que
+   quedaron dentro de proyectos antes de v1002 (no se migran — sus OCs los siguen citando).
+   Cada uno queda marcado con _origen para saber dónde vive. */
+function _variosPedidosTodos(){
+  const out = [];
+  try {
+    (_variosMatStore().pedidos || []).forEach(function(pd){
+      if (pd) out.push(Object.assign({}, pd, { _origen: 'varios' }));
+    });
+    ((state && state.projects) || []).forEach(function(p){
+      const arr = (p && p.materiales && p.materiales.pedidos) || [];
+      arr.forEach(function(pd){
+        if (pd && pd.proyectoManual) out.push(Object.assign({}, pd, { _origen: 'proyecto:' + p.id }));
+      });
+    });
+  } catch (e) {}
+  return out;
+}
+function _puedeVerVarios(){
+  try { return can('pedidos.create') || can('compras.autorizar') || can('compras.revisar') || can('users.manage'); }
+  catch(e){ return false; }
+}
 function _bodegaMatStore(){
   if (!state.bodegaMat || typeof state.bodegaMat !== 'object') state.bodegaMat = {};
   const b = state.bodegaMat;
@@ -19929,6 +20022,10 @@ function _findPedidoGlobal(id){
   const b = (state && state.bodegaMat) || {};
   const enBodega = (b.pedidos || []).find(x => x && x.id === id);
   if (enBodega) return { pd: enBodega, cont: _bodegaMatStore(), esBodega: true, nombre: 'BODEGA CENTRAL', projectId: null };
+  // v1002: PROYECTOS VARIOS — tercer contenedor, fuera de los proyectos
+  const v = (state && state.variosMat) || {};
+  const enVarios = (v.pedidos || []).find(x => x && x.id === id);
+  if (enVarios) return { pd: enVarios, cont: _variosMatStore(), esBodega: false, esVarios: true, nombre: String(enVarios.proyectoPedido || 'PROYECTOS VARIOS'), projectId: null };
   const p = activeProj();
   const pd = (((p || {}).materiales || {}).pedidos || []).find(x => x && x.id === id);
   if (pd) return { pd: pd, cont: p.materiales, esBodega: false, nombre: p.name, projectId: p.id };
@@ -19946,6 +20043,12 @@ function _ocEsAbastecimiento(oc, p){
    (la recepción desde el panel no puede depender de qué proyecto esté abierto).
    v964: el store de bodega se barre PRIMERO (p:null = OC de abastecimiento del store). */
 function _bodegaFindOc(id){
+  // v1002: PROYECTOS VARIOS primero (mismo criterio que _findPedidoGlobal)
+  try {
+    const _v = (state && state.variosMat) || {};
+    const _ocV = (_v.ordenes || []).find(o => o && o.id === id);
+    if (_ocV) return { oc: _ocV, cont: _variosMatStore(), p: null, esBodega: false, esVarios: true };
+  } catch(e){}
   const b = (state && state.bodegaMat) || {};
   const enB = (b.ordenes || []).find(x => x && x.id === id);
   if (enB) return { oc: enB, p: null };
@@ -20124,7 +20227,7 @@ function _abrirPanelBodega(){
         <div style="font-size:10px;color:#78716C;margin-top:2px">${nItems} material${nItems !== 1 ? 'es' : ''} · ${pd.solicitante || ''}${pd.fechaEntrega ? ' · ENTREGA ' + pd.fechaEntrega : ''}</div>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
-        <button class="btn ghost sm" style="font-size:10px" onclick="_cerrarPanelBodegaDom(); openPedidoDetalle('${pd.id}')">DETALLE</button>
+        <button class="btn ghost sm" style="font-size:10px" onclick="openPedidoDetalle('${pd.id}')" title="Ver el detalle sin salir de bodega central">DETALLE</button>
         ${btnGenerar}
         ${botonesOc}
         ${_esAdminBod ? `<button class="btn-icon danger" onclick="deletePedido('${pd.id}')" title="Eliminar pedido (solo admin)">✕</button>` : ''}
@@ -20149,6 +20252,7 @@ function _abrirPanelBodega(){
         <button class="btn ghost sm" style="font-size:10px" onclick="previewOrden('${o.id}')">VER BORRADOR</button>
         <!-- v1001: compras corrige mientras no esté firmada -->
         <button class="btn ghost sm" style="font-size:10px" data-perm="compras.autorizar|materiales.bodega" onclick="_ocEditarBorrador('${o.id}')" title="Corregir esta orden (solo mientras finanzas no la firme)">EDITAR</button>
+        <button class="btn ghost sm" style="font-size:10px;border-color:#C62828;color:#C62828" data-perm="compras.autorizar|materiales.bodega" onclick="_ocEliminarBorrador('${o.id}')" title="Eliminar esta orden (solo mientras finanzas no la firme)">ELIMINAR</button>
         <button class="btn sm" style="background:var(--red-dark);border-color:var(--red-dark);color:#fff;font-size:10px" onclick="autorizarOrden('${o.id}')" title="Visto bueno + firma (quien la generó no puede)">AUTORIZAR Y FIRMAR</button>
       </div>
     </div>`;
@@ -20253,6 +20357,97 @@ window._bodegaViewFiltrar = function(q){
   });
 };
 function _cerrarPanelBodegaDom(){ const m = document.getElementById('_bodegaPanelModal'); if (m) m.remove(); window._bodegaPanelRows = null; }
+
+/* ── v1002: PANEL DE PROYECTOS VARIOS ─────────────────────────────────────────────────
+   Todos los pedidos de proyectos pequeños y reparaciones, agrupados por cliente. Vive en el
+   desplegable de PROYECTO igual que BODEGA CENTRAL y no cambia el proyecto activo. */
+function _cerrarPanelVariosDom(){ const m = document.getElementById('_variosPanelModal'); if (m) m.remove(); }
+window._cerrarPanelVarios = _cerrarPanelVariosDom;
+window._variosRepintar = function(){
+  try { if (document.getElementById('_variosPanelModal')) { _cerrarPanelVariosDom(); window._abrirPanelVarios(); } } catch(e){}
+};
+window._abrirPanelVarios = function(){
+  if (!_puedeVerVarios()) return showToast('SIN ACCESO A PROYECTOS VARIOS', 'red');
+  if (document.getElementById('_variosPanelModal')) return;
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  const pedidos = _variosPedidosTodos().sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  // agrupados por CLIENTE / proyecto pequeño
+  const porCliente = {};
+  pedidos.forEach(pd => {
+    const k = String(pd.proyectoPedido || 'SIN NOMBRE').toUpperCase();
+    (porCliente[k] = porCliente[k] || []).push(pd);
+  });
+  const clientes = Object.keys(porCliente).sort((a, b) => a.localeCompare(b, 'es'));
+  const _puedeAut = _puedeAutorizarOc();
+  const _estadoCol = st => st === 'RECIBIDO' ? '#166534' : st === 'APROBADO' ? '#92400E' : '#B91C1C';
+  const bloques = clientes.map(cli => {
+    const filas = porCliente[cli].map(pd => {
+      const ocs = getPedidoOrdenes(pd.id);
+      const nItems = Object.keys(pd.items || {}).length + ((pd.extras || []).length);
+      const st = pd.status || 'SOLICITADO';
+      const btnOc = (!ocs.length && (can('compras.autorizar') || can('users.manage')))
+        ? `<button class="btn sm" style="font-size:10px" onclick="_cerrarPanelVariosDom(); currentPedidoDetalleId='${pd.id}'; openOrdenCompra()">GENERAR OC</button>` : '';
+      const chipsOc = ocs.map(o => {
+        const pend = (o.status || 'AUTORIZADA') === 'PENDIENTE_AUTORIZACION';
+        const n = _numLimpio(o.numero).split(' - ').pop();
+        if (!pend) return `<button class="btn ghost sm" style="font-size:10px" onclick="printOrdenCompra('${o.id}')">IMPRIMIR ${esc(n)}</button>`;
+        return _puedeAut
+          ? `<button class="btn sm" style="background:var(--red-dark);border-color:var(--red-dark);color:#fff;font-size:10px" onclick="autorizarOrden('${o.id}')">AUTORIZAR ${esc(n)}</button>`
+          : `<span style="font-size:9px;font-weight:700;letter-spacing:.8px;color:#B45309">${esc(n)} · PENDIENTE FINANZAS</span>`;
+      }).join(' ');
+      return `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
+        <div style="min-width:0">
+          <div style="font-size:11.5px"><b>${esc(_numLimpio(pd.numero))}</b> <span style="font-size:9px;font-weight:700;color:${_estadoCol(st)};letter-spacing:.8px;margin-left:6px">${esc(st)}</span></div>
+          <div style="font-size:10px;color:#78716C;margin-top:2px">${nItems} material${nItems !== 1 ? 'es' : ''} · ${esc(pd.solicitante || '')}${pd.fechaEntrega ? ' · ENTREGA ' + esc(pd.fechaEntrega) : ''}${pd.apto ? ' · ' + esc(pd.apto) : ''}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+          <button class="btn ghost sm" style="font-size:10px" onclick="openPedidoDetalle('${pd.id}')" title="Ver el detalle sin salir de acá">DETALLE</button>
+          ${btnOc}${chipsOc}
+          ${can('users.manage') ? `<button class="btn-icon danger" onclick="deletePedido('${pd.id}')" title="Eliminar pedido (solo admin)">✕</button>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+    return `<div class="card" style="padding:12px 18px;margin-top:12px">
+      <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:6px">${esc(cli)} (${porCliente[cli].length})</div>
+      ${filas}
+    </div>`;
+  }).join('');
+  const wrap = document.createElement('div');
+  wrap.id = '_variosPanelModal';
+  wrap.className = 'modal-bg show';
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:100060;background:rgba(0,0,0,.5);overflow:auto;padding:18px';
+  wrap.innerHTML = `<div class="modal" style="max-width:1100px;margin:0 auto;background:var(--bg);border-radius:14px;padding:18px">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      <div style="min-width:0">
+        <div style="font-size:9px;letter-spacing:1.5px;color:#1D4ED8;font-weight:700">■ PEDIDOS FUERA DE LAS OBRAS GRANDES</div>
+        <h3 style="margin:2px 0 0;font-size:22px">PROYECTOS VARIOS.</h3>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn ghost" onclick="_cerrarPanelVariosDom()">← VOLVER A PROYECTOS</button>
+        <button class="btn primary" data-perm="pedidos.create" onclick="_variosNuevoPedido()">+ NUEVO PEDIDO</button>
+      </div>
+    </div>
+    <div style="font-size:11px;color:#78716C;line-height:1.5;margin-bottom:8px">Reparaciones, casas sueltas y clientes que no son ninguna de las obras grandes. Cada uno lleva su propia numeración.</div>
+    ${bloques || '<div class="empty" style="padding:34px;text-align:center;color:var(--mute)">TODAVÍA NO HAY PEDIDOS DE PROYECTOS VARIOS.</div>'}
+  </div>`;
+  document.body.appendChild(wrap);
+  try { if (typeof applyPermissions === 'function') applyPermissions(); } catch(e){}
+};
+/* + NUEVO PEDIDO desde el panel: lleva al formulario ya en modo PROYECTO PEQUEÑO. */
+window._variosNuevoPedido = function(){
+  _cerrarPanelVariosDom();
+  try {
+    if (typeof showSection === 'function') showSection('materiales');
+    if (typeof setMaterialesTab === 'function') setMaterialesTab('pedidos');
+    if (typeof setPedidoTab === 'function') setPedidoTab('nuevo');
+    setTimeout(function(){
+      const sel = document.getElementById('pfProyectoTipo');
+      if (sel) { sel.value = 'MANUAL'; if (typeof togglePedidoProyectoManual === 'function') togglePedidoProyectoManual(); }
+      const inp = document.getElementById('pfProyectoManual');
+      if (inp) inp.focus();
+    }, 120);
+  } catch(e){ console.warn('[v1002] nuevo pedido de varios', e); }
+};
 function _cerrarPanelBodega(){
   _cerrarPanelBodegaDom(); // v963: sin gate — VOLVER regresa a la app tal como estaba
 }
@@ -20308,7 +20503,8 @@ async function openOrdenCompra(){
   // v993: el número previsto usa la SERIE que le tocará (OC / DESP / OP), cada una con su
   // propio correlativo — antes compartían la serie y salían OC 00002 y DESP 00003.
   const _seriePrev = _ctx.esBodega ? 'DESP' : (/SOLO POSTES A MEDIDA/.test(String(pd.observaciones || '')) ? 'OP' : 'OC');
-  const _ordPrev = _ctx.esBodega ? (_bodegaMatStore().ordenes || []) : (p.materiales.ordenes || []);
+  // v1002: el folio se deriva del CONTENEDOR del pedido (proyecto, bodega o varios)
+  const _ordPrev = (_ctx.cont && _ctx.cont.ordenes) || (p.materiales.ordenes || []);
   const nextNum = _primerNumeroLibre(_ordPrev.filter(o => _ocSerieDe(o) === _seriePrev).map(o => Number(o.folio) || 0));
   // v978: el número que se muestra ES el correlativo real (folio) — antes salía "OC01 / SIG.
   // FOLIO 2" y se leía como si fuera la primera OC del proyecto (queja de Antonio 26-jul).
@@ -21057,7 +21253,7 @@ async function generarOrdenCompra(){
      v993 (pedido de Antonio): CADA SERIE lleva su propio correlativo — las órdenes de
      compra (OC), los despachos de bodega (DESP) y las órdenes de producción (OP) ya no
      comparten la numeración. Base de folios usados por serie, antes del loop. */
-  const _ordExistentes = _ctx.esBodega ? (_ctx.cont.ordenes || []) : (p.materiales.ordenes || []);
+  const _ordExistentes = (_ctx.cont && _ctx.cont.ordenes) || (p.materiales.ordenes || []); // v1002: los tres contenedores
   const _usadosSerie = {};
   _ordExistentes.forEach(o => { const s = _ocSerieDe(o); (_usadosSerie[s] = _usadosSerie[s] || []).push(Number(o.folio) || 0); });
 
@@ -21168,7 +21364,7 @@ async function generarOrdenCompra(){
 
   // v909: recordar el último precio digitado de postes a medida (por medida en metros).
   // v964: si el pedido es de bodega, la memoria va al STORE (no al proyecto que esté abierto).
-  const _memDest = _ctx.esBodega ? _bodegaMatStore() : p.materiales;
+  const _memDest = _ctx.cont || p.materiales; // v1002: la memoria vive con el pedido
   ocWorkingItems.forEach(it => {
     const _mts = _ocMedidaEspecialMetros(it.name);
     if (_mts != null && Number(it.precio) > 0) {
@@ -22051,6 +22247,57 @@ function _ocEntregaFalta(texto){
   if (!_tieneContacto) falta.push('QUIÉN RECIBE');
   return falta;
 }
+/* v1002 (pedido de Antonio): ELIMINAR una orden que todavía no autorizó finanzas. Una vez
+   firmada no se borra —es el documento que se le mandó al proveedor—; para esas está la baja.
+   Deja tombstone para que el union-merge (v972) no la resucite desde otro dispositivo. */
+window._ocEliminarBorrador = async function(ocId){
+  if (!can('compras.autorizar') && !can('users.manage') && !can('materiales.bodega')) {
+    return showToast('SOLO COMPRAS O EL ADMIN PUEDE ELIMINARLA', 'red');
+  }
+  const _hit = _bodegaFindOc(ocId);
+  const oc = _hit && _hit.oc;
+  if (!oc) return showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red');
+  if ((oc.status || 'AUTORIZADA') !== 'PENDIENTE_AUTORIZACION') {
+    return showToast('YA ESTÁ AUTORIZADA — NO SE PUEDE ELIMINAR', 'red');
+  }
+  const _ok = await window.prConfirm({
+    title: 'ELIMINAR LA ORDEN',
+    bodyHTML: `<div style="font-size:12.5px;color:#333;line-height:1.5">Vas a eliminar <b>${String(_numLimpio(oc.numero)).replace(/[<>]/g,'')}</b> (${String(oc.proveedorNombre||'').replace(/[<>]/g,'')}).</div>
+               <div style="margin-top:10px;font-size:12px;color:#666">El pedido queda como estaba y se le puede volver a generar la orden.</div>`,
+    okText: 'ELIMINAR', cancelText: 'CANCELAR', danger: true
+  });
+  if (!_ok) return;
+  // re-leer tras el modal (regla v769/v770): pudo autorizarse mientras tanto
+  const _h2 = _bodegaFindOc(ocId);
+  if (!_h2 || !_h2.oc) return showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red');
+  if ((_h2.oc.status || 'AUTORIZADA') !== 'PENDIENTE_AUTORIZACION') {
+    return showToast('YA FUE AUTORIZADA MIENTRAS TANTO — NO SE PUEDE ELIMINAR', 'red');
+  }
+  const _cont = _h2.cont || (_h2.p && _h2.p.materiales) || _bodegaMatStore();
+  const _arr = _cont.ordenes || [];
+  const _i = _arr.findIndex(o => o && o.id === ocId);
+  if (_i < 0) return showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red');
+  const _pdId = _arr[_i].pedidoId;
+  _arr.splice(_i, 1);
+  _cont.ordenesEliminadas = _cont.ordenesEliminadas || {};
+  _cont.ordenesEliminadas[ocId] = Date.now();
+  /* Si el pedido se queda sin ninguna orden, vuelve a SOLICITADO: si no, quedaría
+     "APROBADO · OC GENERADA" sin OC y no se le podría generar de nuevo. */
+  try {
+    const _ctxPd = _findPedidoGlobal(_pdId);
+    if (_ctxPd && _ctxPd.pd && !getPedidoOrdenes(_pdId).length && _ctxPd.pd.status === 'APROBADO') {
+      _ctxPd.pd.status = 'SOLICITADO';
+      _ctxPd.pd._ts = Date.now();
+      (_ctxPd.pd.history = _ctxPd.pd.history || []).push({ ts: Date.now(), from: 'APROBADO', to: 'SOLICITADO', by: 'OC ELIMINADA' });
+    }
+  } catch(e){ console.warn('[v1002] estado del pedido tras eliminar OC', e); }
+  saveState();
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch(e){}
+  try { if (typeof _bodegaRepintar === 'function') _bodegaRepintar(); } catch(e){}
+  try { if (typeof renderOrdenesList === 'function') renderOrdenesList(); } catch(e){}
+  try { if (typeof renderPedidosList === 'function') renderPedidosList(); } catch(e){}
+  showToast('ORDEN ELIMINADA', 'green');
+};
 /* v1001 (pedido de Antonio): compras puede CORREGIR una orden mientras finanzas no la haya
    firmado — "por si se confunde". Se re-abre el modal de generación con el pedido de esa
    orden; al volver a generar, el borrador viejo se reemplaza (ver _ocEditandoId). Una orden
@@ -22305,9 +22552,11 @@ window._ocSubirFactura = _ocSubirFactura;
 function deleteOrden(id){
   // v949: eliminar órdenes de compra = SOLO el admin
   if (!can('users.manage')) return showToast('SOLO EL ADMIN PUEDE ELIMINAR ÓRDENES DE COMPRA', 'red');
-  const p = activeProj();
-  const oc = (p.materiales.ordenes || []).find(x => x.id === id);
-  if (!oc) return;
+  /* v1002: buscaba SOLO en el proyecto activo, así que con una OC de bodega o de proyectos
+     varios el botón no hacía nada (return silencioso). _bodegaFindOc resuelve los tres. */
+  const _hitDel = (typeof _bodegaFindOc === 'function') ? _bodegaFindOc(id) : null;
+  const oc = (_hitDel && _hitDel.oc) || ((activeProj().materiales.ordenes || []).find(x => x.id === id));
+  if (!oc) return showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red');
   return requestDeletion({
     type: 'orden',
     label: `OC ${oc.numero || oc.id}`,
@@ -22322,6 +22571,8 @@ function _doDeleteOrden(id){
   const p = (_hit && _hit.p) || activeProj();
   if (!oc) return;
   const _esDeBodegaMat = !!(_hit && !_hit.p && ((state.bodegaMat || {}).ordenes || []).some(x => x && x.id === id));
+  // v1002: la OC puede vivir en PROYECTOS VARIOS — tercer contenedor
+  const _esDeVarios = !!(_hit && _hit.esVarios) || !!(((state.variosMat || {}).ordenes || []).some(x => x && x.id === id));
 
   // v959: si la orden ya movió existencias de bodega (SALIDA de despacho o ENTRADA de
   // abastecimiento), se escribe la REVERSA como AJUSTE — nunca se borran movimientos
@@ -22335,7 +22586,13 @@ function _doDeleteOrden(id){
     }
   } catch (e) {}
 
-  if (_esDeBodegaMat) {
+  if (_esDeVarios) {
+    /* v1002: sin esta rama la OC de PROYECTOS VARIOS caía al else, se filtraba sobre el
+       proyecto ABIERTO (no se borraba) y la lápida quedaba en el proyecto equivocado. */
+    const v = _variosMatStore();
+    v.ordenes = v.ordenes.filter(x => x.id !== id);
+    v.ordenesEliminadas[id] = Date.now();
+  } else if (_esDeBodegaMat) {
     // v964: el store va por union-merge — sin tombstone la OC reviviría en el próximo sync
     const b = _bodegaMatStore();
     b.ordenes = b.ordenes.filter(x => x.id !== id);
