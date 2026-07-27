@@ -109,5 +109,21 @@ ok('si el pedido queda sin OC vuelve a SOLICITADO', /to: 'SOLICITADO', by: 'OC E
 ok('re-lee tras el modal (regla v769/v770)', zDel.split('_bodegaFindOc(ocId)').length - 1 >= 2);
 ok('DETALLE en bodega ya no cierra el panel', !html.includes('_cerrarPanelBodegaDom(); openPedidoDetalle'));
 
+// v1002b (se veía transparente encima del dashboard): la capa es OPACA y a pantalla
+// completa, igual que el panel de bodega — no un .modal-bg translúcido.
+const zPanel = ex('window._abrirPanelVarios = function');
+ok('la capa del panel es opaca', zPanel.includes('background:var(--paper)') && !zPanel.includes("className = 'modal-bg"));
+ok('cubre toda la pantalla', zPanel.includes('position:fixed;inset:0'));
+ok('y no se apila sobre el contenido con z-index de modal', zPanel.includes('z-index:98000'));
+
+/* v1003 (reporte de Antonio: DETALLE 'me sigue sacando'): los paneles de bodega y varios
+   son capas a pantalla completa con z-index 98000 y .modal-bg vale 100 — el detalle abría
+   DEBAJO, invisible, y parecía que la app te sacaba. Abierto desde un panel va encima. */
+const zDet = ex('function openPedidoDetalle(');
+ok('el detalle se pone ENCIMA del panel abierto', zDet.includes("_panelAbierto ? '99000' : ''"));
+ok('detecta los dos paneles', zDet.includes('_bodegaPanelModal') && zDet.includes('_variosPanelModal'));
+ok('99000 supera al z-index de los paneles', (function(){ const m = html.match(/z-index:98000/g); return !!m && m.length >= 2; })());
+ok('al cerrar se devuelve el z-index', ex('function closeModal(').includes("_m.style.zIndex = ''"));
+
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
