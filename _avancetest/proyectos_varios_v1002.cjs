@@ -130,11 +130,12 @@ ok('al cerrar se devuelve el z-index', ex('function closeModal(').includes("_m.s
    funciones se llamaban showSection/setMaterialesTab, que no existen — el try se comía el
    error y solo cerraba el panel. */
 const zNP = ex('window._variosNuevoPedido = function');
-ok('navega con las funciones REALES', zNP.includes("setView('materiales')") && zNP.includes("setMatTab('pedidos')") && zNP.includes("setPedidoTab('nuevo')"));
+// v1007: ya no navega a ningún lado — el formulario se abre DENTRO del panel
+ok('abre el formulario dentro del panel', zNP.includes('_variosFormHost'));
 ok('ya no LLAMA a funciones inexistentes', !zNP.includes('showSection(') && !zNP.includes('setMaterialesTab('));
-ok('las cuatro funciones que usa existen de verdad', ['setView','setMatTab','setPedidoTab','togglePedidoProyectoManual'].every(f => html.includes('function ' + f + '(')));
+ok('las funciones que usa existen de verdad', ['togglePedidoProyectoManual','renderPedidoForm'].every(f => html.includes('function ' + f + '(')));
 ok('deja el formulario en modo PROYECTO PEQUEÑO', zNP.includes("sel.value = 'MANUAL'"));
-ok('y le dice al usuario qué hacer', zNP.includes('showToast('));
+ok('deja un botón para volver al listado', html.includes('_variosBtnVolverLista'));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

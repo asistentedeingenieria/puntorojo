@@ -3171,7 +3171,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1006</span>
+    <span style="opacity:.5;font-size:9px">v1007</span>
   </footer>
 
 </div>
@@ -18926,6 +18926,12 @@ async function submitPedido(){
   } catch(e){ console.warn('[v996] limpieza del formulario de pedido', e); }
 
   showToast(`PEDIDO ${numero} ENVIADO A COMPRAS`, 'green');
+  /* v1007: si el pedido se hizo DESDE el panel de PROYECTOS VARIOS, el formulario está
+     prestado ahí: se devuelve y se vuelve a su listado — no a la pestaña del proyecto. */
+  if (window._variosFormOrigen) {
+    try { window._variosVolverALista(); } catch(e){ console.warn('[v1007] volver al listado de varios', e); }
+    return;
+  }
   try { setPedidoTab('lista'); } catch(e){ console.warn('[v996] setPedidoTab', e); }
 }
 
@@ -20007,6 +20013,15 @@ function _variosPedidosTodos(){
 /* v1006 (pedido de Antonio): en ÓRDENES DE COMPRA solo queda a la vista lo que TODAVÍA no
    llegó a la obra; lo recibido se guarda en el historial. Una orden deja de estar pendiente
    cuando se firmó SU entrega (v996) o cuando el pedido entero quedó RECIBIDO. PURA. */
+/* v1007: un pedido ya recibido en obra sale de la lista activa y se guarda en el historial
+   de su panel. Cuenta como recibido si su estado es RECIBIDO o si tiene recepción firmada
+   sin entregas pendientes (v996). PURA. */
+function _pedidoYaRecibido(pd){
+  if (!pd) return false;
+  if (String(pd.status || '') === 'RECIBIDO') return true;
+  const r = pd.recepcion;
+  return !!(r && r.ts && !r.faltanEntregas);
+}
 function _ocPendienteDeRecibir(oc, pd){
   if (!oc) return false;
   if ((oc.status || '') === 'CANCELADA' || oc.anulada) return false;
@@ -20237,7 +20252,12 @@ function _abrirPanelBodega(){
   const pedAb = _bm.pedidos.slice().sort((a, b2) => (_numPedidoOrd(a) - _numPedidoOrd(b2)) || ((a.ts || 0) - (b2.ts || 0)));
   const _esAdminBod = can('users.manage');
   const _puedeAutOc = _puedeAutorizarOc(); // v998: el botón AUTORIZAR solo a quien autoriza
-  const pedAbHTML = pedAb.map(pd => {
+  /* v1007 (pedido de Antonio): los pedidos ya recibidos se ocultan en un historial. */
+  const _pedAbAct = pedAb.filter(pd => !_pedidoYaRecibido(pd));
+  const _pedAbHist = pedAb.filter(pd => _pedidoYaRecibido(pd));
+  const _hKeyBod = 'bodega_historial_visible';
+  const _hVisBod = (function(){ try { return localStorage.getItem(_hKeyBod) === '1'; } catch(e){ return false; } })();
+  const _filaPedAb = pd => {
     const ocsPd = _bm.ordenes.filter(o => o && o.pedidoId === pd.id);
     // v1005: el chip dice PENDIENTE DE AUTORIZACIÓN mientras finanzas no firme sus órdenes
     const _estMost = _estadoPedidoMostrar(pd, ocsPd);
@@ -20270,7 +20290,20 @@ function _abrirPanelBodega(){
         ${_esAdminBod ? `<button class="btn-icon danger" onclick="deletePedido('${pd.id}')" title="Eliminar pedido (solo admin)">✕</button>` : ''}
       </div>
     </div>`;
-  }).join('');
+  };
+  let pedAbHTML = _pedAbAct.map(_filaPedAb).join('');
+  if (!_pedAbAct.length && _pedAbHist.length) {
+    pedAbHTML += `<div style="padding:16px 0;text-align:center;color:var(--mute);font-size:11px;letter-spacing:.5px">TODOS LOS PEDIDOS FUERON RECIBIDOS EN OBRA.</div>`;
+  }
+  if (_pedAbHist.length) {
+    pedAbHTML += `<div style="border-top:1px solid #E5E7EB;margin-top:8px">
+      <div onclick="window.toggleBodegaHistorial()" style="padding:10px 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <strong style="font-size:10px;letter-spacing:.5px;color:#666">HISTORIAL DE PEDIDOS RECIBIDOS</strong>
+        <span style="font-size:10px;color:#888;font-weight:600">${_pedAbHist.length} · ${_hVisBod ? '▼ OCULTAR' : '▶ MOSTRAR'}</span>
+      </div>
+      ${_hVisBod ? _pedAbHist.map(_filaPedAb).join('') : ''}
+    </div>`;
+  }
   // v960: OCs de abastecimiento pendientes de recibir (cualquier proyecto) — la recepción
   // vive en el panel para que no dependa del proyecto activo.
   /* v999 (decisión de Antonio): la BANDEJA DE AUTORIZACIÓN de finanzas vive acá — el
@@ -20398,7 +20431,12 @@ function _cerrarPanelBodegaDom(){ const m = document.getElementById('_bodegaPane
 /* ── v1002: PANEL DE PROYECTOS VARIOS ─────────────────────────────────────────────────
    Todos los pedidos de proyectos pequeños y reparaciones, agrupados por cliente. Vive en el
    desplegable de PROYECTO igual que BODEGA CENTRAL y no cambia el proyecto activo. */
-function _cerrarPanelVariosDom(){ const m = document.getElementById('_variosPanelModal'); if (m) m.remove(); }
+function _cerrarPanelVariosDom(){
+  // v1007: si el formulario está prestado al panel, se devuelve ANTES de destruirlo — si no,
+  // #pedido-nuevo se iría del DOM con el panel y la pestaña de materiales quedaría sin él.
+  try { if (window._variosFormOrigen && typeof window._variosDevolverForm === 'function') window._variosDevolverForm(); } catch(e){}
+  const m = document.getElementById('_variosPanelModal'); if (m) m.remove();
+}
 window._cerrarPanelVarios = _cerrarPanelVariosDom;
 window._variosRepintar = function(){
   try { if (document.getElementById('_variosPanelModal')) { _cerrarPanelVariosDom(); window._abrirPanelVarios(); } } catch(e){}
@@ -20407,7 +20445,11 @@ window._abrirPanelVarios = function(){
   if (!_puedeVerVarios()) return showToast('SIN ACCESO A PROYECTOS VARIOS', 'red');
   if (document.getElementById('_variosPanelModal')) return;
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-  const pedidos = _variosPedidosTodos().sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  const _todosVar = _variosPedidosTodos().sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  // v1007: los ya recibidos se guardan en el historial del panel
+  const pedidos = _todosVar.filter(pd => !_pedidoYaRecibido(pd));
+  const _varHist = _todosVar.filter(pd => _pedidoYaRecibido(pd));
+  const _hVisVar = (function(){ try { return localStorage.getItem('varios_historial_visible') === '1'; } catch(e){ return false; } })();
   // agrupados por CLIENTE / proyecto pequeño
   const porCliente = {};
   pedidos.forEach(pd => {
@@ -20425,7 +20467,7 @@ window._abrirPanelVarios = function(){
       const _estV = _estadoPedidoMostrar(pd, ocs);
       const st = _estV.texto;
       const btnOc = (!ocs.length && (can('compras.autorizar') || can('users.manage')))
-        ? `<button class="btn sm" style="font-size:10px" onclick="_cerrarPanelVariosDom(); currentPedidoDetalleId='${pd.id}'; openOrdenCompra()">GENERAR OC</button>` : '';
+        ? `<button class="btn sm" style="font-size:10px" onclick="currentPedidoDetalleId='${pd.id}'; openOrdenCompra()" title="Generar la orden sin salir de acá">GENERAR OC</button>` : '';
       const chipsOc = ocs.map(o => {
         const pend = (o.status || 'AUTORIZADA') === 'PENDIENTE_AUTORIZACION';
         const n = _numLimpio(o.numero).split(' - ').pop();
@@ -20463,40 +20505,88 @@ window._abrirPanelVarios = function(){
         <h2 style="margin:4px 0 0;font-family:'Familjen Grotesk',sans-serif;font-size:26px;font-weight:500;letter-spacing:-.5px">PROYECTOS VARIOS.</h2>
       </div>
       <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn ghost" onclick="_cerrarPanelVariosDom()">← VOLVER A PROYECTOS</button>
-        <button class="btn primary" data-perm="pedidos.create" onclick="_variosNuevoPedido()">+ NUEVO PEDIDO</button>
+        <button class="btn ghost" onclick="_cerrarPanelVarios()">← VOLVER A PROYECTOS</button>
+        <button class="btn ghost" id="_variosBtnVolverLista" style="display:none" onclick="_variosVolverALista()">← VOLVER AL LISTADO</button>
+        <button class="btn primary" id="_variosBtnNuevo" data-perm="pedidos.create" onclick="_variosNuevoPedido()">+ NUEVO PEDIDO</button>
       </div>
     </div>
     <div style="font-size:11px;color:#78716C;line-height:1.5;margin-bottom:10px">Reparaciones, casas sueltas y clientes que no son ninguna de las obras grandes. Cada uno lleva su propia numeración.</div>
-    ${bloques || '<div class="card" style="padding:34px;text-align:center;color:var(--mute);font-size:12px;letter-spacing:.5px">TODAVÍA NO HAY PEDIDOS DE PROYECTOS VARIOS.</div>'}
+    <!-- v1007: el formulario de pedido se muestra ACÁ ADENTRO (se mueve el nodo real) -->
+    <div id="_variosFormHost" style="display:none"></div>
+    <div id="_variosListaHost">
+      ${bloques || '<div class="card" style="padding:34px;text-align:center;color:var(--mute);font-size:12px;letter-spacing:.5px">TODAVÍA NO HAY PEDIDOS DE PROYECTOS VARIOS.</div>'}
+      ${_varHist.length ? `<div class="card" style="padding:0;margin-top:12px;background:#FAFAFA">
+        <div onclick="window.toggleVariosHistorial()" style="padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px">
+          <strong style="font-size:10.5px;letter-spacing:.5px;color:#666">HISTORIAL DE PEDIDOS RECIBIDOS</strong>
+          <span style="font-size:10.5px;color:#888;font-weight:600">${_varHist.length} · ${_hVisVar ? '▼ OCULTAR' : '▶ MOSTRAR'}</span>
+        </div>
+        ${_hVisVar ? `<div style="padding:0 16px 12px">${_varHist.map(pd => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:11px;color:#78716C;padding:6px 0;border-top:1px solid #F3F4F6">
+          <span><b style="color:#444">${esc(_numLimpio(pd.numero))}</b> · ${esc(pd.proyectoPedido || '')}</span>
+          <span style="display:flex;gap:8px;align-items:center"><span style="color:#166534;font-weight:700;font-size:9px;letter-spacing:1px">RECIBIDO</span>
+          <button class="btn ghost sm" style="font-size:9.5px;padding:2px 8px" onclick="openPedidoDetalle('${pd.id}')">DETALLE</button></span>
+        </div>`).join('')}</div>` : ''}
+      </div>` : ''}
+    </div>
   </div>`;
   document.body.appendChild(wrap);
   try { if (typeof applyPermissions === 'function') applyPermissions(); } catch(e){}
 };
 /* + NUEVO PEDIDO desde el panel: lleva al formulario ya en modo PROYECTO PEQUEÑO. */
+/* v1007 (pedido de Antonio: "en proyectos varios los pedidos y TODO se maneje únicamente
+   dentro de esta pestaña. NO QUIERO QUE ME REGRESE A LA GENERAL"): el formulario de pedido
+   no se duplica — se MUEVE el mismo nodo (#pedido-nuevo) adentro del panel y se devuelve a
+   su lugar al salir. Los handlers son onclick inline, así que sobreviven al movimiento. */
+window.toggleBodegaHistorial = function(){
+  try { localStorage.setItem('bodega_historial_visible', localStorage.getItem('bodega_historial_visible') === '1' ? '0' : '1'); } catch(e){}
+  try { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } catch(e){}
+};
+window.toggleVariosHistorial = function(){
+  try { localStorage.setItem('varios_historial_visible', localStorage.getItem('varios_historial_visible') === '1' ? '0' : '1'); } catch(e){}
+  try { window._variosRepintar(); } catch(e){}
+};
 window._variosNuevoPedido = function(){
-  /* v1004 (Antonio: "me regresa a proyecto y no me deja hacer pedidos"): las funciones de
-     navegación se llamaban showSection/setMaterialesTab, que NO EXISTEN — el try se comía el
-     error y solo quedaba el panel cerrado. Los nombres reales son setView y setMatTab. */
-  _cerrarPanelVariosDom();
+  const host = document.getElementById('_variosFormHost');
+  const form = document.getElementById('pedido-nuevo');
+  if (!host || !form) return showToast('NO SE PUDO ABRIR EL FORMULARIO — RECARGÁ', 'red');
+  if (!window._variosFormOrigen) {
+    window._variosFormOrigen = { padre: form.parentNode, next: form.nextSibling, display: form.style.display };
+  }
+  host.style.display = 'block';
+  host.appendChild(form);
+  form.style.display = 'block';
+  document.getElementById('_variosListaHost').style.display = 'none';
+  document.getElementById('_variosBtnNuevo').style.display = 'none';
+  document.getElementById('_variosBtnVolverLista').style.display = '';
+  try { if (typeof renderPedidoForm === 'function') renderPedidoForm(); } catch(e){ console.warn('[v1007] renderPedidoForm', e); }
+  // queda en modo PROYECTO PEQUEÑO: es el único tipo que se maneja acá
   try {
-    if (typeof setView === 'function') setView('materiales');
-    if (typeof setMatTab === 'function') setMatTab('pedidos');
-    if (typeof setPedidoTab === 'function') setPedidoTab('nuevo');
-  } catch(e){ console.warn('[v1004] navegar a nuevo pedido', e); }
-  // el formulario se pinta después del cambio de pestaña: se deja en modo PROYECTO PEQUEÑO
-  setTimeout(function(){
-    try {
-      const sel = document.getElementById('pfProyectoTipo');
-      if (sel) {
-        sel.value = 'MANUAL';
-        if (typeof togglePedidoProyectoManual === 'function') togglePedidoProyectoManual();
-      }
-      const inp = document.getElementById('pfProyectoManual');
-      if (inp) { inp.focus(); inp.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
-      showToast('ESCRIBÍ EL PROYECTO O CLIENTE Y AGREGÁ LOS MATERIALES', 'green');
-    } catch(e){ console.warn('[v1004] preparar formulario de varios', e); }
-  }, 200);
+    const sel = document.getElementById('pfProyectoTipo');
+    if (sel) {
+      sel.value = 'MANUAL';
+      sel.disabled = true;                     // desde acá SIEMPRE es proyecto varios
+      if (typeof togglePedidoProyectoManual === 'function') togglePedidoProyectoManual();
+    }
+    const inp = document.getElementById('pfProyectoManual');
+    if (inp) inp.focus();
+  } catch(e){ console.warn('[v1007] preparar formulario', e); }
+  try { host.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch(e){}
+};
+/* Devuelve el formulario a su lugar en la pestaña de materiales. Se llama al volver al
+   listado, al cerrar el panel y después de enviar el pedido. */
+window._variosDevolverForm = function(){
+  const org = window._variosFormOrigen;
+  const form = document.getElementById('pedido-nuevo');
+  if (form && org && org.padre) {
+    org.padre.insertBefore(form, org.next || null);
+    form.style.display = org.display || 'none';
+  }
+  window._variosFormOrigen = null;
+  const sel = document.getElementById('pfProyectoTipo');
+  if (sel) sel.disabled = false;
+};
+window._variosVolverALista = function(){
+  window._variosDevolverForm();
+  try { window._variosRepintar(); } catch(e){}
 };
 function _cerrarPanelBodega(){
   _cerrarPanelBodegaDom(); // v963: sin gate — VOLVER regresa a la app tal como estaba
@@ -20668,7 +20758,12 @@ async function openOrdenCompra(){
   }
 
   closeModal('pedidoDetalle');
-  document.getElementById('modalOrdenCompra').classList.add('show');
+  /* v1007: si se abre desde un panel a pantalla completa (bodega / proyectos varios), el
+     modal va ENCIMA — el panel queda visible detrás y al cerrar seguís ahí. */
+  const _mOc = document.getElementById('modalOrdenCompra');
+  const _panOc = document.getElementById('_bodegaPanelModal') || document.getElementById('_variosPanelModal');
+  if (_mOc) _mOc.style.zIndex = _panOc ? '99000' : '';
+  _mOc.classList.add('show');
 }
 // ── v925: PICKER BUSCABLE genérico — el panel se cuelga del BODY con position:fixed
 // (los combos custom dentro de modales se recortan por el overflow — regla v795/lección v913).
