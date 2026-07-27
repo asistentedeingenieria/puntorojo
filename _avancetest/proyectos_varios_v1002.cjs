@@ -120,10 +120,20 @@ ok('y no se apila sobre el contenido con z-index de modal', zPanel.includes('z-i
    son capas a pantalla completa con z-index 98000 y .modal-bg vale 100 — el detalle abría
    DEBAJO, invisible, y parecía que la app te sacaba. Abierto desde un panel va encima. */
 const zDet = ex('function openPedidoDetalle(');
-ok('el detalle se pone ENCIMA del panel abierto', zDet.includes("_panelAbierto ? '99000' : ''"));
+ok('el detalle ESCONDE el panel mientras está abierto', zDet.includes("_panelAbierto.style.display = 'none'"));
 ok('detecta los dos paneles', zDet.includes('_bodegaPanelModal') && zDet.includes('_variosPanelModal'));
-ok('99000 supera al z-index de los paneles', (function(){ const m = html.match(/z-index:98000/g); return !!m && m.length >= 2; })());
-ok('al cerrar se devuelve el z-index', ex('function closeModal(').includes("_m.style.zIndex = ''"));
+ok('guarda cuál panel escondió', zDet.includes('window._panelOculto = _panelAbierto.id'));
+ok('al cerrar el modal se devuelve el panel', ex('function closeModal(').includes('window._panelOculto') && ex('function closeModal(').includes("_p.style.display = ''"));
+
+/* v1004 (Antonio: '+ NUEVO PEDIDO me regresa a proyecto y no me deja hacer pedidos'): las
+   funciones se llamaban showSection/setMaterialesTab, que no existen — el try se comía el
+   error y solo cerraba el panel. */
+const zNP = ex('window._variosNuevoPedido = function');
+ok('navega con las funciones REALES', zNP.includes("setView('materiales')") && zNP.includes("setMatTab('pedidos')") && zNP.includes("setPedidoTab('nuevo')"));
+ok('ya no LLAMA a funciones inexistentes', !zNP.includes('showSection(') && !zNP.includes('setMaterialesTab('));
+ok('las cuatro funciones que usa existen de verdad', ['setView','setMatTab','setPedidoTab','togglePedidoProyectoManual'].every(f => html.includes('function ' + f + '(')));
+ok('deja el formulario en modo PROYECTO PEQUEÑO', zNP.includes("sel.value = 'MANUAL'"));
+ok('y le dice al usuario qué hacer', zNP.includes('showToast('));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

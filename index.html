@@ -3171,7 +3171,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1003</span>
+    <span style="opacity:.5;font-size:9px">v1004</span>
   </footer>
 
 </div>
@@ -19043,13 +19043,17 @@ function openPedidoDetalle(id){
     body.innerHTML += `<div style="background:var(--cream);padding:10px 14px;margin-top:14px;font-size:12px;font-style:italic;color:var(--mute)">"${esc(pd.observaciones)}"</div>`;
   }
 
-  /* v1003 (reporte de Antonio: "me sigue sacando"): los paneles de BODEGA CENTRAL y
-     PROYECTOS VARIOS son capas a pantalla completa con z-index 98000, y .modal-bg vale 100
-     — el detalle abría DEBAJO y quedaba invisible: parecía que la app te había sacado.
-     Abierto desde un panel, el modal se pone por encima; si no, vuelve a su z-index normal. */
+  /* v1004 (Antonio: "me sigue sacandooooo"): los paneles de BODEGA CENTRAL y PROYECTOS
+     VARIOS son capas OPACAS a pantalla completa. Subirle el z-index al modal (v1003) no
+     alcanzó: el modal vive dentro de un contenedor y su z-index no escapa de ese contexto
+     de apilamiento. Solución que no depende de eso: se ESCONDE el panel mientras el detalle
+     está abierto y closeModal lo devuelve — al cerrar seguís en bodega, no en el proyecto. */
   const _mDet = document.getElementById('modalPedidoDetalle');
   const _panelAbierto = document.getElementById('_bodegaPanelModal') || document.getElementById('_variosPanelModal');
-  if (_mDet) _mDet.style.zIndex = _panelAbierto ? '99000' : '';
+  if (_panelAbierto) {
+    window._panelOculto = _panelAbierto.id;
+    _panelAbierto.style.display = 'none';
+  }
   _mDet.classList.add('show');
 
   // Mostrar/ocultar botón eliminar según permisos
@@ -20443,18 +20447,28 @@ window._abrirPanelVarios = function(){
 };
 /* + NUEVO PEDIDO desde el panel: lleva al formulario ya en modo PROYECTO PEQUEÑO. */
 window._variosNuevoPedido = function(){
+  /* v1004 (Antonio: "me regresa a proyecto y no me deja hacer pedidos"): las funciones de
+     navegación se llamaban showSection/setMaterialesTab, que NO EXISTEN — el try se comía el
+     error y solo quedaba el panel cerrado. Los nombres reales son setView y setMatTab. */
   _cerrarPanelVariosDom();
   try {
-    if (typeof showSection === 'function') showSection('materiales');
-    if (typeof setMaterialesTab === 'function') setMaterialesTab('pedidos');
+    if (typeof setView === 'function') setView('materiales');
+    if (typeof setMatTab === 'function') setMatTab('pedidos');
     if (typeof setPedidoTab === 'function') setPedidoTab('nuevo');
-    setTimeout(function(){
+  } catch(e){ console.warn('[v1004] navegar a nuevo pedido', e); }
+  // el formulario se pinta después del cambio de pestaña: se deja en modo PROYECTO PEQUEÑO
+  setTimeout(function(){
+    try {
       const sel = document.getElementById('pfProyectoTipo');
-      if (sel) { sel.value = 'MANUAL'; if (typeof togglePedidoProyectoManual === 'function') togglePedidoProyectoManual(); }
+      if (sel) {
+        sel.value = 'MANUAL';
+        if (typeof togglePedidoProyectoManual === 'function') togglePedidoProyectoManual();
+      }
       const inp = document.getElementById('pfProyectoManual');
-      if (inp) inp.focus();
-    }, 120);
-  } catch(e){ console.warn('[v1002] nuevo pedido de varios', e); }
+      if (inp) { inp.focus(); inp.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+      showToast('ESCRIBÍ EL PROYECTO O CLIENTE Y AGREGÁ LOS MATERIALES', 'green');
+    } catch(e){ console.warn('[v1004] preparar formulario de varios', e); }
+  }, 200);
 };
 function _cerrarPanelBodega(){
   _cerrarPanelBodegaDom(); // v963: sin gate — VOLVER regresa a la app tal como estaba
@@ -26609,8 +26623,14 @@ function closeModal(name){
   const _m = document.getElementById('modal' + name.charAt(0).toUpperCase() + name.slice(1));
   if (!_m) return;
   _m.classList.remove('show');
-  // v1003: si se abrió por encima de un panel a pantalla completa, se devuelve su z-index
-  if (_m.style && _m.style.zIndex) _m.style.zIndex = '';
+  /* v1004: si el modal se abrió desde el panel de BODEGA CENTRAL o de PROYECTOS VARIOS, ese
+     panel se escondió para que el modal se viera. Al cerrar se devuelve — el usuario vuelve
+     a donde estaba, no al proyecto. */
+  if (window._panelOculto) {
+    const _p = document.getElementById(window._panelOculto);
+    if (_p) _p.style.display = '';
+    window._panelOculto = null;
+  }
 }
 
 function closeModalBg(e, name){
