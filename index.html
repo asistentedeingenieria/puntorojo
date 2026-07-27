@@ -3171,7 +3171,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v990</span>
+    <span style="opacity:.5;font-size:9px">v991</span>
   </footer>
 
 </div>
@@ -13443,15 +13443,28 @@ function _recetaV2EtapaNivelPorApto(p, levelId, etapaIdx, aptoId){
 // v909: cobertura de los pedidos POR APARTAMENTO de una etapa/nivel. Por clave ORIGINAL:
 // { total: qty pedida entre todos los aptos, porApto: {aptoId: true} }. Los pedidos de
 // NIVEL no entran acá (esos cierran la clave vía _itemsYaPedidosEtapa). PURA.
+/* v991 (decisión de Antonio): lo que un pedido REALMENTE cubre. Con recepción PARCIAL
+   cubre lo RECIBIDO (no lo pedido), y así el faltante vuelve a estar disponible para
+   pedirse. Sin recepción registrada, cubre lo pedido como siempre. PURA. */
+function _pedidoCubre(pd){
+  var rec = pd && pd.recepcion;
+  if (rec && rec.recetaRecibido && typeof rec.recetaRecibido === 'object') return rec.recetaRecibido;
+  return (pd && pd.recetaQty) || {};
+}
 function _coberturaAptosEtapa(pedidos, levelId, stageIdx){
   var cob = {};
   (pedidos||[]).forEach(function(pd){
-    if (!(pd && pd.esDeReceta && pd.recetaAptoId && pd.recetaLevelId===levelId && pd.recetaEtapaIdx===stageIdx)) return;
-    var qtys = pd.recetaQty || {};
+    if (!(pd && pd.esDeReceta && pd.recetaLevelId===levelId && pd.recetaEtapaIdx===stageIdx)) return;
+    // v991: además de los pedidos POR APTO (v909), entran los de NIVEL con recepción
+    // PARCIAL — su clave ya no se cierra en _itemsYaPedidosEtapa, así que la resta por
+    // cantidades es la que deja disponible exactamente el faltante.
+    var esParcial = !!(pd.recepcion && pd.recepcion.parcial);
+    if (!pd.recetaAptoId && !esParcial) return;
+    var qtys = _pedidoCubre(pd);
     Object.keys(qtys).forEach(function(k){
       if (!cob[k]) cob[k] = { total: 0, porApto: {} };
       cob[k].total += Number(qtys[k]) || 0;
-      cob[k].porApto[pd.recetaAptoId] = true;
+      if (pd.recetaAptoId) cob[k].porApto[pd.recetaAptoId] = true;
     });
   });
   return cob;
@@ -13481,6 +13494,10 @@ function _itemsYaPedidosEtapa(pedidos, levelId, stageIdx){
       // v909: los pedidos POR APARTAMENTO no cierran la clave a escala de nivel;
       // su cobertura se resta con _coberturaAptosEtapa.
       if (pd.recetaAptoId) return;
+      // v991: si la recepción fue PARCIAL, este pedido NO cierra sus claves — lo que de
+      // verdad llegó se descuenta por cantidades en _coberturaAptosEtapa y el faltante
+      // queda disponible para volver a pedirse (decisión de Antonio 27-jul).
+      if (pd.recepcion && pd.recepcion.parcial) return;
       Object.keys(pd.items||{}).forEach(function(k){ keys[k]=true; });
       // v906: claves ORIGINALES de receta (los POSTES se guardan renombrados con su medida)
       (pd.recetaKeys||[]).forEach(function(k){ keys[k]=true; });
@@ -17660,6 +17677,7 @@ function renderPedidoCard(pd, p){
       <div class="pedido-actions">
         <div class="timeline">${timelineDots}</div>
         <button class="btn ghost sm" onclick="openPedidoDetalle('${pd.id}')">VER DETALLE</button>
+        ${(pd.recepcion && pd.recepcion.parcial) ? `<span style="font-size:9px;font-weight:800;letter-spacing:1px;color:#B45309;background:#FFFBEB;border:1px solid #FCD34D;border-radius:20px;padding:3px 9px;align-self:center">RECIBIDO PARCIAL · FALTANTE RE-PEDIBLE</span>` : ''}
         ${pd.recepcion ? `<button class="btn ghost sm" onclick="imprimirRecibo('${pd.id}')" title="Comprobante de recepción firmado">VER RECIBO</button>
         <button class="btn sm" onclick="compartirReciboImg('${pd.id}')" style="background:#25D366;border-color:#25D366;color:#fff">COMPARTIR RECIBO</button>` : ''}
         ${actionBtn}
@@ -21820,11 +21838,22 @@ ${paraCaptura ? '' : `<div class="no-print" style="display:flex;gap:10px;justify
 
   <div class="nota">Recibí en obra los materiales detallados en este comprobante, en las cantidades indicadas y en buen estado.${rec.parcial ? ' La entrega fue PARCIAL respecto a lo solicitado en el pedido.' : ''}</div>
 
-  <div style="margin-top:34px;text-align:center">
-    <div style="height:62px;display:flex;align-items:flex-end;justify-content:center">${firma ? `<img src="${firma}" style="height:58px;max-width:240px;object-fit:contain;display:block">` : ''}</div>
-    <div style="border-top:1px solid #000;max-width:320px;margin:0 auto;padding-top:5px">
-      <div style="font-size:12px;font-weight:700;letter-spacing:.5px">${esc2(rec.porNombre || '')}</div>
-      <div style="font-size:8.5px;color:#666;letter-spacing:1.5px;margin-top:2px">RECIBIÓ EN OBRA · ${esc2(rec.fecha || '')}</div>
+  <!-- v991 (pedido de Antonio): DOS firmas — quien recibe (firma registrada) y quien
+       entrega (piloto/proveedor: línea en blanco para firmar a mano). -->
+  <div style="margin-top:34px;display:grid;grid-template-columns:1fr 1fr;gap:40px;max-width:640px;margin-left:auto;margin-right:auto">
+    <div style="text-align:center">
+      <div style="height:62px;display:flex;align-items:flex-end;justify-content:center">${firma ? `<img src="${firma}" style="height:58px;max-width:230px;object-fit:contain;display:block">` : ''}</div>
+      <div style="border-top:1px solid #000;padding-top:5px">
+        <div style="font-size:12px;font-weight:700;letter-spacing:.5px">${esc2(rec.porNombre || '')}</div>
+        <div style="font-size:8.5px;color:#666;letter-spacing:1.5px;margin-top:2px">RECIBIÓ EN OBRA · ${esc2(rec.fecha || '')}</div>
+      </div>
+    </div>
+    <div style="text-align:center">
+      <div style="height:62px"></div>
+      <div style="border-top:1px solid #000;padding-top:5px">
+        <div style="font-size:12px;font-weight:700;letter-spacing:.5px">${esc2(rec.entregoNombre || '________________________')}</div>
+        <div style="font-size:8.5px;color:#666;letter-spacing:1.5px;margin-top:2px">ENTREGÓ</div>
+      </div>
     </div>
   </div>
 
@@ -21874,7 +21903,8 @@ window._abrirRecepcion = async function(id){
      EXTRAORDINARIO + METAL A MEDIDA) con el nombre ya limpio (sin el prefijo 'CAT::')
      y con su spec entre corchetes. Antes solo se leía pd.items: el recibo omitía
      material, el TOTAL mentía y un pedido de solo extras no se podía recibir NUNCA. */
-  const lineas = (typeof buildPedidoOcItems === 'function' ? buildPedidoOcItems(pd2) : []).map(x => ({ k: x.name, q: Number(x.qty) || 0 })).filter(x => x.k);
+  // v991: src = la clave del pedido, para mapear lo recibido a las claves de RECETA
+  const lineas = (typeof buildPedidoOcItems === 'function' ? buildPedidoOcItems(pd2) : []).map(x => ({ k: x.name, q: Number(x.qty) || 0, src: x.sourceKey })).filter(x => x.k);
   if (!lineas.length) return 'sin-detalle'; // v990: no bloquea el pedido
   const esc2 = s => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
   const filas = lineas.map((ln, i) => `
@@ -21893,6 +21923,12 @@ window._abrirRecepcion = async function(id){
       <div style="font-size:11px;color:#78716C;margin-top:4px;line-height:1.5">Revisá lo que llegó. Si la entrega fue <b>PARCIAL</b>, corregí las cantidades — el recibo sale con lo que de verdad recibiste y con tu firma.</div>
     </div>
     <div style="overflow:auto;flex:1;padding:8px 18px">${filas}</div>
+    <!-- v991 (pedido de Antonio): quién ENTREGÓ el material — sale en el recibo con su línea de firma -->
+    <div style="padding:10px 18px;border-top:1px solid rgba(0,0,0,.06)">
+      <label style="display:block;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700">ENTREGÓ (PILOTO O PROVEEDOR) · OPCIONAL
+        <input id="_recepEntrego" class="pr-buscador" placeholder="NOMBRE DE QUIEN ENTREGÓ" style="width:100%;margin-top:4px">
+      </label>
+    </div>
     <div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
       <button class="btn ghost" onclick="_recepcionCerrar(false)">CANCELAR</button>
       <button class="btn primary" onclick="_recepcionConfirmar()">CONFIRMAR Y FIRMAR RECIBO</button>
@@ -21917,14 +21953,17 @@ window._recepcionConfirmar = async function(){
   // recepción COMPLETA con las globals sucias de un pedido cancelado.
   if (!modal || !lineas.length) return window._recepcionCerrar(false);
   const items = {};
+  const _recQtyPorLinea = {};
   let parcial = false;
   lineas.forEach((ln, i) => {
     const inp = modal.querySelector('[data-recx="' + i + '"]');
     if (!inp) return;
     const q = Number(inp.value) || 0;
     if (q > 0) items[ln.k] = q;
+    if (ln.src) _recQtyPorLinea[ln.src] = q;
     if (q < ln.q) parcial = true;
   });
+  const _entrego = (() => { const e = modal.querySelector('#_recepEntrego'); return e ? String(e.value || '').trim().toUpperCase() : ''; })();
   if (!Object.keys(items).length) return showToast('NO PODÉS CONFIRMAR UNA RECEPCIÓN VACÍA — CORREGÍ LAS CANTIDADES O CANCELÁ', 'red');
   // v990: la FIRMA se pide DESPUÉS de que confirmó el detalle (antes se registraba —de
   // forma irreversible— aunque el usuario cancelara sin ver siquiera qué iba a firmar).
@@ -21935,16 +21974,32 @@ window._recepcionConfirmar = async function(){
   const pd = _ctx.pd;
   const u = getCurrentUser() || {};
   const n = new Date();
+  /* v991: lo recibido POR CLAVE DE RECETA — es lo que la cobertura descuenta para dejar
+     el faltante disponible. Las claves del pedido (items) son las renombradas
+     (_nombreCompraConMedida); recetaKeys son las originales: se mapea una a una. */
+  const _p991 = activeProj();
+  const recetaRecibido = {};
+  (pd.recetaKeys || []).forEach(k => {
+    const fk = (typeof _nombreCompraConMedida === 'function') ? _nombreCompraConMedida(k, _p991, pd.recetaLevelId) : k;
+    if (Object.prototype.hasOwnProperty.call(_recQtyPorLinea, fk)) recetaRecibido[k] = _recQtyPorLinea[fk];
+    else if (Object.prototype.hasOwnProperty.call(_recQtyPorLinea, k)) recetaRecibido[k] = _recQtyPorLinea[k];
+  });
   pd.recepcion = {
     por: String(u.username || '').toLowerCase(),
     porNombre: String(u.displayName || u.username || '').toUpperCase(),
+    entregoNombre: _entrego, // v991: quién entregó (piloto/proveedor) — firma a mano en el recibo
     ts: Date.now(),
     fecha: String(n.getDate()).padStart(2,'0') + '/' + String(n.getMonth()+1).padStart(2,'0') + '/' + n.getFullYear(),
     hora: String(n.getHours()).padStart(2,'0') + ':' + String(n.getMinutes()).padStart(2,'0'),
     items,
     parcial
   };
+  if (Object.keys(recetaRecibido).length) pd.recepcion.recetaRecibido = recetaRecibido;
   pd._ts = Date.now(); // v972: pedidos van por union-merge
+  // v991: con faltante, la etapa vuelve a estar disponible → soltar el candado
+  if (parcial && pd.esDeReceta && pd.recetaLevelId && typeof _recetaLiberarCandadoEtapa === 'function') {
+    try { _recetaLiberarCandadoEtapa(_p991, pd.recetaLevelId, pd.recetaEtapaIdx); } catch(e){}
+  }
   saveState();
   try { CloudSync.forceUploadNow().catch(() => {}); } catch(e){}
   window._recepcionCerrar(true);

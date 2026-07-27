@@ -49,7 +49,8 @@ if (srcApto) {
 const srcCob = extractFn('_coberturaAptosEtapa');
 ok('_coberturaAptosEtapa existe', !!srcCob);
 if (srcCob) {
-  const g = new Function(srcCob + '\nreturn _coberturaAptosEtapa;')();
+  // v991: la cobertura usa _pedidoCubre (lo RECIBIDO manda sobre lo pedido)
+  const g = new Function(extractFn('_pedidoCubre') + '\n' + srcCob + '\nreturn _coberturaAptosEtapa;')();
   const cob = g([ pdApto('a-201', { 'CANAL X': 50 }), pdApto('a-202', { 'CANAL X': 60 }), pdNivel({ [POSTE]: 424 }) ], 'l-2', 0);
   ok('suma cantidades por apto', cob['CANAL X'] && cob['CANAL X'].total === 110);
   ok('marca los aptos pedidos', cob['CANAL X'].porApto['a-201'] === true && cob['CANAL X'].porApto['a-202'] === true);
@@ -68,6 +69,7 @@ if (srcYa) {
 
 // ── 4. _etapaItemsParaPedir: nivel resta cobertura / apto bloquea lo suyo ──
 const deps = extractFn('_recetaV2EtapaNivel') + '\n' + extractFn('_recetaEtapaResuelta') + '\n'
+  + extractFn('_pedidoCubre') + '\n' // v991: la cobertura cuenta lo RECIBIDO
   + srcYa + '\n' + srcCob + '\n' + srcApto + '\n';
 const srcPara = extractFn('_etapaItemsParaPedir');
 if (srcPara && srcCob && srcApto) {
