@@ -57,5 +57,15 @@ ok('tras enviar el pedido vuelve al listado de varios', ex('async function submi
 ok('GENERAR OC ya no cierra el panel', !html.includes("_cerrarPanelVariosDom(); currentPedidoDetalleId"));
 ok('y el modal de OC se abre encima del panel', ex('async function openOrdenCompra(').includes("_panOc ? '99000' : ''"));
 
+/* v1008 (pedidos de Antonio): la barra de ENVIAR A COMPRAS no puede quedar FIJA en medio del
+   catálogo dentro del panel, y las ÓRDENES de proyectos varios se manejan ahí adentro. */
+ok('la barra de resumen es estática dentro del panel', html.includes('#_variosFormHost .pedido-summary-bar{position:static'));
+ok('varios tiene su bandeja de autorización', zVar.includes('OC PENDIENTES DE AUTORIZAR'));
+ok('con autorizar, editar y eliminar', zVar.includes('autorizarOrden(') && zVar.includes('_ocEditarBorrador(') && zVar.includes('_ocEliminarBorrador('));
+ok('y su sección POR RECIBIR', zVar.includes('POR RECIBIR') && zVar.includes('MARCAR RECIBIDO'));
+ok('la recepción va por ORDEN (no por pedido entero)', zVar.includes("advancePedido('") && zVar.includes("o.pedidoId"));
+ok('solo muestra órdenes vivas', zVar.includes("o.status !== 'CANCELADA'"));
+ok('las ya recibidas no aparecen como pendientes', zVar.includes('_ocPendienteDeRecibir('));
+
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

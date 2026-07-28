@@ -1259,6 +1259,9 @@ html.ios-standalone .pedido-meta dd{font-size:11px}
 .cat-item-qty input:focus{outline:none;border-color:var(--red)}
 .cat-item-qty input.has-value{background:var(--red-soft);border-color:var(--red);color:var(--red)}
 
+/* v1008: dentro del panel de PROYECTOS VARIOS la barra de resumen NO va pegada — el panel
+   tiene su propio scroll y quedaba flotando en medio del catálogo. */
+#_variosFormHost .pedido-summary-bar{position:static;margin-top:14px;border-radius:10px}
 .pedido-summary-bar{position:sticky;bottom:0;background:var(--white);color:var(--ink);padding:14px max(22px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left));border:1px solid var(--line);border-top:3px solid var(--red);border-radius:3px;display:flex;justify-content:space-between;align-items:center;gap:14px;margin-top:20px;z-index:5;box-shadow:0 -4px 20px rgba(0,0,0,.06)}
 .pedido-summary-count{font-family:'Familjen Grotesk',sans-serif;font-size:22px;font-weight:500;line-height:1;color:var(--red);letter-spacing:-.5px}
 .pedido-summary-count small{display:block;font-family:'Familjen Grotesk',sans-serif;font-size:9px;letter-spacing:2px;text-transform:uppercase;font-weight:600;color:var(--mute);margin-top:3px}
@@ -3171,7 +3174,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1007</span>
+    <span style="opacity:.5;font-size:9px">v1008</span>
   </footer>
 
 </div>
@@ -20459,6 +20462,24 @@ window._abrirPanelVarios = function(){
   const clientes = Object.keys(porCliente).sort((a, b) => a.localeCompare(b, 'es'));
   const _puedeAut = _puedeAutorizarOc();
   const _estadoCol = st => st === 'RECIBIDO' ? '#166534' : st === 'APROBADO' ? '#92400E' : '#B91C1C';
+  /* v1008 (pedido de Antonio): las ÓRDENES de proyectos varios también se manejan acá —
+     su bandeja de autorización y las que están por recibir, como en bodega central. */
+  const _ocsVar = (_variosMatStore().ordenes || []).filter(function(o){ return o && o.status !== 'CANCELADA' && !o.anulada; });
+  const _pdDeOc = id => _todosVar.find(x => x && x.id === id);
+  const _varPorAut = _bodegaOcsPorAutorizar(_ocsVar);
+  const _varPorRec = _ocsVar.filter(function(o){
+    return (o.status || 'AUTORIZADA') === 'AUTORIZADA' && _ocPendienteDeRecibir(o, _pdDeOc(o.pedidoId));
+  });
+  const _filaOcVar = (o, accion) => {
+    const _pdo = _pdDeOc(o.pedidoId);
+    return `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
+      <div style="min-width:0">
+        <div style="font-size:11.5px"><b>${esc(_numLimpio(o.numero))}</b> <span style="color:#78716C">· ${esc(o.proveedorNombre || '')}</span></div>
+        <div style="font-size:10px;color:#78716C;margin-top:2px">${_pdo ? esc(String(_pdo.proyectoPedido || '')) + ' · ' : ''}Q ${fmtQ(o.total || 0)}${o.fechaEntrega ? ' · ENTREGA ' + esc(o.fechaEntrega) : ''}</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">${accion}</div>
+    </div>`;
+  };
   const bloques = clientes.map(cli => {
     const filas = porCliente[cli].map(pd => {
       const ocs = getPedidoOrdenes(pd.id);
@@ -20515,6 +20536,20 @@ window._abrirPanelVarios = function(){
     <div id="_variosFormHost" style="display:none"></div>
     <div id="_variosListaHost">
       ${bloques || '<div class="card" style="padding:34px;text-align:center;color:var(--mute);font-size:12px;letter-spacing:.5px">TODAVÍA NO HAY PEDIDOS DE PROYECTOS VARIOS.</div>'}
+      ${(_varPorAut.length && _puedeAut) ? `<div class="card" style="padding:12px 18px;margin-top:12px;background:#FFFBEB;border:1px solid #FCD34D">
+        <div style="font-size:8.5px;letter-spacing:1.5px;color:#B45309;font-weight:700;margin-bottom:6px">OC PENDIENTES DE AUTORIZAR (${_varPorAut.length})</div>
+        ${_varPorAut.map(o => _filaOcVar(o,
+          `<button class="btn ghost sm" style="font-size:10px" onclick="previewOrden('${o.id}')">VER BORRADOR</button>
+           <button class="btn ghost sm" style="font-size:10px" data-perm="compras.autorizar|materiales.bodega" onclick="_ocEditarBorrador('${o.id}')">EDITAR</button>
+           <button class="btn ghost sm" style="font-size:10px;border-color:#C62828;color:#C62828" data-perm="compras.autorizar|materiales.bodega" onclick="_ocEliminarBorrador('${o.id}')">ELIMINAR</button>
+           <button class="btn sm" style="background:var(--red-dark);border-color:var(--red-dark);color:#fff;font-size:10px" onclick="autorizarOrden('${o.id}')">AUTORIZAR Y FIRMAR</button>`)).join('')}
+      </div>` : ''}
+      ${_varPorRec.length ? `<div class="card" style="padding:12px 18px;margin-top:12px;background:#F0FDF4">
+        <div style="font-size:8.5px;letter-spacing:1.5px;color:#166534;font-weight:700;margin-bottom:6px">POR RECIBIR (${_varPorRec.length})</div>
+        ${_varPorRec.map(o => _filaOcVar(o,
+          `<button class="btn ghost sm" style="font-size:10px" onclick="printOrdenCompra('${o.id}')">IMPRIMIR</button>
+           <button class="btn sm" style="background:#166534;border-color:#166534;color:#fff;font-size:10px" onclick="advancePedido('${o.pedidoId}','${o.id}')" title="Marcar que este proveedor ya entregó">MARCAR RECIBIDO</button>`)).join('')}
+      </div>` : ''}
       ${_varHist.length ? `<div class="card" style="padding:0;margin-top:12px;background:#FAFAFA">
         <div onclick="window.toggleVariosHistorial()" style="padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px">
           <strong style="font-size:10.5px;letter-spacing:.5px;color:#666">HISTORIAL DE PEDIDOS RECIBIDOS</strong>
