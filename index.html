@@ -2874,9 +2874,11 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
         <button class="mat-tab" data-mattab="ordenes" onclick="setMatTab('ordenes')" data-perm="compras.autorizar|compras.revisar|materiales.bodega">ÓRDENES DE COMPRA<span id="tabBadge-ordenes"></span></button>
         <button class="mat-tab" data-mattab="inventario" onclick="setMatTab('inventario')">INVENTARIOS</button>
         <button class="mat-tab" data-mattab="avanceapto" onclick="setMatTab('avanceapto')">AVANCE POR APARTAMENTO</button>
+        <button class="mat-tab" data-mattab="gastos" onclick="setMatTab('gastos')" data-perm="receta.verPrecios|users.manage|compras.autorizar|compras.revisar">GASTOS</button>
       </div>
 
       <div id="mat-avanceapto" style="display:none"></div>
+      <div id="mat-gastos" style="display:none"></div>
 
       <div id="mat-inventario" style="display:none">
         <!-- v740: TOMA DE INVENTARIO (drill-down por ubicación + historial). -->
@@ -3190,7 +3192,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1013</span>
+    <span style="opacity:.5;font-size:9px">v1014</span>
   </footer>
 
 </div>
@@ -11549,7 +11551,10 @@ function setMatTab(t){
   if (recetaBlock) recetaBlock.style.display = t === 'receta' ? 'block' : 'none';
   const avanceAptoBlock = document.getElementById('mat-avanceapto');
   if (avanceAptoBlock) avanceAptoBlock.style.display = t === 'avanceapto' ? 'block' : 'none';
+  const gastosBlock = document.getElementById('mat-gastos'); // v1014
+  if (gastosBlock) gastosBlock.style.display = t === 'gastos' ? 'block' : 'none';
   if (t === 'avanceapto') { renderAvanceMateriales(); } // v698
+  if (t === 'gastos') { try { renderGastos(); } catch(e){ console.warn('renderGastos:', e); } } // v1014
   if (t === 'inventario') { invUI.view='root'; invUI.loc=null; invUI.histId=null; try { renderInventarios(); } catch(e){ console.warn('renderInventarios:', e); } } // v740
   if (t === 'pedidos') {
     if (currentPedidoTab !== 'nuevo') setPedidoTab('lista');
@@ -17561,6 +17566,7 @@ function renderMateriales(){
   document.getElementById('matKpis').innerHTML = `
     <div class="kpi cafe"><div class="lbl">Materiales</div><div class="val">${items.length}</div><div class="sub">En inventario</div></div>
     <div class="kpi"><div class="lbl">Pedidos activos</div><div class="val">${(p.materiales.pedidos||[]).filter(pd => _pedidoEsDeEstaObra(pd, p) && pd.status !== 'RECIBIDO').length}</div><div class="sub">Este proyecto</div></div>
+    ${_puedeVerGastos() ? `<div class="kpi cafe"><div class="lbl">GASTO acumulado</div><div class="val">Q ${fmtQ((_gastosDeProyecto(p.id) || {}).total || 0)}</div><div class="sub">Compras y despachos</div></div>` : ''}
   `;
 
   const body = document.getElementById('matBody');
@@ -31656,6 +31662,148 @@ function _getProveedores(){ try { if (typeof state !== 'undefined' && state) { i
 /* v1011: los DÍAS de crédito como número. "CRÉDITO 30 DÍAS" es un literal que hasta hoy no
    parseaba nadie; para vencer una cuenta por pagar hace falta el número, no el texto.
    Todo lo que no sea crédito vale 0 (se paga de una). */
+/* ═══════════ v1014 · GASTOS POR OBRA (pedido de Antonio 28-jul) ═══════════
+   "Necesitamos poder tener el registro de todos los gastos... uno de compras general por
+   proyecto donde pueda ver un despliegue y el detalle de las órdenes de compra o de despacho."
+
+   EL GASTO NO SE GUARDA, SE CALCULA. La orden de compra ya es la foto congelada del precio
+   (items[].precio, subtotal, IVA y total) y v927 prohíbe regenerarlas, así que una función
+   pura sobre lo que ya existe es idempotente por construcción: nada que duplicar, nada que
+   desincronizar, ningún contenedor nuevo y ningún ritual de versión. Recalcular dos veces da
+   exactamente lo mismo.
+
+   QUÉ CUENTA: las órdenes de COMPRA (OC) y las de DESPACHO de bodega (DESP).
+   QUÉ NO: las de PRODUCCIÓN (OP) — son un aviso al proveedor, no una compra — ni las
+   CANCELADAS. */
+function _precioEntradaBodega(k){
+  /* El despacho sale en Q 0 en el papel: su valor real es el precio con que ese material
+     entró a la bodega. Se toma la ENTRADA más reciente que tenga precio; los movimientos
+     históricos no lo traen, así que devuelve 0 y esas líneas quedan sin valorizar en vez de
+     inventar un número. */
+  const movs = ((typeof state !== 'undefined' && state && state.bodegaMovs) || []);
+  let mejor = null;
+  movs.forEach(m => {
+    if (!m || m.tipo !== 'ENTRADA' || String(m.k) !== String(k)) return;
+    if (!(Number(m.precio) > 0)) return;
+    if (!mejor || (Number(m.ts) || 0) > (Number(mejor.ts) || 0)) mejor = m;
+  });
+  return mejor ? Number(mejor.precio) || 0 : 0;
+}
+function _gastosDeProyecto(projectId){
+  const pid = String(projectId || '');
+  const conts = [];
+  ((state && state.projects) || []).forEach(pj => { if (pj && pj.materiales) conts.push(pj.materiales.ordenes || []); });
+  conts.push(((state && state.bodegaMat) || {}).ordenes || []);
+  conts.push(((state && state.variosMat) || {}).ordenes || []);
+
+  const ordenes = [];
+  let totalCompra = 0, totalDespacho = 0;
+  conts.forEach(lista => (lista || []).forEach(o => {
+    if (!o || o.status === 'CANCELADA') return;
+    const serie = (typeof _ocSerieDe === 'function') ? _ocSerieDe(o) : (o.serie || 'OC');
+    if (serie === 'OP') return;                       // la producción NO es gasto
+    if (String(o.destinoProyectoId || '') !== pid) return;
+    const esDesp = (serie === 'DESP') || !!o.esDespacho;
+    /* el despacho se valoriza línea por línea con el precio de entrada a bodega; la compra ya
+       trae su total congelado, con el IVA incluido (v922) */
+    let monto = Number(o.total) || 0;
+    let items = (o.items || []).map(it => ({ name: it.name, qty: Number(it.qty) || 0, precio: Number(it.precio) || 0 }));
+    if (esDesp) {
+      items = items.map(it => {
+        const pu = it.precio > 0 ? it.precio : _precioEntradaBodega(_ocItemMemKey(it.name));
+        return { name: it.name, qty: it.qty, precio: pu };
+      });
+      monto = items.reduce((s, it) => s + it.qty * it.precio, 0);
+    }
+    if (esDesp) totalDespacho += monto; else totalCompra += monto;
+    ordenes.push({
+      id: o.id, numero: o.numero, serie: serie, esDespacho: esDesp,
+      proveedorNombre: o.proveedorNombre || '', ts: o.ts || 0,
+      status: o.status || '', formaPago: o.formaPago || '', credito: Number(o.credito) || 0,
+      pedidoId: o.pedidoId || '', items: items, monto: monto
+    });
+  }));
+  ordenes.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return { ordenes: ordenes, totalCompra: totalCompra, totalDespacho: totalDespacho, total: totalCompra + totalDespacho };
+}
+/* v1014: la pantalla de GASTOS. Un total arriba, el detalle de cada orden desplegable (Antonio:
+   "poder ver despues un despliegue y el detalle de las ordenes de compra o de despacho"), y el
+   resumen por producto. Los montos son plata: mismo gate que el inventario valorizado. */
+function _puedeVerGastos(){
+  try { return can('receta.verPrecios') || can('users.manage') || can('compras.autorizar') || can('compras.revisar'); }
+  catch(e){ return false; }
+}
+window._gastosToggleOrden = function(id){
+  const el = document.getElementById('_gastoDet-' + id);
+  if (el) el.style.display = (el.style.display === 'none') ? 'block' : 'none';
+};
+function renderGastos(){
+  const cont = document.getElementById('mat-gastos');
+  if (!cont) return;
+  const p = activeProj();
+  if (!p) { cont.innerHTML = ''; return; }
+  if (!_puedeVerGastos()) {
+    cont.innerHTML = `<div class="empty" style="padding:36px 20px;text-align:center;color:var(--mute)"><p style="font-size:12px">No tenés permiso para ver montos.</p></div>`;
+    return;
+  }
+  const g = _gastosDeProyecto(p.id);
+  const porProd = _gastosPorProducto(g.ordenes);
+  const _esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+
+  const filas = g.ordenes.map(o => `
+    <div style="border-bottom:1px solid var(--line-soft)">
+      <div class="pr-fila-panel" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 0;cursor:pointer" onclick="window._gastosToggleOrden('${_esc(o.id)}')">
+        <div style="min-width:0">
+          <div style="font-size:11.5px"><b>${_esc(_numLimpio(o.numero))}</b>
+            <span style="font-size:9px;font-weight:700;letter-spacing:.8px;margin-left:6px;color:${o.esDespacho ? '#166534' : '#1D4ED8'}">${o.esDespacho ? 'DESPACHO DE BODEGA' : 'COMPRA'}</span></div>
+          <div style="font-size:10px;color:#78716C;margin-top:2px">${_esc(o.proveedorNombre)}${o.formaPago ? ' · ' + _esc(o.formaPago) : ''}</div>
+        </div>
+        <div style="text-align:right;font-weight:700;font-size:12.5px;font-variant-numeric:tabular-nums">Q ${fmtQ(o.monto)}<div style="font-size:8.5px;color:#9CA3AF;font-weight:700;letter-spacing:.5px">VER DETALLE</div></div>
+      </div>
+      <div id="_gastoDet-${_esc(o.id)}" style="display:none;padding:0 0 10px 0">
+        ${o.items.map(it => `<div style="display:grid;grid-template-columns:minmax(0,1fr) 60px 80px 90px;gap:8px;font-size:10.5px;padding:3px 0;color:#57534E">
+          <span>${_esc(it.name)}</span>
+          <span style="text-align:right;font-variant-numeric:tabular-nums">${it.qty}</span>
+          <span style="text-align:right;font-variant-numeric:tabular-nums">${it.precio ? 'Q ' + fmtQ(it.precio) : '—'}</span>
+          <span style="text-align:right;font-weight:700;font-variant-numeric:tabular-nums">Q ${fmtQ(it.qty * it.precio)}</span>
+        </div>`).join('')}
+      </div>
+    </div>`).join('');
+
+  cont.innerHTML = `
+    <div class="kpi-row" style="margin-bottom:14px">
+      <div class="kpi cafe"><div class="lbl">Gasto acumulado</div><div class="val">Q ${fmtQ(g.total)}</div><div class="sub">Esta obra</div></div>
+      <div class="kpi blue"><div class="lbl">Comprado a proveedores</div><div class="val" style="color:var(--blue)">Q ${fmtQ(g.totalCompra)}</div><div class="sub">Órdenes de compra</div></div>
+      <div class="kpi green"><div class="lbl">Despachado de bodega</div><div class="val green">Q ${fmtQ(g.totalDespacho)}</div><div class="sub">Al precio con que entró</div></div>
+      <div class="kpi"><div class="lbl">Órdenes</div><div class="val">${g.ordenes.length}</div><div class="sub">Sin contar producción</div></div>
+    </div>
+    <div class="card" style="padding:10px 18px 14px;margin-bottom:14px">
+      <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;padding-bottom:4px">ÓRDENES · TOCÁ UNA PARA VER SU DETALLE</div>
+      ${filas || '<div style="padding:22px;text-align:center;color:#9CA3AF;font-size:11px">Todavía no hay gasto registrado en esta obra.<br>Se cuenta cuando la orden de compra o el despacho quedan generados.</div>'}
+    </div>
+    ${porProd.length ? `<div class="card" style="padding:10px 18px 14px">
+      <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;padding-bottom:6px">QUÉ SE LE COMPRÓ A ESTA OBRA</div>
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 70px 100px;gap:8px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;padding-bottom:4px"><span>MATERIAL</span><span style="text-align:right">CANT.</span><span style="text-align:right">MONTO</span></div>
+      ${porProd.map(x => `<div style="display:grid;grid-template-columns:minmax(0,1fr) 70px 100px;gap:8px;font-size:11px;padding:4px 0;border-bottom:1px solid #F9FAFB">
+        <span>${_esc(x.name)}</span>
+        <span style="text-align:right;font-variant-numeric:tabular-nums">${x.qty}</span>
+        <span style="text-align:right;font-weight:700;font-variant-numeric:tabular-nums">Q ${fmtQ(x.monto)}</span>
+      </div>`).join('')}
+    </div>` : ''}
+  `;
+  try { applyPermissions(); } catch(e){}
+}
+/* v1014: "un resumen de qué producto se envió a cada obra con su monto" (pedido textual). */
+function _gastosPorProducto(ordenes){
+  const out = {};
+  (ordenes || []).forEach(o => (o.items || []).forEach(it => {
+    const k = _ocItemMemKey(it.name);
+    if (!out[k]) out[k] = { name: it.name, qty: 0, monto: 0 };
+    out[k].qty += Number(it.qty) || 0;
+    out[k].monto += (Number(it.qty) || 0) * (Number(it.precio) || 0);
+  }));
+  return Object.values(out).sort((a, b) => b.monto - a.monto); // lo que más pesa, arriba
+}
 /* v1013: la obra destino de una orden, por ID. Sale del pedido que la originó, que desde
    v1012 guarda su proyectoId. Vacío cuando no hay obra: bodega central y proyectos varios no
    son obras. Un pedido viejo sin id devuelve vacío en vez de inventar una pertenencia. */
