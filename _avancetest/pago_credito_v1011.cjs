@@ -39,7 +39,8 @@ if (fD) {
   ok('no confunde un número suelto del nombre', fD('CHEQUE') === 0);
   ok('vacío o basura es 0', fD('') === 0 && fD(null) === 0 && fD(undefined) === 0);
 } else { ['15','30','60','contado','transfer','tarjeta','minúsculas','cheque','basura'].forEach(n => ok(n + ' (evaluable)', false)); }
-ok('la OC guarda los días de crédito', /credito:\s*_diasCredito\(/.test(html));
+/* v1013 le antepuso la rama del despacho de bodega, que no lleva crédito */
+ok('la OC guarda los días de crédito', /credito:[^,\n]*_diasCredito\(/.test(html));
 
 console.log('\n— 3. la forma de pago sale de la ficha del proveedor —');
 const zOpen = ex('function openOrdenCompra(');

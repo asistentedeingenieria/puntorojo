@@ -3190,7 +3190,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1012</span>
+    <span style="opacity:.5;font-size:9px">v1013</span>
   </footer>
 
 </div>
@@ -19065,11 +19065,28 @@ async function submitPedido(){
     if (typeof renderExtraMaterials === 'function') renderExtraMaterials();
   } catch(e){ console.warn('[v996] limpieza del formulario de pedido', e); }
 
-  showToast(`PEDIDO ${numero} ENVIADO A COMPRAS`, 'green');
+  /* v1013 (pedido de Antonio: "se envía a compras y solo no pasa nada... no sé si se pidió").
+     v996 ya limpiaba y redirigía, y avisaba con un toast — pero el toast se va solo y en la
+     práctica uno no se entera. Un aviso que hay que cerrar no deja lugar a dudas, y dice
+     A DÓNDE fue el pedido: los de abastecimiento se ven en BODEGA CENTRAL, no en la obra. */
+  const _dondeVerlo = pedido.esBodega ? 'Lo ves en <b>BODEGA CENTRAL</b>.'
+    : (pedido.esVarios ? 'Lo ves en <b>PROYECTOS VARIOS</b>.' : 'Lo ves en <b>LISTA DE PEDIDOS</b>.');
+  try {
+    await window.prAlert({
+      title: 'PEDIDO ENVIADO A COMPRAS',
+      bodyHTML: `<div style="line-height:1.7">Se envió el pedido <b>${_numLimpio(numero)}</b> a compras.<br>${_dondeVerlo}</div>`
+    });
+  } catch(e){ showToast(`PEDIDO ${numero} ENVIADO A COMPRAS`, 'green'); }
   /* v1007: si el pedido se hizo DESDE el panel de PROYECTOS VARIOS, el formulario está
      prestado ahí: se devuelve y se vuelve a su listado — no a la pestaña del proyecto. */
   if (window._variosFormOrigen) {
     try { window._variosVolverALista(); } catch(e){ console.warn('[v1007] volver al listado de varios', e); }
+    return;
+  }
+  /* un pedido de abastecimiento ya no vive en la obra: mandarlo a LISTA DE PEDIDOS sería
+     mandarlo a una lista donde no está */
+  if (pedido.esBodega) {
+    try { _abrirPanelBodega(); } catch(e){ console.warn('[v1013] abrir bodega', e); }
     return;
   }
   try { setPedidoTab('lista'); } catch(e){ console.warn('[v996] setPedidoTab', e); }
@@ -21499,8 +21516,8 @@ function renderOcItems(){
       }</div>
       <div class="oc-qty">${it.qty}</div>
       <div><button type="button" onclick="_abrirPickerProveedor(this, ${idx})" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 10px;border:1px solid ${it.proveedorId ? '#D1D5DB' : '#FCA5A5'};border-radius:8px;background:#fff;font-family:inherit;font-size:11px;cursor:pointer;text-align:left"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${it.proveedorId === '_bodega' ? 'BODEGA CENTRAL (DESPACHO)' : ((proveedores.find(pv => pv.id === it.proveedorId)||{}).nombre || '— ASIGNAR —')}</span><span style="color:#9CA3AF">▾</span></button></div>
-      <div>${it.aMedida
-        ? `<input type="number" step="0.01" min="0" value="${it.precio || ''}" placeholder="0.00" oninput="updateOcPrecio(${idx}, this.value)" title="Poste a medida: precio de fabricación digitable">`
+      <div>${(it.aMedida || it.eventual)
+        ? `<input type="number" step="0.01" min="0" value="${it.precio || ''}" placeholder="0.00" oninput="updateOcPrecio(${idx}, this.value)" title="${it.aMedida ? 'Poste a medida: precio de fabricación digitable' : 'Material extraordinario: no está en el catálogo, escribí el precio acordado'}">`
         : `<input type="number" value="${it.precio || ''}" placeholder="—" disabled style="background:var(--cream);cursor:not-allowed" title="El precio viene del catálogo de precios — para cambiarlo enviá una solicitud">`}</div>
       <div class="oc-subtotal" id="ocSubtotal-${idx}">Q ${fmtQ(it.qty * (it.precio || 0))}</div>
     </div>
@@ -21582,9 +21599,12 @@ function updateOcItemProveedor(idx, provId){
 
 function updateOcPrecio(idx, val){
   if (!ocWorkingItems[idx]) return;
-  // v923: los precios viven SOLO en el catálogo; el único digitable es el poste a
-  // medida (fabricación). Cambios de precio → solicitud del catálogo.
-  if (!ocWorkingItems[idx].aMedida) {
+  /* v923: los precios viven SOLO en el catálogo; el único digitable era el poste a medida
+     (fabricación). Cambios de precio → solicitud del catálogo.
+     v1013: y el EXTRAORDINARIO, que por definición no está en el catálogo. Antes se le podía
+     asignar proveedor pero no precio, y la orden terminaba saliendo en Q 0 — una mentira
+     permanente en el reporte de gasto. Lo que SÍ está en el catálogo sigue bloqueado. */
+  if (!ocWorkingItems[idx].aMedida && !ocWorkingItems[idx].eventual) {
     showToast('EL PRECIO VIENE DEL CATÁLOGO — PEDÍ EL CAMBIO POR SOLICITUD', 'red');
     return;
   }
@@ -21861,6 +21881,7 @@ async function generarOrdenCompra(){
     return showToast(`ASIGNAR PROVEEDOR A ${sinProveedor.length} MATERIAL${sinProveedor.length!==1?'ES':''}`, 'red');
   }
 
+
   /* v1000 (pedido de Antonio): una obra NUEVA o un proyecto pequeño no trae dirección — sin
      dirección y sin quién recibe, la orden le llega al proveedor sin dónde entregar. Se
      bloquea acá, ANTES de crear nada. */
@@ -21889,18 +21910,22 @@ async function generarOrdenCompra(){
     if (!_okSinVar) return;
   }
 
-  // v921: lo que sale de BODEGA CENTRAL es despacho interno — no exige precio
+  /* v921: lo que sale de BODEGA CENTRAL es despacho interno — no exige precio (su valor sale
+     del precio con que el material entró a la bodega).
+     v1013: para el resto ya NO se pregunta, se BLOQUEA. Antes esto era un "¿generar de todas
+     formas?" que se aceptaba sin leer y la orden salía en Q 0 — y cada orden en cero es una
+     mentira permanente en el gasto del proyecto. El extraordinario ya puede llevar precio
+     escrito a mano (updateOcPrecio), así que no queda ningún caso sin salida. */
   const sinPrecio = ocWorkingItems.filter(it => it.proveedorId !== '_bodega' && !(Number(it.precio) > 0));
   if (sinPrecio.length > 0) {
-    // v314: modal elegante en vez del confirm() nativo.
-    const _okSinPrec = await window.prConfirm({
-      title: 'MATERIALES SIN PRECIO UNITARIO',
-      bodyHTML: `<div><strong>${sinPrecio.length}</strong> material${sinPrecio.length===1?'':'es'} no ${sinPrecio.length===1?'tiene':'tienen'} precio unitario asignado.</div>
-                 <div style="margin-top:12px">¿Generar las órdenes de todas formas?</div>`,
-      okText: 'GENERAR',
-      cancelText: 'CANCELAR'
+    const _lst = sinPrecio.slice(0, 4).map(it => `<li>${it.name}</li>`).join('');
+    await window.prAlert({
+      title: 'FALTA EL PRECIO',
+      bodyHTML: `<div><strong>${sinPrecio.length}</strong> material${sinPrecio.length===1?'':'es'} sin precio unitario:</div>
+                 <ul style="margin:10px 0 0 18px;font-size:12px;color:#444">${_lst}${sinPrecio.length>4?'<li>…</li>':''}</ul>
+                 <div style="margin-top:12px">Una orden en Q 0 falsea el gasto del proyecto. Escribí el precio de cada uno antes de generar.</div>`
     });
-    if (!_okSinPrec) return;
+    return;
   }
 
   const fechaOc = inputToDate(document.getElementById('ocFecha').value);
@@ -21984,9 +22009,16 @@ async function generarOrdenCompra(){
       fechaEntrega: (_pp.fechaEntrega ? _fechaInputALatam(_pp.fechaEntrega) : fechaEntregaNueva),
       proyecto: proyectoOc,
       area: areaOc,
-      formaPago: _pp.formaPago || formaPago,
+      /* v1013 (observación de Antonio): en un DESPACHO de bodega la forma de pago no aplica —
+         ese material ya se compró y ya está en la bodega de la oficina. No es una compra, es
+         un traslado. Se deja explícito para que nadie lo cuente como una cuenta por pagar. */
+      formaPago: esBodega ? 'NO APLICA · DESPACHO DE BODEGA' : (_pp.formaPago || formaPago),
       // v1011: los DÍAS como número, para poder vencer la cuenta por pagar sin parsear texto
-      credito: _diasCredito(_pp.formaPago || formaPago),
+      credito: esBodega ? 0 : _diasCredito(_pp.formaPago || formaPago),
+      /* v1013: la obra destino por ID. oc.proyecto es texto libre escrito a mano y una orden
+         de una obra puede mostrar el nombre de otra; el resumen "qué se fue a cada obra" no
+         puede apoyarse en eso. El texto se conserva intacto. */
+      destinoProyectoId: _destinoProyectoDePedido(pd),
       entregarA,
       items: items.map(it => ({ name: it.name, qty: it.qty, precio: it.precio || 0, sourceKey: it.sourceKey || '', cat: it.cat || '', eventual: it.eventual || false })),
       subtotal,
@@ -31624,6 +31656,15 @@ function _getProveedores(){ try { if (typeof state !== 'undefined' && state) { i
 /* v1011: los DÍAS de crédito como número. "CRÉDITO 30 DÍAS" es un literal que hasta hoy no
    parseaba nadie; para vencer una cuenta por pagar hace falta el número, no el texto.
    Todo lo que no sea crédito vale 0 (se paga de una). */
+/* v1013: la obra destino de una orden, por ID. Sale del pedido que la originó, que desde
+   v1012 guarda su proyectoId. Vacío cuando no hay obra: bodega central y proyectos varios no
+   son obras. Un pedido viejo sin id devuelve vacío en vez de inventar una pertenencia. */
+function _destinoProyectoDePedido(pd){
+  if (!pd) return '';
+  if (pd.esBodega || pd.esVarios || pd.proyectoManual) return '';
+  try { if (_pedidoEsAbastecimiento(pd)) return ''; } catch (e) {}
+  return pd.proyectoId ? String(pd.proyectoId) : '';
+}
 function _diasCredito(formaPago){
   const t = String(formaPago || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
   if (t.indexOf('CREDITO') < 0) return 0;   // CONTADO, TRANSFERENCIA, CHEQUE, TARJETA DE ABASTO
