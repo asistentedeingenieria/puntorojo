@@ -345,7 +345,12 @@ html.ios-standalone .topbar{
 }
 .proj-switcher{display:flex;align-items:center;gap:10px;background:var(--red);padding:8px 14px;border-radius:10px;border:1px solid var(--red);transition:all .15s;box-shadow:0 2px 8px rgba(200,20,28,.18);position:relative}
 .proj-switcher:hover{background:var(--red-dark);border-color:var(--red-dark)}
-.proj-switcher .lbl{font-size:9px;color:rgba(255,255,255,.78);letter-spacing:2px;text-transform:uppercase;font-weight:700}
+/* v1022: la obra en la que se está trabajando pasa a leerse de un vistazo. Antes la etiqueta
+   y el nombre iban en la misma línea, del mismo tamaño: la obra se perdía entre lo demás y
+   por eso "se sentía igual que antes" después de elegirla. */
+.proj-switcher{flex-direction:column;align-items:flex-start;gap:1px}
+.proj-switcher .lbl{font-size:8.5px;color:rgba(255,255,255,.72);letter-spacing:2px;text-transform:uppercase;font-weight:700;line-height:1.4}
+.proj-switcher .pr-proj-btn{font-size:15px;letter-spacing:.2px;padding:0}
 .proj-switcher select{background:transparent;border:none;color:#fff;font-family:'Familjen Grotesk',sans-serif;font-size:13px;font-weight:700;cursor:pointer;text-transform:uppercase;outline:none}
 .proj-switcher select option{background:var(--white);color:var(--ink)}
 
@@ -2586,7 +2591,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
   <header class="topbar">
 
     <div class="proj-switcher">
-      <span class="lbl">PROYECTO</span>
+      <span class="lbl">TRABAJANDO EN</span>
       <!-- v307: dropdown custom (reemplaza select nativo) -->
       <div class="pr-proj-dropdown" id="prProjDropdown">
         <button class="pr-proj-btn" id="prProjBtn" type="button" onclick="window.prToggleProjDropdown(event)" aria-haspopup="listbox" aria-expanded="false">
@@ -2596,6 +2601,10 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
         <div class="pr-proj-panel" role="listbox">
           <div class="pr-proj-panel-hd">Elegir proyecto</div>
           <div class="pr-proj-panel-list" id="prProjList"></div>
+          <!-- v1022: volver a la pantalla de "¿dónde vas a trabajar?" sin salir de la app -->
+          <div style="border-top:1px solid rgba(0,0,0,.08);padding:8px 10px">
+            <button type="button" class="btn ghost sm" style="width:100%;font-size:10px" onclick="window.prToggleProjDropdown(); window._abrirPantallaObra(true)">VER TODAS LAS OBRAS</button>
+          </div>
         </div>
       </div>
       <select id="projectSelect" onchange="setActiveProject(this.value)" style="display:none"></select>
@@ -3201,7 +3210,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1021</span>
+    <span style="opacity:.5;font-size:9px">v1022</span>
   </footer>
 
 </div>
@@ -30689,6 +30698,10 @@ window.DELETION_EXECUTORS['activityLog'] = () => _doClearActivity();
 /* ─────────────── RENDER ALL ─────────────── */
 function renderAll(){
   renderProjectSelect();
+  /* v1022: al entrar, primero se elige dónde trabajar. Solo la primera vez de cada sesión —
+     después de eso no vuelve a interponerse (esa fricción fue lo que hizo quitar el gate de
+     v961); para cambiar está el botón de la barra. */
+  try { window._abrirPantallaObra(); } catch(e){ console.warn('[v1022] pantalla de obra', e); }
   const activeTab = document.querySelector('.tab.active')?.dataset.view || 'dashboard';
 
   // Verificar si tiene permiso para la vista actual; si no, ir a la primera permitida
@@ -31942,6 +31955,88 @@ function _gastosDeProyecto(projectId){
   ordenes.sort((a, b) => (b.ts || 0) - (a.ts || 0));
   return { ordenes: ordenes, totalCompra: totalCompra, totalDespacho: totalDespacho, total: totalCompra + totalDespacho };
 }
+/* ═══════════ v1022 · ELEGIR DÓNDE TRABAJAR AL ENTRAR ═══════════
+   Antonio, sobre el gate de v961: "sí funcionaba, pero cuando se entraba se convertía en lo
+   mismo que antes; si se quería cambiar de proyecto se volvía a seleccionar donde siempre".
+
+   Ese gate era un overlay COSMÉTICO: nunca ponía el proyecto en null y elegir no cambiaba
+   nada. Esta vez la diferencia está en las dos puntas — se entra eligiendo, y una vez adentro
+   la obra queda arriba a la vista con su propio botón para cambiarla.
+
+   ⚠️ El proyecto activo SIGUE existiendo en el state mientras se elige. Ponerlo en null
+   rompería todas las pantallas que hacen activeProj() sin guarda, que son muchas. Lo que se
+   guarda es si ESTA persona ya eligió en esta sesión. */
+function _obraElegidaKey(){
+  const u = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  return 'pr_obra_elegida_' + String(u.username || 'anon').toLowerCase();
+}
+function _yaEligioObra(){
+  try { return sessionStorage.getItem(_obraElegidaKey()) === '1'; } catch(e){ return true; }
+}
+function _marcarObraElegida(){
+  try { sessionStorage.setItem(_obraElegidaKey(), '1'); } catch(e){}
+}
+window._elegirObraYEntrar = function(id){
+  _marcarObraElegida();
+  /* la última obra se recuerda ENTRE sesiones: al volver a entrar aparece marcada, para que
+     elegir sea un clic y no una búsqueda (la fricción que hizo quitar el gate de v961) */
+  try { localStorage.setItem('pr_ultima_obra_' + String(((typeof getCurrentUser==='function' && getCurrentUser())||{}).username || 'anon').toLowerCase(), String(id)); } catch(e){}
+  try { setActiveProject(id); } catch(e){}
+  _cerrarPantallaObra();
+};
+window._entrarA = function(fn){
+  _marcarObraElegida();
+  _cerrarPantallaObra();
+  try { if (typeof window[fn] === 'function') window[fn](); } catch(e){ console.warn('[v1022] ' + fn, e); }
+};
+function _cerrarPantallaObra(){
+  const m = document.getElementById('_pantallaObra');
+  if (m) m.remove();
+}
+window._abrirPantallaObra = function(forzar){
+  if (!forzar && _yaEligioObra()) return;
+  if (document.getElementById('_pantallaObra')) return;
+  const proys = ((state && state.projects) || []).filter(p => p && p.id);
+  if (!proys.length) { _marcarObraElegida(); return; }   // sin obras no hay nada que elegir
+  const _esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  let ultima = '';
+  try { ultima = localStorage.getItem('pr_ultima_obra_' + String(((typeof getCurrentUser==='function' && getCurrentUser())||{}).username || 'anon').toLowerCase()) || ''; } catch(e){}
+
+  const tarjeta = (p) => {
+    let pend = '';
+    try {
+      const n = (p.materiales && p.materiales.pedidos || []).filter(pd => _pedidoEsDeEstaObra(pd, p) && pd.status !== 'RECIBIDO').length;
+      pend = n ? `${n} pedido${n !== 1 ? 's' : ''} activo${n !== 1 ? 's' : ''}` : 'sin pendientes';
+    } catch(e){}
+    const esUlt = String(p.id) === String(ultima);
+    return `<button class="btn ghost" style="text-align:left;padding:14px 16px;border-radius:10px;${esUlt ? 'border:2px solid var(--red);' : ''}display:block;width:100%" onclick="window._elegirObraYEntrar('${_esc(p.id)}')">
+      <div style="font-size:15px;font-weight:600;letter-spacing:-.2px">${_esc(p.name)}</div>
+      <div style="font-size:11px;color:var(--mute);margin-top:3px">${_esc(pend)}${esUlt ? ' · la última donde trabajaste' : ''}</div>
+    </button>`;
+  };
+  const otra = (nom, sub, fn, color) => `<button class="btn ghost" style="text-align:left;padding:12px 16px;border-radius:10px;display:block;width:100%" onclick="window._entrarA('${fn}')">
+      <div style="font-size:13.5px;font-weight:600;color:${color}">${nom}</div>
+      <div style="font-size:11px;color:var(--mute);margin-top:2px">${sub}</div>
+    </button>`;
+
+  const wrap = document.createElement('div');
+  wrap.id = '_pantallaObra';
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:99500;background:var(--paper);overflow:auto;padding:32px 16px 40px';
+  wrap.innerHTML = `<div style="max-width:760px;margin:0 auto">
+    <div style="font-size:9px;letter-spacing:2px;color:var(--red);font-weight:700;text-transform:uppercase">■ Punto de partida</div>
+    <h2 style="margin:6px 0 4px;font-family:'Familjen Grotesk',sans-serif;font-size:28px;font-weight:500;letter-spacing:-.5px">¿DÓNDE VAS A TRABAJAR?</h2>
+    <div style="font-size:12px;color:var(--mute);margin-bottom:22px">Todo lo que veas después va a ser de la obra que elijas.</div>
+    <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:8px">OBRAS</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:22px">${proys.map(tarjeta).join('')}</div>
+    <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:8px">TODA LA EMPRESA</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">
+      ${(typeof _puedeVerBodega === 'function' && _puedeVerBodega()) ? otra('BODEGA CENTRAL', 'existencias y compras', '_abrirPanelBodega', '#166534') : ''}
+      ${(typeof _puedeVerVarios === 'function' && _puedeVerVarios()) ? otra('PROYECTOS VARIOS', 'obras chicas y reparaciones', '_abrirPanelVarios', '#1D4ED8') : ''}
+      ${(typeof _puedeVerAdmin === 'function' && _puedeVerAdmin()) ? otra('ADMINISTRACIÓN', 'pólizas y anticipos', '_abrirPanelAdmin', '#7C3AED') : ''}
+    </div>
+  </div>`;
+  document.body.appendChild(wrap);
+};
 /* ═══════════ v1018 · ADMINISTRACIÓN (pedido de Antonio) ═══════════
    "En personal necesito ordenar ahí para quitar las pólizas... crear una opción en proyectos
    que tenga las pólizas y los anticipos. Saquemos la pestaña de anticipos de donde está y
