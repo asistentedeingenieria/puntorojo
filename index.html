@@ -3192,7 +3192,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1016</span>
+    <span style="opacity:.5;font-size:9px">v1017</span>
   </footer>
 
 </div>
@@ -13337,7 +13337,9 @@ function _itemsDespachadosEtapa(pedidos, ordenes, levelId, etapaIdx){
   (pedidos||[]).forEach(function(pd){
     if(!pd || !pd.esDeReceta) return;
     if(pd.recetaLevelId!==levelId || pd.recetaEtapaIdx!==etapaIdx) return;
-    var ocs=(ordenes||[]).filter(function(o){ return o && o.pedidoId===pd.id; });
+    /* v1017: una ORDEN DE PRODUCCIÓN no despacha nada — el material recién se está fabricando.
+       Contarla como despachada hacía que el avance por apartamento mintiera. */
+    var ocs=(ordenes||[]).filter(function(o){ return o && o.pedidoId===pd.id && o.serie!=='OP' && !o.esProduccion; });
     if(!ocs.length) return;                                            // sin OC todavía → no despachado
     if(!ocs.every(function(o){ return (o.status||'')==='AUTORIZADA'; })) return; // alguna sin autorizar
     Object.keys(pd.items||{}).forEach(function(k){ keys[k]=true; });
@@ -17747,7 +17749,14 @@ function _pedidoEntregas(pd, ocs){
   // las OC de materiales usan `status` (PENDIENTE_AUTORIZACION / AUTORIZADA); `estatus` es
   // el campo de otro módulo — se miran los dos para no contar una orden dada de baja
   const vivas = (ocs || []).filter(function(o){
-    return o && o.pedidoId === (pd || {}).id && o.estatus !== 'CANCELADA' && o.status !== 'CANCELADA' && !o.anulada;
+    if (!o || o.pedidoId !== (pd || {}).id) return false;
+    if (o.estatus === 'CANCELADA' || o.status === 'CANCELADA' || o.anulada) return false;
+    /* v1017: una ORDEN DE PRODUCCIÓN no se recibe — es el aviso al proveedor para que fabrique.
+       Lo que llega a la obra es la orden de compra que nace de ella. Si la OP siguiera contando
+       como entrega viva, el mismo material pediría DOS firmas de recepción.
+       El criterio va inline y no por _ocSerieDe: esta función se extrae y evalúa aislada. */
+    if (o.serie === 'OP' || o.esProduccion) return false;
+    return true;
   });
   const pendientes = [], recibidasList = [];
   vivas.forEach(function(o, i){
@@ -21628,7 +21637,10 @@ function updateOcItemProveedor(idx, provId){
         showToast(`EN BODEGA: ${_res.saldo} DISPONIBLES${_res.precio ? ' · Q ' + fmtQ(_res.precio) : ''}`, 'ok');
       }
     } else {
-      showToast('ESE MATERIAL NO ESTÁ REGISTRADO EN LA BODEGA CENTRAL', 'red');
+      /* v1017: casi siempre es un problema de NOMBRE, no de existencia. Se ofrecen los
+         parecidos que sí tienen existencia para que Antonio diga cuál es; su respuesta queda
+         declarada como equivalencia y no la vuelve a contestar. */
+      _bodegaPedirMatch(idx, item.name);
     }
     renderOcItems();
     return;
@@ -21649,14 +21661,78 @@ function updateOcItemProveedor(idx, provId){
    limpia del catálogo (v1010): si Antonio dijo que dos nombres son el mismo, los encuentra. */
 function _bodegaBuscarMaterial(nombre){
   const saldos = (typeof window._bodegaSaldos === 'function') ? window._bodegaSaldos((state || {}).bodegaMovs) : {};
-  const claves = [];
-  try { claves.push(_ocItemMemKey(nombre)); } catch(e){}
-  try { const ck = _matAliasCanon(claves[0]); if (ck && ck !== claves[0]) claves.push(ck); } catch(e){}
+  const k0 = (function(){ try { return _ocItemMemKey(nombre); } catch(e){ return ''; } })();
+  const claves = [k0];
+  /* v1017: la equivalencia se sigue en LOS DOS SENTIDOS. Si Antonio declaró que
+     "AGUA PURIFICADA" es la misma que "AGUA PURA SALVAVIDAS", el saldo puede estar guardado
+     bajo CUALQUIERA de los dos nombres — el que se usó al cargar la existencia. Se prueban el
+     canónico y todos sus hermanos (los que apuntan al mismo canónico). */
+  try {
+    const ck = _matAliasCanon(k0);
+    if (ck && ck !== k0) claves.push(ck);
+    const mapa = _matAliasMap();
+    Object.keys(mapa).forEach(k => { if (_matAliasCanon(k) === ck && claves.indexOf(k) < 0) claves.push(k); });
+  } catch(e){}
   for (const k of claves) {
     const s = saldos[k];
     if (s) return { key: k, name: s.name || nombre, saldo: Number(s.saldo) || 0, precio: _precioEntradaBodega(k) };
   }
   return null;
+}
+/* v1017: cuando el material NO aparece en bodega, casi siempre es porque está guardado con
+   OTRO NOMBRE (el caso del agua: "AGUA PURA SALVAVIDAS GARRAFON" en el pedido y "AGUA
+   PURIFICADA GARRAFON" en la bodega). En vez de solo negar, se buscan los parecidos por
+   palabras en común para que Antonio diga cuál es — y esa respuesta queda declarada como
+   equivalencia, así no la vuelve a contestar nunca más. */
+function _bodegaCandidatosParecidos(nombre){
+  const saldos = (typeof window._bodegaSaldos === 'function') ? window._bodegaSaldos((state || {}).bodegaMovs) : {};
+  const _pal = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .split(/[^A-Z0-9½¼¾"']+/).filter(w => w.length > 2);
+  const mias = _pal(nombre);
+  if (!mias.length) return [];
+  const out = [];
+  Object.keys(saldos).forEach(k => {
+    const s = saldos[k];
+    if (!s || !(Number(s.saldo) > 0)) return;   // solo lo que de verdad hay
+    const suyas = _pal(s.name);
+    const comunes = mias.filter(w => suyas.indexOf(w) >= 0).length;
+    if (comunes) out.push({ key: k, name: s.name, saldo: Number(s.saldo) || 0, precio: _precioEntradaBodega(k), score: comunes });
+  });
+  return out.sort((a, b) => b.score - a.score).slice(0, 6);
+}
+window._bodegaUnirYUsar = function(idx, key, nombreBodega){
+  /* declara la equivalencia (queda guardada, como la de la limpia del catálogo) y aplica el
+     material de bodega al item de la OC */
+  const item = ocWorkingItems[idx];
+  if (!item) return;
+  try {
+    const mio = _ocItemMemKey(item.name);
+    if (mio !== key) _matFixAdd({ tipo: 'ALIAS', key: mio, hacia: key, name: item.name, haciaName: nombreBodega });
+  } catch(e){}
+  const m = document.getElementById('_bodegaMatchModal'); if (m) m.remove();
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  updateOcItemProveedor(idx, '_bodega');
+  showToast('QUEDÓ GUARDADO: ES EL MISMO MATERIAL', 'ok');
+};
+function _bodegaPedirMatch(idx, nombre){
+  const cands = _bodegaCandidatosParecidos(nombre);
+  const _esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  const w = document.createElement('div');
+  w.id = '_bodegaMatchModal';
+  w.style.cssText = 'position:fixed;inset:0;z-index:100090;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+  w.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:560px;width:100%;padding:18px;max-height:86vh;overflow:auto">
+    <b style="font-size:13px;letter-spacing:.5px">ESE MATERIAL NO ESTÁ CON ESE NOMBRE EN BODEGA</b>
+    <div style="font-size:11px;color:#78716C;margin:6px 0 12px;line-height:1.6">El pedido dice <b>${_esc(nombre)}</b>. ${cands.length ? 'En la bodega hay estos parecidos — si es el mismo, tocalo y queda guardado para siempre.' : 'Y no hay nada parecido con existencia. Cargá la existencia en bodega o elegí otro proveedor.'}</div>
+    ${cands.map(c => `<button class="btn ghost" style="width:100%;text-align:left;margin-bottom:6px;padding:10px 12px" onclick="window._bodegaUnirYUsar(${idx}, '${_esc(c.key)}', '${_esc(c.name)}')">
+      <div style="font-size:11.5px;font-weight:600">${_esc(c.name)}</div>
+      <div style="font-size:10px;color:#78716C;margin-top:2px">${c.saldo} en existencia${c.precio ? ' · Q ' + fmtQ(c.precio) : ''}</div>
+    </button>`).join('')}
+    <div class="modal-actions" style="display:flex;justify-content:flex-end;margin-top:10px">
+      <button class="btn ghost" onclick="document.getElementById('_bodegaMatchModal').remove()">CERRAR</button>
+    </div>
+  </div>`;
+  document.body.appendChild(w);
 }
 
 /* v1015 (pedido de Antonio): "si sale de la bodega central la orden de despacho NO TIENE QUE
@@ -22964,6 +23040,25 @@ function renderOrdenesList(){
       ? `<button class="btn sm" onclick="printOrdenCompra('${oc.id}')" title="Imprimir orden autorizada">IMPRIMIR</button>`
       : `<button class="btn ghost sm" disabled title="Necesita autorización de finanzas" style="opacity:.5;cursor:not-allowed">IMPRIMIR</button>`;
 
+    /* v1017: el circuito de la ORDEN DE PRODUCCIÓN. Es un aviso al proveedor para que fabrique,
+       no una compra: no suma al gasto y no se recibe. Cuando el proveedor confirma que el
+       material está listo, de ella nace la orden de compra — esa sí es gasto. */
+    let _opBloque = '';
+    if (_ocSerieDe(oc) === 'OP' && isAuth) {
+      const _lista = !!(oc.produccionLista && oc.produccionLista.ts);
+      const _puedeMarcar = can('compras.autorizar') || can('materiales.bodega') || can('users.manage');
+      const _puedeDerivar = can('compras.autorizar') || can('users.manage');
+      if (oc.ocDerivadaId) {
+        _opBloque = `<div style="font-size:9px;color:#15803D;font-weight:700;letter-spacing:.8px;margin-top:4px">YA CONVERTIDA EN ${_numLimpio(oc.ocDerivadaNumero || '')}</div>`;
+      } else if (!_lista) {
+        _opBloque = `<div style="font-size:9px;color:#B45309;font-weight:700;letter-spacing:.8px;margin-top:4px">ESPERANDO PROVEEDOR</div>`
+          + (_puedeMarcar ? `<button class="btn ghost sm" style="font-size:9.5px;margin-top:4px" onclick="window._ocMarcarProduccionLista('${oc.id}')">EL PROVEEDOR YA LO TIENE LISTO</button>` : '');
+      } else {
+        _opBloque = `<div style="font-size:9px;color:#15803D;font-weight:700;letter-spacing:.8px;margin-top:4px">LISTA PARA COMPRA</div>`
+          + (_puedeDerivar ? `<button class="btn sm" style="font-size:9.5px;margin-top:4px" onclick="window._ocDerivarDeOp('${oc.id}')">GENERAR OC DE ESTA PRODUCCIÓN</button>` : '');
+      }
+    }
+
     // v919: quien generó la OC no puede autorizarla (control interno); admin exento
     const _ocPropia = !_esAdminOC && oc.generadoPorUsername && oc.generadoPorUsername === _userOC;
     const authBtn = (isPending && canAuthorize && !_ocPropia)
@@ -23028,6 +23123,7 @@ function renderOrdenesList(){
         ${recibirBtn}
         ${printBtn}
         ${facturaBtn}
+        ${_opBloque}
         ${canDeleteOC ? `<button class="btn-icon danger" onclick="deleteOrden('${oc.id}')" title="Eliminar orden">✕</button>` : ''}
       </div>
     </div>`;
@@ -31796,6 +31892,114 @@ function _gastosDeProyecto(projectId){
   ordenes.sort((a, b) => (b.ts || 0) - (a.ts || 0));
   return { ordenes: ordenes, totalCompra: totalCompra, totalDespacho: totalDespacho, total: totalCompra + totalDespacho };
 }
+/* ═══════════ v1017 · ORDEN DE PRODUCCIÓN → ORDEN DE COMPRA ═══════════
+   Antonio definió el circuito: "las órdenes de producción son para notificar al proveedor y
+   después, cuando ellos confirman que ya está listo el material, ya se genera una orden de
+   compra con exactamente la misma información, solo que como orden de compra, para ahora sí
+   descontarlo y agregar el gasto en el proyecto".
+
+   "El proveedor confirmó" es un CAMPO, no un status nuevo: un status rompería todos los
+   filtros que comparan status === 'AUTORIZADA' (el botón de recibir, el avance por
+   apartamento, allPedidoOcsAuthorized). El badge se deriva del campo. */
+window._ocMarcarProduccionLista = async function(ocId){
+  if (!can('compras.autorizar') && !can('materiales.bodega') && !can('users.manage')) {
+    return showToast('SOLO QUIEN HABLA CON EL PROVEEDOR', 'red');
+  }
+  const _f = _bodegaFindOc(ocId);
+  if (!_f || !_f.oc) return showToast('ORDEN NO ENCONTRADA', 'red');
+  if (_f.oc.produccionLista && _f.oc.produccionLista.ts) return showToast('YA ESTABA MARCADA COMO LISTA', 'red');
+  const okc = await window.prConfirm({
+    title: '¿EL PROVEEDOR YA TIENE EL MATERIAL LISTO?',
+    bodyHTML: `<div>Al confirmar vas a poder generar la <b>orden de compra</b> de esta producción, que es la que suma al gasto del proyecto.</div>`,
+    okText: 'SÍ, ESTÁ LISTO', cancelText: 'TODAVÍA NO'
+  });
+  if (!okc) return;
+  // re-leer del state vivo DESPUÉS del await (regla v769/v940: la referencia pudo quedar vieja)
+  const _f2 = _bodegaFindOc(ocId);
+  if (!_f2 || !_f2.oc) return showToast('ORDEN NO ENCONTRADA', 'red');
+  if (_f2.oc.produccionLista && _f2.oc.produccionLista.ts) return showToast('YA ESTABA MARCADA COMO LISTA', 'red');
+  const u0 = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  _f2.oc.produccionLista = {
+    ts: Date.now(),
+    por: String(u0.displayName || u0.username || '').toUpperCase(),
+    porUsername: String(u0.username || '').toLowerCase()
+  };
+  _f2.oc._ts = Date.now();
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  showToast('MATERIAL LISTO — YA PODÉS GENERAR LA ORDEN DE COMPRA', 'ok');
+  try { renderOrdenesList(); } catch(e){}
+  try { if (document.getElementById('_bodegaPanelModal')) { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } } catch(e){}
+};
+/* De la OP nace una OC NUEVA; la OP NO se convierte. Tres razones:
+   1. El papel de la OP ya salió firmado al proveedor — mutarle el tipo falsifica un documento
+      ya emitido.
+   2. Cada serie lleva su correlativo propio, así que la OP 1 no bloquea a la OC 1.
+   3. El sync es union por id: crear un objeto nuevo es aditivo y sobrevive un merge; mutar el
+      tipo de uno existente se puede perder.
+   NO se reusa generarOrdenCompra: esa re-arma todo desde el pedido, borra los borradores
+   pendientes y choca con el candado v927. Constructor propio y corto. */
+window._ocDerivarDeOp = async function(opId){
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
+  const _f = _bodegaFindOc(opId);
+  if (!_f || !_f.oc) return showToast('ORDEN NO ENCONTRADA', 'red');
+  const op = _f.oc;
+  if (_ocSerieDe(op) !== 'OP') return showToast('ESTA ORDEN NO ES DE PRODUCCIÓN', 'red');
+  if (!(op.produccionLista && op.produccionLista.ts)) return showToast('PRIMERO MARCÁ QUE EL PROVEEDOR TIENE EL MATERIAL LISTO', 'red');
+  if (op.ocDerivadaId) return showToast('ESTA PRODUCCIÓN YA TIENE SU ORDEN DE COMPRA', 'red');
+  const okc = await window.prConfirm({
+    title: 'GENERAR LA ORDEN DE COMPRA',
+    bodyHTML: `<div>Se crea una orden de compra con <b>exactamente la misma información</b> que la ${_numLimpio(op.numero)} — mismos materiales, mismas cantidades y mismos precios.</div>
+               <div style="margin-top:10px">Esa orden es la que suma al gasto del proyecto. La producción queda como respaldo.</div>`,
+    okText: 'GENERAR', cancelText: 'CANCELAR'
+  });
+  if (!okc) return;
+  /* re-leer del state vivo DESPUÉS del await: si otro derivó mientras el modal estaba abierto,
+     dos OCs con el mismo contenido duplicarían el gasto para siempre */
+  const _f2 = _bodegaFindOc(opId);
+  if (!_f2 || !_f2.oc) return showToast('ORDEN NO ENCONTRADA', 'red');
+  const op2 = _f2.oc;
+  if (op2.ocDerivadaId) return showToast('ESTA PRODUCCIÓN YA TIENE SU ORDEN DE COMPRA', 'red');
+
+  const cont = _f2.cont;
+  const _usados = [];
+  (cont.ordenes || []).forEach(o => { if (_ocSerieDe(o) === 'OC') _usados.push(Number(o.folio) || 0); });
+  const folio = _primerNumeroLibre(_usados);
+  const _base = String(op2.numero || '').split(' - ')[0];
+  const t = Date.now();
+  const oc = Object.assign({}, op2, {
+    id: 'oc-' + uid(),
+    serie: 'OC',
+    esProduccion: false,          // congelado: NO se recalcula (el criterio de origen puede cambiar)
+    folio: folio,
+    numero: `${_base} - OC ${folio}`,
+    ts: t, _ts: t,
+    opOrigenId: op2.id,
+    opOrigenNumero: op2.numero,
+    // hereda la autorización de la OP: Antonio decidió que la copia exacta no vuelve a finanzas
+    status: 'AUTORIZADA',
+    autorizadoPor: op2.autorizadoPor || '',
+    autorizadoTs: op2.autorizadoTs || t,
+    heredaAutorizacionDeOp: true,
+    impreso: false,
+    produccionLista: null,
+    ocDerivadaId: null,
+    factura: null,
+    recibidoBodega: null
+  });
+  cont.ordenes.push(oc);
+  op2.ocDerivadaId = oc.id;
+  op2.ocDerivadaNumero = oc.numero;
+  op2._ts = Date.now();
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  await window.prAlert({
+    title: 'ORDEN DE COMPRA GENERADA',
+    bodyHTML: `<div style="line-height:1.7">Se creó la <b>${_numLimpio(oc.numero)}</b> a partir de la producción ${_numLimpio(op2.numero)}.<br>Ya cuenta como gasto del proyecto y se puede recibir en obra.</div>`
+  });
+  try { renderOrdenesList(); } catch(e){}
+  try { if (document.getElementById('_bodegaPanelModal')) { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } } catch(e){}
+};
 /* ═══════════ v1016 · CUENTAS POR PAGAR (pedido de Antonio) ═══════════
    "Separá por proyecto el tema de las cuentas por pagar de todas las compras que están a
    crédito... necesito un resumen de cuentas por pagar con detalle de las órdenes a crédito."

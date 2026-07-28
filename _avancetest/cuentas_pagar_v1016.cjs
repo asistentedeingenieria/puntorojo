@@ -102,7 +102,16 @@ ok('al elegir bodega se busca de verdad', /_bodegaBuscarMaterial\(/.test(zUp));
 ok('el nombre de la bodega manda', /item\.name = _res\.name/.test(zUp));
 ok('y toma el precio con que entró', /item\.precio = _res\.precio/.test(zUp));
 ok('avisa si no alcanza la existencia', /SE DESPACHA LO QUE HAYA/.test(zUp));
-ok('y si el material ni está registrado', /NO ESTÁ REGISTRADO EN LA BODEGA/.test(zUp));
+/* v1017: si no está con ESE nombre, casi siempre es un problema de nombre y no de
+   existencia: se ofrecen los parecidos que sí hay en vez de solo negar */
+ok('si no está con ese nombre, ofrece los parecidos', /_bodegaPedirMatch\(/.test(zUp));
+/* la equivalencia se sigue en LOS DOS SENTIDOS: el saldo puede estar guardado bajo cualquiera
+   de los dos nombres, según con cuál se cargó la existencia */
+ok('busca por el canónico y por sus hermanos', /_matAliasMap\(\)/.test(zB));
+const zCand = ex('function _bodegaCandidatosParecidos(');
+ok('los parecidos salen por palabras en común', zCand.length > 100 && /indexOf\(w\)/.test(zCand));
+ok('solo ofrece lo que de verdad hay en existencia', /saldo\) > 0/.test(zCand));
+ok('elegir uno deja declarada la equivalencia', /_matFixAdd\(/.test(ex('window._bodegaUnirYUsar = function')));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

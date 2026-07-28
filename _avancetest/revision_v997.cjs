@@ -115,7 +115,8 @@ ok('al deseleccionar vuelve al nombre de compra, no al interno', /varianteNombre
 ok('sin match limpia precio Y proveedor (no cobra otra presentación)', /item\.proveedorId = '';/.test(zUV) && /item\.eventual = true;/.test(zUV));
 
 // ── 6. filtro de OC vivas ──
-ok('el filtro mira status (no solo estatus)', /o\.status !== 'CANCELADA'/.test(zE));
+/* v1017 reescribió el filtro con returns explícitos al excluir las órdenes de producción */
+ok('el filtro mira status (no solo estatus)', /o\.status === 'CANCELADA'/.test(zE) && /o\.estatus === 'CANCELADA'/.test(zE));
 
 // ── 7. número de comprobante congelado ──
 ok('la entrega guarda su número al firmar', /_entrega\.seq = /.test(ex('window._recepcionConfirmar = async function')));
