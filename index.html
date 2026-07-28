@@ -3192,7 +3192,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1018</span>
+    <span style="opacity:.5;font-size:9px">v1019</span>
   </footer>
 
 </div>
@@ -20362,7 +20362,12 @@ window._bodegaMovsEntradaDeOc = function(oc, cants){
   (((oc || {}).items) || []).forEach((it, i) => {
     const q = Number(cants && cants[i]);
     if (!it || !(q > 0)) return;
-    out.push(_bodegaMov('ENTRADA', it.name, q, { ocId: oc.id, ocNumero: oc.numero || '', proyecto: oc.proyecto || '' }));
+    /* v1019: se SELLA el precio con que entra. Antes solo quedaba el ocId y había que ir a
+       buscarlo a la orden; si esa orden se borraba, el material quedaba sin valor y todo
+       despacho suyo salía en Q 0. */
+    const _mov = _bodegaMov('ENTRADA', it.name, q, { ocId: oc.id, ocNumero: oc.numero || '', proyecto: oc.proyecto || '' });
+    _mov.precio = Number(it.precio) || 0;
+    out.push(_mov);
   });
   return out;
 };
@@ -21558,7 +21563,7 @@ function renderOcItems(){
       }</div>
       <div class="oc-qty">${it.qty}</div>
       <div><button type="button" onclick="_abrirPickerProveedor(this, ${idx})" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 10px;border:1px solid ${it.proveedorId ? '#D1D5DB' : '#FCA5A5'};border-radius:8px;background:#fff;font-family:inherit;font-size:11px;cursor:pointer;text-align:left"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${it.proveedorId === '_bodega' ? 'BODEGA CENTRAL (DESPACHO)' : ((proveedores.find(pv => pv.id === it.proveedorId)||{}).nombre || '— ASIGNAR —')}</span><span style="color:#9CA3AF">▾</span></button></div>
-      <div>${(it.aMedida || it.eventual)
+      <div>${(it.aMedida || it.eventual || it.proveedorId === '_bodega')
         ? `<input type="number" step="0.01" min="0" value="${it.precio || ''}" placeholder="0.00" oninput="updateOcPrecio(${idx}, this.value)" title="${it.aMedida ? 'Poste a medida: precio de fabricación digitable' : 'Material extraordinario: no está en el catálogo, escribí el precio acordado'}">`
         : `<input type="number" value="${it.precio || ''}" placeholder="—" disabled style="background:var(--cream);cursor:not-allowed" title="El precio viene del catálogo de precios — para cambiarlo enviá una solicitud">`}</div>
       <div class="oc-subtotal" id="ocSubtotal-${idx}">Q ${fmtQ(it.qty * (it.precio || 0))}</div>
@@ -21765,7 +21770,11 @@ function updateOcPrecio(idx, val){
      v1013: y el EXTRAORDINARIO, que por definición no está en el catálogo. Antes se le podía
      asignar proveedor pero no precio, y la orden terminaba saliendo en Q 0 — una mentira
      permanente en el reporte de gasto. Lo que SÍ está en el catálogo sigue bloqueado. */
-  if (!ocWorkingItems[idx].aMedida && !ocWorkingItems[idx].eventual) {
+  /* v1019: y lo que sale de BODEGA. Su precio no viene del catálogo del proveedor sino de lo
+     que costó cuando entró a la bodega; si la app no lo encuentra (movimientos viejos sin
+     precio sellado), tiene que poder escribirse a mano o el despacho sale en Q 0 y falsea el
+     gasto de la obra. */
+  if (!ocWorkingItems[idx].aMedida && !ocWorkingItems[idx].eventual && ocWorkingItems[idx].proveedorId !== '_bodega') {
     showToast('EL PRECIO VIENE DEL CATÁLOGO — PEDÍ EL CAMBIO POR SOLICITUD', 'red');
     return;
   }
@@ -31852,17 +31861,40 @@ function _getProveedores(){ try { if (typeof state !== 'undefined' && state) { i
    CANCELADAS. */
 function _precioEntradaBodega(k){
   /* El despacho sale en Q 0 en el papel: su valor real es el precio con que ese material
-     entró a la bodega. Se toma la ENTRADA más reciente que tenga precio; los movimientos
-     históricos no lo traen, así que devuelve 0 y esas líneas quedan sin valorizar en vez de
-     inventar un número. */
+     entró a la bodega. CASCADA (v1019 — los movimientos históricos no sellaban precio, así
+     que sin los pasos 2 y 3 todo despacho valía 0):
+       1. el precio sellado en la ENTRADA (desde v1019 en adelante),
+       2. el de la ORDEN DE COMPRA que originó esa entrada — el movimiento guarda su ocId,
+       3. el del catálogo de precios, como última aproximación.
+     Si ninguno da, devuelve 0 y la línea queda sin valorizar en vez de inventar un número. */
   const movs = ((typeof state !== 'undefined' && state && state.bodegaMovs) || []);
-  let mejor = null;
-  movs.forEach(m => {
-    if (!m || m.tipo !== 'ENTRADA' || String(m.k) !== String(k)) return;
-    if (!(Number(m.precio) > 0)) return;
-    if (!mejor || (Number(m.ts) || 0) > (Number(mejor.ts) || 0)) mejor = m;
-  });
-  return mejor ? Number(mejor.precio) || 0 : 0;
+  const entradas = movs.filter(m => m && m.tipo === 'ENTRADA' && String(m.k) === String(k))
+    .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0));   // la más reciente primero
+
+  // 1. precio sellado en el propio movimiento
+  const conPrecio = entradas.find(m => Number(m.precio) > 0);
+  if (conPrecio) return Number(conPrecio.precio) || 0;
+
+  // 2. el precio que tenía la orden de compra con que entró
+  for (const m of entradas) {
+    const ocId = m.ref && m.ref.ocId;
+    if (!ocId) continue;
+    let oc = null;
+    try { const f = _bodegaFindOc(ocId); oc = f && f.oc; } catch(e){}
+    if (!oc) continue;
+    const linea = (oc.items || []).find(it => { try { return _ocItemMemKey(it.name) === String(k); } catch(e){ return false; } });
+    if (linea && Number(linea.precio) > 0) return Number(linea.precio) || 0;
+  }
+
+  // 3. el catálogo de precios (aproximación: es lo que cuesta hoy, no lo que costó)
+  const nombre = (entradas[0] && entradas[0].name) || '';
+  if (nombre) {
+    try {
+      const pvs = _provsDelProducto(nombre);
+      if (pvs.length) return Number(pvs[0].precio) || 0;
+    } catch(e){}
+  }
+  return 0;
 }
 function _gastosDeProyecto(projectId){
   const pid = String(projectId || '');
