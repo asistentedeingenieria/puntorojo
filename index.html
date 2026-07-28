@@ -3190,7 +3190,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1011</span>
+    <span style="opacity:.5;font-size:9px">v1012</span>
   </footer>
 
 </div>
@@ -17560,7 +17560,7 @@ function renderMateriales(){
   // columnas de BAJO MÍNIMO / ESTADO. Stock queda como número editable libre.
   document.getElementById('matKpis').innerHTML = `
     <div class="kpi cafe"><div class="lbl">Materiales</div><div class="val">${items.length}</div><div class="sub">En inventario</div></div>
-    <div class="kpi"><div class="lbl">Pedidos activos</div><div class="val">${(p.materiales.pedidos||[]).length}</div><div class="sub">Este proyecto</div></div>
+    <div class="kpi"><div class="lbl">Pedidos activos</div><div class="val">${(p.materiales.pedidos||[]).filter(pd => _pedidoEsDeEstaObra(pd, p) && pd.status !== 'RECIBIDO').length}</div><div class="sub">Este proyecto</div></div>
   `;
 
   const body = document.getElementById('matBody');
@@ -17835,9 +17835,50 @@ function _healPedidosRecibidos(pedidos){
   });
   return n;
 }
+/* v1012 (pedido de Antonio: "cada una en su proyecto, NO mezclar"): ¿este pedido es de la
+   obra abierta? Dentro de p.materiales.pedidos conviven tres cosas por razones históricas:
+   los pedidos de la obra, los MANUALES anteriores a v1002 (que además salen en PROYECTOS
+   VARIOS, o sea DOS veces) y los de OFICINA CENTRAL (que deberían estar en bodega).
+   NO se mueve ni se borra nada: solo se filtra la vista y se avisa dónde están. */
+function _pedidoEsDeEstaObra(pd, p){
+  if (!pd || !p) return false;
+  try { if (_pedidoEsAbastecimiento(pd)) return false; } catch (e) {}
+  /* La identidad va por ID. Comparar por NOMBRE congelaba la pertenencia: al corregir el
+     nombre de la obra (una tilde, un guión, agregar "TORRE B") pd.proyectoPedido se quedaba
+     con el viejo y TODOS sus pedidos salían de la lista, con sus órdenes atrás. El nombre
+     queda solo como respaldo para los pedidos anteriores a v1012. */
+  if (pd.proyectoId) return String(pd.proyectoId) === String(p.id);
+  if (pd.proyectoManual || pd.esVarios) return false;
+  const pp = String(pd.proyectoPedido || '').trim().toUpperCase();
+  if (!pp) return true; // sin marca = pedido viejo de la obra, antes de que existiera el campo
+  return pp === String(p.name || '').trim().toUpperCase();
+}
+/* v1012: al RENOMBRAR una obra hay que reparar la marca de sus pedidos legacy (los que no
+   tienen proyectoId). Sella _ts porque los pedidos van por union-merge (v972): sin el sello,
+   el cambio se pierde en la siguiente sincronización. No toca los MANUAL ni los de OFICINA:
+   esos pertenecen a otro contenedor y su nombre es el de su propio cliente. */
+function _reestamparPedidosProyecto(p, nombreViejo, nombreNuevo){
+  if (!p || !p.materiales) return 0;
+  const viejo = String(nombreViejo || '').trim().toUpperCase();
+  const nuevo = String(nombreNuevo || '').trim().toUpperCase();
+  if (!viejo || viejo === nuevo) return 0;
+  let n = 0;
+  (p.materiales.pedidos || []).forEach(pd => {
+    if (!pd || pd.proyectoManual || pd.esVarios) return;
+    try { if (_pedidoEsAbastecimiento(pd)) return; } catch (e) {}
+    if (String(pd.proyectoPedido || '').trim().toUpperCase() !== viejo) return;
+    pd.proyectoPedido = nuevo;
+    if (!pd.proyectoId) pd.proyectoId = p.id;
+    pd._ts = Date.now();
+    n++;
+  });
+  return n;
+}
 function renderPedidosList(){
   const p = activeProj();
-  const pedidos = (p.materiales.pedidos || []).slice().sort((a,b) => (b.ts||0) - (a.ts||0));
+  const _todos = (p.materiales.pedidos || []).slice().sort((a,b) => (b.ts||0) - (a.ts||0));
+  const pedidos = _todos.filter(pd => _pedidoEsDeEstaObra(pd, p));
+  const _ajenos = _todos.length - pedidos.length;
   if (_healPedidosRecibidos(pedidos)) { try { saveState(); } catch(e){} }
 
   // KPIs de pedidos
@@ -17845,17 +17886,28 @@ function renderPedidosList(){
   const byState = {};
   PEDIDO_ESTADOS.forEach(s => { byState[s.key] = 0; });
   pedidos.forEach(pd => { if (byState[pd.status] !== undefined) byState[pd.status]++; });
+  /* v1012: el total decía "3 · ESTE PROYECTO" con UNA tarjeta en pantalla, porque contaba
+     también los recibidos que el historial esconde. Ahora el número grande es lo que se ve. */
+  const _activos = total - (byState['RECIBIDO'] || 0);
 
   document.getElementById('pedKpis').innerHTML = `
-    <div class="kpi cafe"><div class="lbl">Total pedidos</div><div class="val">${total}</div><div class="sub">Este proyecto</div></div>
+    <div class="kpi cafe"><div class="lbl">Total pedidos</div><div class="val">${_activos}</div><div class="sub">${(byState['RECIBIDO'] || 0) ? 'Activos · ' + (byState['RECIBIDO'] || 0) + ' en historial' : 'Este proyecto'}</div></div>
     <div class="kpi blue"><div class="lbl">Solicitados</div><div class="val" style="color:var(--blue)">${byState['SOLICITADO']||0}</div><div class="sub">Pendientes de compra</div></div>
     <div class="kpi"><div class="lbl">En compra / aprobación</div><div class="val" style="color:var(--amber)">${(byState['EN COMPRA']||0) + (byState['APROBADO']||0)}</div><div class="sub">En proceso</div></div>
     <div class="kpi green"><div class="lbl">Recibidos</div><div class="val green">${byState['RECIBIDO']||0}</div><div class="sub">Completados</div></div>
   `;
 
   const list = document.getElementById('pedidosList');
+  /* v1012: el aviso de los pedidos que están guardados acá pero no son de esta obra se arma
+     ANTES del estado vacío. Si quedaba después, con TODOS filtrados la pantalla decía
+     "No hay pedidos registrados todavía" y no había una sola pista de que existen. */
+  const _avisoAjenos = _ajenos
+    ? `<div style="padding:9px 14px;margin-bottom:8px;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;font-size:11px;color:#475569;line-height:1.6">
+        Hay <b>${_ajenos}</b> pedido${_ajenos !== 1 ? 's' : ''} guardado${_ajenos !== 1 ? 's' : ''} en esta obra que no le pertenece${_ajenos !== 1 ? 'n' : ''} — pedidos de otro cliente o de abastecimiento a bodega. No se borraron: se ven desde su propia vista.
+      </div>`
+    : '';
   if (pedidos.length === 0) {
-    list.innerHTML = `<div class="empty"><div class="big">◈</div><p>No hay pedidos registrados todavía.</p><button class="btn cafe sm" onclick="setPedidoTab('nuevo')" data-perm="pedidos.create">+ CREAR PRIMER PEDIDO</button></div>`;
+    list.innerHTML = _avisoAjenos + `<div class="empty"><div class="big">◈</div><p>No hay pedidos de esta obra todavía.</p><button class="btn cafe sm" onclick="setPedidoTab('nuevo')" data-perm="pedidos.create">+ CREAR PRIMER PEDIDO</button></div>`;
     applyPermissions();
     return;
   }
@@ -17867,7 +17919,8 @@ function renderPedidosList(){
   const _hist = pedidos.filter(pd => pd && pd.status === 'RECIBIDO');
   const _hKey = 'pedidos_historial_visible_' + ((p && p.id) || 'def');
   const _hVis = (() => { try { return localStorage.getItem(_hKey) === '1'; } catch(e){ return false; } })();
-  let _html = _act.map(pd => renderPedidoCard(pd, p)).join('');
+  let _html = _avisoAjenos;
+  _html += _act.map(pd => renderPedidoCard(pd, p)).join('');
   if (!_act.length && _hist.length) {
     _html += `<div class="empty" style="padding:22px 12px"><p style="margin:0">No hay pedidos activos — todos fueron recibidos en obra.</p></div>`;
   }
@@ -18314,7 +18367,11 @@ function renderPedidoForm(){
   const nivelSelect = document.getElementById('pfNivel');
   const niveles = [];
   p.towers.forEach(t => t.levels.forEach(l => niveles.push({ id:t.id + '|' + l.id, label: `${t.name} · ${l.name}`, tower:t, level:l })));
-  nivelSelect.innerHTML = '<option value="">— SELECCIONAR —</option>' + niveles.map(n => `<option value="${n.id}" data-levelid="${n.level.id}">${n.label}</option>`).join('');
+  /* v1012: BODEGA DE LA OBRA va arriba de los niveles — es de las opciones que más se usan
+     (agua, limpieza, insumos que no son de ningún apartamento). */
+  nivelSelect.innerHTML = '<option value="">— SELECCIONAR —</option>'
+    + `<option value="${PF_NIVEL_BODEGA}">${PF_NIVEL_BODEGA_LBL}</option>`
+    + niveles.map(n => `<option value="${n.id}" data-levelid="${n.level.id}">${n.label}</option>`).join('');
   nivelSelect.onchange = () => updateAptoSelect();
   updateAptoSelect();
 
@@ -18667,12 +18724,27 @@ function escapeAttr(s){
   return String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;');
 }
 
+/* v1012 (pedido de Antonio, señalando el desplegable TORRE/NIVEL): "necesito aquí poder
+   cargar a bodega del proyecto el pedido". Es para consumibles de la obra — agua, limpieza,
+   insumos — que no son de ningún nivel ni apartamento.
+   El value es un centinela de letras y guión bajo a propósito: NO puede llevar '|' (lo parte
+   updateAptoSelect) ni caracteres raros (submitPedido lo mete en un selector CSS). */
+const PF_NIVEL_BODEGA = '__BODEGA_OBRA__';
+const PF_NIVEL_BODEGA_LBL = 'BODEGA DE LA OBRA';
 function updateAptoSelect(){
   const p = activeProj();
   const val = document.getElementById('pfNivel').value;
   const aptoSelect = document.getElementById('pfApto');
   if (!val) {
     aptoSelect.innerHTML = '<option value="">— SIN APTO ESPECÍFICO —</option>';
+    return;
+  }
+  /* v1012: BODEGA DE LA OBRA no es un nivel — no tiene apartamentos. Y OJO: sin esta rama,
+     un value desconocido caía en el find, no lo hallaba y hacía return DEJANDO el apto que
+     estuviera puesto; el pedido salía "BODEGA DE LA OBRA · APTO 304". */
+  if (val === PF_NIVEL_BODEGA) {
+    aptoSelect.innerHTML = '<option value="">— NO APLICA —</option>';
+    aptoSelect.value = '';
     return;
   }
   const [towerId, levelId] = val.split('|');
@@ -18820,11 +18892,15 @@ async function submitPedido(){
   // v921: en OFICINA tampoco (el material va a la bodega central, sin torre/nivel/apto).
   const isManualProyecto = (proyectoTipo === 'MANUAL' || proyectoTipo === 'OFICINA');
   let nivelLabel = '';
+  let _destinoBodegaObra = false;
   if (!isManualProyecto) {
     const nivelVal = document.getElementById('pfNivel').value;
     if (!nivelVal) return showToast('SELECCIONAR TORRE / NIVEL', 'red');
     const opt = document.getElementById('pfNivel').querySelector(`option[value="${nivelVal}"]`);
     nivelLabel = opt ? opt.textContent : '';
+    /* v1012: destino BODEGA DE LA OBRA. Se guarda un FLAG además de la etiqueta: la intención
+       nunca debe volver a leerse parseando el texto de pd.nivel. */
+    _destinoBodegaObra = (nivelVal === PF_NIVEL_BODEGA);
   }
 
   let aptoLabel = '';
@@ -18882,7 +18958,11 @@ async function submitPedido(){
     solicitanteUsername: (u.username || '').toLowerCase(),
     proyectoPedido,
     proyectoManual: proyectoTipo === 'MANUAL',
+    // v1012: la pertenencia va por ID; el nombre es solo el rótulo y puede cambiar
+    proyectoId: p.id,
     nivel: nivelLabel,
+    // v1012: el destino como FLAG, no como texto a parsear (pd.nivel es solo el rótulo)
+    destinoBodega: _destinoBodegaObra,
     apto: aptoLabel,
     ordenCambio: document.getElementById('pfOrdenCambio').value.trim().toUpperCase(),
     observaciones: document.getElementById('pfObservaciones').value.trim(),
@@ -18913,6 +18993,16 @@ async function submitPedido(){
   if (proyectoTipo === 'MANUAL') {
     pedido.esVarios = true;
     _variosMatStore().pedidos.push(pedido);
+  } else if (proyectoTipo === 'OFICINA') {
+    /* v1012: LA SEGUNDA PUERTA. Un pedido de OFICINA CENTRAL — ABASTECIMIENTO se guardaba
+       dentro de la obra que estuviera abierta: ensuciaba su lista y encima NO aparecía en
+       bodega, que es justo al revés de lo que uno espera. Ahora va al contenedor de la
+       bodega central con SU numeración, igual que si se hubiera pedido desde ese panel.
+       El correlativo de la obra que se consumió arriba se devuelve: el pedido no vive ahí. */
+    p.materiales.pedidoCounter = Math.max(0, (p.materiales.pedidoCounter || 1) - 1);
+    pedido.esBodega = true;
+    pedido.numero = 'BODEGA – ' + String(_bodegaNextNum(_bodegaMatStore().pedidos));
+    _bodegaMatStore().pedidos.push(pedido);
   } else {
     p.materiales.pedidos.push(pedido);
   }
@@ -22704,10 +22794,20 @@ function renderOrdenesList(){
   /* v999 (corrección de Antonio): las órdenes de ABASTECIMIENTO NO se mezclan acá — no son
      de ningún proyecto, todo su circuito vive en BODEGA CENTRAL, incluida la autorización.
      Quien firma entra a bodega (ver _puedeVerBodega) y las autoriza desde su bandeja. */
-  const ordenes = [...(p.materiales.ordenes || [])].sort((a,b) => (b.ts || 0) - (a.ts || 0));
+  /* v1012: las órdenes de los pedidos MANUALES viejos quedaron guardadas en el contenedor de
+     la obra anfitriona y mostraban el nombre de OTRA obra en su columna PROYECTO/ÁREA. Se
+     filtran por el pedido que las originó — el mismo criterio que la lista de pedidos. */
+  const _ordTodas = [...(p.materiales.ordenes || [])].sort((a,b) => (b.ts || 0) - (a.ts || 0));
+  const ordenes = _ordTodas.filter(o => {
+    if (!o) return false;
+    const _pdo = (p.materiales.pedidos || []).find(x => x && x.id === o.pedidoId);
+    return _pdo ? _pedidoEsDeEstaObra(_pdo, p) : true; // sin pedido origen se muestra igual
+  });
+  const _ordAjenas = _ordTodas.length - ordenes.length;
 
   const countLbl = document.getElementById('ocCountLabel');
-  if (countLbl) countLbl.textContent = `— ${ordenes.length} ÓRDEN${ordenes.length !== 1 ? 'ES' : ''}`;
+  if (countLbl) countLbl.textContent = `— ${ordenes.length} ÓRDEN${ordenes.length !== 1 ? 'ES' : ''}`
+    + (_ordAjenas ? ` · ${_ordAjenas} DE OTRO CLIENTE` : ''); // v1012: nada desaparece en silencio
 
   if (ordenes.length === 0) {
     cont.innerHTML = `<div class="empty" style="padding:40px 20px;text-align:center;color:var(--mute)">
@@ -27645,6 +27745,9 @@ function saveProjectSpecs(){
   const totalCI = Number(document.getElementById('epAmount').value) || 0;
   const iva = (Number(document.getElementById('epIva').value) || 0) / 100;
   const totalSI = iva > 0 ? +(totalCI / (1 + iva)).toFixed(2) : totalCI;
+  /* v1012: los pedidos legacy marcan su obra por NOMBRE. Si se renombra sin reparar la marca,
+     todos ellos y sus órdenes salen de la lista. Se re-estampan ANTES de pisar p.name. */
+  const _reest = _reestamparPedidosProyecto(p, p.name, name);
   p.name = name;
   p.client = document.getElementById('epClient').value.trim().toUpperCase();
   p.location = document.getElementById('epLocation').value.trim().toUpperCase();
