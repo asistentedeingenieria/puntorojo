@@ -3192,7 +3192,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1014</span>
+    <span style="opacity:.5;font-size:9px">v1015</span>
   </footer>
 
 </div>
@@ -3575,7 +3575,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
         </div>
       </div>
 
-      <div class="field">
+      <div class="field" id="ocFormaPagoWrap">
         <label>FORMA DE PAGO</label>
         <select id="ocFormaPago">
           <option>TARJETA DE ABASTO</option>
@@ -19034,17 +19034,7 @@ async function submitPedido(){
   const metalLabel = validMetal.length > 0 ? ` · ${validMetal.length} fabricación${validMetal.length!==1?'es':''} metal` : '';
   try { logActivity('create', `Pedido ${numero} creado`, `${p.name} · ${totalCount} materiales${extraLabel}${metalLabel} · ${solicitante}`); } catch(e){ console.warn('[v996] logActivity submitPedido', e); }
 
-  // Notificar a Compras: hay pedido nuevo pendiente de aprobación / OC
-  try {
-    const actorName = (getCurrentUser()?.displayName || solicitante || 'USUARIO').toUpperCase();
-    await _notifyByPerm('compras.autorizar', {
-      type: 'pedido-nuevo',
-      title: `${actorName} · SOLICITÓ PEDIDO ${numero}`,
-      body: `${p.name} · ${totalCount} material${totalCount !== 1 ? 'es' : ''}${extraLabel}${metalLabel}`,
-      refPedidoId: pedido.id,
-      projectId: p.id
-    });
-  } catch(e){ console.warn('Notif submitPedido:', e); }
+
 
   saveState();
 
@@ -19095,6 +19085,24 @@ async function submitPedido(){
     try { _abrirPanelBodega(); } catch(e){ console.warn('[v1013] abrir bodega', e); }
     return;
   }
+  /* Notificar a Compras: hay pedido nuevo pendiente de aprobación / OC.
+     ⚠️ v1015 — CAUSA RAÍZ de "le doy ENVIAR A COMPRAS y no pasa nada" (reportado tres veces).
+     Esto estaba con AWAIT y ANTES de limpiar el formulario y avisar. _notifyByPerm habla con
+     la red: si tarda o queda colgada, el await nunca continúa y el pedido queda guardado sin
+     que en pantalla pase nada. El try/catch no salvaba — atrapa un rechazo, no una promesa
+     que nunca resuelve. Por eso fallaba "a veces": dependía de la red.
+     Avisarle a compras es un efecto secundario: se dispara y se olvida. El usuario ya vio su
+     confirmación y su lista mucho antes. */
+  try {
+    const actorName = (getCurrentUser()?.displayName || solicitante || 'USUARIO').toUpperCase();
+    _notifyByPerm('compras.autorizar', {
+      type: 'pedido-nuevo',
+      title: `${actorName} · SOLICITÓ PEDIDO ${numero}`,
+      body: `${p.name} · ${totalCount} material${totalCount !== 1 ? 'es' : ''}${extraLabel}${metalLabel}`,
+      refPedidoId: pedido.id,
+      projectId: p.id
+    }).catch(e => console.warn('Notif submitPedido:', e)); // v1015: se dispara y se olvida
+  } catch(e){ console.warn('Notif submitPedido:', e); }
   try { setPedidoTab('lista'); } catch(e){ console.warn('[v996] setPedidoTab', e); }
 }
 
@@ -21302,6 +21310,8 @@ async function openOrdenCompra(){
     const _op = Array.from(selFP.options).find(o => String(o.value || o.textContent).trim().toUpperCase() === _fp.trim().toUpperCase());
     if (_op) selFP.value = _op.value || _op.textContent;
   })();
+  // v1015: si el pedido entero sale de bodega, la forma de pago no aplica desde el arranque
+  try { _ocSyncFormaPagoVisible(); } catch(e){}
 
   const autoCount = ocWorkingItems.filter(x => x.proveedorId).length;
   const note = document.getElementById('ocCatalogNote');
@@ -21533,6 +21543,8 @@ function renderOcItems(){
   // v985: aplicar los valores guardados a los selects de pago por proveedor (el value
   // no viaja en el HTML string) — el re-render de proveedores no pierde lo elegido.
   try { cont.querySelectorAll('[data-ocprovpago]').forEach(s => { s.value = ((window._ocPorProv || {})[s.dataset.ocprovpago] || {}).formaPago || ''; }); } catch(e){}
+  // v1015: si todo el pedido sale de bodega, la forma de pago no aplica y se esconde
+  try { _ocSyncFormaPagoVisible(); } catch(e){}
   updateOcTotal();
 }
 window._ocPorProvSet = function(provId, campo, valor){
@@ -21603,6 +21615,20 @@ function updateOcItemProveedor(idx, provId){
   renderOcItems();
 }
 
+/* v1015 (pedido de Antonio): "si sale de la bodega central la orden de despacho NO TIENE QUE
+   DECIR NADA DE FORMA DE PAGO porque ese pago ya se solicitó". v1013 arregló lo que se GUARDA
+   en la orden, pero el modal seguía mostrando el campo — que es lo que él estaba viendo.
+   Si TODO sale de bodega, el campo desaparece. Si hay mezcla se queda, porque los materiales
+   que sí se le compran a un proveedor necesitan su forma de pago. */
+function _ocTodoDeBodega(){
+  const its = (typeof ocWorkingItems !== 'undefined' && ocWorkingItems) || [];
+  return its.length > 0 && its.every(it => it && it.proveedorId === '_bodega');
+}
+function _ocSyncFormaPagoVisible(){
+  const wrap = document.getElementById('ocFormaPagoWrap');
+  if (!wrap) return;
+  wrap.style.display = _ocTodoDeBodega() ? 'none' : '';
+}
 function updateOcPrecio(idx, val){
   if (!ocWorkingItems[idx]) return;
   /* v923: los precios viven SOLO en el catálogo; el único digitable era el poste a medida
