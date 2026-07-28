@@ -3190,7 +3190,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1009</span>
+    <span style="opacity:.5;font-size:9px">v1010</span>
   </footer>
 
 </div>
@@ -3678,6 +3678,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
     <div style="display:flex;justify-content:flex-end;margin:0 0 12px">
       <button id="btnSolicitudesPrecio" class="btn ghost sm" style="margin-right:8px;display:none;border-color:var(--cafe);color:var(--cafe)" onclick="_abrirSolicitudesPrecio()">SOLICITUDES DE PRECIO</button>
+      <button class="btn ghost sm" style="margin-right:8px" data-perm="users.manage" onclick="_abrirLimpiaCatalogo()" title="Materiales que no tiene ningún proveedor: asignarles uno, unirlos a otro material o eliminarlos">LIMPIAR CATÁLOGO</button>
       <label class="btn primary sm" style="cursor:pointer;margin:0" data-perm="users.manage">SUBIR EXCEL DE PRECIOS<input type="file" accept=".xlsx,.xls" style="display:none" onchange="_importarPreciosExcel(event)"></label>
     </div>
 
@@ -8971,7 +8972,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 915; // v977: merge por clave/ts de p.materiales.recetaMiles en applyRemote
+const APP_SYNC_VERSION = 916; // v1010: union-merge de state.matFix (correcciones del catálogo) en applyRemote
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9880,6 +9881,15 @@ const CloudSync = {
         const _mBm = _mergeById((state && state.bodegaMovs) || [], merged.bodegaMovs || [], _bmTomb);
         merged.bodegaMovs = _mBm.list; if (_mBm.changed) needsResync = true;
 
+        /* v1010: CORRECCIONES DEL CATÁLOGO (equivalencias de nombre y materiales eliminados
+           en la limpia). Se unen igual: si dos personas limpian a la vez, las dos limpiezas
+           sobreviven en vez de pisarse. */
+        const _mfTomb = Object.assign({}, (state && state.matFixEliminados) || {}, merged.matFixEliminados || {});
+        merged.matFixEliminados = _mfTomb;
+        const _mMf = _mergeById((state && state.matFix) || [], merged.matFix || [], _mfTomb);
+        merged.matFix = _mMf.list; if (_mMf.changed) needsResync = true;
+        try { _matFixReset(); } catch(e){} // el índice de equivalencias quedó viejo tras el merge
+
         // v964: STORE de abastecimiento (bodegaMat.pedidos/ordenes) — pedidos y OCs de la
         // bodega central, fuera de los proyectos. Mismo régimen de plata + tombstones.
         {
@@ -10097,7 +10107,7 @@ const CloudSync = {
     // referencia queda huerfana y el cambio (push/Object.assign/splice) no persiste. Esto
     // arregla de raiz toda la familia "await modal -> escribir" (aprobar/rechazar/procesar/
     // anular planilla, editar/eliminar anticipos y polizas, etc.).
-    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal, #_bodegaCargaModal, #_recepcionModal, #_variosPanelModal, .prModal-backdrop')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO; v977: prPrompt/prAlert (.prModal-backdrop) — recetaV2Op escribía sobre un p tomado antes del await del prompt. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo.
+    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal, #_bodegaCargaModal, #_recepcionModal, #_variosPanelModal, #_limpiaModal, #_limpiaUnirModal, .prModal-backdrop')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO; v977: prPrompt/prAlert (.prModal-backdrop) — recetaV2Op escribía sobre un p tomado antes del await del prompt. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo.
     const focused = document.activeElement;
     if (focused && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)) return true;
     return false;
@@ -19141,7 +19151,27 @@ function findCatalogProductForProvider(itemName, proveedor){
 /* v989 (pedido de Antonio): TODOS los proveedores del catálogo que tienen este producto,
    con su precio. Si hay más de uno, compras SÍ puede elegir en pedidos de receta (el
    candado v978 solo evita inventar proveedores, no elegir entre los que ya lo venden). */
+/* v1010: si el material fue UNIDO a otro en la limpia del catálogo, se prueba también con el
+   nombre canónico. Sin esto, unir servía solo para la pantalla: el pedido de obra seguía
+   llegando a compras sin proveedor, que es justo lo que Antonio quería resolver. */
+function _matNombreCanonico(itemName){
+  try {
+    const k = _ocItemMemKey(itemName);
+    const ck = _matAliasCanon(k);
+    if (ck === k) return '';
+    const f = (_matFixStore() || []).find(x => x && x.tipo === 'ALIAS' && x.hacia === ck && x.haciaName);
+    return (f && f.haciaName) || ck;
+  } catch (e) { return ''; }
+}
 function _provsDelProducto(itemName){
+  const _base = _provsDelProductoEn(itemName);
+  if (_base.length) return _base;
+  /* try: en los tests esta función se evalúa aislada, sin las correcciones del catálogo */
+  let _canon = '';
+  try { _canon = _matNombreCanonico(itemName); } catch (e) {}
+  return _canon ? _provsDelProductoEn(_canon) : _base;
+}
+function _provsDelProductoEn(itemName){
   /* v990 (revisión): match EXACTO, NO el difuso de findCatalogProductForProvider (que
      matchea por subcadena en ambos sentidos). Con el difuso, "PLYWOOD [4' X 8' X 3/4"]"
      pescaba al que vende PLYWOOD de 1/2" y "CLAVO CON ESCUADRA 1"" a uno que vende
@@ -19158,10 +19188,18 @@ function _provsDelProducto(itemName){
 function findBestProviderForItem(itemName){
   const p = activeProj();
   const proveedores = _getProveedores();
-  const matches = proveedores.map(prv => {
+  let matches = proveedores.map(prv => {
     const prod = findCatalogProductForProvider(itemName, prv);
     return prod ? { proveedor: prv, producto: prod, precio: Number(prod.precio) || 0 } : null;
   }).filter(Boolean);
+  if (matches.length === 0) {
+    // v1010: segundo intento con el nombre canónico si el material fue unido en la limpia
+    const _canon = (typeof _matNombreCanonico === 'function') ? _matNombreCanonico(itemName) : '';
+    if (_canon) matches = proveedores.map(prv => {
+      const prod = findCatalogProductForProvider(_canon, prv);
+      return prod ? { proveedor: prv, producto: prod, precio: Number(prod.precio) || 0 } : null;
+    }).filter(Boolean);
+  }
   if (matches.length === 0) return null;
   matches.sort((a,b) => a.precio - b.precio);
   return matches[0];
@@ -19439,7 +19477,13 @@ function autoAssignOcProviders(pd){
    sirve a todas las obras (decisión de Antonio). Key normalizada con _ocItemMemKey. */
 function _esItemBodega(name){
   const k = _ocItemMemKey(name);
-  return !!(((state || {}).bodegaItemsGlobal) || {})[k];
+  const flags = ((state || {}).bodegaItemsGlobal) || {};
+  if (flags[k]) return true;
+  /* v1010: si Antonio declaró que este material es el mismo que otro, el flag del canónico
+     manda. Sin esto, el nombre viejo de un pedido seguía comprándose al proveedor mientras
+     el canónico salía de bodega — el mismo material por dos caminos distintos. */
+  try { const ck = _matAliasCanon(k); if (ck !== k && flags[ck]) return true; } catch (e) {}
+  return false;
 }
 /* v959: gate único de ACCIONES de bodega — oficina (materiales.bodega), compras o admin. */
 function _puedeGestionarBodega(){
@@ -19510,6 +19554,243 @@ function _bodegaProductosDeReceta(p){
    COMPRA de su Excel; el nombre interno queda como ALIAS de búsqueda. Las recetas de
    todos los proyectos se unen encima (aportan unidad y total sugerido; los materiales
    de receta que no están en el catálogo también entran). */
+/* ═══════ v1010 · CORRECCIONES DEL CATÁLOGO (limpia pedida por Antonio 28-jul) ═══════
+   Dos problemas del mismo origen: el Excel de compras y el catálogo de precios nombran
+   distinto al mismo material ("AGUA PURA SALVAVIDAS GARRAFON" vs "AGUA PURIFICADA GARRAFON")
+   y hay cientos de materiales sin ningún proveedor. Antonio: "quiero verlo una sola vez" y
+   "dame la opción de agregarles proveedor o eliminarlos para hacer una limpia".
+
+   Ninguna heurística junta esos dos nombres — no comparten una sola palabra clave — así que
+   la equivalencia la DECLARA Antonio y se guarda como una corrección.
+
+   ⚠️ POR QUÉ NO SE TOCA _ocItemMemKey: esa clave sella los saldos de bodegaMovs, los flags
+   de "de bodega" y los items congelados dentro de pedidos y OCs. Renombrar ahí partiría el
+   inventario histórico en dos. Las correcciones son una CAPA DE PRESENTACIÓN encima.
+
+   UN solo array con tipo (no dos): un bloque de merge, un tombstone, una superficie de sync. */
+/* Los cachés cuelgan de la propia función en vez de ser variables sueltas: así cada una es
+   autocontenida (los tests las extraen de a una y las evalúan aisladas). */
+function _matFixReset(){ _matAliasMap._cache = null; _matEstaOculto._cache = null; }
+function _matFixStore(){
+  try { if (typeof state !== 'undefined' && state) { if (!Array.isArray(state.matFix)) state.matFix = []; return state.matFix; } } catch(e){}
+  return [];
+}
+function _matAliasMap(){
+  if (_matAliasMap._cache) return _matAliasMap._cache;
+  const m = {};
+  (_matFixStore() || []).forEach(f => { if (f && f.tipo === 'ALIAS' && f.key && f.hacia) m[f.key] = f.hacia; });
+  _matAliasMap._cache = m;
+  return m;
+}
+function _matAliasCanon(key){
+  const m = _matAliasMap();
+  let k = key, n = 0;
+  /* Sigue la cadena A→B→C hasta el final. El tope de saltos es por si alguien declara un
+     círculo (A→B y después B→A): sin él, el while se cuelga para siempre. */
+  while (m[k] && m[k] !== k && n < 20) { k = m[k]; n++; }
+  return k;
+}
+function _matEstaOculto(key){
+  /* cacheado como el de alias: el colapso lo llama DOS veces por clave dentro del bucle
+     caliente, y un .some() lineal sobre matFix por cada una se nota con la lista ampliada */
+  if (!_matEstaOculto._cache) {
+    const c = {};
+    (_matFixStore() || []).forEach(f => { if (f && f.tipo === 'OCULTO' && f.key) c[f.key] = 1; });
+    _matEstaOculto._cache = c;
+  }
+  return !!_matEstaOculto._cache[key];
+}
+function _matFixAdd(fix){
+  const u0 = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  const t = Date.now();
+  const f = Object.assign({
+    id: 'mf-' + uid(), ts: t, _ts: t,
+    por: String(u0.displayName || u0.username || '').toUpperCase(),
+    porUsername: String(u0.username || '').toLowerCase()
+  }, fix);
+  _matFixStore().push(f);
+  _matFixReset();
+  return f;
+}
+function _puedeLimpiarCatalogo(){
+  /* El catálogo maestro ya dice "SOLO EL ADMINISTRADOR PUEDE EDITAR ESTE CATÁLOGO":
+     borrar materiales y declarar equivalencias es de la misma familia. */
+  try { return can('users.manage'); } catch(e){ return false; }
+}
+
+/* v1010 · LIMPIA DEL CATÁLOGO. Lista los materiales que no tiene NINGÚN proveedor y deja
+   hacer tres cosas con cada uno: asignarle proveedor y precio, declararlo el mismo que otro
+   material (el caso del agua), o eliminarlo de la lista. La unidad la pone el clasificador
+   automático (_bodegaUnidadDelNombre, v994) — Antonio: "la unidad colocala tu con tu logica".
+   Cableado por ÍNDICE, nunca nombres en atributos onclick (trampa escapeAttr v740). */
+function _cerrarLimpiaCatalogo(){ const m = document.getElementById('_limpiaModal'); if (m) m.remove(); window._limpiaFilas = null; }
+function _abrirLimpiaCatalogo(){
+  if (!_puedeLimpiarCatalogo()) return showToast('SOLO EL ADMINISTRADOR', 'red');
+  if (document.getElementById('_limpiaModal')) return;
+  _precioIndexReset(); _matFixReset();
+  const todos = _bodegaProductosGlobal();
+  const sinProv = todos.filter(x => !x.precio);
+  window._limpiaFilas = sinProv;
+  window._limpiaTodos = todos;
+  const provs = (_getProveedores() || []).slice().sort((a, b) => String(a.nombre||'').localeCompare(String(b.nombre||''), 'es'));
+  const optProv = provs.map(pv => `<option value="${_invEscAttr(pv.id)}">${_invEscAttr(pv.nombre)}</option>`).join('');
+  const filas = sinProv.map((x, i) => `
+    <div data-lfila data-lname="${(String(x.name) + ' ' + String(x.alias || '')).toLowerCase().replace(/"/g, '&quot;')}" style="padding:9px 0;border-bottom:1px solid #F3F4F6">
+      <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">
+        <div style="font-size:11.5px;font-weight:600;flex:1;min-width:0">${_invEscAttr(x.name)}</div>
+        <div style="font-size:9px;letter-spacing:1px;color:#9CA3AF;font-weight:700">${_invEscAttr(x.u || '')}</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px">
+        <select data-nativo data-lprov="${i}" style="flex:1 1 190px;min-width:0;padding:5px 7px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:10.5px"><option value="">— ELEGIR PROVEEDOR —</option>${optProv}</select>
+        <input type="number" data-lprecio="${i}" min="0" step="any" placeholder="PRECIO Q" style="flex:0 0 96px;padding:5px 7px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:10.5px;text-align:right">
+        <button class="btn sm" style="font-size:9.5px" onclick="window._limpiaAsignar(${i})">GUARDAR</button>
+        <button class="btn ghost sm" style="font-size:9.5px" onclick="window._limpiaUnir(${i})" title="Declarar que este material es el mismo que otro que ya tiene proveedor">ES EL MISMO QUE…</button>
+        <button class="btn ghost sm" style="font-size:9.5px;color:var(--red);border-color:var(--red)" onclick="window._limpiaEliminar(${i})">ELIMINAR</button>
+      </div>
+    </div>`).join('') || '<div style="padding:24px;text-align:center;color:#9CA3AF;font-size:11px">TODOS LOS MATERIALES TIENEN PROVEEDOR CON PRECIO.</div>';
+  const fixes = (_matFixStore() || []).slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  const hechas = fixes.map(f => `
+    <div style="display:flex;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #F9FAFB;font-size:10.5px">
+      <span style="flex:1;min-width:0">${f.tipo === 'ALIAS'
+        ? `<b>${_invEscAttr(f.name || f.key)}</b> <span style="color:#9CA3AF">es el mismo que</span> <b>${_invEscAttr(f.haciaName || f.hacia)}</b>`
+        : `<b>${_invEscAttr(f.name || f.key)}</b> <span style="color:#9CA3AF">eliminado de la lista</span>`}</span>
+      <button class="btn ghost sm" style="font-size:9px" onclick="window._limpiaDeshacer('${_invEscAttr(f.id)}')">DESHACER</button>
+    </div>`).join('');
+  const wrap = document.createElement('div');
+  wrap.id = '_limpiaModal';
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:100070;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+  wrap.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:820px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid rgba(0,0,0,.08)">
+      <b style="font-size:13px;letter-spacing:.5px">LIMPIAR CATÁLOGO · ${sinProv.length} MATERIALES SIN PROVEEDOR</b>
+      <div style="font-size:11px;color:#78716C;margin-top:4px;line-height:1.5">Estos materiales aparecen en los pedidos pero no los tiene ningún proveedor del catálogo de precios. Asignales uno con su precio, decí que son <b>el mismo</b> que otro material, o eliminalos. La unidad la pone la app sola.</div>
+    </div>
+    <div style="padding:10px 18px 0"><input id="_limpiaFiltro" class="pr-buscador" placeholder="BUSCAR MATERIAL…" oninput="window._limpiaFiltrar(this.value)" style="width:100%"></div>
+    <div style="overflow:auto;flex:1;padding:4px 18px 8px">${filas}
+      ${hechas ? `<div style="margin-top:16px"><div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;padding-bottom:4px">CORRECCIONES YA HECHAS (${fixes.length})</div>${hechas}</div>` : ''}
+    </div>
+    <div class="modal-actions" style="padding:10px 18px;border-top:1px solid rgba(0,0,0,.06);display:flex;justify-content:flex-end">
+      <button class="btn ghost" onclick="_cerrarLimpiaCatalogo()">CERRAR</button>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap);
+  try { applyPermissions(); } catch(e){}
+}
+window._limpiaFiltrar = function(txt){
+  const q = String(txt || '').toLowerCase().trim();
+  document.querySelectorAll('#_limpiaModal [data-lfila]').forEach(el => {
+    el.style.display = (!q || String(el.dataset.lname || '').includes(q)) ? '' : 'none';
+  });
+};
+/* Asignar SÍ escribe state.proveedoresGlobales, que viaja por LAST-WRITE-WINS sin
+   union-merge: se sube de inmediato para achicar la ventana en que otro dispositivo lo pise. */
+window._limpiaAsignar = function(i){
+  if (!_puedeLimpiarCatalogo()) return showToast('SOLO EL ADMINISTRADOR', 'red');
+  const x = (window._limpiaFilas || [])[i]; if (!x) return;
+  const selP = document.querySelector('#_limpiaModal [data-lprov="' + i + '"]');
+  const selQ = document.querySelector('#_limpiaModal [data-lprecio="' + i + '"]');
+  const provId = selP && selP.value;
+  const precio = Number(selQ && selQ.value);
+  if (!provId) return showToast('ELEGÍ EL PROVEEDOR', 'red');
+  if (!(precio > 0)) return showToast('ESCRIBÍ EL PRECIO', 'red');
+  const prv = (_getProveedores() || []).find(p => p && p.id === provId);
+  if (!prv) return showToast('PROVEEDOR NO ENCONTRADO', 'red');
+  if (!Array.isArray(prv.productos)) prv.productos = [];
+  const yaEsta = prv.productos.find(pr => pr && normOcName(pr.nombre) === normOcName(x.name));
+  if (yaEsta) yaEsta.precio = precio; else prv.productos.push({ nombre: x.name, unidad: x.u || '', precio: precio, rendimiento: '' });
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  _precioIndexReset(); _catUnidadIndexReset();
+  showToast(x.name + ' → ' + prv.nombre + ' · Q' + fmtQ(precio), 'ok');
+  _cerrarLimpiaCatalogo(); _abrirLimpiaCatalogo();
+};
+window._limpiaUnir = function(i){
+  if (!_puedeLimpiarCatalogo()) return showToast('SOLO EL ADMINISTRADOR', 'red');
+  const x = (window._limpiaFilas || [])[i]; if (!x) return;
+  /* solo se puede unir HACIA un material que sí tiene proveedor: unir hacia otro huérfano
+     no resuelve nada y encadena correcciones sin necesidad */
+  const destinos = (window._limpiaTodos || []).filter(y => y.precio && y.key !== x.key);
+  if (!destinos.length) return showToast('NO HAY MATERIALES CON PRECIO A LOS QUE UNIRLO', 'red');
+  window._limpiaDestinos = destinos;
+  const opts = destinos.map((y, j) => `<option value="${j}">${_invEscAttr(y.name)} · Q${fmtQ(y.precio)}</option>`).join('');
+  const w = document.createElement('div');
+  w.id = '_limpiaUnirModal';
+  w.style.cssText = 'position:fixed;inset:0;z-index:100080;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+  w.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:560px;width:100%;padding:18px">
+    <b style="font-size:13px;letter-spacing:.5px">ES EL MISMO MATERIAL QUE…</b>
+    <div style="font-size:11px;color:#78716C;margin:6px 0 12px;line-height:1.5"><b>${_invEscAttr(x.name)}</b> va a dejar de salir por su cuenta y se va a mostrar como el material que elijas. No se toca el inventario ya registrado: es solo la forma de listarlos.</div>
+    <select data-nativo id="_limpiaUnirSel" class="pr-filtro" style="width:100%">${opts}</select>
+    <div class="modal-actions" style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+      <button class="btn ghost" onclick="document.getElementById('_limpiaUnirModal').remove()">CANCELAR</button>
+      <button class="btn primary" onclick="window._limpiaUnirConfirmar(${i})">UNIR</button>
+    </div>
+  </div>`;
+  document.body.appendChild(w);
+};
+window._limpiaUnirConfirmar = function(i){
+  const x = (window._limpiaFilas || [])[i];
+  const sel = document.getElementById('_limpiaUnirSel');
+  const y = (window._limpiaDestinos || [])[Number(sel && sel.value)];
+  const m = document.getElementById('_limpiaUnirModal'); if (m) m.remove();
+  if (!x || !y) return;
+  _matFixAdd({ tipo: 'ALIAS', key: x.key, hacia: y.key, name: x.name, haciaName: y.name });
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  showToast(x.name + ' AHORA ES ' + y.name, 'ok');
+  _cerrarLimpiaCatalogo(); _abrirLimpiaCatalogo();
+};
+window._limpiaEliminar = function(i){
+  if (!_puedeLimpiarCatalogo()) return showToast('SOLO EL ADMINISTRADOR', 'red');
+  const x = (window._limpiaFilas || [])[i]; if (!x) return;
+  if (!confirm('¿ELIMINAR "' + x.name + '" DE LA LISTA DE MATERIALES?\n\nDeja de aparecer en ABASTECER, CARGAR EXISTENCIAS y las sugerencias. Lo podés deshacer desde esta misma pantalla.')) return;
+  _matFixAdd({ tipo: 'OCULTO', key: x.key, name: x.name });
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  showToast(x.name + ' ELIMINADO DE LA LISTA', 'ok');
+  _cerrarLimpiaCatalogo(); _abrirLimpiaCatalogo();
+};
+window._limpiaDeshacer = function(id){
+  if (!_puedeLimpiarCatalogo()) return showToast('SOLO EL ADMINISTRADOR', 'red');
+  const arr = _matFixStore();
+  const k = arr.findIndex(f => f && f.id === id);
+  if (k < 0) return;
+  arr.splice(k, 1);
+  // tombstone: sin él, el union-merge la revive desde el otro dispositivo (regla v964)
+  if (!state.matFixEliminados) state.matFixEliminados = {};
+  state.matFixEliminados[id] = Date.now();
+  _matFixReset();
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  showToast('CORRECCIÓN DESHECHA', 'ok');
+  _cerrarLimpiaCatalogo(); _abrirLimpiaCatalogo();
+};
+
+/* v1010 (pedido de Antonio 28-jul): "mi abastecer bodega debe de estar en todo momento
+   actualizado con mi catalogo de precios. Necesito que jale TODA la informacion con todo y
+   precios." Índice nombre→proveedores construido UNA sola vez por apertura: _provsDelProducto
+   es un triple bucle y con ~900 filas × 58 proveedores el modal se arrastraba. Mismo patrón
+   cacheado que _catUnidadIndex (v994).
+   ⚠️ REGLA: este índice LEE el catálogo, JAMÁS lo escribe. state.proveedoresGlobales viaja
+   por LAST-WRITE-WINS (sin union-merge ni tombstones), así que una escritura disparada desde
+   un render pisa lo que otro editó en otro dispositivo. */
+let _precioIdxCache = null;
+function _precioIndexReset(){ _precioIdxCache = null; }
+function _precioIndexProv(){
+  if (_precioIdxCache) return _precioIdxCache;
+  const idx = {};
+  (_getProveedores() || []).forEach(prv => {
+    (prv.productos || []).forEach(pr => {
+      if (!pr || !pr.nombre) return;
+      const precio = Number(pr.precio) || 0;
+      if (precio <= 0) return; // sin precio no entra (mismo criterio que _provsDelProducto v990)
+      const k = normOcName(pr.nombre);
+      if (!k) return;
+      (idx[k] = idx[k] || []).push({ id: prv.id, nombre: prv.nombre, precio: precio, unidad: pr.unidad || '', prodNombre: pr.nombre });
+    });
+  });
+  Object.keys(idx).forEach(k => idx[k].sort((a, b) => a.precio - b.precio)); // el más barato primero, igual que findBestProviderForItem
+  _precioIdxCache = idx;
+  return idx;
+}
 function _bodegaProductosGlobal(){
   const out = {};
   (typeof CATALOGO_COMPRAS !== 'undefined' ? CATALOGO_COMPRAS : []).forEach(g => {
@@ -19526,22 +19807,84 @@ function _bodegaProductosGlobal(){
       out[x.key].total += Number(x.total) || 0;
     });
   });
+  /* v1010: TERCERA FUENTE — el catálogo de precios por proveedor. Antes solo entraban la
+     constante CATALOGO_COMPRAS (foto congelada del Excel) y las recetas, así que cada Excel
+     de precios que subía Antonio agrandaba el catálogo y dejaba esta lista igual: la brecha
+     crecía con cada importación. */
+  const _pidx = _precioIndexProv();
+  (_getProveedores() || []).forEach(prv => {
+    (prv.productos || []).forEach(pr => {
+      if (!pr || !pr.nombre) return;
+      const k = _ocItemMemKey(pr.nombre);
+      if (!out[k]) out[k] = { key: k, name: pr.nombre, u: '', total: 0, alias: '', cat: '' };
+      // la unidad del proveedor solo rellena; la de la receta manda (llega antes)
+      if (!out[k].u && pr.unidad) out[k].u = pr.unidad;
+    });
+  });
   // v969: lo que quedó sin unidad de receta usa la derivada del nombre (CAJA/CUB/GAL/…/UND)
   // v970: y todo se normaliza — 'U'/'UN'/'PZA' de las recetas se muestran como UND
-  Object.values(out).forEach(x => { x.u = _bodegaUFmt(x.u) || _bodegaUnidadDelNombre(x.name); });
+  /* v1010: se aplican las correcciones declaradas por Antonio. Los nombres unidos se funden
+     en su canónico (el agua sale UNA vez) y los eliminados desaparecen de la lista. Se hace
+     acá, al final, para que da igual de qué fuente vino cada fila. */
+  const _canonOut = {};
+  Object.keys(out).forEach(k => {
+    if (_matEstaOculto(k)) return;
+    const ck = _matAliasCanon(k);
+    if (_matEstaOculto(ck)) return;
+    /* El canónico puede NO existir todavía en `out` (Antonio unió hacia un material que solo
+       aparece más adelante en el recorrido, o que ya no está en ninguna fuente). En ese caso
+       la fila unida ASCIENDE y toma su lugar: si no, con dos materiales unidos al mismo
+       canónico ausente se perdía uno entero y cuál sobrevivía dependía del orden de las claves. */
+    const destino = _canonOut[ck] || out[ck];
+    if (!destino) {
+      const f = Object.assign({}, out[k], { key: ck, keys: [k] });
+      if (ck !== k) f.alias = String(f.alias || '') + ' ' + String(out[k].name || '');
+      _canonOut[ck] = f;
+      return;
+    }
+    if (destino === out[k]) { destino.keys = [k]; _canonOut[ck] = destino; return; }
+    // se funde: suma el total, hereda lo que le falte y ARRASTRA la clave para el saldo
+    destino.total = (Number(destino.total) || 0) + (Number(out[k].total) || 0);
+    if (!destino.u && out[k].u) destino.u = out[k].u;
+    destino.keys = (destino.keys || [destino.key]).concat([k]);
+    // el nombre unido queda como alias de búsqueda: buscar "PURIFICADA" tiene que pescarlo
+    destino.alias = String(destino.alias || '') + ' ' + String(out[k].name || '');
+    _canonOut[ck] = destino;
+  });
+  Object.keys(out).forEach(k => { delete out[k]; });
+  Object.keys(_canonOut).forEach(k => { out[k] = _canonOut[k]; });
+  Object.values(out).forEach(x => {
+    x.u = _bodegaUFmt(x.u) || _bodegaUnidadDelNombre(x.name);
+    /* v1010: el precio que se muestra es EL MISMO que después va a salir en la OC — el del
+       proveedor más barato. El índice ya viene ordenado. Ojo: se busca con normOcName (la
+       clave del catálogo de precios), NO con _ocItemMemKey (la clave de identidad de saldos
+       y flags): son dos normalizadores distintos y hay que respetar cada uno en su terreno. */
+    /* v1010 (revisión): el precio se busca por el nombre canónico Y por el de CADA material
+       unido. Sin esto, unir AGUA PURIFICADA (Q23 de HINCAPIE) hacia AGUA SALVAVIDAS (sin
+       proveedor) dejaba la fila en '—': justo lo contrario de lo que Antonio pidió. */
+    const _nombres = [x.name].concat((x.keys || []).filter(k => k !== x.key));
+    let _pv = [];
+    for (const _n of _nombres) {
+      const _hit = _pidx[normOcName(_n)] || [];
+      if (_hit.length) { _pv = _hit; break; }
+    }
+    if (_pv.length) { x.precio = _pv[0].precio; x.nProv = _pv.length; x.provId = _pv[0].id; x.provNombre = _pv[0].nombre; }
+  });
   return Object.values(out).sort((a, b) => a.name.localeCompare(b.name, 'es'));
 }
 function _abrirModalBodega(){
   if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN', 'red');
   if (document.getElementById('_bodegaModal')) return;
+  _precioIndexReset(); // v1010: el catálogo pudo cambiar desde la última apertura
   const prods = _bodegaProductosGlobal();
   // v968: filas con alias interno para la búsqueda. v969: SIN nada de la receta
   // (pedido de Antonio: "no tiene nada que ver" — la receta solo entra cuando la OC
   // de obra elige que un producto salga de bodega como despacho).
   const filas = prods.map((x, i) => `
-    <div data-abfila data-abname="${(String(x.name) + ' ' + String(x.alias || '')).toLowerCase().replace(/"/g, '&quot;')}" style="display:grid;grid-template-columns:34px minmax(0,1fr) 110px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
+    <div data-abfila data-abname="${(String(x.name) + ' ' + String(x.alias || '')).toLowerCase().replace(/"/g, '&quot;')}" style="display:grid;grid-template-columns:34px minmax(0,1fr) 84px 110px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
       <input type="checkbox" data-bi="${i}" ${_esItemBodega(x.name) ? 'checked' : ''} style="width:16px;height:16px;accent-color:#D0151C" title="DE BODEGA: sale como DESPACHO automático en las OC de obra">
-      <div style="font-size:11.5px;letter-spacing:.2px">${x.name}<span style="color:#9CA3AF;font-size:10px">${x.u ? ' · ' + x.u : ''}</span></div>
+      <div style="font-size:11.5px;letter-spacing:.2px">${_invEscAttr(x.name)}<span style="color:#9CA3AF;font-size:10px">${x.u ? ' · ' + _invEscAttr(x.u) : ''}</span></div>
+      <div style="text-align:right;font-size:11px;font-variant-numeric:tabular-nums;color:${x.precio ? '#111827' : '#D1D5DB'}" title="${x.precio ? 'Precio de ' + String(x.provNombre || '').replace(/"/g, '&quot;') + (x.nProv > 1 ? ' — el más barato de ' + x.nProv : '') : 'Sin proveedor en el catálogo de precios'}">${x.precio ? 'Q ' + fmtQ(x.precio) : '—'}${x.nProv > 1 ? `<div style="font-size:8.5px;color:#9CA3AF;letter-spacing:.5px">${x.nProv} PROV.</div>` : ''}</div>
       <input type="number" data-bqty="${i}" min="0" step="any" placeholder="—" style="width:100%;padding:6px 8px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:12px;text-align:right;box-sizing:border-box">
     </div>`).join('') || '<div style="padding:24px;text-align:center;color:#9CA3AF;font-size:11px">SIN MATERIALES EN EL CATÁLOGO</div>';
   const wrap = document.createElement('div');
@@ -19553,7 +19896,7 @@ function _abrirModalBodega(){
       <div style="font-size:11px;color:#78716C;margin-top:4px;line-height:1.5">Marcá con el check los materiales <b>DE BODEGA</b> (cuando un supervisor pida su etapa, esos saldrán solos como ORDEN DE DESPACHO). Ponele cantidad a los que le querás comprar al proveedor para stock — los FALTANTES (existencia en rojo) vienen pre-llenados.</div>
     </div>
     <div style="padding:10px 18px 0"><input id="_bodegaAbFiltro" class="pr-buscador" placeholder="BUSCAR MATERIAL…" oninput="window._bodegaAbFiltrar(this.value)" style="width:100%"></div>
-    <div style="display:grid;grid-template-columns:34px minmax(0,1fr) 110px;gap:10px;padding:10px 18px 4px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700"><span>BOD.</span><span>MATERIAL</span><span style="text-align:right">CANTIDAD</span></div>
+    <div style="display:grid;grid-template-columns:34px minmax(0,1fr) 84px 110px;gap:10px;padding:10px 18px 4px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700"><span>BOD.</span><span>MATERIAL</span><span style="text-align:right">PRECIO</span><span style="text-align:right">CANTIDAD</span></div>
     <div style="overflow:auto;flex:1;padding:0 18px 8px">${filas}</div>
     <div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;align-items:end">
       <label style="font-size:8.5px;letter-spacing:1.5px;color:#78716C;font-weight:700" title="La fecha que heredan las OC al proveedor">¿PARA CUÁNDO LO NECESITÁS EN BODEGA?<br><input type="date" id="_bodegaFecha" class="pr-buscador" style="margin-top:3px"></label>
@@ -19569,10 +19912,17 @@ function _abrirModalBodega(){
   try {
     const _sal = window._bodegaSaldos((state || {}).bodegaMovs);
     prods.forEach((x, i) => {
-      const s = _sal[x.key];
-      if (s && s.saldo < 0) {
+      /* v1010: los movimientos están sellados con la clave del nombre con que se movió el
+         material. Si Antonio unió dos nombres, el saldo vive bajo la clave VIEJA — hay que
+         sumar todas las claves fundidas o el faltante desaparece de la pantalla. */
+      let _saldo = 0, _hay = false;
+      (x.keys && x.keys.length ? x.keys : [x.key]).forEach(k => {
+        const s = _sal[k];
+        if (s) { _saldo += Number(s.saldo) || 0; _hay = true; }
+      });
+      if (_hay && _saldo < 0) {
         const q = wrap.querySelector('input[data-bqty="' + i + '"]');
-        if (q && !q.value) q.value = -s.saldo;
+        if (q && !q.value) q.value = -_saldo;
       }
     });
   } catch (e) {}
@@ -19878,6 +20228,8 @@ window._bodegaMovsDeCarga = function(filas, saldos){
 function _abrirCargaExistencias(){
   if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA, COMPRAS O ADMIN', 'red');
   if (document.getElementById('_bodegaCargaModal')) return;
+  _precioIndexReset();               // v1010: el catálogo pudo cambiar desde la última apertura
+  const _cargaIdx = _precioIndexProv();
   const saldos = window._bodegaSaldos(state.bodegaMovs);
   const prods = _bodegaProductosGlobal();
   const vistos = {};
@@ -19889,14 +20241,17 @@ function _abrirCargaExistencias(){
   // v968: la búsqueda también pesca por el nombre INTERNO (alias del catálogo)
   const filasHTML = filas.map((x, i) => `
     <div data-cfila data-cname="${(String(x.name) + ' ' + String(x.alias || '')).toLowerCase().replace(/"/g, '&quot;')}" style="display:grid;grid-template-columns:minmax(0,1fr) 56px 80px 110px;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid #F3F4F6">
-      <div style="font-size:11.5px;letter-spacing:.2px">${x.name}</div>
-      <div style="text-align:center;font-size:10px;color:#6B7280">${x.u || ''}</div>
+      <div style="font-size:11.5px;letter-spacing:.2px">${_invEscAttr(x.name)}</div>
+      <div style="text-align:center;font-size:10px;color:#6B7280">${_invEscAttr(x.u || '')}</div>
       <div style="text-align:right;font-size:11.5px;color:#78716C;font-variant-numeric:tabular-nums">${x.saldo}</div>
       <input type="number" data-cx="${i}" min="0" step="any" placeholder="—" style="width:100%;padding:6px 8px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:12px;text-align:right;box-sizing:border-box">
       ${(function(){
         /* v993 (pedido de Antonio): si el material lo venden VARIOS proveedores, elegir de
-           cuál es el que se está cargando — el inventario se valoriza con SU precio. */
-        const _pvs = (typeof _provsDelProducto === 'function') ? _provsDelProducto(x.name) : [];
+           cuál es el que se está cargando — el inventario se valoriza con SU precio.
+           v1010: sale del ÍNDICE, no de _provsDelProducto. Con la lista ampliada del catálogo
+           esto se ejecutaba una vez por fila (~900 filas × ~658 productos) y congelaba el
+           modal varios segundos en Android. */
+        const _pvs = _cargaIdx[normOcName(x.name)] || [];
         if (_pvs.length < 2) return '';
         return `<div style="grid-column:1/-1;margin-top:2px"><select data-nativo data-cprov="${i}" style="width:100%;padding:5px 7px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:10.5px;box-sizing:border-box"><option value="">— PROVEEDOR —</option>${_pvs.map(pv => `<option value="${pv.id}">${_invEscAttr(pv.nombre)} · Q${fmtQ(pv.precio)}</option>`).join('')}</select></div>`;
       })()}
@@ -20256,8 +20611,8 @@ function _abrirPanelBodega(){
   window._bodegaPanelRows = lista;
   const filas = lista.map((x, i) => `
     <div data-bfila data-bname="${(String(x.name) + ' ' + String(x.alias || '')).toLowerCase().replace(/"/g, '&quot;')}" style="display:grid;grid-template-columns:minmax(0,1fr) 56px 84px 84px 100px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
-      <div style="font-size:11.5px;letter-spacing:.2px">${x.name}</div>
-      <div style="text-align:center;font-size:10px;color:#6B7280">${x.u || ''}</div>
+      <div style="font-size:11.5px;letter-spacing:.2px">${_invEscAttr(x.name)}</div>
+      <div style="text-align:center;font-size:10px;color:#6B7280">${_invEscAttr(x.u || '')}</div>
       <div style="text-align:right;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;color:${x.saldo < 0 ? '#C62828' : '#111827'}">${x.saldo}</div>
       <div style="text-align:right;font-size:11.5px;color:#78716C;font-variant-numeric:tabular-nums">${x.camino || '—'}</div>
       <input type="number" data-aj="${i}" step="any" placeholder="±" style="width:100%;padding:6px 8px;border:1px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:12px;text-align:right;box-sizing:border-box">
@@ -21314,7 +21669,7 @@ async function _importarPreciosExcel(event){
     let creados=0, prodNuevos=0, prodUpd=0;
     const ensureProv=nom=>{ let pr=findProv(nom); if(!pr){ pr={id:'prv-'+uid(),nombre:String(nom).toUpperCase(),contacto:'',telefono:'',productos:[]}; provs.push(pr); creados++; } if(!pr.productos)pr.productos=[]; return pr; };
     const REF='SIN PROVEEDOR FIJO / REFERENCIA';
-    _catUnidadIndexReset(); const _uIdxImp=_catUnidadIndex(); // v994: índice de unidades UNA vez para todo el import
+    _catUnidadIndexReset(); _precioIndexReset(); const _uIdxImp=_catUnidadIndex(); // v994: índice de unidades UNA vez para todo el import
     parsed.items.forEach(it=>{
       const pr=ensureProv(it.proveedor? it.proveedor : REF);
       const k=matchKeyProducto(it.material);
@@ -33291,7 +33646,7 @@ function openCatalogoProveedores(){
   if (!(can('users.manage')||can('precios.autorizar')||can('precios.proponer'))) return showToast('SIN ACCESO AL CATÁLOGO DE PRECIOS', 'red');
   currentCatProvId = null;
   catProvSearchTerm = '';
-  _catUnidadIndexReset(); // v994: índice de unidades fresco al abrir
+  _catUnidadIndexReset(); _precioIndexReset(); // v994/v1010: índices frescos al abrir
   /* v1000: quien edita el catálogo directo (admin) NO ve los botones de PROPONER — para él
      serían un rodeo, y en pantalla se veían dos "+" seguidos. */
   try {

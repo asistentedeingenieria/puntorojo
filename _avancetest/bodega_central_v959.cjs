@@ -115,7 +115,10 @@ ok('...con guard anti-doble descuento', /_bodegaYaTieneMov/.test(zSal));
 
 // ── 8. sync: union-merge de bodegaMovs con tombstones en applyRemote (regla v752) ──
 const iApply = html.indexOf('applyRemote(remoteData');
-const zApply = html.slice(iApply, iApply + 26000);
+/* v1010: la ventana era de 26000 y el bloque de bodegaItemsGlobal quedó a 26002 al
+   insertar el merge de matFix — dos caracteres afuera, falso negativo puro. Se amplía;
+   una ventana fija se vuelve a romper con cada merge nuevo. */
+const zApply = html.slice(iApply, iApply + 40000);
 ok('applyRemote mergea bodegaMovs', /_mergeById\(\(state && state\.bodegaMovs\)/.test(zApply));
 ok('...con tombstones bodegaMovsEliminados', /bodegaMovsEliminados/.test(zApply));
 // ── 9. blindaje v944-style para la lista DE BODEGA (dejaba de ser LWW) ──
