@@ -16,8 +16,10 @@ ok('y su encabezado "Elegir proyecto"', !/pr-proj-panel-hd">Elegir proyecto/.tes
 ok('ya no hay botón VER TODAS LAS OBRAS ahí adentro', !/VER TODAS LAS OBRAS/.test(html));
 
 console.log('\n— la barra lleva al menú —');
-ok('el botón de arriba abre el menú principal', /id="prProjBtn"[^>]*_abrirPantallaObra\(true\)/.test(html));
-ok('y lo dice: REGRESAR AL MENÚ', /← REGRESAR AL MENÚ/.test(html));
+/* v1028: el volver dejó de estar DENTRO de la caja roja y pasó a ser su propio botón al lado
+   — la caja quedó de una línea, solo con la obra (pedido de Antonio) */
+ok('hay un botón propio para volver', /class="btn ghost sm pr-btn-menu"[^>]*_abrirPantallaObra\(true\)/.test(html));
+ok('y lo dice: MENÚ', /← MENÚ<\/button>/.test(html));
 ok('sigue mostrando en qué obra se está', /id="prProjBtnLabel"/.test(html) && /<span class="lbl">TRABAJANDO EN<\/span>/.test(html));
 ok('forzando la apertura (no se salta por "ya eligió")', /_abrirPantallaObra\(true\)/.test(html));
 
