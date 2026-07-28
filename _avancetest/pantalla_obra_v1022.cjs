@@ -26,7 +26,9 @@ ok('lista las obras como tarjetas', /proys\.map\(tarjeta\)/.test(zP));
 ok('con sus pendientes a la vista', /PEDIDO\$\{|SIN PENDIENTES/.test(zP));
 ok('y las ubicaciones de empresa', /BODEGA CENTRAL/.test(zP) && /PROYECTOS VARIOS/.test(zP) && /ADMINISTRACIÓN/.test(zP));
 ok('cada una respeta su permiso', /_puedeVerBodega\(\)/.test(zP) && /_puedeVerVarios\(\)/.test(zP) && /_puedeVerAdmin\(\)/.test(zP));
-ok('sale al arrancar la app', /_abrirPantallaObra\(\)/.test(ex('function renderAll(')));
+/* v1026: renderAll ya no la llama directo — usa el insistidor, porque en el primer render
+   los proyectos todavía no llegaron de la nube y esa única oportunidad se perdía */
+ok('sale al arrancar la app', /_asegurarMenuInicial\(\)/.test(ex('function renderAll(')));
 
 console.log('\n— 2. NO se repite la fricción que hizo quitar el gate de v961 —');
 ok('solo aparece la primera vez de la sesión', /_yaEligioObra\(\)/.test(zP));
@@ -58,6 +60,20 @@ ok('entrar a una ubicación de empresa también cuenta como elegir', /_marcarObr
 console.log('\n— 5. los nombres de obra se escapan —');
 ok('el nombre pasa por escape', /_esc\(p\.name\)/.test(zP));
 ok('y el id también (va en un onclick)', /_esc\(p\.id\)/.test(zP));
+
+console.log('\n— 6. EL ARRANQUE ES ASÍNCRONO: no basta con intentarlo una vez —');
+/* v1026, tercer intento sobre lo mismo. Los dos anteriores asumían que renderAll correría en
+   el momento justo, con los proyectos ya cargados. El arranque real es asíncrono — login,
+   caché local, applyRemote de la nube — y nadie garantiza en qué render aparecen las obras:
+   la única oportunidad se perdía y el menú no salía nunca. Ahora se INSISTE. */
+const zA = ex('function _asegurarMenuInicial(');
+ok('existe el insistidor', zA.length > 100);
+ok('reintenta hasta que haya obras', /setTimeout\(_asegurarMenuInicial/.test(zA));
+ok('con tope, para no insistir para siempre', /_menuIntentos > 40/.test(zA));
+ok('se rinde si el usuario ya eligió', /_menuYaMostradoEstaCarga\) return/.test(zA));
+ok('y si el menú ya está abierto', /_pantallaObra'\)\) return/.test(zA));
+ok('renderAll usa el insistidor, no la llamada directa', /_asegurarMenuInicial\(\)/.test(ex('function renderAll(')));
+ok('y también se engancha al arranque tras el login', (html.match(/_asegurarMenuInicial\(\)/g) || []).length >= 3);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

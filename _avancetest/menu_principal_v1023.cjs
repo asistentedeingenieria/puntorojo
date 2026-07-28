@@ -49,7 +49,8 @@ ok('varios', /_cerrarPanelVarios\(\); window\._abrirPantallaObra\(true\)/.test(h
 ok('administración', /_cerrarPanelAdmin\(\); window\._abrirPantallaObra\(true\)/.test(html));
 
 console.log('\n— 4. es lo primero que se ve —');
-ok('se abre en el primer render', /_abrirPantallaObra\(\)/.test(ex('function renderAll(')));
+/* v1026: se engancha por el insistidor, que reintenta hasta que lleguen los proyectos */
+ok('se abre al arrancar', /_asegurarMenuInicial\(\)/.test(ex('function renderAll(')));
 ok('tapa todo (capa opaca a pantalla completa)', /z-index:99500/.test(zP) && /background:var\(--paper\)/.test(zP));
 ok('y por encima de los paneles de empresa (98000)', zP.indexOf('99500') > 0);
 

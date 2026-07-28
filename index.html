@@ -3210,7 +3210,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1025</span>
+    <span style="opacity:.5;font-size:9px">v1026</span>
   </footer>
 
 </div>
@@ -30707,10 +30707,10 @@ window.DELETION_EXECUTORS['activityLog'] = () => _doClearActivity();
 /* ─────────────── RENDER ALL ─────────────── */
 function renderAll(){
   renderProjectSelect();
-  /* v1022: al entrar, primero se elige dónde trabajar. Solo la primera vez de cada sesión —
-     después de eso no vuelve a interponerse (esa fricción fue lo que hizo quitar el gate de
-     v961); para cambiar está el botón de la barra. */
-  try { window._abrirPantallaObra(); } catch(e){ console.warn('[v1022] pantalla de obra', e); }
+  /* v1022/v1026: al entrar, primero se elige dónde trabajar. No se llama directo: se usa el
+     insistidor, porque en el primer render los proyectos todavía no llegaron de la nube y
+     una sola oportunidad se pierde (fue el bug de v1024 y v1025). */
+  try { _asegurarMenuInicial(); } catch(e){ console.warn('[v1026] pantalla de obra', e); }
   const activeTab = document.querySelector('.tab.active')?.dataset.view || 'dashboard';
 
   // Verificar si tiene permiso para la vista actual; si no, ir a la primera permitida
@@ -31983,6 +31983,22 @@ function _gastosDeProyecto(projectId){
 let _menuYaMostradoEstaCarga = false;
 function _yaEligioObra(){ return _menuYaMostradoEstaCarga; }
 function _marcarObraElegida(){ _menuYaMostradoEstaCarga = true; }
+/* v1026 — TERCER INTENTO, y esta vez sin depender de CUÁNDO corre cada cosa. Los dos
+   arreglos anteriores asumían que renderAll se ejecutaría en el momento justo: una vez con
+   los proyectos ya cargados. Pero el arranque real es asíncrono — login, caché local,
+   applyRemote de la nube — y nadie garantiza en qué render aparecen las obras.
+   En vez de adivinar el momento, se INSISTE: cada medio segundo se pregunta si ya hay obras,
+   hasta 20 segundos. En cuanto las hay, se abre el menú. Se rinde solo si el usuario ya
+   eligió o si de verdad no hay obras que mostrar. */
+window._menuIntentos = 0;
+function _asegurarMenuInicial(){
+  if (_menuYaMostradoEstaCarga) return;                       // ya eligió: no molestar
+  if (document.getElementById('_pantallaObra')) return;       // ya está abierto
+  const hay = (((typeof state !== 'undefined' && state) || {}).projects || []).some(p => p && p.id);
+  if (hay) { try { window._abrirPantallaObra(); } catch(e){ console.warn('[v1026] menú', e); } return; }
+  if (++window._menuIntentos > 40) return;                    // ~20 s y se deja de insistir
+  setTimeout(_asegurarMenuInicial, 500);
+}
 window._elegirObraYEntrar = function(id){
   _marcarObraElegida();
   /* la última obra se recuerda ENTRE sesiones: al volver a entrar aparece marcada, para que
@@ -44195,6 +44211,9 @@ function applyAuthSession(fbUser, profileData){
   setTimeout(() => { try { syncClientRegistrations().catch(()=>{}); } catch(e){} }, 2000);
   renderAll();
   applyPermissions();
+  /* v1026: el menú principal también se engancha acá, en el arranque tras el login. No
+     alcanza con renderAll: cuando corre, los proyectos suelen no haber llegado todavía. */
+  try { window._menuIntentos = 0; _asegurarMenuInicial(); } catch(e){ console.warn("[v1026] menú tras login", e); }
   updateActivityBadge();
   updateNotifBadge();
   updateStorageIndicator();
