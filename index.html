@@ -3192,7 +3192,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1015</span>
+    <span style="opacity:.5;font-size:9px">v1016</span>
   </footer>
 
 </div>
@@ -8975,7 +8975,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 916; // v1010: union-merge de state.matFix (correcciones del catálogo) en applyRemote
+const APP_SYNC_VERSION = 917; // v1016: union-merge de state.pagosProv (pagos a proveedores de material)
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9891,6 +9891,14 @@ const CloudSync = {
         merged.matFixEliminados = _mfTomb;
         const _mMf = _mergeById((state && state.matFix) || [], merged.matFix || [], _mfTomb);
         merged.matFix = _mMf.list; if (_mMf.changed) needsResync = true;
+
+        /* v1016: PAGOS A PROVEEDORES de material. Es plata: mismo régimen que las planillas
+           y los movimientos de bodega — union por id + _ts + tombstones. Si dos personas
+           registran pagos a la vez, los dos sobreviven en vez de pisarse. */
+        const _ppTomb = Object.assign({}, (state && state.pagosProvEliminados) || {}, merged.pagosProvEliminados || {});
+        merged.pagosProvEliminados = _ppTomb;
+        const _mPp = _mergeById((state && state.pagosProv) || [], merged.pagosProv || [], _ppTomb);
+        merged.pagosProv = _mPp.list; if (_mPp.changed) needsResync = true;
         try { _matFixReset(); } catch(e){} // el índice de equivalencias quedó viejo tras el merge
 
         // v964: STORE de abastecimiento (bodegaMat.pedidos/ordenes) — pedidos y OCs de la
@@ -21603,6 +21611,28 @@ function updateOcItemProveedor(idx, provId){
   item.autoAssigned = false;
   // v_pcat: con proveedor real ya no es eventual; sin proveedor (SIN PROVEEDOR) sí lo es
   item.eventual = !provId;
+  /* v1016 (pedido de Antonio): al mandar un material a BODEGA CENTRAL se busca de verdad en
+     la bodega — si está, se adopta el NOMBRE con que está registrado ahí y el PRECIO con que
+     entró. Si no hay existencia suficiente se avisa, pero no se bloquea: puede que la bodega
+     lo reciba antes de despachar. */
+  if (provId === '_bodega') {
+    const _res = _bodegaBuscarMaterial(item.name);
+    if (_res) {
+      if (_res.name && _res.name !== item.name) item.name = _res.name;  // el nombre de la bodega manda
+      item.precio = _res.precio || 0;
+      item.autoAssigned = true;
+      item.esBodega = true;
+      if (_res.saldo < item.qty) {
+        showToast(`BODEGA TIENE ${_res.saldo} DE ${item.qty} — SE DESPACHA LO QUE HAYA`, 'red');
+      } else {
+        showToast(`EN BODEGA: ${_res.saldo} DISPONIBLES${_res.precio ? ' · Q ' + fmtQ(_res.precio) : ''}`, 'ok');
+      }
+    } else {
+      showToast('ESE MATERIAL NO ESTÁ REGISTRADO EN LA BODEGA CENTRAL', 'red');
+    }
+    renderOcItems();
+    return;
+  }
   if (provId) {
     const p = activeProj();
     const prov = _getProveedores().find(x => x.id === provId);
@@ -21613,6 +21643,20 @@ function updateOcItemProveedor(idx, provId){
     }
   }
   renderOcItems();
+}
+/* v1016: busca un material en la BODEGA CENTRAL y devuelve cómo está registrado ahí — su
+   nombre real, su saldo y el precio con que entró. Respeta las equivalencias declaradas en la
+   limpia del catálogo (v1010): si Antonio dijo que dos nombres son el mismo, los encuentra. */
+function _bodegaBuscarMaterial(nombre){
+  const saldos = (typeof window._bodegaSaldos === 'function') ? window._bodegaSaldos((state || {}).bodegaMovs) : {};
+  const claves = [];
+  try { claves.push(_ocItemMemKey(nombre)); } catch(e){}
+  try { const ck = _matAliasCanon(claves[0]); if (ck && ck !== claves[0]) claves.push(ck); } catch(e){}
+  for (const k of claves) {
+    const s = saldos[k];
+    if (s) return { key: k, name: s.name || nombre, saldo: Number(s.saldo) || 0, precio: _precioEntradaBodega(k) };
+  }
+  return null;
 }
 
 /* v1015 (pedido de Antonio): "si sale de la bodega central la orden de despacho NO TIENE QUE
@@ -31752,6 +31796,108 @@ function _gastosDeProyecto(projectId){
   ordenes.sort((a, b) => (b.ts || 0) - (a.ts || 0));
   return { ordenes: ordenes, totalCompra: totalCompra, totalDespacho: totalDespacho, total: totalCompra + totalDespacho };
 }
+/* ═══════════ v1016 · CUENTAS POR PAGAR (pedido de Antonio) ═══════════
+   "Separá por proyecto el tema de las cuentas por pagar de todas las compras que están a
+   crédito... necesito un resumen de cuentas por pagar con detalle de las órdenes a crédito."
+
+   EL VENCIMIENTO SE CALCULA, NO SE GUARDA. Si se guardara, cambiar la fecha de la factura lo
+   dejaría mintiendo para siempre. Cascada explícita, y la pantalla dice cuál usó:
+   fecha de factura → fecha real de recepción → fecha en que finanzas autorizó. */
+function _fechaLatamADate(s){
+  const m = String(s || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  return m ? new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])) : null;
+}
+function _dateALatam(d){
+  if (!d || isNaN(d.getTime())) return '';
+  return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + d.getFullYear();
+}
+function _vencimientoOc(oc){
+  const dias = Number(oc && oc.credito) || 0;
+  if (dias <= 0) return null;                       // contado: no hay nada que vencer
+  let base = null, cual = '';
+  if (oc.factura && oc.factura.fecha) { base = _fechaLatamADate(oc.factura.fecha); cual = 'FACTURA'; }
+  if (!base && oc.recibidoFecha) { base = _fechaLatamADate(oc.recibidoFecha); cual = 'RECEPCIÓN'; }
+  if (!base && oc.recibidoTs) { base = new Date(Number(oc.recibidoTs)); cual = 'RECEPCIÓN'; }
+  if (!base && oc.autorizadoTs) { base = new Date(Number(oc.autorizadoTs)); cual = 'AUTORIZACIÓN'; }
+  if (!base || isNaN(base.getTime())) return null;  // sin fecha base no se inventa una
+  const v = new Date(base.getTime());
+  v.setDate(v.getDate() + dias);
+  return { fecha: _dateALatam(v), base: cual, dias: dias, ts: v.getTime() };
+}
+function _pagosProvList(){
+  try { if (typeof state !== 'undefined' && state) { if (!Array.isArray(state.pagosProv)) state.pagosProv = []; return state.pagosProv; } } catch(e){}
+  return [];
+}
+function _pagosDeOc(ocId){ return _pagosProvList().filter(x => x && String(x.ocId) === String(ocId)); }
+function _cuentasPorPagar(projectId){
+  /* Se DERIVA de las órdenes: a crédito, no canceladas, menos lo ya pagado. Un despacho de
+     bodega nunca es cuenta por pagar — ese material ya se pagó cuando entró a la bodega. Y una
+     orden de producción tampoco: es un aviso al proveedor, no una compra. */
+  const pid = String(projectId || '');
+  const conts = [];
+  ((state && state.projects) || []).forEach(pj => { if (pj && pj.materiales) conts.push(pj.materiales.ordenes || []); });
+  conts.push(((state && state.bodegaMat) || {}).ordenes || []);
+  conts.push(((state && state.variosMat) || {}).ordenes || []);
+
+  const cuentas = [];
+  let total = 0, totalPagado = 0, totalVencido = 0;
+  const hoy = new Date(); hoy.setHours(23, 59, 59, 999);
+  conts.forEach(lista => (lista || []).forEach(o => {
+    if (!o || o.status === 'CANCELADA') return;
+    const serie = (typeof _ocSerieDe === 'function') ? _ocSerieDe(o) : (o.serie || 'OC');
+    if (serie === 'OP' || serie === 'DESP' || o.esDespacho) return;
+    if (pid && String(o.destinoProyectoId || '') !== pid) return;
+    if (!(Number(o.credito) > 0)) return;            // solo lo que es a crédito
+    const montoOc = Number(o.total) || 0;
+    const pagado = _pagosDeOc(o.id).reduce((s, x) => s + (Number(x.monto) || 0), 0);
+    const saldo = +(montoOc - pagado).toFixed(2);
+    totalPagado += pagado;
+    if (saldo <= 0.009) return;                      // ya está pagada
+    const venc = _vencimientoOc(o);
+    const vencida = !!(venc && venc.ts < hoy.getTime());
+    total += saldo;
+    if (vencida) totalVencido += saldo;
+    cuentas.push({
+      id: o.id, numero: o.numero, proveedorNombre: o.proveedorNombre || '',
+      destinoProyectoId: o.destinoProyectoId || '', formaPago: o.formaPago || '',
+      credito: Number(o.credito) || 0, montoOc: montoOc, pagado: pagado, saldo: saldo,
+      vence: venc ? venc.fecha : '', base: venc ? venc.base : '', vencida: vencida, ts: o.ts || 0
+    });
+  }));
+  /* lo más urgente arriba: primero lo vencido, después por fecha de vencimiento */
+  cuentas.sort((a, b) => (b.vencida - a.vencida) || (a.vence && b.vence ? (_fechaLatamADate(a.vence) - _fechaLatamADate(b.vence)) : 0));
+  return { cuentas: cuentas, total: total, totalPagado: totalPagado, totalVencido: totalVencido };
+}
+window._registrarPagoProv = async function(ocId){
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO FINANZAS O ADMIN', 'red');
+  const cxp = _cuentasPorPagar('');
+  const c = (cxp.cuentas || []).find(x => x.id === ocId);
+  if (!c) return showToast('ESA ORDEN YA NO TIENE SALDO', 'red');
+  const txt = await window.prPrompt({
+    title: 'REGISTRAR PAGO',
+    body: `${_numLimpio(c.numero)} · ${c.proveedorNombre} — saldo pendiente Q ${fmtQ(c.saldo)}`,
+    placeholder: String(c.saldo),
+    required: true
+  });
+  if (txt === null) return;
+  const monto = Number(String(txt).replace(/[^0-9.]/g, '')) || 0;
+  if (!(monto > 0)) return showToast('ESCRIBÍ UN MONTO', 'red');
+  // no se puede pagar más de lo que se debe: el saldo manda
+  if (monto > c.saldo + 0.009) return showToast(`EL SALDO ES Q ${fmtQ(c.saldo)} — NO SE PUEDE PAGAR DE MÁS`, 'red');
+  const u0 = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  const t = Date.now();
+  _pagosProvList().push({
+    id: 'pp-' + uid(), ts: t, _ts: t, ocId: String(ocId), ocNumero: c.numero,
+    proveedorNombre: c.proveedorNombre, destinoProyectoId: c.destinoProyectoId,
+    monto: monto, fecha: _dateALatam(new Date()),
+    por: String(u0.displayName || u0.username || '').toUpperCase(),
+    porUsername: String(u0.username || '').toLowerCase()
+  });
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  showToast(`PAGO DE Q ${fmtQ(monto)} REGISTRADO`, 'ok');
+  try { renderGastos(); } catch(e){}
+};
 /* v1014: la pantalla de GASTOS. Un total arriba, el detalle de cada orden desplegable (Antonio:
    "poder ver despues un despliegue y el detalle de las ordenes de compra o de despacho"), y el
    resumen por producto. Los montos son plata: mismo gate que el inventario valorizado. */
@@ -31807,6 +31953,33 @@ function renderGastos(){
       <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;padding-bottom:4px">ÓRDENES · TOCÁ UNA PARA VER SU DETALLE</div>
       ${filas || '<div style="padding:22px;text-align:center;color:#9CA3AF;font-size:11px">Todavía no hay gasto registrado en esta obra.<br>Se cuenta cuando la orden de compra o el despacho quedan generados.</div>'}
     </div>
+    ${(function(){
+      /* v1016: CUENTAS POR PAGAR de esta obra. Solo lo que es a crédito y todavía tiene saldo:
+         el contado ya se pagó, el despacho de bodega también, y la producción no es compra. */
+      const cxp = _cuentasPorPagar(p.id);
+      if (!cxp.cuentas.length) return '';
+      const filas = cxp.cuentas.map(c => `
+        <div class="pr-fila-panel" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid ${c.vencida ? '#FECACA' : '#F3F4F6'}">
+          <div style="min-width:0">
+            <div style="font-size:11.5px"><b>${_esc(_numLimpio(c.numero))}</b> <span style="color:#78716C">· ${_esc(c.proveedorNombre)}</span>
+              ${c.vencida ? '<span style="font-size:9px;font-weight:700;letter-spacing:.8px;color:#B91C1C;margin-left:6px">VENCIDA</span>' : ''}</div>
+            <div style="font-size:10px;color:#78716C;margin-top:2px">
+              ${_esc(c.formaPago)}${c.vence ? ' · vence ' + c.vence + ' <span style="color:#9CA3AF">(desde ' + c.base.toLowerCase() + ')</span>' : ' · <span style="color:#B45309">sin fecha para vencer todavía</span>'}
+              ${c.pagado ? ' · abonado Q ' + fmtQ(c.pagado) : ''}</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+            <div style="text-align:right;font-weight:700;font-size:12.5px;font-variant-numeric:tabular-nums;color:${c.vencida ? '#B91C1C' : '#111827'}">Q ${fmtQ(c.saldo)}</div>
+            ${(can('compras.autorizar') || can('users.manage')) ? `<button class="btn sm" style="font-size:9.5px" onclick="window._registrarPagoProv('${_esc(c.id)}')">REGISTRAR PAGO</button>` : ''}
+          </div>
+        </div>`).join('');
+      return `<div class="card" style="padding:10px 18px 14px;margin-bottom:14px;border-left:3px solid ${cxp.totalVencido ? 'var(--red)' : '#D97706'}">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;padding-bottom:6px">
+          <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700">CUENTAS POR PAGAR · COMPRAS A CRÉDITO</div>
+          <div style="font-size:12.5px;font-weight:700">Q ${fmtQ(cxp.total)}${cxp.totalVencido ? ` <span style="color:var(--red);font-size:10px">· Q ${fmtQ(cxp.totalVencido)} VENCIDO</span>` : ''}</div>
+        </div>
+        ${filas}
+      </div>`;
+    })()}
     ${porProd.length ? `<div class="card" style="padding:10px 18px 14px">
       <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;padding-bottom:6px">QUÉ SE LE COMPRÓ A ESTA OBRA</div>
       <div style="display:grid;grid-template-columns:minmax(0,1fr) 70px 100px;gap:8px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;padding-bottom:4px"><span>MATERIAL</span><span style="text-align:right">CANT.</span><span style="text-align:right">MONTO</span></div>

@@ -23,7 +23,7 @@ ok('y su tombstone', html.includes('matFixEliminados'));
 /* el proyecto no declara estos arrays en un state inicial: los crea el accessor la primera
    vez (mismo patrón que _bodegaMovsList y _getProveedores) */
 ok('el accessor lo crea si no existe', /if \(!Array\.isArray\(state\.matFix\)\) state\.matFix = \[\]/.test(html));
-ok('el índice se refresca después del merge', /_matFixReset\(\)/.test(html.slice(html.indexOf('merged.matFix ='), html.indexOf('merged.matFix =') + 400)));
+ok('el índice se refresca después del merge', /_matFixReset\(\)/.test(html.slice(html.indexOf('merged.matFix ='), html.indexOf('merged.matFix =') + 1200)));
 
 // ── 2. las correcciones se aplican al armar la lista ──
 const zProds = ex('function _bodegaProductosGlobal(');
