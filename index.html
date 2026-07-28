@@ -2931,7 +2931,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
               </div>
               <!-- v312: APTO/CASA con dos modos (select para activos, texto libre para manuales) -->
               <div class="field" id="pfAptoWrap">
-                <label>APTO / CASA N°</label>
+                <label>APTO N°</label>
                 <select id="pfApto"><option value="">— SIN APTO ESPECÍFICO —</option></select>
                 <input id="pfAptoManual" placeholder="EJ: CASA 12 · APTO 304 · CLIENTE X" style="display:none">
               </div>
@@ -3190,7 +3190,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1010</span>
+    <span style="opacity:.5;font-size:9px">v1011</span>
   </footer>
 
 </div>
@@ -3577,6 +3577,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
         <label>FORMA DE PAGO</label>
         <select id="ocFormaPago">
           <option>TARJETA DE ABASTO</option>
+          <option>CRÉDITO 15 DÍAS</option>
           <option>CRÉDITO 30 DÍAS</option>
           <option>CRÉDITO 60 DÍAS</option>
           <option>CONTADO</option>
@@ -11657,6 +11658,7 @@ document.addEventListener('keydown', (ev) => {
 
 function setActiveProject(id){
   state.activeProjectId = id;
+  try { _rotularProyectoPedido(); } catch (e) {} // v1011: el desplegable del pedido sigue a la obra
   // v648: al cambiar de proyecto, reiniciar el filtro de obra de asistencia a TODAS LAS OBRAS.
   // Evita que un filtro viejo (p.ej. otra obra) oculte los marcados del proyecto nuevo y parezca
   // que "no marcó nadie". El encargado lo vuelve a fijar a su obra en renderPersonal.
@@ -18283,11 +18285,30 @@ function togglePedidoProyectoManual(){
     aptoManualInput.style.display = isManual ? 'block' : 'none';
     if (!isManual) aptoManualInput.value = '';
   }
+  /* v1011: en OFICINA se escondía el select pero NO su bloque, así que quedaba el rótulo
+     "APTO N°" flotando sobre nada. Se esconde el bloque entero (en MANUAL se queda porque
+     ahí vive el campo de texto libre). */
+  const aptoWrap = document.getElementById('pfAptoWrap');
+  if (aptoWrap) aptoWrap.style.display = isOficina ? 'none' : '';
+}
+/* v1011 (pedido de Antonio, foto 1): el desplegable decía "PROYECTO ACTIVO" en abstracto.
+   Ahora dice el nombre de la obra en la que se está trabajando, para que se vea de una que
+   el pedido va ahí. El VALUE sigue siendo 'ACTIVO': togglePedidoProyectoManual y
+   _pedidoEsAbastecimiento comparan por él, nunca por el texto. */
+function _rotularProyectoPedido(){
+  const sel = document.getElementById('pfProyectoTipo');
+  if (!sel) return;
+  const opt = Array.from(sel.options).find(o => o.value === 'ACTIVO');
+  if (!opt) return;
+  let nombre = '';
+  try { const p = activeProj(); nombre = (p && p.name) ? String(p.name) : ''; } catch (e) {}
+  opt.textContent = nombre || 'PROYECTO ACTIVO';
 }
 
 function renderPedidoForm(){
   if (!can('pedidos.create')) return showToast('SIN PERMISO PARA CREAR PEDIDOS', 'red');
   const p = activeProj();
+  try { _rotularProyectoPedido(); } catch (e) {} // v1011: el desplegable dice el nombre de la obra
 
   // Poblar selects de torre/nivel y apto
   const nivelSelect = document.getElementById('pfNivel');
@@ -21153,7 +21174,21 @@ async function openOrdenCompra(){
   autoAssignOcProviders(pd); // v916: pedidos de receta traen su proveedor recordado
   window._ocPorProv = {}; // v985: fecha/pago POR PROVEEDOR arrancan vacíos (heredan lo general)
   renderOcItems();
-  document.getElementById('ocFormaPago').selectedIndex = 0;
+  /* v1011: la forma de pago la siembra la FICHA del proveedor. Antes era selectedIndex = 0 y
+     TODAS las órdenes nacían 'TARJETA DE ABASTO' aunque el proveedor fuera a crédito: el
+     histórico quedó inservible para cuentas por pagar. Si la ficha no la tiene, queda el
+     default de siempre y alguien la corrige a mano. */
+  (function(){
+    const selFP = document.getElementById('ocFormaPago');
+    if (!selFP) return;
+    selFP.selectedIndex = 0;
+    // el proveedor de referencia es el del primer item que ya trae uno asignado
+    const _it = ocWorkingItems.find(x => x && x.proveedorNombre);
+    const _fp = _it ? _formaPagoDeProveedor(_it.proveedorNombre) : '';
+    if (!_fp) return;
+    const _op = Array.from(selFP.options).find(o => String(o.value || o.textContent).trim().toUpperCase() === _fp.trim().toUpperCase());
+    if (_op) selFP.value = _op.value || _op.textContent;
+  })();
 
   const autoCount = ocWorkingItems.filter(x => x.proveedorId).length;
   const note = document.getElementById('ocCatalogNote');
@@ -21860,6 +21895,8 @@ async function generarOrdenCompra(){
       proyecto: proyectoOc,
       area: areaOc,
       formaPago: _pp.formaPago || formaPago,
+      // v1011: los DÍAS como número, para poder vencer la cuenta por pagar sin parsear texto
+      credito: _diasCredito(_pp.formaPago || formaPago),
       entregarA,
       items: items.map(it => ({ name: it.name, qty: it.qty, precio: it.precio || 0, sourceKey: it.sourceKey || '', cat: it.cat || '', eventual: it.eventual || false })),
       subtotal,
@@ -22579,8 +22616,10 @@ ${showDraft ? '<div class="no-print" style="background:var(--red-soft);padding:1
 
   ${(function(){
     /* v985: pago CONTADO o TRANSFERENCIA → la OC imprime la cuenta bancaria del proveedor
-       (como el formato físico de la empresa): nombre / número / tipo de cuenta / banco. */
-    if (!/CONTADO|TRANSFERENCIA/i.test(String(oc.formaPago || ''))) return '';
+       (como el formato físico de la empresa): nombre / número / tipo de cuenta / banco.
+       v1011: el CRÉDITO también termina pagándose por transferencia, así que la cuenta hace
+       la misma falta — solo la TARJETA DE ABASTO no la necesita. */
+    if (!/CONTADO|TRANSFERENCIA|CR[ÉE]DITO/i.test(String(oc.formaPago || ''))) return '';
     const _cb = (typeof _cuentaDeProveedor === 'function') ? _cuentaDeProveedor(oc.proveedorNombre) : null;
     if (!_cb) return '';
     return `<div style="text-align:center;margin:20px 0;font-weight:700;font-size:12.5px;line-height:1.7;letter-spacing:.3px">
@@ -31479,6 +31518,28 @@ window.recetaToggleMiles = async function(material, nombreCompra){
 };
 // v524: accessor del catálogo GLOBAL de proveedores. Top-level (global) para que lo alcancen OCs, recetas y catálogo.
 function _getProveedores(){ try { if (typeof state !== 'undefined' && state) { if (!Array.isArray(state.proveedoresGlobales)) state.proveedoresGlobales = []; return state.proveedoresGlobales; } } catch(e){} return []; }
+/* v1011: los DÍAS de crédito como número. "CRÉDITO 30 DÍAS" es un literal que hasta hoy no
+   parseaba nadie; para vencer una cuenta por pagar hace falta el número, no el texto.
+   Todo lo que no sea crédito vale 0 (se paga de una). */
+function _diasCredito(formaPago){
+  const t = String(formaPago || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  if (t.indexOf('CREDITO') < 0) return 0;   // CONTADO, TRANSFERENCIA, CHEQUE, TARJETA DE ABASTO
+  const m = t.match(/(\d+)\s*DIAS?/);
+  return m ? (Number(m[1]) || 0) : 0;
+}
+/* v1011: la forma de pago la manda la FICHA del proveedor (pv.pago.tipoCompra) — un campo que
+   ya se guardaba y que no leía nadie. Hasta ahora openOrdenCompra hacía selectedIndex = 0 y
+   TODAS las órdenes nacían como 'TARJETA DE ABASTO', así que el histórico de formas de pago
+   es basura y las cuentas por pagar la heredarían. */
+function _formaPagoDeProveedor(nombre){
+  try {
+    const n = String(nombre || '').trim().toUpperCase();
+    if (!n) return '';
+    const pv = _getProveedores().find(x => x && String(x.nombre || '').trim().toUpperCase() === n);
+    const tc = pv && pv.pago && String(pv.pago.tipoCompra || '').trim();
+    return tc || '';
+  } catch (e) { return ''; }
+}
 /* v985: cuenta bancaria de un proveedor por NOMBRE — la ficha del proveedor en la app
    (pago.numeroCuenta/tipoCuenta/banco, editable/importable) MANDA; si está vacía, cae a
    la tabla CUENTAS_PROVEEDORES (hoja PROVEEDOR del Excel DATOS_COMPRAS). Null si no hay. */
