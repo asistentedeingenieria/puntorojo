@@ -38,7 +38,9 @@ ok('se puede volver a ella a propósito', /_abrirPantallaObra\(true\)/.test(html
 
 console.log('\n— 3. adentro, la obra se ve —');
 ok('la barra dice TRABAJANDO EN', /<span class="lbl">TRABAJANDO EN<\/span>/.test(html));
-ok('el nombre de la obra es grande', /\.proj-switcher \.pr-proj-btn\{font-size:15px/.test(html));
+/* v1029: Antonio pidió lo contrario de "grande" — la letra del nombre unificada con la de
+   TRABAJANDO EN, misma tipografía y sin negritas ("lo quiero todo unificado") */
+ok('el nombre comparte tipografía con la etiqueta', /\.proj-switcher \.lbl,\s*\r?\n\.proj-switcher \.pr-proj-btn\{[^}]*font-weight:400/.test(html));
 /* v1028: la caja volvió a UNA línea y más delgada, con el volver como botón aparte
    (Antonio: "no me gusta cómo se ve, más delgado") */
 ok('la caja es compacta, de una línea', /\.proj-switcher\{flex-direction:row/.test(html));

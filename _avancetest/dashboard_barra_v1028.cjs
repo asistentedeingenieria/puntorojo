@@ -32,7 +32,9 @@ ok('y es un botón aparte', /class="btn ghost sm pr-btn-menu"/.test(html));
 ok('que dice MENÚ', /← MENÚ<\/button>/.test(html));
 ok('y lleva al menú principal', /pr-btn-menu"[^>]*_abrirPantallaObra\(true\)/.test(html));
 ok('la caja vuelve a una sola línea', /\.proj-switcher\{flex-direction:row/.test(html));
-ok('con menos alto que antes', /\.proj-switcher\{[^}]*padding:6px 12px/.test(html));
+/* lo que importa es que siga siendo de una línea: padding vertical chico, no un valor exacto
+   (v1029 lo ajustó a 7px al unificar la tipografía) */
+ok('con menos alto que antes', /\.proj-switcher\{[^}]*padding:[1-9]px 12px/.test(html));
 ok('la caja ya no es clickeable (el botón hace ese trabajo)', /\.proj-switcher \.pr-proj-btn\{[^}]*cursor:default/.test(html));
 ok('sigue mostrando en qué obra se está', /id="prProjBtnLabel"/.test(html) && /TRABAJANDO EN/.test(html));
 
