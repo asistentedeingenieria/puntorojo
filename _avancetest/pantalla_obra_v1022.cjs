@@ -22,7 +22,8 @@ console.log('\n— 1. la pantalla de entrada —');
 const zP = ex('window._abrirPantallaObra = function');
 ok('existe', zP.length > 400);
 ok('lista las obras como tarjetas', /proys\.map\(tarjeta\)/.test(zP));
-ok('con sus pendientes a la vista', /pedidos activos|pedido\$\{|sin pendientes/.test(zP));
+/* v1023: los subtitulos van en MAYUSCULA (pedido de Antonio) */
+ok('con sus pendientes a la vista', /PEDIDO\$\{|SIN PENDIENTES/.test(zP));
 ok('y las ubicaciones de empresa', /BODEGA CENTRAL/.test(zP) && /PROYECTOS VARIOS/.test(zP) && /ADMINISTRACIÓN/.test(zP));
 ok('cada una respeta su permiso', /_puedeVerBodega\(\)/.test(zP) && /_puedeVerVarios\(\)/.test(zP) && /_puedeVerAdmin\(\)/.test(zP));
 ok('sale al arrancar la app', /_abrirPantallaObra\(\)/.test(ex('function renderAll(')));
@@ -30,7 +31,7 @@ ok('sale al arrancar la app', /_abrirPantallaObra\(\)/.test(ex('function renderA
 console.log('\n— 2. NO se repite la fricción que hizo quitar el gate de v961 —');
 ok('solo aparece la primera vez de la sesión', /_yaEligioObra\(\)/.test(zP));
 ok('recuerda la última obra entre sesiones', /pr_ultima_obra_/.test(html));
-ok('y la marca para que elegir sea un clic', /la última donde trabajaste/.test(zP));
+ok('y la marca para que elegir sea un clic', /LA ÚLTIMA DONDE TRABAJASTE/.test(zP));
 ok('se puede volver a ella a propósito', /_abrirPantallaObra\(true\)/.test(html));
 
 console.log('\n— 3. adentro, la obra se ve —');

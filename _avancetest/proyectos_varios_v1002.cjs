@@ -57,8 +57,11 @@ ok('con su propio gate', !!zV);
 let fV = null;
 try { fV = new Function('can', 'return (' + zV + ')'); } catch(e){}
 if (fV) {
-  ok('lo ve quien crea pedidos', fV(k => k === 'pedidos.create')() === true);
-  ok('lo ve compras', fV(k => k === 'compras.autorizar')() === true);
+  /* v1023: crear pedidos ya NO alcanza para ver PROYECTOS VARIOS (lo veia casi todo el
+   mundo). Ahora pide menu.varios. */
+ok('crear pedidos ya NO alcanza para verlo', fV(k => k === 'pedidos.create')() === false);
+ok('pero SI con el permiso propio del menu', fV(k => k === 'menu.varios')() === true);
+  ok('los permisos de compras tampoco alcanzan', fV(k => k === 'compras.autorizar')() === false);
   ok('y el admin', fV(k => k === 'users.manage')() === true);
   ok('alguien sin nada NO lo ve', fV(() => false)() === false);
 }

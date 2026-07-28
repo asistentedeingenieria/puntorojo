@@ -49,7 +49,9 @@ console.log('\n— 5. reglas del proyecto —');
 ok('el panel pospone applyRemote (como bodega y varios)',
    /#_bodegaPanelModal|#_variosPanelModal/.test(html) && /#_adminPanelModal, \.prModal-backdrop/.test(html));
 ok('tiene su gate de permiso', /function _puedeVerAdmin\(/.test(html));
-ok('que incluye a quien maneja pólizas y anticipos', /polizas\.edit/.test(ex('function _puedeVerAdmin(')));
+/* v1023: ya NO entra por polizas.edit ni planilla.ver — Antonio: "predeterminadamente
+   nadie lo ve y yo doy el permiso". Ahora pide su propio menu.admin. */
+ok('pide su propio permiso, no uno de otra cosa', /menu\.admin/.test(ex('function _puedeVerAdmin(')));
 
 /* el badge de anticipos pendientes viajó con la pestaña: sin él, nadie se entera de que hay
    solicitudes esperando sin entrar a mirar */

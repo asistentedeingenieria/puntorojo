@@ -26,8 +26,10 @@ let fV = null;
 try { fV = new Function('can', 'return (' + zV + ')'); } catch(e){}
 if (fV) {
   const conPerm = p => fV(k => k === p)();
-  ok('finanzas (compras.revisar) entra', conPerm('compras.revisar') === true);
-  ok('bodega entra', conPerm('materiales.bodega') === true);
+  /* v1023: los permisos de compras YA NO abren bodega — se da menu.bodega aparte */
+ok('finanzas ya NO entra por compras.revisar', conPerm('compras.revisar') === false);
+ok('pero SI con el permiso propio del menu', conPerm('menu.bodega') === true);
+  ok('bodega ya NO entra por materiales.bodega', conPerm('materiales.bodega') === false);
   ok('el admin entra', conPerm('users.manage') === true);
   ok('alguien sin ninguno NO entra', fV(() => false)() === false);
 }
