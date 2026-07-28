@@ -45,7 +45,14 @@ ok('elegir una obra la activa de verdad', /setActiveProject\(id\)/.test(zE));
 /* la trampa de v961 al revés: si se pusiera el proyecto en null para "no tener default",
    reventarían todas las pantallas que hacen activeProj() sin guarda */
 ok('nunca pone el proyecto activo en null', !/activeProjectId = null/.test(zP) && !/activeProjectId = null/.test(zE));
-ok('sin obras cargadas no se interpone', /proys\.length/.test(zP) && /_marcarObraElegida\(\); return;/.test(zP));
+/* ⚠️ v1025 — ACÁ ESTABA EL BUG de "recargo y no me sale el menú". El primer render corre
+   ANTES de que lleguen los proyectos de la nube, así que la lista está vacía; la versión
+   anterior marcaba "ya eligió" en ese momento y se rendía PARA SIEMPRE: cuando llegaban los
+   datos, el menú ya se creía mostrado. REGLA: nunca marcar como elegido algo que el usuario
+   no eligió. */
+ok('con la lista vacía sale SIN marcar', /if \(!proys\.length\) return;/.test(zP));
+ok('y no se rinde para siempre', !/proys\.length\) \{ _marcarObraElegida/.test(zP));
+ok('solo se marca al elegir de verdad', (html.match(/_marcarObraElegida\(\)/g) || []).length === 3);
 ok('entrar a una ubicación de empresa también cuenta como elegir', /_marcarObraElegida\(\)/.test(ex('window._entrarA = function')));
 
 console.log('\n— 5. los nombres de obra se escapan —');
