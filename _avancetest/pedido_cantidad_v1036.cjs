@@ -190,7 +190,8 @@ ok('ni que no se pueden tocar', !/salen de la receta y no se pueden tocar/.test(
 console.log('\n— 10. clientes viejos —');
 /* cambia cómo se INTERPRETA un dato compartido: un celular con la versión vieja ve el pedido
    de 70 con la regla vieja (clave cerrada) y NO deja pedir los 30 que faltan */
-ok('se subió la versión de sincronización', /APP_SYNC_VERSION = 918/.test(html));
+/* v1039 la subió a 919; lo que importa acá es que sea AL MENOS la del cambio de cobertura */
+ok('se subió la versión de sincronización', parseInt((html.match(/APP_SYNC_VERSION = (\d+)/)||[])[1], 10) >= 918);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

@@ -3234,7 +3234,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1038</span>
+    <span style="opacity:.5;font-size:9px">v1039</span>
   </footer>
 
 </div>
@@ -9054,7 +9054,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 918; // v1036: cobertura de receta por CANTIDAD (un cliente viejo interpreta el pedido parcial como clave cerrada y bloquea el faltante)
+const APP_SYNC_VERSION = 919; // v1039: escudo de factura en el merge de órdenes (un cliente viejo sin el escudo re-abre la ventana de pérdida)
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9885,6 +9885,8 @@ const CloudSync = {
             rp.materiales.ordenesEliminadas || {});
           rp.materiales.ordenesEliminadas = _toc;
           const _moc = _mergeById((lp && lp.materiales && lp.materiales.ordenes) || [], rp.materiales.ordenes || [], _toc);
+          // v1039: la factura no se pierde aunque gane una copia sin ella
+          if (_ocFacturaShield(_moc.list, (lp && lp.materiales && lp.materiales.ordenes) || [], rp.materiales.ordenes || [])) needsResync = true;
           rp.materiales.ordenes = _moc.list;
           if (_moc.changed) needsResync = true;
           // v977: flags "SE PIDE EN MILES" (p.materiales.recetaMiles) — mapa chico por clave
@@ -9993,6 +9995,7 @@ const CloudSync = {
           const _boTomb = Object.assign({}, _bmL.ordenesEliminadas || {}, _bmR.ordenesEliminadas || {});
           _bmR.ordenesEliminadas = _boTomb;
           const _mBo = _mergeById(_bmL.ordenes || [], _bmR.ordenes || [], _boTomb);
+          if (_ocFacturaShield(_mBo.list, _bmL.ordenes || [], _bmR.ordenes || [])) needsResync = true; // v1039
           _bmR.ordenes = _mBo.list; if (_mBo.changed) needsResync = true;
           // memorias proveedor/precio del store: unión simple (lo local que el remoto no trae se conserva)
           ['ocProvPorItem', 'postesPrecioMedida'].forEach(k => {
@@ -10017,6 +10020,7 @@ const CloudSync = {
           const _voTomb = Object.assign({}, _vmL.ordenesEliminadas || {}, _vmR.ordenesEliminadas || {});
           _vmR.ordenesEliminadas = _voTomb;
           const _mVo = _mergeById(_vmL.ordenes || [], _vmR.ordenes || [], _voTomb);
+          if (_ocFacturaShield(_mVo.list, _vmL.ordenes || [], _vmR.ordenes || [])) needsResync = true; // v1039
           _vmR.ordenes = _mVo.list; if (_mVo.changed) needsResync = true;
           ['ocProvPorItem', 'postesPrecioMedida', 'ocVariantePorItem'].forEach(k => {
             const _loc = _vmL[k] || {}, _rem = _vmR[k] || {};
@@ -23191,19 +23195,22 @@ function renderOrdenesList(){
     /* v1017: el circuito de la ORDEN DE PRODUCCIÓN. Es un aviso al proveedor para que fabrique,
        no una compra: no suma al gasto y no se recibe. Cuando el proveedor confirma que el
        material está listo, de ella nace la orden de compra — esa sí es gasto. */
-    let _opBloque = '';
+    /* v1039 (pedido de Antonio): el RÓTULO del estado de la producción va con el badge de la
+       tarjeta ("en otro lado", no flotando junto al total) y el BOTÓN va en la columna de
+       acciones, justo arriba de la ✕. */
+    let _opEstado = '', _opBtn = '';
     if (_ocSerieDe(oc) === 'OP' && isAuth) {
       const _lista = !!(oc.produccionLista && oc.produccionLista.ts);
       const _puedeMarcar = can('compras.autorizar') || can('materiales.bodega') || can('users.manage');
       const _puedeDerivar = can('compras.autorizar') || can('users.manage');
       if (oc.ocDerivadaId) {
-        _opBloque = `<div style="font-size:9px;color:#15803D;font-weight:700;letter-spacing:.8px;margin-top:4px">YA CONVERTIDA EN ${_numLimpio(oc.ocDerivadaNumero || '')}</div>`;
+        _opEstado = `<div style="font-size:9px;color:#15803D;font-weight:700;letter-spacing:.8px;margin-top:4px">YA CONVERTIDA EN ${_numLimpio(oc.ocDerivadaNumero || '')}</div>`;
       } else if (!_lista) {
-        _opBloque = `<div style="font-size:9px;color:#B45309;font-weight:700;letter-spacing:.8px;margin-top:4px">ESPERANDO PROVEEDOR</div>`
-          + (_puedeMarcar ? `<button class="btn ghost sm" style="font-size:9.5px;margin-top:4px" onclick="window._ocMarcarProduccionLista('${oc.id}')">EL PROVEEDOR YA LO TIENE LISTO</button>` : '');
+        _opEstado = `<div style="font-size:9px;color:#B45309;font-weight:700;letter-spacing:.8px;margin-top:4px">ESPERANDO PROVEEDOR</div>`;
+        if (_puedeMarcar) _opBtn = `<button class="btn ghost sm" style="font-size:9.5px" onclick="window._ocMarcarProduccionLista('${oc.id}')">EL PROVEEDOR YA LO TIENE LISTO</button>`;
       } else {
-        _opBloque = `<div style="font-size:9px;color:#15803D;font-weight:700;letter-spacing:.8px;margin-top:4px">LISTA PARA COMPRA</div>`
-          + (_puedeDerivar ? `<button class="btn sm" style="font-size:9.5px;margin-top:4px" onclick="window._ocDerivarDeOp('${oc.id}')">GENERAR OC DE ESTA PRODUCCIÓN</button>` : '');
+        _opEstado = `<div style="font-size:9px;color:#15803D;font-weight:700;letter-spacing:.8px;margin-top:4px">LISTA PARA COMPRA</div>`;
+        if (_puedeDerivar) _opBtn = `<button class="btn sm" style="font-size:9.5px" onclick="window._ocDerivarDeOp('${oc.id}')">GENERAR OC DE ESTA PRODUCCIÓN</button>`;
       }
     }
 
@@ -23221,7 +23228,9 @@ function renderOrdenesList(){
 
     // v947: FACTURA del proveedor en OCs autorizadas — sin factura sale el botón (compras);
     // con factura, el link VER en la info + reemplazo solo admin.
-    const facturaBtn = (isAuth && canFactura && !oc.facturaUrl)
+    /* v1039 (Antonio): la ORDEN DE PRODUCCIÓN no se factura — es un aviso al proveedor para
+       fabricar. La factura va en la ORDEN DE COMPRA que nace de ella. */
+    const facturaBtn = (isAuth && canFactura && !oc.facturaUrl && _ocSerieDe(oc) !== 'OP')
       ? `<button class="btn ghost sm" onclick="_ocAbrirSubirFactura('${oc.id}')" title="Subir la factura que generó el proveedor">SUBIR FACTURA</button>`
       : '';
 
@@ -23251,6 +23260,7 @@ function renderOrdenesList(){
       <dl class="oc-list-info" style="margin:0">
         <dd class="proveedor">${oc.proveedorNombre || '—'}</dd>
         <div style="margin-top:4px">${statusBadge}${autorizInfo}</div>
+        ${_opEstado}
         ${facturaInfo}
         ${recibidaInfo}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px">
@@ -23271,7 +23281,7 @@ function renderOrdenesList(){
         ${recibirBtn}
         ${printBtn}
         ${facturaBtn}
-        ${_opBloque}
+        ${_opBtn}
         ${canDeleteOC ? `<button class="btn-icon danger" onclick="deleteOrden('${oc.id}')" title="Eliminar orden">✕</button>` : ''}
       </div>
     </div>`;
@@ -23557,6 +23567,8 @@ function _ocAbrirSubirFactura(ocId){
   const _hit = _bodegaFindOc(ocId); // v964
   const oc = _hit && _hit.oc;
   if (!oc) return;
+  // v1039 (Antonio): la producción NO se factura — la factura va en la OC que nace de ella
+  if (_ocSerieDe(oc) === 'OP') return showToast('LA FACTURA VA EN LA ORDEN DE COMPRA — LA PRODUCCIÓN NO SE FACTURA', 'red');
   if (oc.status !== 'AUTORIZADA') return showToast('LA FACTURA SE SUBE CUANDO LA OC YA ESTÁ AUTORIZADA', 'red');
   if (oc.facturaUrl && !can('users.manage')) return showToast('YA TIENE FACTURA — SOLO UN ADMIN PUEDE REEMPLAZARLA', 'red');
   const wrap = document.createElement('div');
@@ -23604,6 +23616,8 @@ async function _ocSubirFactura(ocId){
   const oc = _hit && _hit.oc;
   _ocCerrarFacturaModal();
   if (!oc) { _borrarMiArchivo(); return showToast('LA OC YA NO EXISTE — RECARGÁ LA LISTA', 'red'); }
+  // v1039: cinturón — la producción no se factura (el modal ya lo rechaza, pero por si acaso)
+  if (_ocSerieDe(oc) === 'OP') { _borrarMiArchivo(); return showToast('LA FACTURA VA EN LA ORDEN DE COMPRA — LA PRODUCCIÓN NO SE FACTURA', 'red'); }
   if (oc.facturaUrl && !esAdmin) { _borrarMiArchivo(); return showToast('OTRA PERSONA YA SUBIÓ LA FACTURA — SE CONSERVA ESA', 'amber'); }
   const u = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
   oc.facturaUrl = url;
@@ -32466,6 +32480,8 @@ window._ocDerivarDeOp = async function(opId){
     impreso: false,
     produccionLista: null,
     ocDerivadaId: null,
+    /* v1039: facturaUrl NO se anula a propósito — si alguien alcanzó a subirle factura a la OP
+       (ventana del bug 29-jul), el Object.assign la trae y la OC nace con ella: rescate. */
     factura: null,
     recibidoBodega: null
   });
@@ -33230,6 +33246,31 @@ function _mergeById(localList, remoteList, tombSet){
   });
   if (tombSet) Object.keys(byId).forEach(function(id){ if (tombSet[id]) delete byId[id]; });
   return { list: Object.keys(byId).map(function(id){ return byId[id]; }), changed: changed };
+}
+/* v1039: ESCUDO DE FACTURA en el union-merge de órdenes (incidente 29-jul: "las facturas no
+   se están guardando y se eliminan" — mismas palabras del incidente de cobro v953).
+   _mergeById gana por OBJETO ENTERO: quien sube la factura sella _ts, pero si OTRO dispositivo
+   que aún no la recibió toca la misma OC (marcar recibida, imprimir…), su copia SIN factura y
+   con _ts más nuevo gana el merge completo y la factura desaparece de toda la flota.
+   La factura se sube UNA vez y solo un admin la reemplaza, así que "quien la tiene, gana" es
+   seguro: si al ganador le falta facturaUrl y la otra copia la tiene, se le re-pega. Si el
+   ganador YA trae la suya (reemplazo de admin, _ts más nuevo), se respeta. PURO e idempotente
+   (regla v856). */
+function _ocFacturaShield(mergedList, localList, remoteList){
+  var por = function(l){ var m = {}; (Array.isArray(l) ? l : []).forEach(function(o){ if (o && o.id) m[o.id] = o; }); return m; };
+  var L = por(localList), R = por(remoteList);
+  var changed = false;
+  (Array.isArray(mergedList) ? mergedList : []).forEach(function(o){
+    if (!o || !o.id || o.facturaUrl) return;
+    var f = (L[o.id] && L[o.id].facturaUrl) ? L[o.id] : ((R[o.id] && R[o.id].facturaUrl) ? R[o.id] : null);
+    if (!f) return;
+    o.facturaUrl = f.facturaUrl;
+    o.facturaNombre = f.facturaNombre || '';
+    o.facturaSubidaPor = f.facturaSubidaPor || '';
+    o.facturaSubidaEn = f.facturaSubidaEn || '';
+    changed = true;
+  });
+  return changed;
 }
 
 /* v891: BLINDAJE DE PLANILLAS ARMADAS, PAGOS Y RETENCIONES de UN proyecto.
