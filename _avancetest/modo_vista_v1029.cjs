@@ -24,12 +24,20 @@ try {
   // se simulan las pestañas reales
   const tabs = ['dashboard','cobro','avance','materiales','personal','planilla','actividad']
     .map(v => ({ dataset:{ view:v }, style:{ display:'' } }));
-  const doc = { querySelectorAll: () => tabs, getElementById: () => ({ textContent:'' }) };
-  fA = new Function('document', 'window', 'return (' + zM + ')');
-  const f1 = fA(doc, { _dashGeneral: true });  f1();
+  /* v1033: la función ahora también MUEVE la vista, así que el andamiaje necesita saber cuál
+     está activa y ofrecer setView/can */
+  let _vistaActiva = 'view-dashboard';
+  const doc = {
+    querySelectorAll: () => tabs,
+    getElementById: () => ({ textContent:'' }),
+    querySelector: sel => (sel === '.view.active' ? { id: _vistaActiva } : null),
+  };
+  fA = (win) => new Function('document', 'window', 'setView', 'can',
+    'return (' + zM + ')')(doc, win, v => { _vistaActiva = 'view-' + v; }, () => true);
+  const f1 = fA({ _dashGeneral: true });  f1();
   const soloDash = tabs.filter(t => t.style.display !== 'none').map(t => t.dataset.view);
   ok('en DASHBOARD EJECUTIVO solo queda el dashboard', soloDash.length === 1 && soloDash[0] === 'dashboard');
-  const f2 = fA(doc, { _dashGeneral: false }); f2();
+  const f2 = fA({ _dashGeneral: false }); f2();
   const sinDash = tabs.filter(t => t.style.display !== 'none').map(t => t.dataset.view);
   ok('dentro de una obra NO está el dashboard', sinDash.indexOf('dashboard') < 0);
   ok('y sí están las de la obra', sinDash.indexOf('cobro') >= 0 && sinDash.indexOf('materiales') >= 0 && sinDash.length === 6);
@@ -60,6 +68,15 @@ ok('el botón tampoco va en negrita', /\.pr-btn-menu\{[^}]*font-weight:400/.test
 const zAP = ex('function applyPermissions(');
 ok('applyPermissions termina aplicando el modo de vista', /_aplicarModoVista/.test(zAP));
 ok('y despues de reasignar las pestañas', zAP.indexOf('_aplicarModoVista') > zAP.indexOf('view.'));
+
+/* ⚠️ v1033 — POR ESTO SEGUIA VIENDOSE EL DASHBOARD DENTRO DE UNA OBRA: esconder la pestaña
+   no cambia la VISTA. La vista activa seguia pintada abajo aunque su boton ya no estuviera, y
+   al recargar la app la restaura tal cual. Hay que MOVER la vista, no solo esconder el boton. */
+const zMV = ex('function _aplicarModoVista(');
+ok('mueve la VISTA, no solo esconde la pestaña', /setView\(/.test(zMV));
+ok('mira cual es la vista activa', /view.active/.test(zMV));
+ok('no hace nada si la vista ya corresponde', /general === _enDash\) return/.test(zMV));
+ok('tiene guarda anti-recursion (setView llama a applyPermissions)', /_modoVistaAplicando/.test(zMV));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
