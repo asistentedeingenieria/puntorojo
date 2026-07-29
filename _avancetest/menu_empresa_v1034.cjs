@@ -63,13 +63,14 @@ try {
   ok('ni el rótulo TODA LA EMPRESA', fB([]).indexOf('TODA LA EMPRESA') < 0);
   const soloBodega = fB(['menu.bodega']);
   ok('con un solo permiso sí sale el rótulo', soloBodega.indexOf('TODA LA EMPRESA') >= 0);
-  ok('y solo esa opción', soloBodega.indexOf('BODEGA CENTRAL') >= 0
+  /* v1040: la tarjeta dice COMPRAS (mismo permiso menu.bodega) */
+  ok('y solo esa opción', soloBodega.indexOf('COMPRAS') >= 0
      && soloBodega.indexOf('DASHBOARD EJECUTIVO') < 0
      && soloBodega.indexOf('ADMINISTRACIÓN') < 0
      && soloBodega.indexOf('PROYECTOS VARIOS') < 0
      && soloBodega.indexOf('USUARIOS') < 0);
   const todo = fB(['menu.dashboard','users.manage','menu.bodega','menu.varios','menu.admin']);
-  ok('el admin las sigue viendo todas', ['DASHBOARD EJECUTIVO','USUARIOS','BODEGA CENTRAL','PROYECTOS VARIOS','ADMINISTRACIÓN']
+  ok('el admin las sigue viendo todas', ['DASHBOARD EJECUTIVO','USUARIOS','COMPRAS','PROYECTOS VARIOS','ADMINISTRACIÓN']
      .every(t => todo.indexOf(t) >= 0));
   /* Antonio v1030: "quiero que todos los cuadros estén del mismo tamaño" */
   ok('los cinco cuadros se arman con el mismo molde', (todo.match(/padding:12px 16px;border-radius:10px/g) || []).length === 5);

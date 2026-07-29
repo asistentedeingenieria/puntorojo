@@ -87,7 +87,9 @@ ok('correlativo derivado + subida inmediata', /_bodegaNextNum/.test(srcGen) && /
 
 // ── 4. botón en la pestaña de pedidos ──
 // v960: un solo botón en la toolbar; v963: la ENTRADA la decide Antonio (materiales.bodega|admin)
-ok('botón BODEGA CENTRAL gateado a bodega|admin', /data-perm="materiales\.bodega\|users\.manage"[^>]*onclick="_abrirPanelBodega\(\)"/.test(html) && /ABASTECER/.test(extractFn('_abrirPanelBodega')));
+/* v1040: el botón pasó a menu.bodega — el mismo permiso que exige la función (antes
+   materiales.bodega mostraba el botón y la función lo rechazaba con toast) */
+ok('botón BODEGA CENTRAL gateado a bodega|admin', /data-perm="menu\.bodega\|users\.manage"[^>]*onclick="_abrirPanelBodega\(\)"/.test(html) && /ABASTECER/.test(extractFn('_abrirPanelBodega')));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

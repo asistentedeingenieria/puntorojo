@@ -131,8 +131,11 @@ const mVer = html.match(/const APP_SYNC_VERSION = (\d+)/);
 ok('APP_SYNC_VERSION >= 910', !!mVer && Number(mVer[1]) >= 910);
 
 // ── 11. UI: sub-pestaña ÓRDENES visible para oficina; botón del panel nuevo ──
-ok('subtab ÓRDENES admite materiales.bodega', /data-mattab="ordenes"[^>]*data-perm="[^"]*materiales\.bodega/.test(html));
-ok('botón BODEGA CENTRAL abre el panel', /_abrirPanelBodega\(\)/.test(html) && /data-perm="[^"]*materiales\.bodega[^"]*"[^>]*onclick="_abrirPanelBodega\(\)"|onclick="_abrirPanelBodega\(\)"[^>]*data-perm="[^"]*materiales\.bodega/.test(html));
+/* v1040: ÓRDENES salió de la obra — su gate (que incluye materiales.bodega) vive en la
+   barra de secciones de COMPRAS */
+ok('subtab ÓRDENES admite materiales.bodega', /materiales\.bodega/.test((function(){ let m=html.indexOf('function _comprasBarraHTML('); let i=html.indexOf('{',m),d=0; for(;i<html.length;i++){ if(html[i]==='{')d++; else if(html[i]==='}'){ d--; if(d===0) return html.slice(m,i+1); } } return ''; })()));
+/* v1040: el botón dice COMPRAS y muestra con el permiso que exige la función (menu.bodega) */
+ok('botón BODEGA CENTRAL abre el panel', /data-perm="menu\.bodega\|users\.manage"[^>]*onclick="_abrirPanelBodega\(\)"/.test(html));
 // v960: el botón suelto de ABASTECER se quitó (un solo botón) — ahora vive DENTRO del panel
 ok('ABASTECER accesible desde el panel y gateado', /_abrirModalBodega\(\)/.test(extractFrom('function _abrirPanelBodega(')) && /_puedeGestionarBodega\(\)/.test(extractFrom('function _abrirModalBodega(')));
 

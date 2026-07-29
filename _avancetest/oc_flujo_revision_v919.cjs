@@ -16,7 +16,9 @@ ok('compras.autorizar relabeleado a generar/gestionar', /key: 'compras\.autoriza
 
 // ── 2. la pestaña OC la ven compras Y el revisor ──
 ok('applyPermissions soporta data-perm con | (cualquiera)', /split\('\|'\)/.test(extractFn('applyPermissions')));
-ok('tab ÓRDENES DE COMPRA visible para ambos', /data-perm="compras\.autorizar\|compras\.revisar(\|[a-z.]+)*"/.test(html)); // v959: también materiales.bodega
+/* v1040: la pestaña salió de la obra — el gate (compras.autorizar|compras.revisar|
+   materiales.bodega) vive ahora en la barra de secciones de COMPRAS */
+ok('tab ÓRDENES DE COMPRA visible para ambos', /compras\.autorizar'\)\s*\|\|\s*can\('compras\.revisar/.test((function(){ let m=html.indexOf('function _comprasBarraHTML('); let i=html.indexOf('{',m),d=0; for(;i<html.length;i++){ if(html[i]==='{')d++; else if(html[i]==='}'){ d--; if(d===0) return html.slice(m,i+1); } } return ''; })()));
 
 // ── 3. generar: usuario real + aviso al revisor ──
 const srcGen = extractFn('generarOrdenCompra');

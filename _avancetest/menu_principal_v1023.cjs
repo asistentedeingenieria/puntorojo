@@ -37,7 +37,8 @@ const zP = ex('window._abrirPantallaObra = function') + ex('function _bloqueEmpr
 ok('SIN PENDIENTES', /'SIN PENDIENTES'/.test(zP));
 ok('PEDIDOS ACTIVOS', /PEDIDO\$\{[^}]*\} ACTIVO/.test(zP));
 ok('LA ÚLTIMA DONDE TRABAJASTE', /LA ÚLTIMA DONDE TRABAJASTE/.test(zP));
-ok('EXISTENCIAS Y COMPRAS', /'EXISTENCIAS Y COMPRAS'/.test(zP));
+/* v1040: la tarjeta pasó a COMPRAS con bajada nueva, siempre en MAYÚSCULA */
+ok('EXISTENCIAS Y COMPRAS', /'BODEGA, PEDIDOS, OC, INVENTARIOS Y GASTOS'/.test(zP));
 ok('OBRAS CHICAS Y REPARACIONES', /'OBRAS CHICAS Y REPARACIONES'/.test(zP));
 ok('PÓLIZAS Y ANTICIPOS', /'PÓLIZAS Y ANTICIPOS'/.test(zP));
 ok('y la bajada del título', /TODO LO QUE VEAS DESPUÉS/.test(zP));

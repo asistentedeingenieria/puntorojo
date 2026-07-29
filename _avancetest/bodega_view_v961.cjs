@@ -22,7 +22,8 @@ ok('...solo para quien Antonio marque (_puedeVerBodega)', /_puedeVerBodega\(\)/.
 // ── 2. gate de entrada por permiso ──
 const vSrc = extractFrom('function _puedeVerBodega(');
 ok('_puedeVerBodega = materiales.bodega o admin (SIN compras)', /materiales\.bodega/.test(vSrc) && /users\.manage/.test(vSrc) && !/compras\.autorizar/.test(vSrc));
-ok('el botón de la toolbar usa el permiso restringido', /data-perm="materiales\.bodega\|users\.manage"[^>]*onclick="_abrirPanelBodega\(\)"/.test(html));
+/* v1040: el permiso restringido pasó a ser menu.bodega (el de la entrada de COMPRAS) */
+ok('el botón de la toolbar usa el permiso restringido', /data-perm="menu\.bodega\|users\.manage"[^>]*onclick="_abrirPanelBodega\(\)"/.test(html));
 
 // ── 3. la vista completa ──
 const zView = extractFrom('function _abrirPanelBodega(');
