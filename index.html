@@ -3234,7 +3234,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1035</span>
+    <span style="opacity:.5;font-size:9px">v1036</span>
   </footer>
 
 </div>
@@ -9042,7 +9042,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 917; // v1016: union-merge de state.pagosProv (pagos a proveedores de material)
+const APP_SYNC_VERSION = 918; // v1036: cobertura de receta por CANTIDAD (un cliente viejo interpreta el pedido parcial como clave cerrada y bloquea el faltante)
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -13694,14 +13694,37 @@ function _primerNumeroLibre(usados){
   while (set[i]) i++;
   return i;
 }
+/* v1036 — EL TECHO DE LO QUE SE PUEDE PEDIR DE UN MATERIAL. PURA.
+   Antonio: "NO debe de poder pedir más de lo que la receta le permite". El atributo max del
+   input se saltea escribiendo, así que el techo de verdad vive acá, del lado del generador.
+   Sin cantidad elegida (o con basura) devuelve lo permitido: el pedido completo de siempre. */
+function _cantidadPedida(elegida, permitida){
+  var per = Math.max(0, Math.floor(Number(permitida) || 0));
+  if (elegida == null || elegida === '') return per;
+  var e = Math.floor(Number(elegida) || 0);
+  if (!(e > 0)) return per;
+  return Math.min(e, per);
+}
 function _pedidoCubre(pd){
   var rec = pd && pd.recepcion;
+  var base = (pd && pd.recetaQty) || {};
   /* v996: mientras FALTE llegar alguna orden de compra, el pedido sigue cubriendo lo
      PEDIDO — ese material ya está comprado y en camino, no se puede volver a pedir. Recién
      cuando llegaron todas manda lo efectivamente recibido (v991). */
-  if (rec && rec.faltanEntregas) return (pd && pd.recetaQty) || {};
-  if (rec && rec.recetaRecibido && typeof rec.recetaRecibido === 'object') return rec.recetaRecibido;
-  return (pd && pd.recetaQty) || {};
+  if (rec && rec.faltanEntregas) return base;
+  if (rec && rec.recetaRecibido && typeof rec.recetaRecibido === 'object') {
+    /* ⚠️ v1036 — FUSIÓN, NO REEMPLAZO. recetaRecibido solo trae las claves que MATCHEARON en
+       el modal de recepción, y los postes con medida especial son justo donde ese match es más
+       frágil. Reemplazando, la clave que no matcheó quedaba en cero cobertura y el material
+       volvía a ofrecerse ENTERO como si nunca se hubiera pedido: sobre-compra silenciosa.
+       Con la contabilidad por cantidades (v1036) esto pasa a afectar a TODOS los pedidos de
+       nivel, no solo a los parciales — por eso se arregla acá. */
+    var out = {};
+    Object.keys(base).forEach(function(k){ out[k] = base[k]; });
+    Object.keys(rec.recetaRecibido).forEach(function(k){ out[k] = rec.recetaRecibido[k]; });
+    return out;
+  }
+  return base;
 }
 function _coberturaAptosEtapa(pedidos, levelId, stageIdx){
   var cob = {};
@@ -13711,7 +13734,13 @@ function _coberturaAptosEtapa(pedidos, levelId, stageIdx){
     // PARCIAL — su clave ya no se cierra en _itemsYaPedidosEtapa, así que la resta por
     // cantidades es la que deja disponible exactamente el faltante.
     var esParcial = !!(pd.recepcion && pd.recepcion.parcial);
-    if (!pd.recetaAptoId && !esParcial) return;
+    /* v1036: entran TAMBIÉN los pedidos de NIVEL que traen recetaQty (la contabilidad v909).
+       Es lo que permite pedir 70 de 100 y que después aparezcan los 30: la resta por
+       CANTIDADES deja disponible exactamente el faltante.
+       Los pedidos VIEJOS sin recetaQty (pre-v909) siguen cerrando la clave por booleano en
+       _itemsYaPedidosEtapa — si no, el día del deploy VDC y VLA re-ofrecen material comprado. */
+    var tieneQty = !!(pd.recetaQty && Object.keys(pd.recetaQty).length);
+    if (!pd.recetaAptoId && !esParcial && !tieneQty) return;
     var qtys = _pedidoCubre(pd);
     Object.keys(qtys).forEach(function(k){
       if (!cob[k]) cob[k] = { total: 0, porApto: {} };
@@ -13752,6 +13781,12 @@ function _itemsYaPedidosEtapa(pedidos, levelId, stageIdx){
          v996: solo cuenta el faltante REAL (llegó incompleto). Que todavía no haya llegado
          otra OC del mismo pedido no libera nada: ese material ya está comprado. */
       if (pd.recepcion && pd.recepcion.parcial && !pd.recepcion.faltanEntregas) return;
+      /* v1036: si el pedido trae recetaQty NO cierra sus claves — la resta por CANTIDADES en
+         _coberturaAptosEtapa deja disponible exactamente el faltante. Si cubrió el 100%, el
+         `qtyFinal <= 0` de _etapaItemsParaPedir lo saca igual: mismo resultado que antes para
+         los pedidos completos. Cerrar por booleano queda SOLO para los pedidos viejos que no
+         tienen esa contabilidad (pre-v909). */
+      if (pd.recetaQty && Object.keys(pd.recetaQty).length) return;
       Object.keys(pd.items||{}).forEach(function(k){ keys[k]=true; });
       // v906: claves ORIGINALES de receta (los POSTES se guardan renombrados con su medida)
       (pd.recetaKeys||[]).forEach(function(k){ keys[k]=true; });
@@ -13788,7 +13823,13 @@ function _etapaItemsParaPedir(p, t, l, stageIdx, aptoId){
     if (aptoId){
       // v909: lo ya pedido para ESTE apto se bloquea
       if (cob[key] && cob[key].porApto && cob[key].porApto[aptoId]) return;
-      var qA = Math.ceil(qtyBase);
+      /* v1036: los pedidos de NIVEL ya no cierran la clave (cuentan por cantidad), así que el
+         apto tiene que mirar el SALDO del nivel: cubierto el nivel no hay nada que pedir acá,
+         y si queda poco, el apto no puede pasarse de eso (sería doble compra). R.src trae los
+         totales del nivel (el modo por apto solo existe con receta estándar). */
+      var _saldoNivel = Math.ceil(Number((R.src || {})[key]) || 0) - ((cob[key] && cob[key].total) || 0);
+      if (_saldoNivel <= 0) return;
+      var qA = Math.min(Math.ceil(qtyBase), _saldoNivel);
       out.push({ key:key, name:name, qtyFinal:qA, qtyMostrar:_aprox(qA), mil:_mil && _aprox(qA) !== qA });
     } else {
       var qtyFinal=Math.ceil(usarTotalesPDF?qtyBase:qtyBase*numAptos);
@@ -34189,15 +34230,24 @@ function _abrirSelectorItemsEtapa(towerId, levelId, stageIdx){
   var items=_etapaItemsParaPedir(p, t, l, stageIdx);
   if(!items.length){ showToast('YA SE PIDIÓ TODO LO DISPONIBLE DE ESTA ETAPA',''); return; }
   var esc=function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(m){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]);}); };
+  /* v1036: la cantidad pasa de rótulo fijo a CASILLA EDITABLE. El valor que trae es lo que la
+     app mandaría hoy (con su ≈ / múltiplo aplicado) y ese mismo número es el TOPE: es lo que
+     falta de la receta. Si Antonio lo baja, se manda literal lo que escribió. */
   var rows=items.map(function(it){
-    return '<label style="display:flex;align-items:center;gap:10px;padding:9px 6px;border-bottom:1px solid rgba(0,0,0,.06);font-size:13px;cursor:pointer">'
+    var sug = (it.qtyMostrar != null ? it.qtyMostrar : it.qtyFinal);
+    return '<label class="_selItemRow" style="display:flex;align-items:center;gap:10px;padding:9px 6px;border-bottom:1px solid rgba(0,0,0,.06);font-size:13px;cursor:pointer">'
       +'<input type="checkbox" class="_selItemChk" data-key="'+esc(it.key)+'" checked style="width:17px;height:17px;flex:0 0 auto">'
-      +'<span style="flex:1;min-width:0">'+esc(it.name)+'</span>'
-      +'<span style="color:var(--mute);font-size:11px;font-weight:700;white-space:nowrap">'+(it.mil ? '≈ ' : '')+(it.qtyMostrar != null ? it.qtyMostrar : it.qtyFinal)+'</span></label>';
+      +'<span style="flex:1;min-width:0">'+esc(it.name)+(it.mil ? ' <span style="color:var(--mute);font-size:10px">≈</span>' : '')+'</span>'
+      /* onclick stopPropagation: la fila es un <label>, para que tocar la casilla no desmarque
+         el material. font-size 16px: menos de eso hace zoom en iOS al enfocar (regla v976). */
+      +'<input type="number" class="_selItemQty" data-key="'+esc(it.key)+'" value="'+sug+'" max="'+sug+'" min="1" step="1" inputmode="numeric"'
+      +' onclick="event.stopPropagation()" onfocus="this.select()"'
+      +' style="width:86px;flex:0 0 auto;padding:6px 8px;border:1px solid #D1D5DB;border-radius:6px;font-family:inherit;font-size:16px;font-weight:700;text-align:right;box-sizing:border-box;background:#fff;color:var(--ink,#1C1917)">'
+      +'</label>';
   }).join('');
   var html='<div id="_selItemsModal" style="position:fixed;inset:0;z-index:100080;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)_cerrarSelectorItems()">'
     +'<div style="background:var(--card,#fff);color:var(--ink,#1C1917);border-radius:14px;max-width:520px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden" onclick="event.stopPropagation()">'
-    +'<div style="padding:16px 18px;border-bottom:1px solid rgba(0,0,0,.08)"><b style="font-size:13px;letter-spacing:.5px">PEDIR ETAPA '+(stageIdx+1)+' · '+esc(t.name)+' · '+esc(l.name)+'</b><div style="font-size:11px;color:var(--mute);margin-top:4px">Dejá todos marcados para pedir la etapa COMPLETA, o desmarcá lo que no querés pedir todavía.</div></div>'
+    +'<div style="padding:16px 18px;border-bottom:1px solid rgba(0,0,0,.08)"><b style="font-size:13px;letter-spacing:.5px">PEDIR ETAPA '+(stageIdx+1)+' · '+esc(t.name)+' · '+esc(l.name)+'</b><div style="font-size:11px;color:var(--mute);margin-top:4px">Desmarcá lo que no querés pedir todavía y cambiá la CANTIDAD si vas a pedir menos. El número que trae es lo que falta de la receta: no se puede pedir más que eso.</div></div>'
     +'<div style="padding:8px 14px;border-bottom:1px solid rgba(0,0,0,.06);display:flex;gap:8px"><button class="btn ghost sm" onclick="_selItemTodos(true)">TODOS</button><button class="btn ghost sm" onclick="_selItemTodos(false)">NINGUNO</button></div>'
     +'<div style="padding:6px 14px;overflow:auto;flex:1">'+rows+'</div>'
     +'<div style="padding:10px 18px;border-top:1px solid rgba(0,0,0,.06)"><label style="display:block;font-size:9px;letter-spacing:1.5px;color:var(--mute,#78716C);font-weight:700;text-transform:uppercase;margin-bottom:4px">FECHA DESEADA DE ENTREGA <span style="color:var(--red,#DC2626)">*</span></label><input type="date" id="_selItemFecha" min="'+_hoyInputISO()+'" style="width:100%;padding:8px 10px;border:1px solid #D1D5DB;border-radius:6px;font-family:inherit;font-size:13px;box-sizing:border-box;background:#fff"></div>'
@@ -34209,13 +34259,32 @@ function _abrirSelectorItemsEtapa(towerId, levelId, stageIdx){
 function _cerrarSelectorItems(){ var m=document.getElementById('_selItemsModal'); if(m) m.remove(); if(window._prUnlockScroll) window._prUnlockScroll(); }
 function _selItemTodos(val){ document.querySelectorAll('._selItemChk').forEach(function(c){ c.checked=!!val; }); }
 function _selItemPedir(towerId, levelId, stageIdx){
-  var keys=[]; document.querySelectorAll('._selItemChk').forEach(function(c){ if(c.checked) keys.push(c.getAttribute('data-key')); });
+  /* v1036: se recorre la FILA y de ahí se sacan checkbox y cantidad. NO se arma un selector
+     con la clave adentro: las claves llevan comillas y apóstrofos (POSTE DE 2½" X 9.19') y
+     cualquier querySelector con eso revienta o no matchea. */
+  var keys=[], qtyElegida={}, error='', primerMalo=null;
+  document.querySelectorAll('._selItemRow').forEach(function(row){
+    var c=row.querySelector('._selItemChk'); if(!c||!c.checked) return;
+    var k=c.getAttribute('data-key');
+    var i=row.querySelector('._selItemQty');
+    if(!i){ keys.push(k); return; }
+    var tope=Math.floor(Number(i.getAttribute('max'))||0);
+    var sug=Math.floor(Number(i.getAttribute('value'))||0); // lo que la app mandaría sola
+    var v=Math.floor(Number(i.value)||0);
+    if(!(v>0)){ if(!error){ error='PONÉ UNA CANTIDAD MAYOR A CERO'; primerMalo=i; } return; }
+    if(tope>0 && v>tope){ if(!error){ error='NO PODÉS PEDIR MÁS DE '+tope+' — ES LO QUE FALTA DE LA RECETA'; primerMalo=i; } return; }
+    keys.push(k);
+    /* solo cuenta como "cantidad a mano" si la TOCÓ: sin tocar, el pedido sale idéntico al de
+       siempre (múltiplo ≈, fulminante derivado, re-sync con la receta) */
+    if(v!==sug) qtyElegida[k]=v;
+  });
+  if(error){ showToast(error,'red'); if(primerMalo){ primerMalo.focus(); primerMalo.select(); } return; }
   if(!keys.length){ showToast('SELECCIONÁ AL MENOS UN ÍTEM','red'); return; }
   // v915: fecha deseada de entrega obligatoria
   var fEl=document.getElementById('_selItemFecha'); var f=fEl?fEl.value:'';
   if(!f){ showToast('PONÉ LA FECHA DESEADA DE ENTREGA','red'); if(fEl) fEl.focus(); return; }
   _cerrarSelectorItems();
-  pedirEtapaCompleta(towerId, levelId, stageIdx, keys, { fechaEntrega: _fechaInputALatam(f) });
+  pedirEtapaCompleta(towerId, levelId, stageIdx, keys, { fechaEntrega: _fechaInputALatam(f), qtyElegida: qtyElegida });
 }
 window._abrirSelectorItemsEtapa=_abrirSelectorItemsEtapa; window._cerrarSelectorItems=_cerrarSelectorItems; window._selItemTodos=_selItemTodos; window._selItemPedir=_selItemPedir;
 // ── v913: PEDIR DE RECETA en MODAL (nivel body). El panel de la sub-pestaña quedaba
@@ -34230,7 +34299,7 @@ function _abrirModalPedirReceta(){
   var html='<div id="_modalPedirReceta" style="position:fixed;inset:0;z-index:100070;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)_cerrarModalPedirReceta()">'
     +'<div style="background:var(--card,#fff);color:var(--ink,#1C1917);border-radius:14px;max-width:860px;width:100%;max-height:88vh;display:flex;flex-direction:column;overflow:hidden" onclick="event.stopPropagation()">'
     +'<div style="padding:16px 18px;border-bottom:1px solid rgba(0,0,0,.08);display:flex;align-items:center;gap:10px"><b style="font-size:13px;letter-spacing:.5px;flex:1">PEDIR DE RECETA · '+esc(p.name)+'</b><button class="btn ghost sm" onclick="_cerrarModalPedirReceta()">CERRAR</button></div>'
-    +'<div style="font-size:11px;color:var(--mute);padding:10px 18px;border-bottom:1px solid rgba(0,0,0,.06)">Tocá PEDIR ET. N en el nivel que necesitás: nivel completo, elegir materiales, por apartamento o solo postes a medida. Las cantidades salen de la receta y no se pueden tocar.</div>'
+    +'<div style="font-size:11px;color:var(--mute);padding:10px 18px;border-bottom:1px solid rgba(0,0,0,.06)">Tocá PEDIR ET. N en el nivel que necesitás: nivel completo, elegir materiales (ahí podés bajar la cantidad), por apartamento o solo postes a medida. La receta pone el tope: nunca se pide más de lo que falta.</div>'
     +'<div style="padding:10px 14px;overflow:auto;flex:1"><div id="recetaPedirContent"></div></div>'
     +'</div></div>';
   var w=document.createElement('div'); w.innerHTML=html; document.body.appendChild(w.firstElementChild);
@@ -34263,12 +34332,12 @@ function _abrirMenuPedirEtapa(towerId, levelId, stageIdx){
   };
   var body='';
   body+=opt('_menuPedirCerrar();pedirEtapaCompleta('+args+')','PEDIR NIVEL COMPLETO','Los '+items.length+' materiales disponibles con el TOTAL del nivel. Cantidades fijas de la receta.');
-  body+=opt('_menuPedirCerrar();_abrirSelectorItemsEtapa('+args+')','ELEGIR MATERIALES DEL NIVEL','Marcá qué materiales pedir; la cantidad del nivel no se puede tocar.');
+  body+=opt('_menuPedirCerrar();_abrirSelectorItemsEtapa('+args+')','ELEGIR MATERIALES DEL NIVEL','Marcá qué materiales pedir y cuánto de cada uno. El tope es lo que falta de la receta.');
   body+=opt('_menuPedirCerrar();_abrirSelectorAptoEtapa('+args+')','PEDIR POR APARTAMENTO','La etapa de UN apartamento: todo o materiales elegidos, con las cantidades de ese apto.');
   if(postes.length) body+=opt('_menuPedirCerrar();pedirEtapaCompleta('+args+',null,{soloPostes:true})','SOLO POSTES A MEDIDA','Mandar a fabricar únicamente los postes ('+postes.length+' tipo'+(postes.length!==1?'s':'')+') · '+esc(pmLbl)+'.');
   var html='<div id="_menuPedirModal" style="position:fixed;inset:0;z-index:100080;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)_menuPedirCerrar()">'
     +'<div style="background:var(--card,#fff);color:var(--ink,#1C1917);border-radius:14px;max-width:460px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden" onclick="event.stopPropagation()">'
-    +'<div style="padding:16px 18px;border-bottom:1px solid rgba(0,0,0,.08)"><b style="font-size:13px;letter-spacing:.5px">PEDIR ETAPA '+(stageIdx+1)+' · '+esc(t.name)+' · '+esc(l.name)+'</b><div style="font-size:11px;color:var(--mute);margin-top:4px">¿Cómo querés hacer el pedido? Las cantidades salen de la receta y no se pueden modificar.</div></div>'
+    +'<div style="padding:16px 18px;border-bottom:1px solid rgba(0,0,0,.08)"><b style="font-size:13px;letter-spacing:.5px">PEDIR ETAPA '+(stageIdx+1)+' · '+esc(t.name)+' · '+esc(l.name)+'</b><div style="font-size:11px;color:var(--mute);margin-top:4px">¿Cómo querés hacer el pedido? La receta pone el tope; en ELEGIR MATERIALES podés pedir menos y el resto queda como saldo.</div></div>'
     +'<div style="padding:14px 16px;overflow:auto;flex:1">'+body+'</div>'
     +'<div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;justify-content:flex-end"><button class="btn ghost" onclick="_menuPedirCerrar()">CANCELAR</button></div>'
     +'</div></div>';
@@ -34630,7 +34699,11 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
     if (opts.aptoId) {
       // v909: lo ya pedido para ESTE apto se bloquea
       if (_cobAptos[key] && _cobAptos[key].porApto && _cobAptos[key].porApto[opts.aptoId]) return;
-      recetaDisponible[key] = recetaFiltrada[key];
+      /* v1036: mismo guarda que el selector — el apto no puede pasarse del saldo del NIVEL
+         (los pedidos de nivel ahora cuentan por cantidad, no cierran la clave) */
+      const _saldoNivel = Math.ceil(Number((_R.src || {})[key]) || 0) - ((_cobAptos[key] && _cobAptos[key].total) || 0);
+      if (_saldoNivel <= 0) return;
+      recetaDisponible[key] = Math.min(recetaFiltrada[key], _saldoNivel);
     } else {
       let q = recetaFiltrada[key];
       // v909: el NIVEL resta lo ya pedido por apto — el total del nivel cierra con el Excel
@@ -34700,6 +34773,10 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
   // Si vienen de receta clásica → multiplicados por # aptos.
   const items = {};
   const recetaQty = {}; // v909: cantidades por clave ORIGINAL (aritmética nivel − aptos)
+  /* v1036: cantidades escritas a mano en ELEGIR MATERIALES DEL NIVEL. _manualKeys marca las
+     claves donde manda el número del usuario y no la derivación de la app. */
+  const _qtyElegida = (opts.qtyElegida && typeof opts.qtyElegida === 'object') ? opts.qtyElegida : null;
+  const _manualKeys = {};
   Object.entries(recetaDisponible).forEach(([key, qtyBase]) => {
     // v906/v907: los POSTES salen con la medida DEL NIVEL en el nombre (queda CONGELADA en este
     // pedido; si la medida cambia después, los pedidos viejos no se tocan)
@@ -34710,6 +34787,18 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
     // EXACTA; si se guardara aproximada, la resta nivel−aptos descuadra (residuales fantasma
     // que no dejan cerrar la etapa, o sub-cobertura del apto restante).
     const _nOrigItem = key.split('::').length > 1 ? key.split('::').slice(1).join('::') : key;
+    /* v1036: cantidad ESCRITA A MANO — manda literal (decisión de Antonio 29-jul: "si escribí
+       600, la OC sale por 600"): sin aproximar al múltiplo, con el techo duro de lo que la
+       receta permite. recetaQty registra lo REALMENTE pedido — eso es lo que hace que después
+       aparezca solo la diferencia. */
+    if (_qtyElegida && _qtyElegida[key] != null) {
+      const qPedida = _cantidadPedida(_qtyElegida[key], qExacto);
+      if (qPedida <= 0) return;
+      items[finalKey] = qPedida;
+      recetaQty[key] = qPedida;
+      _manualKeys[finalKey] = true;
+      return;
+    }
     const q = _recetaEsMiles(p, _nOrigItem) ? _recetaAprox(qExacto, _recetaMilesMult(p, _nOrigItem)) : qExacto; // v978: múltiplo por material
     items[finalKey] = q;
     recetaQty[key] = qExacto;
@@ -34719,7 +34808,9 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
   // recetaQty no se toca (contabilidad v909 en unidades de receta).
   try {
     const _fd = _recetaDerivarFulminantes(Object.keys(items).map(k => ({ name: k, qty: items[k] })));
-    if (_fd) Object.keys(items).forEach(k => { if (String(k).toUpperCase().indexOf('FULMINANTE') >= 0) items[k] = _fd.tiras; });
+    /* v1036: si el usuario escribió la cantidad del fulminante, gana él — el derivado de los
+       clavos no le pisa el número (decisión de Antonio 29-jul, misma lógica que el múltiplo) */
+    if (_fd) Object.keys(items).forEach(k => { if (!_manualKeys[k] && String(k).toUpperCase().indexOf('FULMINANTE') >= 0) items[k] = _fd.tiras; });
   } catch(e){}
 
   const pedido = {
@@ -34741,6 +34832,7 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
     metalMedida: [],
     recetaKeys: Object.keys(recetaDisponible), // v906: claves originales (dedup aunque los postes se renombren)
     recetaQty, // v909: qty por clave original — permite restar cobertura por apto
+    recetaQtyManual: Object.keys(_manualKeys).length > 0, // v1036: cantidad puesta a mano — el resync no lo toca
     recetaAptoId: opts.aptoId || '', // v909: pedido POR APARTAMENTO (no cierra la etapa a nivel)
     recetaAptoName: _apto ? _apto.name : '',
     esDeReceta: true,
@@ -34781,6 +34873,10 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
 function _pedidoResyncConReceta(p, pd){
   try{
     if (!pd || !pd.esDeReceta || !pd.recetaLevelId || !Array.isArray(pd.recetaKeys)) return false;
+    /* v1036: cantidad puesta A MANO — el pedido ya NO es un espejo de la receta, y este resync
+       corre SOLO (editar receta, toggle ≈). Sin este candado, el pedido de 70 se re-inflaba a
+       lo que dijera la receta y la OC salía por 100 sin que nadie lo pidiera. */
+    if (pd.recetaQtyManual) return false;
     if ((getPedidoOrdenes(pd.id) || []).length > 0) return false;
     const lid = pd.recetaLevelId, ei = pd.recetaEtapaIdx;
     const fuente = pd.recetaAptoId

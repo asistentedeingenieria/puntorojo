@@ -54,7 +54,9 @@ if (srcCob) {
   const cob = g([ pdApto('a-201', { 'CANAL X': 50 }), pdApto('a-202', { 'CANAL X': 60 }), pdNivel({ [POSTE]: 424 }) ], 'l-2', 0);
   ok('suma cantidades por apto', cob['CANAL X'] && cob['CANAL X'].total === 110);
   ok('marca los aptos pedidos', cob['CANAL X'].porApto['a-201'] === true && cob['CANAL X'].porApto['a-202'] === true);
-  ok('los pedidos de NIVEL no cuentan como cobertura de apto', !(POSTE in cob));
+  /* v1036: el pedido de NIVEL ahora SÍ suma su cantidad (así 70 de 100 deja 30 disponibles),
+     pero NO marca ningún apto — porApto sigue siendo territorio de los pedidos por apto */
+  ok('los pedidos de NIVEL suman cantidad sin marcar aptos', cob[POSTE] && cob[POSTE].total === 424 && Object.keys(cob[POSTE].porApto).length === 0);
   ok('otro nivel/etapa → vacío', Object.keys(g([ pdApto('a-201', {'CANAL X':50}) ], 'l-9', 0)).length === 0);
 }
 
@@ -64,7 +66,12 @@ if (srcYa) {
   const h = new Function(srcYa + '\nreturn _itemsYaPedidosEtapa;')();
   const ya = h([ pdApto('a-201', { 'CANAL X': 50 }), pdNivel({ [POSTE]: 424 }) ], 'l-2', 0);
   ok('pedido por APTO no cierra la clave', !ya['CANAL X']);
-  ok('pedido de NIVEL sí la cierra', ya[POSTE] === true);
+  /* v1036: con recetaQty la clave ya NO se cierra por binario — la resta por cantidades hace
+     el trabajo (y si cubrió todo, qtyFinal<=0 la saca igual). El binario quedó para los
+     pedidos viejos sin recetaQty. */
+  ok('pedido de NIVEL con recetaQty ya no cierra por binario', !ya[POSTE]);
+  const yaViejo = h([ { esDeReceta:true, recetaLevelId:'l-2', recetaEtapaIdx:0, items:{ [POSTE]: 424 }, recetaKeys:[POSTE] } ], 'l-2', 0);
+  ok('pedido VIEJO sin recetaQty sí la cierra', yaViejo[POSTE] === true);
 } else { ok('_itemsYaPedidosEtapa extraída', false); }
 
 // ── 4. _etapaItemsParaPedir: nivel resta cobertura / apto bloquea lo suyo ──
@@ -85,7 +92,9 @@ if (srcPara && srcCob && srcApto) {
   ok('APTO: lo ya pedido para ESE apto se bloquea', !aptoItems.find(x => x.key === 'CANAL X'));
   ok('APTO: cantidad = columna del apto', aptoItems.find(x => x.key === POSTE).qtyFinal === 200);
   const otroApto = f2(p1, T, L, 0, 'a-202');
-  ok('APTO: otro apto sigue libre', otroApto.find(x => x.key === 'CANAL X').qtyFinal === 60);
+  /* v1036: el apto se CAPA al saldo del nivel. El nivel de CANAL X es 100 y a-201 ya pidió 50:
+     al a-202 le tocan 50 aunque su columna diga 60 — pedirle 60 sería comprar de más. */
+  ok('APTO: otro apto sigue libre, capado al saldo del nivel', otroApto.find(x => x.key === 'CANAL X').qtyFinal === 50);
   const p3 = clone(pEst); p3.materiales.pedidos = [ pdNivel({ [POSTE]: 424 }) ];
   ok('APTO: clave cerrada a nivel bloquea el apto', !f2(p3, T, L, 0, 'a-201').find(x => x.key === POSTE));
 } else { ok('_etapaItemsParaPedir + deps extraídas', false); }

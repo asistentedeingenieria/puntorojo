@@ -29,9 +29,13 @@ if (fCob) {
   // pedido de NIVEL con recepción parcial: su recibido entra a la resta
   const r1 = f([{ esDeReceta:true, recetaLevelId:'l2', recetaEtapaIdx:0, recetaQty:{ A:100 }, recepcion:{ parcial:true, recetaRecibido:{ A:60 } } }], 'l2', 0);
   ok('el pedido de NIVEL parcial suma su RECIBIDO a la cobertura', r1.A && r1.A.total === 60);
-  // pedido de nivel SIN recepción: no entra (lo cierra _itemsYaPedidosEtapa como siempre)
+  /* v1036: el pedido de nivel CON recetaQty ahora SÍ entra a la resta por cantidades — es lo
+     que permite pedir 70 de 100 y que después se ofrezca solo la diferencia. El binario quedó
+     únicamente para los pedidos viejos sin recetaQty (pre-v909). */
   const r2 = f([{ esDeReceta:true, recetaLevelId:'l2', recetaEtapaIdx:0, recetaQty:{ A:100 } }], 'l2', 0);
-  ok('el pedido de nivel normal NO entra a la resta (sigue el binario)', !r2.A);
+  ok('el pedido de nivel normal SÍ entra a la resta (v1036: por cantidad)', r2.A && r2.A.total === 100);
+  const r2b = f([{ esDeReceta:true, recetaLevelId:'l2', recetaEtapaIdx:0, items:{ A:100 } }], 'l2', 0);
+  ok('el pedido VIEJO sin recetaQty sigue fuera (lo cierra el binario)', !r2b.A);
   // pedido POR APTO sigue igual
   const r3 = f([{ esDeReceta:true, recetaAptoId:'ap1', recetaLevelId:'l2', recetaEtapaIdx:0, recetaQty:{ A:25 } }], 'l2', 0);
   ok('los pedidos POR APTO siguen sumando como antes', r3.A && r3.A.total === 25 && r3.A.porApto.ap1);

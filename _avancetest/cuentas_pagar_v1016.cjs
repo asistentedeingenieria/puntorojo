@@ -80,7 +80,8 @@ ok('y sube de inmediato (es plata)', /forceUploadNow/.test(zReg));
 ok('no se puede pagar más de lo que se debe', /saldo|resta|excede/i.test(zReg));
 
 console.log('\n— 4. el ritual de sync —');
-ok('APP_SYNC_VERSION subió a 917', /APP_SYNC_VERSION = 917/.test(html));
+/* v1036 la subió a 918; lo que importa acá es que sea AL MENOS la de pagosProv */
+ok('APP_SYNC_VERSION subió a 917', parseInt((html.match(/APP_SYNC_VERSION = (\d+)/)||[])[1], 10) >= 917);
 
 console.log('\n— 5. la pantalla —');
 const zR = ex('function renderGastos(');
