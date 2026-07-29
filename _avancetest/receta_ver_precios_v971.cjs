@@ -16,7 +16,10 @@ ok('permiso receta.verPrecios en el catálogo', /key:\s*'receta\.verPrecios'/.te
 // ── 2. la zona del render de la receta (anclada al comentario v949) ──
 const i0 = html.indexOf('// v949: el admin APLICA cambios directo');
 const zona = html.slice(i0, i0 + 11000); // v974/v977: los avisos (por-apto, tipo) y el toggle ≈ agrandaron el bloque
-ok('gate puedeVerPrecios definido', /puedeVerPrecios = can\('receta\.verPrecios'\) \|\| can\('users\.manage'\)/.test(zona));
+/* v1048 (decisión de Antonio): la receta de la OBRA ya no muestra dinero PARA NADIE — la
+   llave quedó apagada fija y el costo vive en COMPRAS. El permiso receta.verPrecios sigue
+   vivo para GASTOS y el inventario valorizado. */
+ok('gate puedeVerPrecios definido', /const puedeVerPrecios = false;/.test(zona));
 ok('columna P.U. condicionada', /puedeVerPrecios[^\n]*P\.U\./.test(zona.replace(/\n/g, ' ')) || /\(puedeVerPrecios \? '<th[^']*P\.U\./.test(zona));
 ok('columna SUBTOTAL condicionada', /\(puedeVerPrecios \? '<th[^']*SUBTOTAL/.test(zona));
 ok('celdas de precio condicionadas', (zona.match(/puedeVerPrecios \? '<td/g) || []).length >= 2);
