@@ -47,7 +47,10 @@ const zP = ex('function _personaEnObraUsuario(');
 ok('el roster escaneable usa el filtro nuevo', /_obraFiltroAsist\(\)/.test(zP));
 /* la regla multiObra-siempre-pasa es DELIBERADA (rota entre obras) y se conserva */
 ok('multiObra sigue pasando siempre', /p\.multiObra/.test(zP));
-ok('el registro de caras también', /_obraFiltroAsist/.test(ex('function _kioskAbrirRegistro(')));
+/* v1051: el registro pasó a usar _personaEnObraUsuario (que resuelve por _obraFiltroAsist
+   adentro) — mismo scope, y de paso incluye a los supervisores de varias obras y al propio
+   encargado, que antes quedaban fuera */
+ok('el registro de caras también', /_personaEnObraUsuario\(/.test(ex('function _kioskAbrirRegistro(')));
 
 console.log('\n— 4. los PDF: el del día es de la obra; los multi-obra quedan intactos —');
 ok('PRESENTES DEL DÍA sigue a la obra activa', /_obraFiltroAsist\(\)/.test(ex('function descargarPdfDiaPresentes(')));

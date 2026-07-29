@@ -3253,7 +3253,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1050</span>
+    <span style="opacity:.5;font-size:9px">v1051</span>
   </footer>
 
 </div>
@@ -5703,9 +5703,23 @@ function _getUserObraAsignada(){
 function _personaEnObraUsuario(p){
   const o = _obraFiltroAsist(); // v1047: la obra ACTIVA (el encargado sigue clavado a la suya)
   if (!o) return true; // sin restricción
-  /* multiObra pasa SIEMPRE: rota entre obras y el encargado la escanea en la suya (regla
-     deliberada, distinta del listado v636) */
-  return !!(p && (p.multiObra || p.obraAsignada === o));
+  if (!p) return false;
+  /* Los que ROTAN pasan SIEMPRE — el que escanea los marca en la obra donde estén (regla
+     deliberada, distinta del listado v636, que exige marca del día).
+     ⚠️ v1051 — REGRESIÓN QUE MORDIÓ EN PRODUCCIÓN: multiSesion ("VARIAS OBRAS (MARCA POR
+     OBRA)", el modo de los SUPERVISORES que visitan varias obras en un día, v653) nunca
+     estuvo acá. Quedaba tapado porque para el admin _getUserObraAsignada() daba '' y el
+     filtro se rendía arriba; v1047 hizo que el admin también caiga a la obra activa y los
+     supervisores desaparecieron de TODOS los kioskos. Su maquinaria de sesiones siempre
+     estuvo bien: simplemente no llegaban a ella. */
+  if (p.multiObra || p.multiSesion) return true;
+  if (p.obraAsignada === o) return true;
+  /* v1051: quien escanea SIEMPRE se puede escanear a sí mismo, sin importar dónde esté su
+     ficha (encargado con ficha en otra obra, o de OFICINA sin obra). El vínculo
+     usuario↔ficha es user.colaboradorId, y _marcarAsistenciaFacial ya permite el
+     auto-marcado sin permiso de asistencia. */
+  try { const u = getCurrentUser(); if (u && u.colaboradorId && u.colaboradorId === p.id) return true; } catch(e){}
+  return false;
 }
 /* v636: ¿la persona aparece en el LISTADO de la obra del encargado? A diferencia del
    kiosko, la gente "VARIAS OBRAS" NO sale por defecto en cada obra: solo si ese día
@@ -27258,8 +27272,10 @@ async function _kioskReanudarCamara(){
 function _kioskAbrirRegistro(){
   if(document.getElementById('_kioskRegScreen')) return;
   if(!_puedeEnrolarCara()){ showToast('SIN PERMISO','red'); return; }
-  var _o=(typeof _obraFiltroAsist==='function')?_obraFiltroAsist():''; // v1047: la obra ACTIVA
-  _kioskRegBase=(_getPersonalActivo()||[]).filter(function(p){ return !_o || (p && p.obraAsignada===_o); }); // SOLO asignados a la obra (estricto, sin multiObra) · v751: sin dados de baja
+  /* v1051: el MISMO criterio que el escaneo (_personaEnObraUsuario) — si alguien no puede
+     registrar su cara acá, tampoco puede escanearse después. Antes filtraba a mano por
+     obraAsignada y dejaba fuera a los supervisores de varias obras y al propio encargado. */
+  _kioskRegBase=(_getPersonalActivo()||[]).filter(function(p){ return _personaEnObraUsuario(p); }); // v751: sin dados de baja
   _kioskRegMejorar=_enrolMejorarSet(_kioskRegBase); // calidad: quiénes conviene mejorar (una sola vez)
   var html='<div id="_kioskRegScreen" style="position:fixed;inset:0;z-index:100071;background:#0B0B0C;display:flex;flex-direction:column;color:#fff">'
     + '<div style="display:flex;align-items:center;gap:8px;padding:calc(env(safe-area-inset-top,22px) + 14px) 14px 8px">'
