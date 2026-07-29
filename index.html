@@ -1502,6 +1502,9 @@ html.ios-standalone .pedido-meta dd{font-size:11px}
    acá en el futuro salga arriba sin acordarse de esta regla. */
 body.pr-usuarios-abierto .modal-bg{z-index:99100}
 body.pr-usuarios-abierto #modalUsers{z-index:99000}
+/* v1050: mismo antídoto para ADMINISTRACIÓN — con COBROS adentro, #modalEtapasListas
+   (.modal-bg, z-index 100) quedaría enterrado bajo el panel de 98000 */
+body.pr-admin-abierto .modal-bg{z-index:99100}
 /* v1040: dentro del panel COMPRAS, el botón COMPRAS de la barra de pedidos (viene prestado
    con #mat-pedidos) abriría el panel sobre sí mismo — se esconde. El !important es necesario
    porque el pase data-perm de applyPermissions escribe estilo inline en cada corrida. */
@@ -2731,7 +2734,9 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
   <!-- ═════════════════ TABS ═════════════════ -->
   <nav class="tabs">
     <button class="tab active" data-view="dashboard" onclick="setView('dashboard')">DASHBOARD</button>
-    <button class="tab" data-view="cobro" onclick="setView('cobro')">COBRO<span class="badge" id="badgeCobro" style="display:none">—</span></button>
+    <!-- v1050 (decisión de Antonio): COBRO salió de la obra — vive en ADMINISTRACIÓN, por
+         proyecto. #view-cobro se queda abajo como casa (renderCobro corre tras cada mutación
+         y toca sus ids). El badge vive en el botón COBROS del panel. -->
     <button class="tab" data-view="avance" onclick="setView('avance')">AVANCE FÍSICO<span class="badge" id="badgeAvance" style="display:none">—</span></button>
     <button class="tab" data-view="materiales" onclick="setView('materiales')">MATERIALES<span class="badge" id="badgeMat" style="display:none">—</span></button>
     <button class="tab" data-view="personal" onclick="setView('personal')">PERSONAL</button>
@@ -3094,10 +3099,10 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
       <span class="section-num">05 — PERSONAL</span>
       <h1 class="view-title"><em>Personal.</em></h1>
       <div class="mat-tabs" style="margin-bottom:18px">
-        <button class="mat-tab active" data-perstab="lista" onclick="setPersonalSubTab('lista')">COLABORADORES</button>
-        <button class="mat-tab" data-perstab="asistencia" onclick="setPersonalSubTab('asistencia')">ASISTENCIA</button>
-        <!-- v1018: PÓLIZAS se movió a ADMINISTRACIÓN (desplegable de PROYECTO). El panel #planilla-polizas y su render siguen igual: solo cambió de dónde se entra. -->
-        <button class="mat-tab" data-perstab="gerencia" onclick="setPersonalSubTab('gerencia')" data-perm="personal.gerencia">GERENCIA</button>
+        <!-- v1050 (decisión de Antonio): COLABORADORES y GERENCIA salieron de la obra — viven
+             en ADMINISTRACIÓN, por proyecto. En la obra queda SOLO la asistencia (v1047). Sus
+             paneles siguen abajo como casa (los presta el panel admin, patrón v1018). -->
+        <button class="mat-tab active" data-perstab="asistencia" onclick="setPersonalSubTab('asistencia')">ASISTENCIA</button>
       </div>
       <div class="kpi-grid" id="persKpis" data-perm="kpis.personal"></div>
 
@@ -3248,7 +3253,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1049</span>
+    <span style="opacity:.5;font-size:9px">v1050</span>
   </footer>
 
 </div>
@@ -6183,6 +6188,7 @@ function _v409RenumerarSeccionesVisibles(){
     const viewId = section.id || '';
     const viewKey = viewId.replace(/^view-/, '');
     if (!viewKey) return;
+    if (viewKey === 'cobro') return; // v1050: COBRO no tiene pestaña en la obra (vive en ADMINISTRACIÓN) — no se numera
     const tab = document.querySelector('.tab[data-view="'+viewKey+'"]');
     let isVisible = false;
     if (tab){ isVisible = tab.style.display !== 'none'; }
@@ -8020,7 +8026,11 @@ function handleNotifClick(id){
     closeModal('notifs');
     setTimeout(() => {
       try {
-        if (typeof setView === 'function') setView('cobro');
+        /* v1050: COBRO vive en ADMINISTRACIÓN — la notificación abre el panel en su sección */
+        if (typeof _puedeVerAdmin === 'function' && _puedeVerAdmin()) {
+          window._adminTab = 'cobros';
+          if (typeof window._abrirPanelAdmin === 'function') window._abrirPanelAdmin();
+        } else { showToast('LAS ESTIMACIONES SE VEN EN ADMINISTRACIÓN → COBROS (PEDÍ EL ACCESO)', ''); }
         if (typeof window.abrirModalEtapasListas === 'function') window.abrirModalEtapasListas();
       } catch(e){ console.error(e); }
     }, 150);
@@ -11588,7 +11598,7 @@ function setView(v){
   };
   // Bloquear si no tiene permiso; redirigir a la primera vista permitida
   if (!_puedeVerView(v)) {
-    const allViews = ['dashboard','cobro','avance','materiales','personal','actividad'];
+    const allViews = ['dashboard','avance','materiales','personal','actividad']; // v1050: cobro vive en ADMINISTRACIÓN
     const fallback = allViews.find(x => _puedeVerView(x));
     if (!fallback) {
       showToast('SIN PERMISO PARA NINGUNA VISTA', 'red');
@@ -11889,7 +11899,7 @@ function renderDashboard(){
           </div>
         </div>
         <div class="proj-row-actions">
-          <button class="btn sm ghost" onclick="setActiveProject('${p.id}');setView('cobro')">VER COBRO</button>
+          <button class="btn sm ghost" onclick="setActiveProject('${p.id}');window._adminTab='cobros';window._abrirPanelAdmin&&window._abrirPanelAdmin()">VER COBRO</button>
           ${state.projects.length > 1 ? `<button class="btn-icon danger" onclick="deleteProject('${p.id}')" title="ELIMINAR PROYECTO">✕</button>` : ''}
         </div>
       </div>
@@ -12091,7 +12101,9 @@ function renderCobro(){
     });
   }
 
-  document.getElementById('badgeCobro').textContent = p.cobro.rows.length;
+  /* v1050: el span vive en el panel de ADMINISTRACIÓN — con el panel cerrado no existe, y
+     renderCobro corre tras CADA mutación de cobro: sin guard, todas reventarían */
+  const _bC = document.getElementById('badgeCobro'); if (_bC) _bC.textContent = p.cobro.rows.length;
   try {
     const _bSol = document.getElementById('btnSolAmort');
     if (_bSol){
@@ -24686,7 +24698,10 @@ function _persListaFiltrada(){
   const emps=_persEmpresas();
   const f=_persEmpresaFilter&&emps.includes(_persEmpresaFilter)?_persEmpresaFilter:'';
   let res=f?all.filter(p=>p.empresa===f):all;
-  res=res.filter(p=>_personaEnListaObra(p)); // v636: multi-obra solo si marcó en esta obra
+  /* v1050: dentro de ADMINISTRACIÓN el selector de PERSONAL puede fijar una obra
+     (window._adminObraFiltro; '' = TODAS, el comportamiento de siempre) */
+  const _fObra = (document.getElementById('_adminPanelModal') && window._adminObraFiltro) || undefined;
+  res=res.filter(p=>_personaEnListaObra(p, _fObra)); // v636: multi-obra solo si marcó en esta obra
   const q=_persNorm(_persBuscar);
   if(q){ res=res.filter(p=>_persNorm(p.nombre).includes(q)||_persNorm(p.empresa).includes(q)||_persNorm(p.cargo).includes(q)||_persNorm(p.dpi).includes(q)); }
   return res.slice().sort((a,b)=>_persNorm(a.nombre).localeCompare(_persNorm(b.nombre),'es',{sensitivity:'base'}));
@@ -32598,7 +32613,7 @@ window._elegirObraYEntrar = function(id){
      de trabajo que la persona pueda ver, para no quedar en una vista escondida. */
   try {
     _aplicarModoVista();
-    const _primera = ['cobro','avance','materiales','personal','planilla','actividad']
+    const _primera = ['avance','materiales','personal','planilla','actividad'] // v1050: cobro vive en ADMINISTRACIÓN
       .find(v => { try { return v === 'actividad' ? _puedeVerActividad() : can('view.' + v); } catch(e){ return false; } }); // v1037
     if (_primera) setView(_primera);
   } catch(e){ console.warn('[v1029] vista tras elegir obra', e); }
@@ -32653,7 +32668,7 @@ function _aplicarModoVista(){
   try {
     if (general) { setView('dashboard'); }
     else {
-      const _v = ['cobro','avance','materiales','personal','planilla','actividad']
+      const _v = ['avance','materiales','personal','planilla','actividad'] // v1050: cobro vive en ADMINISTRACIÓN
         .find(v => { try { return v === 'actividad' ? _puedeVerActividad() : can('view.' + v); } catch(e){ return false; } }); // v1037
       if (_v) setView(_v);
     }
@@ -32723,7 +32738,7 @@ function _bloqueEmpresaHTML(){
   if (puede(typeof _puedeVerVarios !== 'undefined' ? _puedeVerVarios : null))
     ops.push(cuadro('PROYECTOS VARIOS', 'OBRAS CHICAS Y REPARACIONES', '_abrirPanelVarios', '#1D4ED8'));
   if (puede(typeof _puedeVerAdmin !== 'undefined' ? _puedeVerAdmin : null))
-    ops.push(cuadro('ADMINISTRACIÓN', 'PÓLIZAS Y ANTICIPOS', '_abrirPanelAdmin', '#7C3AED'));
+    ops.push(cuadro('ADMINISTRACIÓN', 'PÓLIZAS, ANTICIPOS, COBROS Y PERSONAL', '_abrirPanelAdmin', '#7C3AED')); // v1050
   if (!ops.length) return '';
   return `<div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:8px">TODA LA EMPRESA</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">${ops.join('')}</div>`;
@@ -32788,33 +32803,100 @@ function _puedeVerAdmin(){
 }
 window._adminTab = 'polizas';
 function _adminDevolverNodos(){
-  /* devuelve cada nodo a su casa ANTES de destruir el panel; si no, se irían con él */
+  /* devuelve cada nodo a su casa ANTES de destruir el panel; si no, se irían con él.
+     v1050: #view-cobro vuelve con display '' (VACÍO, no 'none') — las clases .view/.view.active
+     deben volver a gobernar; #persKpis también '' (en la obra lo maneja setPersonalSubTab). */
   try {
-    const pol = document.getElementById('planilla-polizas');
-    const _casaPol = document.getElementById('_adminCasaPolizas');
-    if (pol && _casaPol && _casaPol.parentNode) { _casaPol.parentNode.insertBefore(pol, _casaPol); pol.style.display = 'none'; }
-    const ant = document.getElementById('planilla-anticipos');
-    const _casaAnt = document.getElementById('_adminCasaAnticipos');
-    if (ant && _casaAnt && _casaAnt.parentNode) { _casaAnt.parentNode.insertBefore(ant, _casaAnt); ant.style.display = 'none'; }
-  } catch(e){ console.warn('[v1018] devolver nodos', e); }
+    const devolver = function(id, marcaId, disp){
+      const nodo = document.getElementById(id);
+      const marca = document.getElementById(marcaId);
+      if (nodo && marca && marca.parentNode) { marca.parentNode.insertBefore(nodo, marca); nodo.style.display = disp; }
+    };
+    devolver('planilla-polizas', '_adminCasaPolizas', 'none');
+    devolver('planilla-anticipos', '_adminCasaAnticipos', 'none');
+    devolver('view-cobro', '_adminCasaCobro', '');
+    devolver('persKpis', '_adminCasaPersKpis', '');
+    devolver('pers-lista-panel', '_adminCasaPersLista', 'none');
+    devolver('pers-gerencia-panel', '_adminCasaGerencia', 'none');
+  } catch(e){ console.warn('[v1018/v1050] devolver nodos', e); }
 }
 function _cerrarPanelAdminDom(){
+  /* cierre INTERNO (repintados del selector): NO restaura la obra ni desmarca el body */
   _adminDevolverNodos();
   const m = document.getElementById('_adminPanelModal');
   if (m) m.remove();
 }
-window._cerrarPanelAdmin = function(){ _cerrarPanelAdminDom(); };
+window._cerrarPanelAdmin = function(){
+  /* v1050: SALIDA real (botón VOLVER) — restaura la obra en la que se estaba trabajando
+     (el selector de COBROS/PERSONAL la cambió localmente) y deja PERSONAL en asistencia */
+  try {
+    if (window._adminObraOrigen && state && String(state.activeProjectId) !== String(window._adminObraOrigen)) {
+      setActiveProject(window._adminObraOrigen);
+    }
+  } catch(e){ console.warn('[v1050] restaurar obra', e); }
+  window._adminObraOrigen = null;
+  window._adminObraFiltro = '';
+  try { document.body.classList.remove('pr-admin-abierto'); } catch(e){}
+  try { window.currentPersonalSubTab = 'asistencia'; } catch(e){}
+  _cerrarPanelAdminDom();
+};
+/* v1050: selector de proyecto de COBROS/PERSONAL — calcado de COMPRAS (select data-nativo;
+   cambia el proyecto activo LOCAL, jamás sincroniza; VOLVER restaura). En PERSONAL trae la
+   opción TODAS (la lista de colaboradores es de la empresa, con su columna de obra). */
+function _adminSelectorHTML(conTodas){
+  var pid = String((state && state.activeProjectId) || '');
+  var filtro = conTodas ? String(window._adminObraFiltro || '') : pid;
+  var opts = (conTodas ? '<option value=""' + (filtro === '' ? ' selected' : '') + '>TODAS LAS OBRAS</option>' : '')
+    + (((state || {}).projects) || []).filter(function(p){ return p && p.id; })
+      .map(function(p){ return '<option value="' + escapeAttr(p.id) + '"' + (String(p.id) === filtro ? ' selected' : '') + '>' + String(p.name || '').replace(/</g, '&lt;') + '</option>'; }).join('');
+  return '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
+    + '<span style="font-size:8.5px;letter-spacing:1.5px;color:#78716C;font-weight:700">PROYECTO</span>'
+    + '<select data-nativo class="pr-filtro" style="min-width:220px" onchange="' + (conTodas ? '_adminFiltroPersonal(this.value)' : '_adminCambiarProyecto(this.value)') + '">' + opts + '</select></div>';
+}
+window._adminCambiarProyecto = function(id){
+  if (!id) return;
+  try { setActiveProject(id); } catch(e){ console.warn('[v1050] cambiar proyecto', e); }
+  /* repintado completo: cae en la MISMA sección (window._adminTab), marcas idempotentes */
+  try { _cerrarPanelAdminDom(); window._abrirPanelAdmin(); } catch(e){}
+};
+window._adminFiltroPersonal = function(id){
+  window._adminObraFiltro = String(id || '');
+  try { renderPersonal(); } catch(e){}
+  try { window._adminSetTab('personal'); } catch(e){}
+};
 window._adminSetTab = function(t){
+  /* doble puerta también acá (doctrina v1023): esconder el botón no basta */
+  try {
+    if (t === 'cobros' && !(can('view.cobro') || can('users.manage'))) t = 'polizas';
+    if (t === 'personal' && !((typeof window._puedeVerColaboradores === 'function' && window._puedeVerColaboradores()) || (typeof _gerPuede === 'function' && _gerPuede()))) t = 'polizas';
+  } catch(e){}
   window._adminTab = t;
   const pol = document.getElementById('planilla-polizas');
   const ant = document.getElementById('planilla-anticipos');
+  const cob = document.getElementById('view-cobro');
+  const pk = document.getElementById('persKpis');
+  const pl = document.getElementById('pers-lista-panel');
+  const pg = document.getElementById('pers-gerencia-panel');
+  const sel = document.getElementById('_adminSelWrap');
   if (pol) pol.style.display = (t === 'polizas') ? '' : 'none';
   if (ant) ant.style.display = (t === 'anticipos') ? '' : 'none';
-  document.querySelectorAll('#_adminPanelModal [data-admintab]').forEach(b => b.classList.toggle('active', b.dataset.admintab === t));
+  /* v1050: display INLINE 'block' (le gana a .view{display:none}); JAMÁS la clase .active */
+  if (cob) cob.style.display = (t === 'cobros') ? 'block' : 'none';
+  if (sel) { sel.style.display = (t === 'cobros' || t === 'personal') ? '' : 'none'; if (t === 'cobros' || t === 'personal') sel.innerHTML = _adminSelectorHTML(t === 'personal'); }
   try {
     if (t === 'polizas' && typeof window.renderPlanillaPolizas === 'function') window.renderPlanillaPolizas();
     if (t === 'anticipos' && typeof window.renderPlanillaAnticipos === 'function') window.renderPlanillaAnticipos();
-  } catch(e){ console.warn('[v1018] render', e); }
+    if (t === 'cobros') renderCobro();
+    if (t === 'personal') { renderPersonal(); if (typeof renderGerencia === 'function' && _gerPuede()) renderGerencia(); }
+  } catch(e){ console.warn('[v1018/v1050] render', e); }
+  /* AL FINAL, nunca antes: renderPersonal→setPersonalSubTab pisa los displays de los nodos
+     prestados (los apagaría hacia 'asistencia'); acá se re-aplican los de la sección */
+  const _verLista = (typeof window._puedeVerColaboradores !== 'function') || window._puedeVerColaboradores();
+  const _verGer = (typeof _gerPuede === 'function') && _gerPuede();
+  if (pk) pk.style.display = (t === 'personal' && _verLista) ? '' : 'none';
+  if (pl) pl.style.display = (t === 'personal' && _verLista) ? '' : 'none';
+  if (pg) pg.style.display = (t === 'personal' && _verGer) ? '' : 'none';
+  document.querySelectorAll('#_adminPanelModal [data-admintab]').forEach(b => b.classList.toggle('active', b.dataset.admintab === t));
 };
 window._abrirPanelAdmin = function(){
   if (!_puedeVerAdmin()) return showToast('SIN PERMISO', 'red');
@@ -32835,30 +32917,41 @@ window._abrirPanelAdmin = function(){
     <div class="mat-tabs ped-tabs-bar" style="margin-bottom:16px">
       <button class="mat-tab active" data-admintab="polizas" onclick="window._adminSetTab('polizas')">PÓLIZAS</button>
       <button class="mat-tab" data-admintab="anticipos" onclick="window._adminSetTab('anticipos')">ANTICIPOS<span id="tabBadge-anticipos"></span></button>
+      ${(function(){ try { return (can('view.cobro') || can('users.manage')) ? '<button class="mat-tab" data-admintab="cobros" onclick="window._adminSetTab(\'cobros\')">COBROS<span id="badgeCobro"></span></button>' : ''; } catch(e){ return ''; } })()}
+      ${(function(){ try { return ((typeof window._puedeVerColaboradores === 'function' && window._puedeVerColaboradores()) || (typeof _gerPuede === 'function' && _gerPuede())) ? '<button class="mat-tab" data-admintab="personal" onclick="window._adminSetTab(\'personal\')">PERSONAL</button>' : ''; } catch(e){ return ''; } })()}
     </div>
+    <div id="_adminSelWrap" style="display:none"></div>
     <div id="_adminHost"></div>
   </div>`;
   document.body.appendChild(wrap);
-  /* se MUEVEN los nodos reales, dejando una marca en su lugar para poder devolverlos */
+  /* v1050: la obra de ORIGEN se recuerda — el selector de COBROS/PERSONAL cambia el proyecto
+     activo local (como COMPRAS) y VOLVER la restaura. El body se marca para el antídoto de
+     apilado (v1035): los .modal-bg abiertos DESDE acá suben por encima del panel. */
+  if (window._adminObraOrigen == null) window._adminObraOrigen = (state && state.activeProjectId) || null;
+  try { document.body.classList.add('pr-admin-abierto'); } catch(e){}
+  /* se MUEVEN los nodos reales, dejando una marca en su lugar para poder devolverlos.
+     ⚠️ A #view-cobro JAMÁS se le pone la clase 'active' — habría DOS '.view.active' y
+     _aplicarModoVista leería la primera; el display:block INLINE le gana a .view{display:none}
+     y setView de fondo solo togglea la CLASE, nunca el inline. */
   try {
     const host = document.getElementById('_adminHost');
-    const pol = document.getElementById('planilla-polizas');
-    if (pol && host) {
-      if (!document.getElementById('_adminCasaPolizas')) {
-        const marca = document.createElement('span'); marca.id = '_adminCasaPolizas'; marca.style.display = 'none';
-        pol.parentNode.insertBefore(marca, pol);
+    const prestar = function(id, marcaId){
+      const nodo = document.getElementById(id);
+      if (!nodo || !host) return null;
+      if (!document.getElementById(marcaId)) {
+        const marca = document.createElement('span'); marca.id = marcaId; marca.style.display = 'none';
+        nodo.parentNode.insertBefore(marca, nodo);
       }
-      host.appendChild(pol);
-    }
-    const ant = document.getElementById('planilla-anticipos');
-    if (ant && host) {
-      if (!document.getElementById('_adminCasaAnticipos')) {
-        const marca = document.createElement('span'); marca.id = '_adminCasaAnticipos'; marca.style.display = 'none';
-        ant.parentNode.insertBefore(marca, ant);
-      }
-      host.appendChild(ant);
-    }
-  } catch(e){ console.warn('[v1018] mover nodos', e); }
+      host.appendChild(nodo);
+      return nodo;
+    };
+    prestar('planilla-polizas', '_adminCasaPolizas');
+    prestar('planilla-anticipos', '_adminCasaAnticipos');
+    const _vc = prestar('view-cobro', '_adminCasaCobro'); if (_vc) _vc.style.display = 'none';
+    const _pk = prestar('persKpis', '_adminCasaPersKpis'); if (_pk) _pk.style.display = 'none';
+    const _pl = prestar('pers-lista-panel', '_adminCasaPersLista'); if (_pl) _pl.style.display = 'none';
+    const _pg = prestar('pers-gerencia-panel', '_adminCasaGerencia'); if (_pg) _pg.style.display = 'none';
+  } catch(e){ console.warn('[v1018/v1050] mover nodos', e); }
   window._adminSetTab(window._adminTab || 'polizas');
   try { applyPermissions(); } catch(e){}
 };
@@ -38555,12 +38648,12 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
 
   // Devuelve la primera sub-pestaña VISIBLE como default al entrar a PERSONAL.
   function _defaultSubPestPersonal(){
-    if (_puedeVerColaboradores()) return 'lista';
-    if (_puedeVerAsistencia()) return 'asistencia';
-    return 'lista';
+    /* v1050: en la obra la única sub-pestaña es ASISTENCIA (colaboradores y gerencia viven
+       en ADMINISTRACIÓN) */
+    return 'asistencia';
   }
 
-  window.currentPersonalSubTab = 'lista';
+  window.currentPersonalSubTab = 'asistencia';
   const _renderPersonal = renderPersonal;
   window.renderPersonal = renderPersonal = function(){
     _aplicarVisibilidadSubPestPersonal();
@@ -38574,6 +38667,10 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   };
   window.setPersonalSubTab = function(tab, silent){
     if(tab==='dpi') tab='lista';
+    /* v1050: en la OBRA solo existe asistencia — lista/gerencia se redirigen (patrón v958 del
+       redirect duro). CON el panel de ADMINISTRACIÓN abierto sí se respetan: es él quien las
+       usa sobre los nodos prestados. */
+    if((tab==='lista'||tab==='gerencia') && !document.getElementById('_adminPanelModal')) tab='asistencia';
     // Solo-asistencia: si piden COLABORADORES pero no puede verlos, ir a ASISTENCIA.
     if(tab==='lista' && typeof _puedeVerColaboradores==='function' && !_puedeVerColaboradores()){
       tab = _puedeVerAsistencia() ? 'asistencia' : 'lista';
@@ -38588,6 +38685,17 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     const kpis = document.getElementById('persKpis');
     // #pers-lista-panel nunca se muestra a quien no puede ver COLABORADORES.
     const _verLista = (typeof _puedeVerColaboradores!=='function') || _puedeVerColaboradores();
+    /* v1050: con el panel de ADMINISTRACIÓN abierto en PERSONAL, los paneles PRESTADOS no se
+       apagan — cualquier mutación de colaboradores re-llama renderPersonal→acá y sin esta
+       rama la lista desaparecería del panel */
+    if (document.getElementById('_adminPanelModal') && window._adminTab === 'personal'){
+      const _gp = (typeof _gerPuede === 'function') && _gerPuede();
+      if (listaPanel) listaPanel.style.display = _verLista ? '' : 'none';
+      if (gerenciaPanel) gerenciaPanel.style.display = _gp ? '' : 'none';
+      if (kpis) kpis.style.display = _verLista ? '' : 'none';
+      if (asistPanel) asistPanel.style.display = 'none';
+      return;
+    }
     if (listaPanel) listaPanel.style.display = (tab === 'lista' && _verLista) ? '' : 'none';
     if (asistPanel) asistPanel.style.display = tab === 'asistencia' ? '' : 'none';
     if (polizasPanel) polizasPanel.style.display = tab === 'polizas' ? '' : 'none';
@@ -41131,8 +41239,9 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     ensureEnhancedData();
     renderProjectSelect();
     const activeTab = document.querySelector('.tab.active')?.dataset.view || 'dashboard';
-    const allViews = ['dashboard','cobro','avance','materiales','personal','planilla','actividad'];
+    const allViews = ['dashboard','avance','materiales','personal','planilla','actividad']; // v1050: cobro vive en ADMINISTRACIÓN
     let targetView = activeTab;
+    if (targetView === 'cobro') targetView = allViews.find(v=>can('view.'+v)) || 'dashboard'; // v1050: la vista restaurada al recargar tampoco puede ser cobro
     if (!can('view.' + targetView)) targetView = allViews.find(v=>can('view.'+v)) || 'dashboard';
     setView(targetView);
     updateFooterLastUpdate();

@@ -40,7 +40,8 @@ ok('LA ÚLTIMA DONDE TRABAJASTE', /LA ÚLTIMA DONDE TRABAJASTE/.test(zP));
 /* v1040: la tarjeta pasó a COMPRAS con bajada nueva, siempre en MAYÚSCULA */
 ok('EXISTENCIAS Y COMPRAS', /'BODEGA, PEDIDOS, OC, INVENTARIOS Y GASTOS'/.test(zP));
 ok('OBRAS CHICAS Y REPARACIONES', /'OBRAS CHICAS Y REPARACIONES'/.test(zP));
-ok('PÓLIZAS Y ANTICIPOS', /'PÓLIZAS Y ANTICIPOS'/.test(zP));
+/* v1050: la tarjeta creció con COBROS y PERSONAL, siempre en MAYÚSCULA */
+ok('PÓLIZAS Y ANTICIPOS', /'PÓLIZAS, ANTICIPOS, COBROS Y PERSONAL'/.test(zP));
 ok('y la bajada del título', /TODO LO QUE VEAS DESPUÉS/.test(zP));
 ok('ya no queda ninguno en minúscula', !/'sin pendientes'|'existencias y compras'|'pólizas y anticipos'/.test(zP));
 

@@ -30,7 +30,9 @@ if (rmSrc) {
 
 // Estructural — permiso, pestaña, panel, switch, sync, fingerprint
 ok('permiso personal.gerencia en el catálogo', /key:\s*'personal\.gerencia'/.test(html));
-ok('botón de pestaña GERENCIA gateado', /data-perstab="gerencia"[\s\S]{0,80}data-perm="personal\.gerencia"/.test(html) || /data-perm="personal\.gerencia"[\s\S]{0,80}GERENCIA/.test(html));
+/* v1050: GERENCIA salió de la obra — vive en la sección PERSONAL de ADMINISTRACIÓN, gateada
+   por _gerPuede en el despacho del panel */
+ok('botón de pestaña GERENCIA gateado', /_gerPuede/.test((function(){ let m=html.indexOf('window._adminSetTab = function'); let i=html.indexOf('{',m),d=0; for(;i<html.length;i++){ if(html[i]==='{')d++; else if(html[i]==='}'){ d--; if(d===0) return html.slice(m,i+1); } } return ''; })()));
 ok('panel pers-gerencia-panel', html.indexOf('id="pers-gerencia-panel"')>=0);
 ok('setPersonalSubTab maneja gerencia', /tab\s*===\s*'gerencia'/.test(html));
 ok('renderGerencia existe', html.indexOf('function renderGerencia(')>=0);

@@ -23,11 +23,13 @@ ok('tiene las dos sub-pestañas', /data-admintab="polizas"/.test(zA) && /data-ad
 ok('las pestañas envuelven en celular (v986)', /ped-tabs-bar/.test(zA));
 
 console.log('\n— 2. NO se duplica: se mueve el nodo real —');
-ok('mueve #planilla-polizas', /getElementById\('planilla-polizas'\)/.test(zA) && /host\.appendChild\(pol\)/.test(zA));
-ok('mueve #planilla-anticipos', /getElementById\('planilla-anticipos'\)/.test(zA) && /host\.appendChild\(ant\)/.test(zA));
+/* v1050: el mover pasó a un helper prestar(id, marca) — mismos nodos, mismo mecanismo */
+ok('mueve #planilla-polizas', /prestar\('planilla-polizas', '_adminCasaPolizas'\)/.test(zA));
+ok('mueve #planilla-anticipos', /prestar\('planilla-anticipos', '_adminCasaAnticipos'\)/.test(zA));
 ok('deja una marca para saber a dónde devolverlos', /_adminCasaPolizas/.test(zA) && /_adminCasaAnticipos/.test(zA));
 const zD = ex('function _adminDevolverNodos(');
-ok('los devuelve a su lugar', /insertBefore\(pol/.test(zD) && /insertBefore\(ant/.test(zD));
+/* v1050: devolver(id, marca, display) — mismo insertBefore, generalizado */
+ok('los devuelve a su lugar', /devolver\('planilla-polizas', '_adminCasaPolizas', 'none'\)/.test(zD) && /devolver\('planilla-anticipos', '_adminCasaAnticipos', 'none'\)/.test(zD) && /insertBefore\(nodo, marca\)/.test(zD));
 const zC = ex('function _cerrarPanelAdminDom(');
 ok('y los devuelve ANTES de destruir el panel', zC.indexOf('_adminDevolverNodos') < zC.indexOf('m.remove()'));
 
