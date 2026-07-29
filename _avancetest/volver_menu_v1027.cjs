@@ -33,7 +33,8 @@ ok('prToggleProjDropdown sigue definida por si algo la llama', /window\.prToggle
 
 console.log('\n— el menú sigue siendo el único lugar donde se elige —');
 ok('el menú lista las obras', /proys\.map\(tarjeta\)/.test(ex('window._abrirPantallaObra = function')));
-ok('y las ubicaciones de empresa con su permiso', /_puedeVerBodega\(\)/.test(ex('window._abrirPantallaObra = function')));
+/* v1034: las ubicaciones de empresa se arman en _bloqueEmpresaHTML */
+ok('y las ubicaciones de empresa con su permiso', /_puedeVerBodega/.test(ex('function _bloqueEmpresaHTML(')));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

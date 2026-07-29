@@ -3223,7 +3223,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1033</span>
+    <span style="opacity:.5;font-size:9px">v1034</span>
   </footer>
 
 </div>
@@ -5029,6 +5029,11 @@ const PERMS_DISPONIBLES = [
   /* v1023 (pedido de Antonio): las tres ubicaciones de empresa NO las ve nadie por defecto —
      se dan una por una. Antes se colaban por permisos de otra cosa (quien podía crear pedidos
      veía PROYECTOS VARIOS, quien revisaba compras veía BODEGA CENTRAL). */
+  /* v1034 (pedido de Antonio): "predeterminadamente todos los usuarios NO pueden ver nada del
+     bloque TODA LA EMPRESA. Yo les doy acceso en su usuario." El DASHBOARD EJECUTIVO iba por
+     view.dashboard, que es el permiso de la PESTAÑA dashboard y lo tiene casi todo el mundo:
+     por ahí se colaba. Ahora tiene su propia casilla, como las otras tres. */
+  { key: 'menu.dashboard', label: 'VER DASHBOARD EJECUTIVO (todas las obras juntas) en el menú principal', group: 'MENÚ PRINCIPAL' },
   { key: 'menu.bodega', label: 'VER BODEGA CENTRAL en el menú principal', group: 'MENÚ PRINCIPAL' },
   { key: 'menu.varios', label: 'VER PROYECTOS VARIOS en el menú principal', group: 'MENÚ PRINCIPAL' },
   { key: 'menu.admin', label: 'VER ADMINISTRACIÓN (pólizas y anticipos) en el menú principal', group: 'MENÚ PRINCIPAL' },
@@ -5636,7 +5641,14 @@ function can(perm){
   const u = getCurrentUser();
   if (!u) return false;
   if (u.perms && u.perms.includes('*')) return true;
-  if (u.perms && u.perms.includes('view.*')) return _permEsSoloVer(perm); // v866: SOLO LECTURA — ve todo, no modifica
+  if (u.perms && u.perms.includes('view.*')) {
+    /* v1034 — LA CASILLA TAMBIÉN TIENE QUE SERVIRLE A UN USUARIO DE SOLO LECTURA. Esta línea
+       contestaba ANTES de mirar los permisos marcados, así que marcarle menu.bodega a alguien
+       de solo lectura no hacía absolutamente nada. Los menu.* son pura navegación: dicen a qué
+       se entra desde el menú, no habilitan escribir. El blindaje de v866 queda intacto. */
+    if (perm.indexOf('menu.') === 0) return u.perms.includes(perm);
+    return _permEsSoloVer(perm); // v866: SOLO LECTURA — ve todo, no modifica
+  }
   if (u.perms && u.perms.includes(perm)) return true;
   // Si piden view.X y el usuario tiene permisos de edición del módulo, view es implícito
   if (perm.startsWith('view.')) {
@@ -32048,7 +32060,15 @@ window._elegirObraYEntrar = function(id){
 };
 /* v1028: entrar al DASHBOARD EJECUTIVO desde el menú — la visión de TODAS las obras juntas.
    Se marca para que la vista sepa que se entró por acá y no por una obra. */
+/* v1034: el DASHBOARD EJECUTIVO es una ubicación de empresa más — nadie la ve por defecto.
+   Mismo criterio que bodega/varios/administración: can('menu.X') o el admin. */
+function _puedeVerDashboardGeneral(){
+  try { return can('menu.dashboard') || can('users.manage'); } catch(e){ return false; }
+}
 window._verDashboardGeneral = function(){
+  /* la puerta se cierra acá también, no solo escondiendo el botón (mismo criterio que
+     _abrirPanelBodega): si no, queda abierta para quien sepa el nombre */
+  if (!_puedeVerDashboardGeneral()) { try { showToast('SIN ACCESO AL DASHBOARD EJECUTIVO', 'red'); } catch(e){} return; }
   window._dashGeneral = true;
   try { setView('dashboard'); } catch(e){ console.warn('[v1028] dashboard general', e); }
   try { _aplicarModoVista(); } catch(e){}
@@ -32121,6 +32141,37 @@ function _cerrarPantallaObra(){
   const m = document.getElementById('_pantallaObra');
   if (m) m.remove();
 }
+/* ═══════════ v1034 · EL BLOQUE "TODA LA EMPRESA" (pedido de Antonio) ═══════════
+   "Predeterminadamente todos los usuarios NO pueden ver nada de este bloque. Yo les debo de
+   dar acceso en su usuario."
+
+   Se arma aparte y devuelve '' cuando la persona no tiene ninguna de las cinco: así no queda
+   colgando el rótulo TODA LA EMPRESA encima de un espacio vacío. Las cinco salen del MISMO
+   molde, que es lo que mantiene los cuadros del mismo tamaño (v1030). */
+function _bloqueEmpresaHTML(){
+  const cuadro = (nom, sub, fn, color) => `<button class="btn ghost" style="text-align:left;padding:12px 16px;border-radius:10px;display:block;width:100%" onclick="window._entrarA('${fn}')">
+      <div style="font-size:13.5px;font-weight:600;color:${color}">${nom}</div>
+      <div style="font-size:11px;color:var(--mute);margin-top:2px">${sub}</div>
+    </button>`;
+  const puede = (f) => { try { return typeof f === 'function' && f(); } catch(e){ return false; } };
+  const ops = [];
+  /* v1028: el DASHBOARD EJECUTIVO es una opción más del menú, no algo que aparece al entrar a
+     una obra. v1034: y va por menu.dashboard, no por el permiso de la pestaña. */
+  if (puede(typeof _puedeVerDashboardGeneral !== 'undefined' ? _puedeVerDashboardGeneral : null))
+    ops.push(cuadro('DASHBOARD EJECUTIVO', 'TODAS LAS OBRAS JUNTAS', '_verDashboardGeneral', 'var(--red)'));
+  /* v1031: USUARIOS pasó acá desde la barra de arriba. Mismo openUsersModal, mismo permiso. */
+  let _u = false; try { _u = can('users.manage'); } catch(e){}
+  if (_u) ops.push(cuadro('USUARIOS', 'PERMISOS Y ACCESOS', '_abrirPanelUsuarios', '#B45309'));
+  if (puede(typeof _puedeVerBodega !== 'undefined' ? _puedeVerBodega : null))
+    ops.push(cuadro('BODEGA CENTRAL', 'EXISTENCIAS Y COMPRAS', '_abrirPanelBodega', '#166534'));
+  if (puede(typeof _puedeVerVarios !== 'undefined' ? _puedeVerVarios : null))
+    ops.push(cuadro('PROYECTOS VARIOS', 'OBRAS CHICAS Y REPARACIONES', '_abrirPanelVarios', '#1D4ED8'));
+  if (puede(typeof _puedeVerAdmin !== 'undefined' ? _puedeVerAdmin : null))
+    ops.push(cuadro('ADMINISTRACIÓN', 'PÓLIZAS Y ANTICIPOS', '_abrirPanelAdmin', '#7C3AED'));
+  if (!ops.length) return '';
+  return `<div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:8px">TODA LA EMPRESA</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">${ops.join('')}</div>`;
+}
 window._abrirPantallaObra = function(forzar){
   if (!forzar && _yaEligioObra()) return;
   if (document.getElementById('_pantallaObra')) return;
@@ -32148,10 +32199,7 @@ window._abrirPantallaObra = function(forzar){
       <div style="font-size:11px;color:var(--mute);margin-top:3px">${_esc(pend)}${esUlt ? ' · LA ÚLTIMA DONDE TRABAJASTE' : ''}</div>
     </button>`;
   };
-  const otra = (nom, sub, fn, color) => `<button class="btn ghost" style="text-align:left;padding:12px 16px;border-radius:10px;display:block;width:100%" onclick="window._entrarA('${fn}')">
-      <div style="font-size:13.5px;font-weight:600;color:${color}">${nom}</div>
-      <div style="font-size:11px;color:var(--mute);margin-top:2px">${sub}</div>
-    </button>`;
+  /* v1034: el molde de las opciones de empresa se mudó a _bloqueEmpresaHTML() */
 
   const wrap = document.createElement('div');
   wrap.id = '_pantallaObra';
@@ -32162,30 +32210,7 @@ window._abrirPantallaObra = function(forzar){
     <div style="font-size:12px;color:var(--mute);margin-bottom:22px">TODO LO QUE VEAS DESPUÉS VA A SER DE LA OBRA QUE ELIJAS.</div>
     <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:8px">OBRAS</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:22px">${proys.map(tarjeta).join('')}</div>
-    <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:8px">TODA LA EMPRESA</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">
-      ${(function(){
-        /* v1028 (pedido de Antonio): el DASHBOARD EJECUTIVO es una opción más del menú, no
-           algo que aparece al entrar a una obra. Adentro de una obra se ve lo de esa obra. */
-        try { if (!can('view.dashboard')) return ''; } catch(e){ return ''; }
-        return `<button class="btn ghost" style="text-align:left;padding:12px 16px;border-radius:10px;display:block;width:100%" onclick="window._entrarA('_verDashboardGeneral')">
-          <div style="font-size:13.5px;font-weight:600;color:var(--red)">DASHBOARD EJECUTIVO</div>
-          <div style="font-size:11px;color:var(--mute);margin-top:2px">TODAS LAS OBRAS JUNTAS</div>
-        </button>`;
-      })()}
-      ${(function(){
-        /* v1031 (pedido de Antonio): USUARIOS pasa acá desde la barra de arriba. Solo se movió
-           de lugar: mismo openUsersModal() y mismo permiso users.manage. */
-        try { if (!can('users.manage')) return ''; } catch(e){ return ''; }
-        return `<button class="btn ghost" style="text-align:left;padding:12px 16px;border-radius:10px;display:block;width:100%" onclick="window._entrarA('_abrirPanelUsuarios')">
-          <div style="font-size:13.5px;font-weight:600;color:#B45309">USUARIOS</div>
-          <div style="font-size:11px;color:var(--mute);margin-top:2px">PERMISOS Y ACCESOS</div>
-        </button>`;
-      })()}
-      ${(typeof _puedeVerBodega === 'function' && _puedeVerBodega()) ? otra('BODEGA CENTRAL', 'EXISTENCIAS Y COMPRAS', '_abrirPanelBodega', '#166534') : ''}
-      ${(typeof _puedeVerVarios === 'function' && _puedeVerVarios()) ? otra('PROYECTOS VARIOS', 'OBRAS CHICAS Y REPARACIONES', '_abrirPanelVarios', '#1D4ED8') : ''}
-      ${(typeof _puedeVerAdmin === 'function' && _puedeVerAdmin()) ? otra('ADMINISTRACIÓN', 'PÓLIZAS Y ANTICIPOS', '_abrirPanelAdmin', '#7C3AED') : ''}
-    </div>
+    ${_bloqueEmpresaHTML()}
   </div>`;
   document.body.appendChild(wrap);
 };

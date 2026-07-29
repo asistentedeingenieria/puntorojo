@@ -31,7 +31,9 @@ ok('menu.admin también', /key: 'menu\.admin'/.test(html));
 ok('agrupados aparte para encontrarlos', /group: 'MENÚ PRINCIPAL'/.test(html));
 
 console.log('\n— 2. los subtítulos van en mayúscula —');
-const zP = ex('window._abrirPantallaObra = function');
+/* v1034: el menú son dos piezas — la pantalla y el bloque de empresa, que se arma aparte
+   para poder no pintarlo cuando la persona no tiene ninguna de esas opciones */
+const zP = ex('window._abrirPantallaObra = function') + ex('function _bloqueEmpresaHTML(');
 ok('SIN PENDIENTES', /'SIN PENDIENTES'/.test(zP));
 ok('PEDIDOS ACTIVOS', /PEDIDO\$\{[^}]*\} ACTIVO/.test(zP));
 ok('LA ÚLTIMA DONDE TRABAJASTE', /LA ÚLTIMA DONDE TRABAJASTE/.test(zP));

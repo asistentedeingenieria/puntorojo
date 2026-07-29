@@ -34,8 +34,12 @@ ok('sigue refrescando la lista desde la nube', /refreshUsersCache\(\)/.test(ex('
 ok('el modal de usuarios sigue en su lugar', /<div class="modal-bg" id="modalUsers"/.test(html));
 
 console.log('\n— se entra desde el menú —');
-const zP = ex('window._abrirPantallaObra = function');
-ok('el menú abre el panel, no el modal pelado', /_entrarA\('_abrirPanelUsuarios'\)/.test(zP));
+/* v1034: las opciones de empresa se arman en _bloqueEmpresaHTML */
+const zP = ex('function _bloqueEmpresaHTML(');
+/* el nombre que se dispara es _abrirPanelUsuarios, NO openUsersModal (si no, el modal saldría
+   pelado sobre el dashboard). Se mira el nombre entre comillas: la palabra suelta también
+   aparece en los comentarios. */
+ok('el menú abre el panel, no el modal pelado', /'_abrirPanelUsuarios'/.test(zP) && /_entrarA\('\$\{fn\}'\)/.test(zP) && !/'openUsersModal'/.test(zP));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

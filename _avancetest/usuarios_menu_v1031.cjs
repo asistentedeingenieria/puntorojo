@@ -11,16 +11,19 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
 console.log('\n— se movió —');
 ok('ya no está en la barra de arriba', !/\$\{manageBtn\}/.test(html));
-const zP = ex('window._abrirPantallaObra = function');
-ok('ahora está en el menú principal', /USUARIOS/.test(zP) && /openUsersModal/.test(zP));
-ok('en el bloque TODA LA EMPRESA', zP.indexOf('TODA LA EMPRESA') < zP.indexOf('openUsersModal'));
+/* v1034: las opciones de empresa se arman en _bloqueEmpresaHTML, que devuelve '' cuando la
+   persona no tiene ninguna. USUARIOS es una de ellas. */
+const zP = ex('function _bloqueEmpresaHTML(');
+ok('ahora está en el menú principal', /'USUARIOS'/.test(zP) && /_abrirPanelUsuarios/.test(zP));
+ok('en el bloque TODA LA EMPRESA', /TODA LA EMPRESA/.test(zP));
 ok('dice para qué es', /PERMISOS Y ACCESOS/.test(zP));
 
 console.log('\n— y NADA más cambió —');
 /* v1032: el menú pasa por _abrirPanelUsuarios, que le pone la capa opaca detrás y después
    llama al MISMO openUsersModal de siempre */
-ok('la acción de fondo es la misma', /_entrarA\('_abrirPanelUsuarios'\)/.test(html) && /openUsersModal\(\)/.test(ex('window._abrirPanelUsuarios = function')));
-ok('el permiso es el mismo', /can\('users\.manage'\)\) return ''/.test(zP));
+/* v1034: el molde de los cuadros recibe el nombre de la función y arma el _entrarA */
+ok('la acción de fondo es la misma', /'_abrirPanelUsuarios'/.test(zP) && /_entrarA\('\$\{fn\}'\)/.test(zP) && /openUsersModal\(\)/.test(ex('window._abrirPanelUsuarios = function')));
+ok('el permiso es el mismo', /can\('users\.manage'\)/.test(zP));
 ok('la pantalla de usuarios sigue igual', /function openUsersModal\(/.test(html));
 /* la variable de la barra se conserva definida: si algo más la leyera, no revienta */
 ok('no se borró manageBtn, solo se dejó de pintar', /const manageBtn = can\('users\.manage'\)/.test(html));

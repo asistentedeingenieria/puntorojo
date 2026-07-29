@@ -24,8 +24,12 @@ ok('existe', zP.length > 400);
 ok('lista las obras como tarjetas', /proys\.map\(tarjeta\)/.test(zP));
 /* v1023: los subtitulos van en MAYUSCULA (pedido de Antonio) */
 ok('con sus pendientes a la vista', /PEDIDO\$\{|SIN PENDIENTES/.test(zP));
-ok('y las ubicaciones de empresa', /BODEGA CENTRAL/.test(zP) && /PROYECTOS VARIOS/.test(zP) && /ADMINISTRACIÓN/.test(zP));
-ok('cada una respeta su permiso', /_puedeVerBodega\(\)/.test(zP) && /_puedeVerVarios\(\)/.test(zP) && /_puedeVerAdmin\(\)/.test(zP));
+/* v1034: el bloque de empresa se arma en su propia función, para poder devolver '' cuando la
+   persona no tiene NINGUNA (antes quedaba el rótulo TODA LA EMPRESA sobre un hueco) */
+const zEmp = ex('function _bloqueEmpresaHTML(');
+ok('y las ubicaciones de empresa', /BODEGA CENTRAL/.test(zEmp) && /PROYECTOS VARIOS/.test(zEmp) && /ADMINISTRACIÓN/.test(zEmp));
+ok('cada una respeta su permiso', /_puedeVerBodega/.test(zEmp) && /_puedeVerVarios/.test(zEmp) && /_puedeVerAdmin/.test(zEmp));
+ok('la pantalla lo usa', /_bloqueEmpresaHTML\(\)/.test(zP));
 /* v1026: renderAll ya no la llama directo — usa el insistidor, porque en el primer render
    los proyectos todavía no llegaron de la nube y esa única oportunidad se perdía */
 ok('sale al arrancar la app', /_asegurarMenuInicial\(\)/.test(ex('function renderAll(')));

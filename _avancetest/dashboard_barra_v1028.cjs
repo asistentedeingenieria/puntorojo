@@ -9,10 +9,15 @@ function ex(marker, from){ let m=html.indexOf(marker, from||0); if(m<0) return '
 let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
 console.log('\n— 1. el dashboard es una opción más del menú —');
-const zP = ex('window._abrirPantallaObra = function');
-ok('aparece en TODA LA EMPRESA', /DASHBOARD EJECUTIVO/.test(zP));
+/* v1034: las opciones de empresa se arman en _bloqueEmpresaHTML (para poder NO pintar el
+   rótulo cuando la persona no tiene ninguna) */
+const zP = ex('function _bloqueEmpresaHTML(');
+ok('aparece en TODA LA EMPRESA', /DASHBOARD EJECUTIVO/.test(zP) && /TODA LA EMPRESA/.test(zP));
 ok('dice qué es', /TODAS LAS OBRAS JUNTAS/.test(zP));
-ok('respeta el permiso de dashboard', /can\('view\.dashboard'\)/.test(zP));
+/* v1034: el permiso pasó a ser el suyo propio. view.dashboard es el de la PESTAÑA y lo tiene
+   casi todo el mundo: por ahí veían el dashboard ejecutivo usuarios que no debían. */
+ok('respeta el permiso de dashboard', /_puedeVerDashboardGeneral/.test(zP));
+ok('que es menu.dashboard, no el de la pestaña', /can\('menu\.dashboard'\)/.test(ex('function _puedeVerDashboardGeneral(')));
 ok('existe la entrada', /window\._verDashboardGeneral = function/.test(html));
 const zV = ex('window._verDashboardGeneral = function');
 ok('marca que se entró por el menú', /_dashGeneral = true/.test(zV));
