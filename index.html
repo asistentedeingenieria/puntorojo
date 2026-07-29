@@ -3246,7 +3246,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1043</span>
+    <span style="opacity:.5;font-size:9px">v1044</span>
   </footer>
 
 </div>
@@ -21276,15 +21276,21 @@ window._comprasPedSub = function(t){
    tengan acceso a compras puedan ver el costo de la receta de material". Por eso acá NO se
    gatea por receta.verPrecios: entrar a COMPRAS es la puerta. Misma fórmula del reporte de
    inventario v982: qty/rendimiento × precio del catálogo. TODO derivado, cero escritura. */
-function _comprasRecetaCosto(p){
+function _comprasRecetaCosto(p, scope){
   var rv = p && p.materiales && p.materiales.recetaV2;
   if (!(rv && rv.formato === 'estandar' && rv.niveles && Array.isArray(rv.etapas))) return null;
+  /* v1044 (Antonio): alcance — TOTALES (default), POR NIVEL o POR APARTAMENTO ("cuánto
+     cuesta cada apto"). Mismo redondeo con el que se pide: ceil por nivel / por apto. */
+  var sc = scope && scope.tipo ? scope : { tipo: 'total' };
+  var lids = sc.tipo === 'total' ? Object.keys(rv.niveles) : [sc.levelId];
   var provs = []; try { provs = _getProveedores(); } catch(e){}
   var etapas = [], granTotal = 0, sinPrecio = 0;
   rv.etapas.forEach(function(nombreEtapa, ei){
     var acc = {};
-    Object.keys(rv.niveles).forEach(function(lid){
-      var m = null; try { m = _recetaV2EtapaNivel(p, lid, ei); } catch(e){}
+    lids.forEach(function(lid){
+      if (!lid || !rv.niveles[lid]) return;
+      var m = null;
+      try { m = (sc.tipo === 'apto') ? _recetaV2EtapaNivelPorApto(p, lid, ei, sc.aptoId) : _recetaV2EtapaNivel(p, lid, ei); } catch(e){}
       /* ceil POR NIVEL: el mismo redondeo con el que se pide (no se compran medias planchas) */
       Object.keys(m || {}).forEach(function(k){ acc[k] = (acc[k] || 0) + Math.ceil(Number(m[k]) || 0); });
     });
@@ -21307,10 +21313,36 @@ function _comprasRecetaCosto(p){
 function _comprasRecetaCostoHTML(){
   var p = (typeof activeProj === 'function') ? activeProj() : null;
   var esc = function(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]); }); };
-  var r = p ? _comprasRecetaCosto(p) : null;
-  if (!r) return '<div class="empty" style="padding:30px 20px;text-align:center;color:var(--mute);font-size:11.5px">ESTE PROYECTO NO TIENE RECETA FORMATO ESTÁNDAR.</div>';
-  var htmlOut = '<div class="card" style="padding:10px 18px 14px;margin-bottom:14px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">'
-    + '<div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700">COSTO TOTAL DE LA RECETA · ' + esc(p.name) + '</div>'
+  var rv = p && p.materiales && p.materiales.recetaV2;
+  /* v1044: alcance vivo en window (sobrevive el re-render); si el nivel elegido ya no existe
+     en este proyecto (se cambió de obra), se vuelve a TOTALES sin reventar */
+  var sc = window._comprasCostoScope || { tipo: 'total' };
+  var _niveles = [];
+  if (rv && rv.niveles) {
+    ((p.towers) || []).forEach(function(t){ ((t.levels) || []).forEach(function(l){ if (l && rv.niveles[l.id]) _niveles.push({ id: l.id, name: l.name || l.id }); }); });
+  }
+  if (sc.tipo !== 'total' && !_niveles.some(function(n){ return n.id === sc.levelId; })) { sc = { tipo: 'total' }; window._comprasCostoScope = sc; }
+  var _nivelSel = _niveles.find(function(n){ return n.id === sc.levelId; }) || null;
+  var _aptos = [];
+  if (sc.tipo === 'apto' && sc.levelId) {
+    ((p.towers) || []).forEach(function(t){ ((t.levels) || []).forEach(function(l){ if (l && l.id === sc.levelId) _aptos = l.aptos || []; }); });
+    if (!_aptos.some(function(a){ return a && a.id === sc.aptoId; })) { sc.aptoId = (_aptos[0] || {}).id || ''; window._comprasCostoScope = sc; }
+  }
+  var _aptoSel = _aptos.find(function(a){ return a && a.id === sc.aptoId; }) || null;
+  var r = p ? _comprasRecetaCosto(p, sc) : null;
+  /* controles: VER = TOTALES / POR NIVEL / POR APARTAMENTO (+ nivel y apto cuando aplican) */
+  var opt = function(v, lbl, cur){ return '<option value="' + v + '"' + (v === cur ? ' selected' : '') + '>' + lbl + '</option>'; };
+  var controles = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">'
+    + '<span style="font-size:8.5px;letter-spacing:1.5px;color:#78716C;font-weight:700">VER</span>'
+    + '<select data-nativo class="pr-filtro" onchange="_comprasCostoSet(\'tipo\',this.value)">' + opt('total', 'TOTALES', sc.tipo) + opt('nivel', 'POR NIVEL', sc.tipo) + opt('apto', 'POR APARTAMENTO', sc.tipo) + '</select>'
+    + (sc.tipo !== 'total' ? '<select data-nativo class="pr-filtro" onchange="_comprasCostoSet(\'levelId\',this.value)">' + _niveles.map(function(n){ return opt(n.id, esc(n.name), sc.levelId); }).join('') + '</select>' : '')
+    + (sc.tipo === 'apto' ? '<select data-nativo class="pr-filtro" onchange="_comprasCostoSet(\'aptoId\',this.value)">' + _aptos.map(function(a){ return a ? opt(a.id, esc(a.name || a.id), sc.aptoId) : ''; }).join('') + '</select>' : '')
+    + '</div>';
+  if (!r) return controles + '<div class="empty" style="padding:30px 20px;text-align:center;color:var(--mute);font-size:11.5px">ESTE PROYECTO NO TIENE RECETA FORMATO ESTÁNDAR.</div>';
+  var _scopeLbl = sc.tipo === 'total' ? '' : (' · ' + esc((_nivelSel && _nivelSel.name) || '')) + (sc.tipo === 'apto' && _aptoSel ? ' · ' + esc(_aptoSel.name || '') : '');
+  var htmlOut = controles
+    + '<div class="card" style="padding:10px 18px 14px;margin-bottom:14px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">'
+    + '<div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700">COSTO ' + (sc.tipo === 'total' ? 'TOTAL ' : '') + 'DE LA RECETA · ' + esc(p.name) + _scopeLbl + '</div>'
     + '<div style="font-size:15px;font-weight:700">Q ' + fmtQ(r.total) + '</div></div>'
     + (r.sinPrecio ? '<div style="font-size:10px;color:#B45309;margin-top:4px">' + r.sinPrecio + ' MATERIAL' + (r.sinPrecio !== 1 ? 'ES' : '') + ' SIN PRECIO EN EL CATÁLOGO — NO SUMAN AL TOTAL.</div>' : '') + '</div>';
   r.etapas.forEach(function(et){
@@ -21328,6 +21360,21 @@ function _comprasRecetaCostoHTML(){
   });
   return htmlOut;
 }
+/* v1044: cambiar el alcance del COSTO DE LA RECETA — al cambiar de tipo se elige nivel/apto
+   por defecto (el primero) para que nunca quede un select apuntando a nada */
+window._comprasCostoSet = function(campo, valor){
+  var sc = Object.assign({ tipo: 'total' }, window._comprasCostoScope || {});
+  sc[campo] = valor;
+  if (campo === 'tipo' && valor !== 'total' && !sc.levelId) {
+    var p = (typeof activeProj === 'function') ? activeProj() : null;
+    var rv = p && p.materiales && p.materiales.recetaV2;
+    ((p && p.towers) || []).some(function(t){ return ((t.levels) || []).some(function(l){ if (l && rv && rv.niveles && rv.niveles[l.id]) { sc.levelId = l.id; return true; } return false; }); });
+  }
+  if (campo === 'levelId') sc.aptoId = ''; // el apto es del nivel: al cambiar nivel se re-elige
+  window._comprasCostoScope = sc;
+  var costo = document.getElementById('_comprasRecetaCosto');
+  if (costo) { try { costo.innerHTML = _comprasRecetaCostoHTML(); } catch(e){ console.warn('[v1044] costo', e); } }
+};
 window._bodegaMovsToggle = function(){
   try { localStorage.setItem('bodega_movs_visible', localStorage.getItem('bodega_movs_visible') === '1' ? '0' : '1'); } catch(e){}
   try { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } catch(e){}
