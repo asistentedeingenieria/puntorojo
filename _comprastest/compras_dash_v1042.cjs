@@ -57,5 +57,15 @@ const zT = ex('function _comprasSetTab(');
 ok('el despacho lo pinta antes del resumen', /_comprasGastosDashHTML\(\) \+ _comprasGastosResumenHTML\(\)/.test(zT));
 ok('respetando el permiso de montos', /_puedeVerGastos\(\)/.test(zT));
 
+console.log('\n— 4. v1045: el detalle por proyecto usa las MISMAS tarjetas compactas —');
+/* Antonio (con foto): los KPI del detalle (GASTO ACUMULADO / COMPRADO / DESPACHADO / ÓRDENES)
+   también salían apilados a lo ancho. Molde COMPARTIDO para que no vuelvan a divergir. */
+const zTile = ex('function _gastoTileHTML(');
+ok('existe el molde compartido', zTile.length > 200);
+const zRG = ex('function renderGastos(');
+ok('el detalle ya no usa kpi-row', !/class="kpi/.test(zRG));
+ok('usa el molde compartido (los dos)', /_gastoTileHTML\(/.test(zRG) && /_gastoTileHTML\(/.test(zH));
+ok('cuadrícula compacta también en el detalle', /repeat\(auto-fit,minmax\(1[4-9]\dpx,1fr\)\)/.test(zRG));
+
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
