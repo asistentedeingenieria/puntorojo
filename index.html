@@ -1506,6 +1506,9 @@ body.pr-usuarios-abierto #modalUsers{z-index:99000}
    con #mat-pedidos) abriría el panel sobre sí mismo — se esconde. El !important es necesario
    porque el pase data-perm de applyPermissions escribe estilo inline en cada corrida. */
 #_bodegaPanelModal .ped-tabs-bar button[onclick*="_abrirPanelBodega"]{display:none!important}
+/* v1041: dentro de COMPRAS no se pide — la barra PEDIR DE RECETA / + NUEVO PEDIDO / LISTA que
+   viene prestada con #mat-pedidos se esconde entera (la sub-vista propia la reemplaza) */
+#_bodegaPanelModal #mat-pedidos .ped-tabs-bar{display:none!important}
 /* v476: bloqueo UNIVERSAL del scroll de fondo cuando hay cualquier modal/recuadro abierto */
 html.pr-scroll-locked,html.pr-scroll-locked body{overflow:hidden!important}
 .modal{background:var(--white);border-radius:4px;padding:28px;max-width:500px;width:100%;max-height:90vh;max-height:90dvh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)}
@@ -3243,7 +3246,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1040</span>
+    <span style="opacity:.5;font-size:9px">v1041</span>
   </footer>
 
 </div>
@@ -21106,9 +21109,14 @@ function _abrirPanelBodega(){
       <div style="font-size:8.5px;letter-spacing:1.5px;color:#166534;font-weight:700;margin-bottom:6px">POR RECIBIR (${porRecibir.length})</div>
       ${porRecibirHTML}
     </div>` : ''}
-    <div class="card" style="padding:12px 18px;margin-top:12px">
-      <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:6px">ÚLTIMOS MOVIMIENTOS</div>
-      ${histo}
+    <!-- v1041 (Antonio): los movimientos van en historial DESPLEGABLE — mismo patrón de los
+         otros seis (preferencia en localStorage, cerrado por defecto) -->
+    <div class="card" style="padding:0 18px;margin-top:12px">
+      <div onclick="window._bodegaMovsToggle()" style="padding:12px 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700">ÚLTIMOS MOVIMIENTOS</div>
+        <span style="font-size:10px;color:#666;font-weight:600">${(((state || {}).bodegaMovs) || []).length} · ${(function(){ try { return localStorage.getItem('bodega_movs_visible') === '1'; } catch(e){ return false; } })() ? '▼ OCULTAR' : '▶ MOSTRAR'}</span>
+      </div>
+      ${(function(){ try { return localStorage.getItem('bodega_movs_visible') === '1'; } catch(e){ return false; } })() ? `<div style="padding-bottom:12px">${histo}</div>` : ''}
     </div>
     </div><!-- /_comprasSecBodega (v1040) -->
     ${_comprasSeccionesHTML()}
@@ -21175,11 +21183,14 @@ function _comprasSeccionesHTML(){
   return `
     <div id="_comprasSecPedidos" style="display:none">
       ${_comprasSelectorHTML()}
+      <!-- v1041 (Antonio): sin PEDIR DE RECETA ni NUEVO PEDIDO acá — eso se hace en la obra.
+           Queda la LISTA y el COSTO DE LA RECETA con montos (visible a todo el que entra). -->
       <div class="mat-tabs ped-tabs-bar" style="margin-bottom:12px">
-        <button class="mat-tab" data-mattab="receta" onclick="setMatTab('receta')">RECETA DE MATERIAL</button>
-        <button class="mat-tab active" data-mattab="pedidos" onclick="setMatTab('pedidos')">PEDIDOS DE MATERIAL</button>
+        <button class="mat-tab active" data-comprasped="lista" onclick="_comprasPedSub('lista')">LISTA DE PEDIDOS</button>
+        <button class="mat-tab" data-comprasped="costo" onclick="_comprasPedSub('costo')">COSTO DE LA RECETA</button>
       </div>
       <div id="_comprasHostPedidos"></div>
+      <div id="_comprasRecetaCosto" style="display:none"></div>
     </div>
     <div id="_comprasSecOrdenes" style="display:none">
       ${_comprasSelectorHTML()}
@@ -21197,8 +21208,9 @@ function _comprasSeccionesHTML(){
 }
 function _comprasLlevarNodos(){
   /* pares inline a propósito (regla del andamiaje: la función extraída se evalúa sola) */
-  [['mat-receta', '_comprasCasaReceta', '_comprasHostPedidos'],
-   ['mat-pedidos', '_comprasCasaPedidos', '_comprasHostPedidos'],
+  /* v1041 (Antonio): la receta NO se presta — "es la misma que hemos estado manejando" en la
+     obra. En COMPRAS lo que se ve es su COSTO (_comprasRecetaCosto). */
+  [['mat-pedidos', '_comprasCasaPedidos', '_comprasHostPedidos'],
    ['mat-ordenes', '_comprasCasaOrdenes', '_comprasHostOrdenes'],
    ['mat-inventario', '_comprasCasaInventario', '_comprasHostInventarios'],
    ['mat-gastos', '_comprasCasaGastos', '_comprasHostGastos']].forEach(function(par){
@@ -21213,8 +21225,7 @@ function _comprasLlevarNodos(){
   });
 }
 function _comprasDevolverNodos(){
-  [['mat-receta', '_comprasCasaReceta'],
-   ['mat-pedidos', '_comprasCasaPedidos'],
+  [['mat-pedidos', '_comprasCasaPedidos'],
    ['mat-ordenes', '_comprasCasaOrdenes'],
    ['mat-inventario', '_comprasCasaInventario'],
    ['mat-gastos', '_comprasCasaGastos']].forEach(function(par){
@@ -21231,7 +21242,13 @@ function _comprasSetTab(t){
   var acc = document.getElementById('_comprasAccionesBodega'); if (acc) acc.style.display = (t === 'bodega') ? 'flex' : 'none';
   try {
     /* cada sección reusa el despacho de la obra tal cual (renders por getElementById) */
-    if (t === 'pedidos') setMatTab('pedidos');
+    if (t === 'pedidos') {
+      /* v1041: acá no se pide — si el formulario de NUEVO PEDIDO quedó abierto en la obra,
+         setMatTab lo respetaría; se aterriza SIEMPRE en la lista */
+      try { setPedidoTab('lista'); } catch(e){}
+      setMatTab('pedidos');
+      _comprasPedSub('lista');
+    }
     if (t === 'ordenes') setMatTab('ordenes');
     if (t === 'inventarios') setMatTab('inventario');
     if (t === 'gastos') {
@@ -21245,6 +21262,76 @@ function _comprasSetTab(t){
   m.querySelectorAll('[data-comprastab]').forEach(function(b){ b.classList.toggle('active', b.dataset.comprastab === t); });
 }
 window._comprasSetTab = _comprasSetTab;
+/* v1041: sub-vista de PEDIDOS — LISTA (el nodo prestado) o COSTO DE LA RECETA */
+window._comprasPedSub = function(t){
+  var host = document.getElementById('_comprasHostPedidos');
+  var costo = document.getElementById('_comprasRecetaCosto');
+  if (host) host.style.display = (t === 'costo') ? 'none' : '';
+  if (costo) costo.style.display = (t === 'costo') ? '' : 'none';
+  var m = document.getElementById('_bodegaPanelModal');
+  if (m) m.querySelectorAll('[data-comprasped]').forEach(function(b){ b.classList.toggle('active', b.dataset.comprasped === t); });
+  if (t === 'costo' && costo) { try { costo.innerHTML = _comprasRecetaCostoHTML(); } catch(e){ console.warn('[v1041] costo receta', e); } }
+};
+/* v1041 (pedido de Antonio): el COSTO de la receta del proyecto elegido — "que todos los que
+   tengan acceso a compras puedan ver el costo de la receta de material". Por eso acá NO se
+   gatea por receta.verPrecios: entrar a COMPRAS es la puerta. Misma fórmula del reporte de
+   inventario v982: qty/rendimiento × precio del catálogo. TODO derivado, cero escritura. */
+function _comprasRecetaCosto(p){
+  var rv = p && p.materiales && p.materiales.recetaV2;
+  if (!(rv && rv.formato === 'estandar' && rv.niveles && Array.isArray(rv.etapas))) return null;
+  var provs = []; try { provs = _getProveedores(); } catch(e){}
+  var etapas = [], granTotal = 0, sinPrecio = 0;
+  rv.etapas.forEach(function(nombreEtapa, ei){
+    var acc = {};
+    Object.keys(rv.niveles).forEach(function(lid){
+      var m = null; try { m = _recetaV2EtapaNivel(p, lid, ei); } catch(e){}
+      /* ceil POR NIVEL: el mismo redondeo con el que se pide (no se compran medias planchas) */
+      Object.keys(m || {}).forEach(function(k){ acc[k] = (acc[k] || 0) + Math.ceil(Number(m[k]) || 0); });
+    });
+    var filas = [], totalEtapa = 0;
+    Object.keys(acc).sort().forEach(function(name){
+      var qty = acc[name];
+      var info = null; try { info = precioDeProductoReceta(provs, name, ''); } catch(e){}
+      var rend = (info && info.rendimiento) ? info.rendimiento : 1;
+      var pu = (info && info.precio > 0) ? info.precio : 0;
+      var sub = pu > 0 ? (qty / rend) * pu : 0;
+      if (!(pu > 0)) sinPrecio++;
+      totalEtapa += sub;
+      filas.push({ name: name, qty: qty, pu: pu, sub: sub });
+    });
+    granTotal += totalEtapa;
+    etapas.push({ nombre: nombreEtapa, filas: filas, total: totalEtapa });
+  });
+  return { etapas: etapas, total: granTotal, sinPrecio: sinPrecio };
+}
+function _comprasRecetaCostoHTML(){
+  var p = (typeof activeProj === 'function') ? activeProj() : null;
+  var esc = function(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]); }); };
+  var r = p ? _comprasRecetaCosto(p) : null;
+  if (!r) return '<div class="empty" style="padding:30px 20px;text-align:center;color:var(--mute);font-size:11.5px">ESTE PROYECTO NO TIENE RECETA FORMATO ESTÁNDAR.</div>';
+  var htmlOut = '<div class="card" style="padding:10px 18px 14px;margin-bottom:14px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">'
+    + '<div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700">COSTO TOTAL DE LA RECETA · ' + esc(p.name) + '</div>'
+    + '<div style="font-size:15px;font-weight:700">Q ' + fmtQ(r.total) + '</div></div>'
+    + (r.sinPrecio ? '<div style="font-size:10px;color:#B45309;margin-top:4px">' + r.sinPrecio + ' MATERIAL' + (r.sinPrecio !== 1 ? 'ES' : '') + ' SIN PRECIO EN EL CATÁLOGO — NO SUMAN AL TOTAL.</div>' : '') + '</div>';
+  r.etapas.forEach(function(et){
+    htmlOut += '<div class="card" style="padding:10px 18px 12px;margin-bottom:12px">'
+      + '<div style="display:flex;justify-content:space-between;gap:10px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;padding-bottom:4px"><span>' + esc(et.nombre) + '</span><span style="color:#374151">Q ' + fmtQ(et.total) + '</span></div>'
+      + '<div style="display:grid;grid-template-columns:minmax(0,1fr) 70px 90px 110px;gap:8px;font-size:8.5px;letter-spacing:1px;color:#9CA3AF;font-weight:700;padding-bottom:3px"><span>MATERIAL</span><span style="text-align:right">CANT.</span><span style="text-align:right">P.U.</span><span style="text-align:right">SUBTOTAL</span></div>'
+      + et.filas.map(function(f){
+          return '<div style="display:grid;grid-template-columns:minmax(0,1fr) 70px 90px 110px;gap:8px;font-size:11px;padding:3px 0;border-bottom:1px solid #F9FAFB">'
+            + '<span>' + esc(f.name) + '</span>'
+            + '<span style="text-align:right;font-variant-numeric:tabular-nums">' + f.qty + '</span>'
+            + '<span style="text-align:right;font-variant-numeric:tabular-nums">' + (f.pu > 0 ? 'Q ' + fmtQ(f.pu) : '<span style="color:#B45309">SIN PRECIO</span>') + '</span>'
+            + '<span style="text-align:right;font-weight:700;font-variant-numeric:tabular-nums">' + (f.pu > 0 ? 'Q ' + fmtQ(f.sub) : '—') + '</span></div>';
+        }).join('')
+      + '</div>';
+  });
+  return htmlOut;
+}
+window._bodegaMovsToggle = function(){
+  try { localStorage.setItem('bodega_movs_visible', localStorage.getItem('bodega_movs_visible') === '1' ? '0' : '1'); } catch(e){}
+  try { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } catch(e){}
+};
 window._comprasCambiarProyecto = function(id){
   if (!id) return;
   try { setActiveProject(id); } catch(e){ console.warn('[v1040] cambiar proyecto', e); }
@@ -23442,7 +23529,7 @@ function renderOrdenesList(){
       : `${oc.numero}`;
 
     return `
-    <div class="oc-list-item">
+    <div class="oc-list-item" id="ocitem-${oc.id}">
       <div class="oc-list-num"><small>No.</small>${numHTML}</div>
       <dl class="oc-list-info" style="margin:0">
         <dd class="proveedor">${oc.proveedorNombre || '—'}</dd>
@@ -23487,6 +23574,18 @@ function renderOrdenesList(){
     </div>`;
   }
   cont.innerHTML = _htmlOc;
+  /* v1041: VER OC desde GASTOS — la orden exacta se trae a la vista y se resalta */
+  try {
+    if (window._comprasIrAOcId) {
+      var _elOc = document.getElementById('ocitem-' + window._comprasIrAOcId);
+      window._comprasIrAOcId = null;
+      if (_elOc) {
+        _elOc.scrollIntoView({ block: 'center' });
+        _elOc.style.outline = '2px solid var(--red)'; _elOc.style.outlineOffset = '2px';
+        setTimeout(function(){ try { _elOc.style.outline = ''; } catch(e){} }, 2600);
+      }
+    }
+  } catch(e){}
 }
 window.toggleOcHistorial = function(){
   const p = activeProj();
@@ -32234,6 +32333,24 @@ function _precioEntradaBodega(k){
   }
   return 0;
 }
+/* v1041 (Antonio: "GASTOS no está incluyendo todo lo que se está pidiendo"): las órdenes
+   ANTERIORES a v1013 no guardaron destinoProyectoId y el filtro las dejaba fuera — la OC de
+   SISTEGUA Q5,815.60 de su foto. El destino se DERIVA del pedido que las originó; si el
+   pedido vive en una obra, la orden es de esa obra aunque el pedido tampoco tenga proyectoId
+   (pedidos viejos). PURA, cero escritura: los datos no se tocan, solo se leen mejor. */
+function _gastoDestinoDeOrden(o){
+  if (o && o.destinoProyectoId) return String(o.destinoProyectoId);
+  if (!o || !o.pedidoId) return '';
+  var dest = '';
+  (((state || {}).projects) || []).some(function(pj){
+    if (!pj || !pj.materiales) return false;
+    var pd = (pj.materiales.pedidos || []).find(function(x){ return x && x.id === o.pedidoId; });
+    if (!pd) return false;
+    try { dest = _destinoProyectoDePedido(pd) || String(pj.id); } catch(e){ dest = String(pj.id); }
+    return true;
+  });
+  return dest;
+}
 function _gastosDeProyecto(projectId){
   const pid = String(projectId || '');
   const conts = [];
@@ -32247,7 +32364,7 @@ function _gastosDeProyecto(projectId){
     if (!o || o.status === 'CANCELADA') return;
     const serie = (typeof _ocSerieDe === 'function') ? _ocSerieDe(o) : (o.serie || 'OC');
     if (serie === 'OP') return;                       // la producción NO es gasto
-    if (String(o.destinoProyectoId || '') !== pid) return;
+    if (_gastoDestinoDeOrden(o) !== pid) return; // v1041: deriva el destino de las órdenes viejas
     const esDesp = (serie === 'DESP') || !!o.esDespacho;
     /* el despacho se valoriza línea por línea con el precio de entrada a bodega; la compra ya
        trae su total congelado, con el IVA incluido (v922) */
@@ -32737,7 +32854,7 @@ function _cuentasPorPagar(projectId){
     if (!o || o.status === 'CANCELADA') return;
     const serie = (typeof _ocSerieDe === 'function') ? _ocSerieDe(o) : (o.serie || 'OC');
     if (serie === 'OP' || serie === 'DESP' || o.esDespacho) return;
-    if (pid && String(o.destinoProyectoId || '') !== pid) return;
+    if (pid && _gastoDestinoDeOrden(o) !== pid) return; // v1041: mismas órdenes que GASTOS
     if (!(Number(o.credito) > 0)) return;            // solo lo que es a crédito
     const montoOc = Number(o.total) || 0;
     const pagado = _pagosDeOc(o.id).reduce((s, x) => s + (Number(x.monto) || 0), 0);
@@ -32796,6 +32913,29 @@ function _puedeVerGastos(){
   try { return can('receta.verPrecios') || can('users.manage') || can('compras.autorizar') || can('compras.revisar'); }
   catch(e){ return false; }
 }
+/* v1041 (Antonio): "una opción que nos redirija exactamente a la OC donde se pidió" —
+   del gasto a la orden: cae en COMPRAS → ÓRDENES, abre el historial por si ya se recibió, y
+   la fila exacta se resalta y se trae a la vista. Los DESPACHOS no viven en esa lista: se
+   avisa que están en BODEGA CENTRAL. */
+window._gastosIrAOc = function(ocId){
+  var hit = null; try { hit = _bodegaFindOc(ocId); } catch(e){}
+  if (!hit || !hit.oc) return showToast('NO ENCONTRÉ LA ORDEN', 'red');
+  if (hit.oc.esDespacho || (typeof _ocSerieDe === 'function' && _ocSerieDe(hit.oc) === 'DESP')) {
+    window._comprasTab = 'bodega';
+    try { if (document.getElementById('_bodegaPanelModal')) { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } else { _abrirPanelBodega(); } } catch(e){}
+    return showToast('ES UN DESPACHO — SU MOVIMIENTO ESTÁ EN BODEGA CENTRAL', '');
+  }
+  window._comprasIrAOcId = ocId;
+  window._comprasTab = 'ordenes';
+  try {
+    var p = (typeof activeProj === 'function') ? activeProj() : null;
+    localStorage.setItem('oc_historial_visible_' + ((p && p.id) || 'def'), '1');
+  } catch(e){}
+  try {
+    if (document.getElementById('_bodegaPanelModal')) { _cerrarPanelBodegaDom(); _abrirPanelBodega(); }
+    else { _abrirPanelBodega(); }
+  } catch(e){}
+};
 window._gastosToggleOrden = function(id){
   const el = document.getElementById('_gastoDet-' + id);
   if (el) el.style.display = (el.style.display === 'none') ? 'block' : 'none';
@@ -32821,7 +32961,8 @@ function renderGastos(){
             <span style="font-size:9px;font-weight:700;letter-spacing:.8px;margin-left:6px;color:${o.esDespacho ? '#166534' : '#1D4ED8'}">${o.esDespacho ? 'DESPACHO DE BODEGA' : 'COMPRA'}</span></div>
           <div style="font-size:10px;color:#78716C;margin-top:2px">${_esc(o.proveedorNombre)}${o.formaPago ? ' · ' + _esc(o.formaPago) : ''}</div>
         </div>
-        <div style="text-align:right;font-weight:700;font-size:12.5px;font-variant-numeric:tabular-nums">Q ${fmtQ(o.monto)}<div style="font-size:8.5px;color:#9CA3AF;font-weight:700;letter-spacing:.5px">VER DETALLE</div></div>
+        <div style="text-align:right;font-weight:700;font-size:12.5px;font-variant-numeric:tabular-nums">Q ${fmtQ(o.monto)}<div style="font-size:8.5px;color:#9CA3AF;font-weight:700;letter-spacing:.5px">VER DETALLE</div>
+          <button class="btn ghost sm" style="font-size:9px;margin-top:4px" onclick="event.stopPropagation();window._gastosIrAOc('${_esc(o.id)}')" title="Ir a la orden exacta donde se pidió">VER OC →</button></div>
       </div>
       <div id="_gastoDet-${_esc(o.id)}" style="display:none;padding:0 0 10px 0">
         ${o.items.map(it => `<div style="display:grid;grid-template-columns:minmax(0,1fr) 60px 80px 90px;gap:8px;font-size:10.5px;padding:3px 0;color:#57534E">

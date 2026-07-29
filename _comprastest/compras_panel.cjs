@@ -47,9 +47,11 @@ const zL = ex('function _comprasLlevarNodos(');
 const zD = ex('function _comprasDevolverNodos(');
 ok('existe el llevar', zL.length > 200);
 ok('existe el devolver', zD.length > 200);
-['mat-receta','mat-pedidos','mat-ordenes','mat-inventario','mat-gastos'].forEach(id => {
+['mat-pedidos','mat-ordenes','mat-inventario','mat-gastos'].forEach(id => {
   ok('se presta ' + id, new RegExp("'" + id + "'").test(zL));
 });
+/* v1041 (Antonio): la receta ya NO se presta — en COMPRAS se ve su COSTO, no la receta misma */
+ok('mat-receta ya no se presta', !new RegExp("'mat-receta'").test(zL));
 ok('deja marca para poder devolver', /_comprasCasa/.test(zL) && /insertBefore\(marca/.test(zL));
 ok('el devolver usa la marca', /_comprasCasa/.test(zD) && /insertBefore\(/.test(zD));
 /* ⚠️ LA REGLA CRÍTICA (v1007): devolver ANTES de destruir el panel — si no, la obra pierde

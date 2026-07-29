@@ -46,7 +46,10 @@ const ctx = {
 };
 let gastos = null;
 try {
-  const src = [ex('function _precioEntradaBodega('), zG].filter(Boolean).join('\n');
+  /* v1041: _gastosDeProyecto ahora resuelve el destino con _gastoDestinoDeOrden (deriva el
+     destino de las órdenes viejas sin destinoProyectoId) — se extrae junto */
+  const src = [ex('function _precioEntradaBodega('), ex('function _gastoDestinoDeOrden('), zG].filter(Boolean).join('\n')
+    + '\nvar _destinoProyectoDePedido = function(pd){ return (pd && pd.proyectoId) || ""; };';
   gastos = new Function(...Object.keys(ctx), src + '\n return _gastosDeProyecto("p1");')(...Object.values(ctx));
 } catch(e){ console.log('   (no evaluable: ' + e.message + ')'); }
 
