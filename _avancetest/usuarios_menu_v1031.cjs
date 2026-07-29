@@ -17,7 +17,9 @@ ok('en el bloque TODA LA EMPRESA', zP.indexOf('TODA LA EMPRESA') < zP.indexOf('o
 ok('dice para qué es', /PERMISOS Y ACCESOS/.test(zP));
 
 console.log('\n— y NADA más cambió —');
-ok('la acción es la misma', /_entrarA\('openUsersModal'\)/.test(html));
+/* v1032: el menú pasa por _abrirPanelUsuarios, que le pone la capa opaca detrás y después
+   llama al MISMO openUsersModal de siempre */
+ok('la acción de fondo es la misma', /_entrarA\('_abrirPanelUsuarios'\)/.test(html) && /openUsersModal\(\)/.test(ex('window._abrirPanelUsuarios = function')));
 ok('el permiso es el mismo', /can\('users\.manage'\)\) return ''/.test(zP));
 ok('la pantalla de usuarios sigue igual', /function openUsersModal\(/.test(html));
 /* la variable de la barra se conserva definida: si algo más la leyera, no revienta */
