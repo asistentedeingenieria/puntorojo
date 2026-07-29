@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v1034-menu-empresa-permiso';
+const CACHE_VERSION = 'v1035-editar-usuario-escalera';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 /* v993: cache APARTE para las fotos de Firebase Storage. NO lleva la versión en el
    nombre: sobrevive a cada despliegue (si se limpiara con cada versión, la flota
