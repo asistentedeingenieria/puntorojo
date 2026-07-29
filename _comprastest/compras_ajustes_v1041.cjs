@@ -60,12 +60,16 @@ if (dest) {
 ok('_gastosDeProyecto lo usa', /_gastoDestinoDeOrden\(o\)/.test(ex('function _gastosDeProyecto(')));
 ok('cuentas por pagar también', /_gastoDestinoDeOrden\(o\)/.test(ex('function _cuentasPorPagar(')));
 
-console.log('\n— 4. VER OC: del gasto a la orden exacta —');
+console.log('\n— 4. VER OC: despliega LA ORDEN, viva donde viva —');
+/* v1046 (Antonio): "quiero que automáticamente despliegue la orden de compra sin importar
+   dónde está" — ya no salta a la lista ni avisa dónde vive: abre la HOJA de la orden.
+   printOrdenCompra resuelve con _bodegaFindOc (obra, bodega y varios) y la hoja ya sabe
+   volver a la app (v979). Pendiente de autorizar → sale como BORRADOR. */
 ok('cada fila del gasto tiene su botón', /_gastosIrAOc\(/.test(ex('function renderGastos(')));
 const zIr = ex('window._gastosIrAOc = function');
-ok('cae en la sección de órdenes de COMPRAS', /_comprasTab = 'ordenes'/.test(zIr));
-ok('abre el historial por si ya se recibió', /oc_historial_visible_/.test(zIr));
-ok('los despachos avisan que viven en bodega', /DESPACHO/.test(zIr));
+ok('abre la hoja de la orden directamente', /printOrdenCompra\(/.test(zIr));
+ok('pendiente de autorizar sale como borrador', /PENDIENTE_AUTORIZACION/.test(zIr));
+ok('ya no redirige a la lista ni regaña por despachos', !/_comprasTab = 'ordenes'/.test(zIr) && !/ES UN DESPACHO/.test(zIr));
 const zRO = ex('function renderOrdenesList(');
 ok('la fila de la OC tiene ancla', /id="ocitem-\$\{oc\.id\}"/.test(zRO));
 ok('y al llegar se resalta y se trae a la vista', /_comprasIrAOcId/.test(zRO) && /scrollIntoView/.test(zRO));
