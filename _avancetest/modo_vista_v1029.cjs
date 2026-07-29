@@ -55,5 +55,11 @@ ok('mismo espaciado', /letter-spacing:1\.4px/.test(zTipo));
 ok('sin negritas', /font-weight:400/.test(zTipo));
 ok('el botón tampoco va en negrita', /\.pr-btn-menu\{[^}]*font-weight:400/.test(html));
 
+/* v1030: applyPermissions reasigna el display de TODAS las pestañas y corre DESPUES, asi
+   que revertia el ocultamiento del dashboard. El modo de vista va al final de ella. */
+const zAP = ex('function applyPermissions(');
+ok('applyPermissions termina aplicando el modo de vista', /_aplicarModoVista/.test(zAP));
+ok('y despues de reasignar las pestañas', zAP.indexOf('_aplicarModoVista') > zAP.indexOf('view.'));
+
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
