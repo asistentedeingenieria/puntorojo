@@ -129,10 +129,30 @@ ok('cada fila trae una casilla de cantidad', /_selItemQty/.test(zSel));
 ok('con el saldo como tope', /max="/.test(zSel));
 ok('sin decimales y mínimo 1', /min="1"/.test(zSel) && /step="1"/.test(zSel));
 /* regla v976 ya pagada: menos de 16px hace zoom en iOS al enfocar */
-ok('no hace zoom en el celular', /_selItemQty[\s\S]{0,400}?font-size:16px/.test(zSel));
+/* ventana amplia: entre la clase y el estilo hay atributos y el comentario del v1038 */
+ok('no hace zoom en el celular', /_selItemQty[\s\S]{0,900}?font-size:16px/.test(zSel));
 /* regla v986/v1009: el markup inline SIN CLASE queda fuera del alcance del CSS responsive */
 ok('la fila tiene clase', /_selItemRow/.test(zSel));
 ok('tocar la casilla no desmarca el material', /stopPropagation/.test(zSel));
+
+console.log('\n— 5b. v1038: no se puede ni ESCRIBIR más que el tope —');
+/* Antonio (29-jul, con foto escribiendo 400 sobre un tope de 330): "quiero que NO deje pedir
+   y escribir más de lo que la receta le dice". El max de HTML no impide teclear: la casilla
+   se corrige SOLA al escribir. El toast del handler y el clamp del generador quedan como
+   respaldo. */
+const mIn = zSel.match(/_selItemQty[^>]*oninput="([^"]+)"/);
+ok('la casilla se corrige mientras se escribe', !!mIn);
+if (mIn) {
+  const correr = (value, max) => {
+    const el = { value: String(value), max: String(max) };
+    new Function('event', mIn[1]).call(el);
+    return String(el.value); // un input real siempre guarda texto
+  };
+  ok('escribir 400 con tope 330 la baja a 330 al instante', correr('400','330') === '330');
+  ok('escribir menos del tope no se toca', correr('200','330') === '200');
+  ok('vacía no se toca (se está escribiendo)', correr('','330') === '');
+  ok('el tope exacto pasa', correr('330','330') === '330');
+} else { ['400→330','200 igual','vacía','exacto'].forEach(n => ok(n, false)); }
 
 console.log('\n— 6. el handler valida ANTES de mandar —');
 const zPedir = ex('function _selItemPedir(');
