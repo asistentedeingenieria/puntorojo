@@ -39,6 +39,12 @@ if (datos) {
 console.log('\n— 2. el dibujo respeta la guía —');
 const zH = ex('function _comprasGastosDashHTML(');
 ok('existe el builder', zH.length > 800);
+/* v1043 (Antonio con foto: las tarjetas salían apiladas a lo ancho, "solo para unos números"):
+   compactas, las 4 juntas en fila — cuadrícula propia, sin depender de .kpi-row (que dentro
+   del panel no arma la grilla) */
+ok('tarjetas compactas en cuadrícula propia', /repeat\(auto-fit,minmax\(1[4-9]\dpx,1fr\)\)/.test(zH));
+/* se mira el MARKUP (class="...") — la palabra suelta vive en el comentario que explica por qué */
+ok('sin la clase kpi-row (dentro del panel se apila)', !/class="kpi/.test(zH));
 ok('la pareja validada, y solo en los RELLENOS', /#1D4ED8/.test(zH) && /#166534/.test(zH) && !/color:#1D4ED8/.test(zH) && !/color:#166534/.test(zH));
 ok('leyenda con las dos series', /COMPRA</.test(zH) && /DESPACHO</.test(zH));
 ok('separador de 2px entre segmentos', /gap:2px/.test(zH));
