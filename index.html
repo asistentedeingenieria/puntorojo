@@ -3246,7 +3246,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1041</span>
+    <span style="opacity:.5;font-size:9px">v1042</span>
   </footer>
 
 </div>
@@ -21254,7 +21254,7 @@ function _comprasSetTab(t){
     if (t === 'gastos') {
       setMatTab('gastos');
       var r = document.getElementById('_comprasResumenGastos');
-      if (r) r.innerHTML = _puedeVerGastos() ? _comprasGastosResumenHTML() : '';
+      if (r) r.innerHTML = _puedeVerGastos() ? (_comprasGastosDashHTML() + _comprasGastosResumenHTML()) : ''; // v1042: dashboard arriba
     }
   } catch(e){ console.warn('[v1040] despachar sección', e); }
   /* setMatTab pisa los .active de TODOS los .mat-tab — el activo de la barra de secciones se
@@ -21338,6 +21338,94 @@ window._comprasCambiarProyecto = function(id){
   /* repintado completo: cae en la MISMA sección (window._comprasTab) con el selector al día */
   try { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } catch(e){}
 };
+/* ═══ v1042 · DASHBOARD DE GASTOS (Antonio: "un dashboard visual creativo para ver cómo
+   vamos"). TODO derivado — cero escritura. La pareja COMPRA #1D4ED8 / DESPACHO #166534 son
+   los MISMOS colores que GASTOS ya usa (el color sigue a la entidad) y pasaron el validador
+   de paleta: ΔE 25.9 en deuteranopia, contraste ≥3:1 sobre el papel. Reglas aplicadas:
+   texto SIEMPRE en tinta (la identidad la lleva la leyenda), separador de 2px entre
+   segmentos, total directo al final de cada barra, un solo eje, top-5 con tope (nada de
+   listas infinitas). PURA la parte de datos. */
+function _comprasGastosDashDatos(){
+  var filas = [], provs = {}, prods = {};
+  var totC = 0, totD = 0, cxpTotal = 0, cxpVenc = 0;
+  (((state || {}).projects) || []).forEach(function(p){
+    if (!p || !p.id) return;
+    var g = null; try { g = _gastosDeProyecto(p.id); } catch(e){}
+    if (!g) return;
+    filas.push({ nombre: p.name || '', compra: g.totalCompra || 0, despacho: g.totalDespacho || 0, total: g.total || 0 });
+    totC += g.totalCompra || 0; totD += g.totalDespacho || 0;
+    (g.ordenes || []).forEach(function(o){
+      var pk = String(o.proveedorNombre || '—');
+      provs[pk] = (provs[pk] || 0) + (Number(o.monto) || 0);
+      (o.items || []).forEach(function(it){
+        var k = String(it.name || '');
+        prods[k] = (prods[k] || 0) + (Number(it.qty) || 0) * (Number(it.precio) || 0);
+      });
+    });
+    try { var c = _cuentasPorPagar(p.id); cxpTotal += (c && c.total) || 0; cxpVenc += (c && c.totalVencido) || 0; } catch(e){}
+  });
+  var top = function(m){
+    return Object.keys(m).map(function(k){ return { name: k, monto: m[k] }; })
+      .filter(function(x){ return x.monto > 0; })
+      .sort(function(a, b){ return b.monto - a.monto; }).slice(0, 5);
+  };
+  filas.sort(function(a, b){ return b.total - a.total; });
+  return { obras: filas, totalCompra: totC, totalDespacho: totD, total: totC + totD,
+           porPagar: cxpTotal, vencido: cxpVenc, proveedores: top(provs), materiales: top(prods) };
+}
+function _comprasGastosDashHTML(){
+  var d = _comprasGastosDashDatos();
+  var esc = function(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]); }); };
+  if (!(d.total > 0)) return '<div class="card" style="padding:26px 18px;margin-bottom:14px;text-align:center;color:#9CA3AF;font-size:11px">SIN GASTO REGISTRADO TODAVÍA — el dashboard se arma solo cuando haya compras o despachos.</div>';
+  var AZUL = '#1D4ED8', VERDE = '#166534';
+  /* fila de tarjetas: el titular es un número, no un gráfico */
+  var htmlOut = '<div class="kpi-row" style="margin-bottom:14px">'
+    + '<div class="kpi cafe"><div class="lbl">Gasto total empresa</div><div class="val">Q ' + fmtQ(d.total) + '</div><div class="sub">Compras y despachos</div></div>'
+    + '<div class="kpi blue"><div class="lbl">Comprado a proveedores</div><div class="val">Q ' + fmtQ(d.totalCompra) + '</div><div class="sub">Órdenes de compra</div></div>'
+    + '<div class="kpi green"><div class="lbl">Despachado de bodega</div><div class="val">Q ' + fmtQ(d.totalDespacho) + '</div><div class="sub">Al precio con que entró</div></div>'
+    + '<div class="kpi' + (d.vencido > 0 ? ' red' : '') + '"><div class="lbl">Por pagar (crédito)</div><div class="val">Q ' + fmtQ(d.porPagar) + '</div><div class="sub">' + (d.vencido > 0 ? 'Q ' + fmtQ(d.vencido) + ' VENCIDO' : 'Sin vencidos') + '</div></div>'
+    + '</div>';
+  /* GASTO POR OBRA: barras horizontales apiladas, mismo máximo para todas (un solo eje) */
+  var max = 0; d.obras.forEach(function(o){ if (o.total > max) max = o.total; });
+  var pct = function(n){ return max > 0 ? Math.max(n > 0 ? 1.5 : 0, (n / max) * 100) : 0; };
+  htmlOut += '<div class="card" style="padding:12px 18px 14px;margin-bottom:14px">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding-bottom:8px">'
+    + '<div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700">GASTO POR OBRA</div>'
+    + '<div style="display:flex;gap:14px;font-size:9.5px;color:#57534E;font-weight:600">'
+    + '<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:' + AZUL + '"></span>COMPRA</span>'
+    + '<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:' + VERDE + '"></span>DESPACHO</span>'
+    + '</div></div>'
+    + d.obras.map(function(o){
+        return '<div style="display:grid;grid-template-columns:minmax(90px,150px) minmax(0,1fr) 100px;gap:10px;align-items:center;padding:5px 0" title="' + esc(o.nombre) + ' · COMPRA Q ' + fmtQ(o.compra) + ' · DESPACHO Q ' + fmtQ(o.despacho) + '">'
+          + '<span style="font-size:10.5px;color:#57534E;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(o.nombre) + '</span>'
+          + '<span style="display:flex;gap:2px;align-items:center;min-height:16px">'
+          + (o.compra > 0 ? '<span style="width:' + pct(o.compra).toFixed(1) + '%;height:16px;background:' + AZUL + ';border-radius:' + (o.despacho > 0 ? '3px 0 0 3px' : '3px') + '"></span>' : '')
+          + (o.despacho > 0 ? '<span style="width:' + pct(o.despacho).toFixed(1) + '%;height:16px;background:' + VERDE + ';border-radius:' + (o.compra > 0 ? '0 3px 3px 0' : '3px') + '"></span>' : '')
+          + (o.total <= 0 ? '<span style="font-size:9px;color:#D6D3D1">—</span>' : '')
+          + '</span>'
+          + '<span style="text-align:right;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums">Q ' + fmtQ(o.total) + '</span></div>';
+      }).join('')
+    + '</div>';
+  /* TOP 5: una sola serie por gráfico — el título nombra, sin leyenda */
+  var mini = function(titulo, lista, colorBarra){
+    if (!lista.length) return '';
+    var mx = lista[0].monto || 1;
+    return '<div class="card" style="padding:12px 18px 14px;flex:1;min-width:260px">'
+      + '<div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;padding-bottom:8px">' + titulo + '</div>'
+      + lista.map(function(x){
+          return '<div style="padding:4px 0" title="' + esc(x.name) + ' · Q ' + fmtQ(x.monto) + '">'
+            + '<div style="display:flex;justify-content:space-between;gap:10px;font-size:10px;color:#57534E"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(x.name) + '</span><span style="font-weight:700;font-variant-numeric:tabular-nums;color:#1C1917">Q ' + fmtQ(x.monto) + '</span></div>'
+            + '<div style="height:6px;border-radius:3px;background:#F1F0EE;margin-top:3px"><div style="width:' + Math.max(2, (x.monto / mx) * 100).toFixed(1) + '%;height:6px;border-radius:3px;background:' + colorBarra + '"></div></div>'
+            + '</div>';
+        }).join('')
+      + '</div>';
+  };
+  htmlOut += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">'
+    + mini('TOP PROVEEDORES · A QUIÉN LE COMPRAMOS', d.proveedores, AZUL)
+    + mini('TOP MATERIALES · EN QUÉ SE VA LA PLATA', d.materiales, VERDE)
+    + '</div>';
+  return htmlOut;
+}
 /* GASTOS agregado: una fila por obra, TODO derivado de _gastosDeProyecto (v1014) — cero
    escritura, cero contenedor nuevo. PURA. */
 function _comprasGastosResumen(){
