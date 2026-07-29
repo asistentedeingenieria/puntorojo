@@ -2926,7 +2926,8 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
              y quitar los BOTONES del markup es el único mecanismo que no pelea con el pase
              v975 de applyPermissions (re-asigna displays en cada corrida). -->
         <button class="mat-tab" data-mattab="avanceapto" onclick="setMatTab('avanceapto')">AVANCE POR APARTAMENTO</button>
-        <button class="mat-tab" data-mattab="gastos" onclick="setMatTab('gastos')" data-perm="receta.verPrecios|users.manage|compras.autorizar|compras.revisar">GASTOS</button>
+        <!-- v1047: GASTOS también salió de la obra — vive en COMPRAS. #mat-gastos se queda
+             abajo como casa (mismo mecanismo v1040 de ordenes/inventario). -->
       </div>
 
       <div id="mat-avanceapto" style="display:none"></div>
@@ -3118,7 +3119,8 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
           <div class="hd-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex:1 1 100%;margin-top:4px">
             <input type="date" id="asistFecha" class="pr-buscador" onchange="setAsistFecha(this.value)" style="flex:0 0 auto">
             <input id="asistBuscar" class="pr-buscador" placeholder="Buscar persona…" oninput="setAsistBuscar(this.value)" style="flex:1 1 160px;min-width:140px">
-            <select id="asistObraPdf" class="pr-filtro" onchange="renderPersonal()" title="Obra — filtra la pantalla (y el PDF si tenés permiso)" style="flex:1 1 150px;min-width:130px"></select>
+            <!-- v1047: el desplegable de obra se fue — la asistencia es de la OBRA ACTIVA
+                 (la elegida en el menú). v757 quedó atrás con él. -->
             <!-- v757: solo PDF PRESENTES + ESTADO DE FUERZA (los únicos que envían los encargados). PDF DÍA/SEMANA/TODAS LAS OBRAS quitados. -->
             <button class="btn primary sm" data-perm="personal.asistencia" onclick="_abrirKioskoCaras()" style="flex:0 0 auto">TOMAR ASISTENCIA</button>
             <button class="btn cafe sm" data-perm="personal.asistenciaPdfTodas" onclick="abrirEstadoFuerza()" style="flex:0 0 auto">ESTADO DE FUERZA</button>
@@ -3246,7 +3248,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1046</span>
+    <span style="opacity:.5;font-size:9px">v1047</span>
   </footer>
 
 </div>
@@ -5694,8 +5696,10 @@ function _getUserObraAsignada(){
 /* ¿la persona se puede ESCANEAR en la obra del encargado? multiObra SÍ se incluye
    (rota entre obras, así el encargado puede marcarla en la suya). Para el KIOSKO. */
 function _personaEnObraUsuario(p){
-  const o = _getUserObraAsignada();
+  const o = _obraFiltroAsist(); // v1047: la obra ACTIVA (el encargado sigue clavado a la suya)
   if (!o) return true; // sin restricción
+  /* multiObra pasa SIEMPRE: rota entre obras y el encargado la escanea en la suya (regla
+     deliberada, distinta del listado v636) */
   return !!(p && (p.multiObra || p.obraAsignada === o));
 }
 /* v636: ¿la persona aparece en el LISTADO de la obra del encargado? A diferencia del
@@ -5716,9 +5720,14 @@ function _personaEnListaObra(p, obra){
 /* v643: obra activa para FILTRAR la pantalla de asistencia (lista + KPIs). El ENCARGADO
    siempre ve SU obra; el ADMIN, la que elija en el dropdown de obra (vacío = todas). */
 function _obraFiltroAsist(){
+  /* v1047 (Fase 2, decisión de Antonio): la asistencia es de la OBRA ACTIVA — para todos,
+     admin incluido. Ya no hay desplegable TODAS LAS OBRAS. El encargado sigue clavado a SU
+     obra (v634 fuerza su obra activa a la asignada: es la misma). Todo por ID de proyecto —
+     renombrar obras no rompe nada. */
   const enc = (typeof _getUserObraAsignada==='function') ? _getUserObraAsignada() : '';
   if (enc) return enc;
-  return (document.getElementById('asistObraPdf')||{}).value || '';
+  const p = (typeof activeProj==='function') ? activeProj() : null;
+  return (p && p.id) || '';
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -11780,7 +11789,7 @@ function setActiveProject(id){
   // v648: al cambiar de proyecto, reiniciar el filtro de obra de asistencia a TODAS LAS OBRAS.
   // Evita que un filtro viejo (p.ej. otra obra) oculte los marcados del proyecto nuevo y parezca
   // que "no marcó nadie". El encargado lo vuelve a fijar a su obra en renderPersonal.
-  try{ const _s=document.getElementById('asistObraPdf'); if(_s) _s.value=''; }catch(e){}
+  // v1047: el reset v648 murió con el select — renderAll re-pinta PERSONAL ya scopeado a la obra
   // v740-fix: reiniciar el estado de INVENTARIOS al cambiar de proyecto. invUI es un
   // singleton de módulo (torreId/nivelId/loc apuntan al proyecto anterior); sin esto, la
   // vista de captura quedaría con ubicaciones de otro proyecto. Re-render si está visible.
@@ -24685,7 +24694,7 @@ function _asistListaFiltrada(){
 }
 
 // v644: modal con el desglose de presentes por cada obra (se abre al tocar el KPI
-// "Presentes por obra (prom.)"). Respeta el mismo alcance que el KPI: el ENCARGADO
+// "Presentes" — v1047: ya se está en UNA obra). Respeta el mismo alcance que el KPI: el ENCARGADO
 // ve solo su obra; el admin respeta el filtro del dropdown (_obraFiltroAsist()).
 window._v644ResumenPresentesPorObra = function(){
   try{
@@ -24874,7 +24883,7 @@ function renderPersonal(){
     const _genteObra = _uObraKpi ? `<div class="kpi olive"><div class="lbl">Personal en tu obra</div><div class="val">${_asistListaFiltrada().length}</div><div class="sub">${String(((state.projects||[]).find(x=>x.id===_uObraKpi)||{}).name||'').toUpperCase()}</div></div>` : '';
     const _kAsist = _genteObra + `<div class="kpi green"><div class="lbl">Hora prom. entrada</div><div class="val">${_avgEnt}</div><div class="sub">${fecha}</div></div>`
       + `<div class="kpi cafe"><div class="lbl">Hora prom. salida</div><div class="val">${_avgSal}</div><div class="sub">${fecha}</div></div>`
-      + `<div class="kpi olive" onclick="window._v644ResumenPresentesPorObra&&window._v644ResumenPresentesPorObra()" style="cursor:pointer" title="Tocá para ver los presentes de cada obra"><div class="lbl">Presentes por obra (prom.)</div><div class="val">${Object.keys(_porObra).length?Math.round(presentes/Object.keys(_porObra).length):0}</div><div class="sub">TOCÁ PARA VER POR OBRA</div></div>`
+      + `<div class="kpi olive" onclick="window._v644ResumenPresentesPorObra&&window._v644ResumenPresentesPorObra()" style="cursor:pointer" title="Tocá para ver los presentes de cada obra"><div class="lbl">Presentes</div><div class="val">${Object.keys(_porObra).length?Math.round(presentes/Object.keys(_porObra).length):0}</div><div class="sub">TOCÁ PARA VER POR OBRA</div></div>`
       + `<div class="kpi cafe" onclick="window._asistAusentesModal&&window._asistAusentesModal()" style="cursor:pointer" title="Tocá para ver quiénes están ausentes"><div class="lbl">Ausentes</div><div class="val">${(typeof _ausentes==='function'?_ausentes(_getPersonalActivo(), dia, _obraFiltroK).length:0)}</div><div class="sub">TOCÁ PARA VER</div></div>`
       + `<div class="kpi cafe" onclick="window._v651FaltanIngreso&&window._v651FaltanIngreso()" style="cursor:pointer" title="Tocá para ver quiénes faltan de ingresar"><div class="lbl">Faltan ingreso</div><div class="val">${(typeof _faltanIngreso==='function'?_faltanIngreso(_getPersonalActivo(), dia, _obraFiltroK).length:0)}</div><div class="sub">TOCÁ PARA VER</div></div>`
       + `<div class="kpi cafe" onclick="window._v651FaltanSalida&&window._v651FaltanSalida()" style="cursor:pointer" title="Tocá para ver quiénes faltan de dar salida"><div class="lbl">Faltan salida</div><div class="val">${(typeof _faltanSalida==='function'?_faltanSalida(dia, _obraFiltroK).length:0)}</div><div class="sub">TOCÁ PARA VER</div></div>`;
@@ -24885,7 +24894,7 @@ function renderPersonal(){
   const fe1=document.getElementById('persEmpresaFilter'); if(fe1) fe1.innerHTML=empOpts;
   /* asistEmpresaFilter removed — no longer in DOM */
   const fi=document.getElementById('asistFecha'); if(fi&&!fi.value) fi.value=fecha;
-  const _obraSel=document.getElementById('asistObraPdf'); if(_obraSel){ const _projs=(typeof state!=='undefined'&&state&&Array.isArray(state.projects))?state.projects:[]; const _cur=_obraSel.value; const _uObraPdf=(typeof _getUserObraAsignada==='function')?_getUserObraAsignada():''; if(_uObraPdf){ const _prU=_projs.find(x=>x.id===_uObraPdf); _obraSel.innerHTML=_prU?(`<option value="${_prU.id}">${String(_prU.name||'').toUpperCase()}</option>`):''; _obraSel.value=_uObraPdf; } else { _obraSel.innerHTML=['<option value="">TODAS LAS OBRAS</option>'].concat(_projs.map(pr=>`<option value="${pr.id}">${String(pr.name||'').toUpperCase()}</option>`)).concat(['<option value="OTRA">OTRA</option>']).join(''); _obraSel.value=_cur; } }
+  /* v1047: el select de obra se fue — la asistencia es de la OBRA ACTIVA (_obraFiltroAsist) */
   const body=document.getElementById('persBody');
   if(body){
     if(!lista.length){ body.innerHTML=`<div style="padding:40px;text-align:center;color:var(--mute)">SIN PERSONAL${canAdd?' — <a href="#" onclick="event.preventDefault();agregarPersonaGlobal()" style="color:var(--red)">AGREGÁ UNA PERSONA</a>':''}</div>`; }
@@ -25022,7 +25031,7 @@ function reactivarPersona(id){
     renderPersonal(); showToast('PERSONA REACTIVADA');
   });
 }
-function toggleAsistenciaGlobal(id){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const _pms=(_getPersonal()||[]).find(x=>x.id===id); if(_pms&&_pms.multiSesion){ showToast('ESTA PERSONA MARCA POR ESCANEO EN VARIAS OBRAS','red'); return; } const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; const cur=A[f][id]||{}; if(cur.presente===true){ showToast('YA ESTÁ PRESENTE · ESE CHEQUE NO SE PUEDE MODIFICAR','red'); return; } const _d=new Date(); const _h=String(_d.getHours()).padStart(2,'0')+':'+String(_d.getMinutes()).padStart(2,'0'); A[f][id]={presente:true,obraId:cur.obraId||'',obraDesc:cur.obraDesc||'',hora:_h,_ts:Date.now()}; try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){} saveAsistencia(); renderPersonal(); }
+function toggleAsistenciaGlobal(id){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const _pms=(_getPersonal()||[]).find(x=>x.id===id); if(_pms&&_pms.multiSesion){ showToast('ESTA PERSONA MARCA POR ESCANEO EN VARIAS OBRAS','red'); return; } const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; const cur=A[f][id]||{}; if(cur.presente===true){ showToast('YA ESTÁ PRESENTE · ESE CHEQUE NO SE PUEDE MODIFICAR','red'); return; } const _d=new Date(); const _h=String(_d.getHours()).padStart(2,'0')+':'+String(_d.getMinutes()).padStart(2,'0'); A[f][id]={presente:true,obraId:cur.obraId||((_pms&&_pms.obraAsignada)||''),obraDesc:cur.obraDesc||'',hora:_h,_ts:Date.now()}; try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){} saveAsistencia(); renderPersonal(); }
 function setAsistenciaObra(id,obraId){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; if(!A[f][id])A[f][id]={presente:true}; A[f][id].obraId=obraId; if(obraId!=='OTRA')A[f][id].obraDesc=''; A[f][id]._ts=Date.now(); try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){} saveAsistencia(); renderPersonal(); }
 function setAsistenciaObraDesc(id,desc){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return; const f=_asistFechaActual(); const A=_getAsistencia(); if(A[f]&&A[f][id]){ A[f][id].obraDesc=desc; A[f][id]._ts=Date.now(); try{ _asistPendingAdd(f, id); }catch(e){} saveAsistencia(); } }
 let _colabAbiertos = new Set(); // ids de colaboradores con su ficha desplegada (se preserva entre renders)
@@ -25488,7 +25497,7 @@ function descargarPdfDiaPresentes(){
   const fecha=_asistFechaActual();
   const A=_getAsistencia(); const dia=A[fecha]||{};
   const projs=(typeof state!=='undefined'&&state&&Array.isArray(state.projects))?state.projects:[];
-  const obraSel=(document.getElementById('asistObraPdf')||{}).value||'';
+  const obraSel=(typeof _obraFiltroAsist==='function')?_obraFiltroAsist():''; // v1047: el PDF del día es de la OBRA ACTIVA (como la pantalla)
   const obraLabel = obraSel ? (obraSel==='OTRA'?'OTRA':(String((projs.find(x=>x.id===obraSel)||{}).name||'').toUpperCase()||obraSel)) : '';
   const _obraCtx = obraSel || ((typeof _getUserObraAsignada==='function')?_getUserObraAsignada():'');
   let roster;
@@ -25741,9 +25750,9 @@ window.abrirPdfSemanal = function(){
   if(typeof window.prConfirm==='function'){
     window.prConfirm({ title:'PDF SEMANAL DE ASISTENCIA', bodyHTML:body, okText:'GENERAR PDF', cancelText:'CANCELAR' }).then(function(okp){
       if(!okp) return;
-      _generarPdfSemanal(window._pdfSemFechaVal || defKey, (typeof _obraFiltroAsist==='function'?_obraFiltroAsist():''), true); // v834: respeta TODAS LAS OBRAS (encargado→su obra)
+      _generarPdfSemanal(window._pdfSemFechaVal || defKey, (typeof _getUserObraAsignada==='function'?_getUserObraAsignada():''), true); // v1047: multi-obra por naturaleza — admin ''=TODAS, encargado la suya
     });
-  } else { _generarPdfSemanal(defKey, (typeof _obraFiltroAsist==='function'?_obraFiltroAsist():''), true); }
+  } else { _generarPdfSemanal(defKey, (typeof _getUserObraAsignada==='function'?_getUserObraAsignada():''), true); } // v1047
 };
 /* ═══════════ v838: REPORTE MENSUAL DE ASISTENCIA (acceso restringido por permiso) ═══════════
    Por persona, TODOS los días del mes con ENTRADA, SALIDA y UBICACIÓN (EN OBRA / FUERA) de
@@ -25809,9 +25818,9 @@ window.abrirPdfMensual = function(){
   if(typeof window.prConfirm==='function'){
     window.prConfirm({ title:'REPORTE MENSUAL DE ASISTENCIA', bodyHTML:body, okText:'GENERAR PDF', cancelText:'CANCELAR' }).then(function(okp){
       if(!okp) return;
-      _generarPdfMensual(window._pdfMesVal || defKey, (typeof _obraFiltroAsist==='function'?_obraFiltroAsist():''), true);
+      _generarPdfMensual(window._pdfMesVal || defKey, (typeof _getUserObraAsignada==='function'?_getUserObraAsignada():''), true); // v1047: admin ''=TODAS
     });
-  } else { _generarPdfMensual(defKey, (typeof _obraFiltroAsist==='function'?_obraFiltroAsist():''), true); }
+  } else { _generarPdfMensual(defKey, (typeof _getUserObraAsignada==='function'?_getUserObraAsignada():''), true); } // v1047
 };
 function _generarPdfMensual(mesKey, obraCtx, explicit){
   if(typeof can==='function' && !(can('personal.asistenciaMensual')||can('users.manage'))) { showToast('SIN PERMISO','red'); return; }
@@ -25911,9 +25920,9 @@ function _efCerrar(){ var m=document.getElementById('_efModal'); if(m) m.remove(
 /* v758: nombre corto de obra para los archivos PDF (ESSENZA FASE 2 → ESSENZA F2). */
 function _obraNombreArchivo(name){ return String(name||'').replace(/\bFASE\s+/i,'F').replace(/\s+/g,' ').trim().toUpperCase(); }
 function _efTargetObra(){
-  var _sel=(document.getElementById('asistObraPdf')||{}).value||'';
-  var _uObra=(typeof _getUserObraAsignada==='function')?(_getUserObraAsignada()||''):'';
-  return _sel || _uObra;
+  /* v1047: sin select — el ESTADO DE FUERZA es multi-obra por naturaleza (decisión de
+     Antonio): admin '' = un PDF por obra + SIN OBRA; el encargado baja el de la suya. */
+  return (typeof _getUserObraAsignada==='function')?(_getUserObraAsignada()||''):'';
 }
 /* v754: dibuja en `doc` (página actual, sin save) el estado de fuerza ESTRUCTURADO de UNA obra,
    con el mismo look del modal: título + obra + fecha, tabla PUESTO/PRESENTES, sexo y banner TOTAL,
@@ -27218,8 +27227,8 @@ async function _kioskReanudarCamara(){
 function _kioskAbrirRegistro(){
   if(document.getElementById('_kioskRegScreen')) return;
   if(!_puedeEnrolarCara()){ showToast('SIN PERMISO','red'); return; }
-  var _o=(typeof _getUserObraAsignada==='function')?_getUserObraAsignada():'';
-  _kioskRegBase=(_getPersonalActivo()||[]).filter(function(p){ return !_o || (p && p.obraAsignada===_o); }); // SOLO asignados a SU obra (admin _o='' → todos) · v751: sin dados de baja
+  var _o=(typeof _obraFiltroAsist==='function')?_obraFiltroAsist():''; // v1047: la obra ACTIVA
+  _kioskRegBase=(_getPersonalActivo()||[]).filter(function(p){ return !_o || (p && p.obraAsignada===_o); }); // SOLO asignados a la obra (estricto, sin multiObra) · v751: sin dados de baja
   _kioskRegMejorar=_enrolMejorarSet(_kioskRegBase); // calidad: quiénes conviene mejorar (una sola vez)
   var html='<div id="_kioskRegScreen" style="position:fixed;inset:0;z-index:100071;background:#0B0B0C;display:flex;flex-direction:column;color:#fff">'
     + '<div style="display:flex;align-items:center;gap:8px;padding:calc(env(safe-area-inset-top,22px) + 14px) 14px 8px">'

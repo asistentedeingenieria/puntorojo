@@ -54,7 +54,9 @@ if (parts.every(Boolean)){
 ok('permiso personal.asistenciaMensual en el catálogo', /\{ key: 'personal\.asistenciaMensual',[^}]*group: 'EDICIÓN PERSONAL' \}/.test(html));
 ok('botón PDF MENSUAL con data-perm', /data-perm="personal\.asistenciaMensual"[^>]*onclick="abrirPdfMensual\(\)"/.test(html));
 ok('_generarPdfMensual exige el permiso', /function _generarPdfMensual[\s\S]{0,160}can\('personal\.asistenciaMensual'\)\|\|can\('users\.manage'\)/.test(html));
-ok('abrirPdfMensual pasa _obraFiltroAsist() + true', /_generarPdfMensual\([^;]*_obraFiltroAsist\(\)[^;]*true\)/.test(html));
+/* v1047: pasa _getUserObraAsignada — el MENSUAL es multi-obra por naturaleza (admin ''=TODAS);
+   _obraFiltroAsist ya nunca devuelve '' (siempre hay obra activa) y mataría el modo TODAS */
+ok('abrirPdfMensual pasa _obraFiltroAsist() + true', /_generarPdfMensual\([^;]*_getUserObraAsignada\(\)[^;]*true\)/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

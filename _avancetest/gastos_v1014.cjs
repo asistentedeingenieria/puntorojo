@@ -87,7 +87,8 @@ if (porProd) {
 } else { ['junta','monto','ordena'].forEach(n => ok(n + ' (evaluable)', false)); }
 
 console.log('\n— 4. dónde se ve —');
-ok('hay pestaña GASTOS en materiales', /data-mattab="gastos"/.test(html));
+/* v1047: la pestaña GASTOS salió de la obra — vive en COMPRAS; #mat-gastos queda como casa */
+ok('hay pestaña GASTOS en materiales', /setMatTab\('gastos'\)/.test(html) && /<div id="mat-gastos"/.test(html));
 ok('con su contenedor', /id="mat-gastos"/.test(html));
 ok('setMatTab la conoce', /gastos/.test(ex('function setMatTab(')));
 ok('hay un total en los KPIs de materiales', /GASTO/i.test(ex('function renderMateriales(')));

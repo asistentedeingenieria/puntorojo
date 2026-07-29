@@ -31,7 +31,8 @@ ok('asistFecha (filtro fecha) unificado', tiene('asistFecha', 'pr-buscador'));
 
 // ── 3. filtros select estáticos ──
 ok('persEmpresaFilter unificado', tiene('persEmpresaFilter', 'pr-filtro'));
-ok('asistObraPdf unificado', tiene('asistObraPdf', 'pr-filtro'));
+/* v1047: el select de obra de asistencia se ELIMINÓ — la asistencia es de la obra activa */
+ok('asistObraPdf unificado', !/id="asistObraPdf"/.test(html));
 ok('inboxFilter unificado', tiene('inboxFilter', 'pr-filtro'));
 
 // ── 4. buscadores/filtros generados por template ──
