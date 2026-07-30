@@ -3325,7 +3325,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1057</span>
+    <span style="opacity:.5;font-size:9px">v1058</span>
   </footer>
 
 </div>
@@ -9171,7 +9171,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 919; // v1039: escudo de factura en el merge de órdenes (un cliente viejo sin el escudo re-abre la ventana de pérdida)
+const APP_SYNC_VERSION = 920; // v1058: blindaje de tomas de inventario (líneas union SIEMPRE + lápidas de línea + rescate) — un cliente viejo con el merge cerrada-gana-entera re-abre la pérdida
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10261,6 +10261,19 @@ const CloudSync = {
     }
     try { _cacheWrite(JSON.stringify(state)); } catch(e) {}
     try { renderAll(); applyPermissions(); } catch(e) { console.error('Render error tras applyRemote:', e); }
+    /* v1058 TIEMPO REAL DE INVENTARIOS (Antonio: "ir viendo en tiempo real cuando se vaya
+       haciendo alguna toma"): renderAll NUNCA repinta la sección de inventarios — el admin
+       con COMPRAS>INVENTARIOS abierto miraba conteos viejos (y podía cerrar la toma antes
+       de tiempo). Se repinta SOLO si #mat-inventario está a la vista (sirve en la obra y en
+       el panel COMPRAS: el nodo se presta) y sin input enfocado (no matar lo que se escribe;
+       applyRemote ya difiere por isUserBusy, esto es el cinturón extra). */
+    try {
+      const _mi = document.getElementById('mat-inventario');
+      if (_mi && _mi.style.display !== 'none' && typeof renderInventarios === 'function') {
+        const _ae = document.activeElement;
+        if (!(_ae && /^(INPUT|TEXTAREA|SELECT)$/.test(_ae.tagName))) renderInventarios();
+      }
+    } catch(e){ console.warn('[v1058] repintado de inventarios', e); }
     // v277: sync silencioso, sin toast intrusivo.
     // Si la limpieza removió filas, re-subir el state limpio a la nube para que
     // todos los dispositivos se sincronicen sin la basura.
@@ -17431,19 +17444,33 @@ function _invCountByLoc(toma){
   return out;
 }
 function _mergeOneToma(a, b){
+  /* v1058 (Antonio: "la información NO se pierda NUNCA"): las LÍNEAS se unen SIEMPRE por
+     (locKey+material), esté como esté la toma. Antes la CERRADA ganaba ENTERA sobre la
+     ABIERTA — cerrar desde la oficina descartaba lo que los celulares seguían contando
+     (el patrón objeto-entero que ya mordió en v953/v972/v1039) — y entre dos CERRADAS
+     ganaba entera la de fechaCierre mayor (doble cierre offline = pérdida). Los METADATOS
+     del cierre sí los manda la cerrada; entre dos cerradas, la de fechaCierre mayor.
+     Lápidas de LÍNEA (lineasEliminadas: clave→ts) para que un conteo borrado no reviva
+     desde una copia vieja; un re-conteo posterior (ts > lápida) sí vuelve.
+     Empate de ts: decide el id (mismo ganador en ambos lados — antes ganaba el local). */
   var aC = a.estado==='CERRADA', bC = b.estado==='CERRADA';
-  if (aC && !bC) return a;
-  if (bC && !aC) return b;
-  if (aC && bC){
-    return (String(b.fechaCierre||'') > String(a.fechaCierre||'')) ? b : a;
-  }
-  // ambas ABIERTAS: unir líneas por (locKey+material), el ts mayor gana
+  var tumbas = {};
+  var addTumbas = function(src){
+    var t = (src && src.lineasEliminadas) || {};
+    Object.keys(t).forEach(function(k){ var ts = Number(t[k])||0; if (ts > (Number(tumbas[k])||0)) tumbas[k] = ts; });
+  };
+  addTumbas(a); addTumbas(b);
   var map = {}; var order = [];
   var put = function(l){
     if (!l) return;
     var k = _invNorm(l.locKey)+'||'+_invNorm(l.material);
-    if (!(k in map)){ map[k]=l; order.push(k); }
-    else if ((Number(l.ts)||0) >= (Number(map[k].ts)||0)) map[k]=l;
+    /* la lápida solo aplica si EXISTE — con 'lápida 0 >= ts 0' una línea vieja sin ts
+       moría contra una lápida inexistente (lo cazó merges_idempotentes.cjs) */
+    if ((k in tumbas) && Number(tumbas[k]) >= (Number(l.ts)||0)) return; // borrada DESPUÉS de este conteo
+    if (!(k in map)){ map[k]=l; order.push(k); return; }
+    var tsN = Number(l.ts)||0, tsV = Number(map[k].ts)||0;
+    if (tsN > tsV){ map[k]=l; return; }
+    if (tsN === tsV && String(l.id||'') > String(map[k].id||'')) map[k]=l;
   };
   (a.lineas||[]).forEach(put);
   (b.lineas||[]).forEach(put);
@@ -17451,7 +17478,12 @@ function _mergeOneToma(a, b){
   var fi = (String(a.fechaInicio||'') && String(b.fechaInicio||''))
     ? (String(a.fechaInicio) <= String(b.fechaInicio) ? a.fechaInicio : b.fechaInicio)
     : (a.fechaInicio || b.fechaInicio);
-  return Object.assign({}, a, { lineas: lineas, fechaInicio: fi });
+  var base = a;
+  if (bC && !aC) base = b;
+  else if (aC && bC) base = (String(b.fechaCierre||'') > String(a.fechaCierre||'')) ? b : a;
+  var out = Object.assign({}, base, { lineas: lineas, fechaInicio: fi });
+  if (Object.keys(tumbas).length) out.lineasEliminadas = tumbas;
+  return out;
 }
 function _mergeTomas(localList, remoteList, tombSet){
   // Unión por id. `changed`/needsResync = "el merge preservó datos LOCALES que el
@@ -17474,6 +17506,43 @@ function _mergeTomas(localList, remoteList, tombSet){
     byId[t.id] = merged;
   });
   var list = Object.keys(byId).map(function(k){ return byId[k]; });
+  /* v1058 RESCATE: un celular que siguió contando en una toma ya UNIFICADA (tombstoneada
+     por unificarTomasAbiertas) agregaba líneas a un id muerto y morían con él. Las líneas
+     con ts POSTERIOR a la lápida migran a la toma ABIERTA superviviente más reciente; las
+     anteriores no (esas ya viajaron en la unificación). Las tomas ELIMINADAS de verdad
+     siguen muertas — solo se salvan los conteos que nacieron después de su lápida. */
+  try {
+    var rescatar = [];
+    var scan = function(t){
+      if (!t || !t.id || !(t.id in tombSet)) return;
+      var tts = Number(tombSet[t.id])||0;
+      (t.lineas||[]).forEach(function(l){ if (l && (Number(l.ts)||0) > tts) rescatar.push(l); });
+    };
+    (remoteList||[]).forEach(scan);
+    (localList||[]).forEach(scan);
+    if (rescatar.length){
+      var abiertas = list.filter(function(t){ return t && t.estado !== 'CERRADA'; })
+        .sort(function(x,y){ return String(y.fechaInicio||'') < String(x.fechaInicio||'') ? -1 : 1; });
+      if (abiertas.length){
+        var surv = abiertas[0];
+        var antes = JSON.stringify(surv.lineas||[]);
+        var lin = surv.lineas || [];
+        rescatar.forEach(function(l){
+          var k = _invNorm(l.locKey)+'||'+_invNorm(l.material);
+          var tumbasSurv = surv.lineasEliminadas || {};
+          if ((k in tumbasSurv) && Number(tumbasSurv[k]) >= (Number(l.ts)||0)) return; // en la superviviente esa clave se borró después
+          var ya = lin.find(function(x){ return (_invNorm(x.locKey)+'||'+_invNorm(x.material)) === k; });
+          if (ya && (Number(ya.ts)||0) >= (Number(l.ts)||0)) return; // la superviviente tiene un conteo más nuevo
+          lin = _invUpsertLinea(lin, l);
+        });
+        if (JSON.stringify(lin) !== antes){
+          var idx = list.indexOf(surv);
+          list[idx] = Object.assign({}, surv, { lineas: lin });
+          changed = true;
+        }
+      }
+    }
+  } catch(e){ console.warn('[v1058] rescate de líneas', e); }
   return { list: list, changed: changed };
 }
 
@@ -18005,6 +18074,13 @@ function invSetCantidad(id,val){
 }
 function invEliminarLinea(id){
   var toma=_invActiveToma(); if(!toma) return;
+  /* v1058: lápida de línea por clave — sin ella, cualquier copia que aún tenga la línea
+     la revivía en el próximo merge (regla de oro: todo borrado escribe su tombstone) */
+  var l=(toma.lineas||[]).find(function(x){ return x.id===id; });
+  if (l){
+    if(!toma.lineasEliminadas || typeof toma.lineasEliminadas!=='object') toma.lineasEliminadas={};
+    toma.lineasEliminadas[_invNorm(l.locKey)+'||'+_invNorm(l.material)]=Date.now();
+  }
   toma.lineas=_invDelLinea(toma.lineas, id);
   saveState(); _invUpload();
   renderInventarios();

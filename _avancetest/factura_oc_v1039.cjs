@@ -69,7 +69,9 @@ ok('ya no está el bloque mezclado', !/\$\{_opBloque\}/.test(zBtn));
 
 console.log('\n— 5. clientes viejos —');
 /* el escudo vive en applyRemote: un cliente viejo sin él re-abre la ventana de pérdida */
-ok('APP_SYNC_VERSION subió a 919', /APP_SYNC_VERSION = 919/.test(html));
+/* v1058: la versión siguió subiendo (920 = blindaje de tomas) — lo que este test fija es
+   que el escudo de factura exigió AL MENOS la 919, no el número exacto */
+ok('APP_SYNC_VERSION subió a 919+', (parseInt((html.match(/APP_SYNC_VERSION = (\d+)/)||[])[1],10)||0) >= 919);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
