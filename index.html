@@ -3346,7 +3346,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1070</span>
+    <span style="opacity:.5;font-size:9px">v1071</span>
   </footer>
 
 </div>
@@ -23467,8 +23467,11 @@ async function generarOrdenCompra(){
     if (!_eitems.length) continue;
     const _bm = _bodegaMatStore();
     _bm.ordenes = _bm.ordenes || [];
-    /* v1070: sin obra destino no se genera ni DPP ni TRAS (el gasto quedaría en el aire) */
-    if (!_destinoProyectoDePedido(pd)) { showToast('ESTE PEDIDO NO TIENE OBRA DESTINO — EL GRUPO PRE-PAGO/TRASIEGO NO SE GENERÓ', 'red'); continue; }
+    /* v1070: sin obra destino no se genera ni DPP ni TRAS (el gasto quedaría en el aire)
+       v1071: MISMO destino derivado que ofrece el picker (con respaldo a la obra donde vive
+       el pedido) — con el crudo, un pedido viejo sin proyectoId se bloqueaba acá */
+    const _destD = _pedidoDestinoActual();
+    if (!_destD) { showToast('ESTE PEDIDO NO TIENE OBRA DESTINO — EL GRUPO PRE-PAGO/TRASIEGO NO SE GENERÓ', 'red'); continue; }
     if (_eid.indexOf('_dpp:') === 0) {
       const _todasE = _dppOrdenesSinBorrador(); // v1070: al corregir, el borrador propio no cuenta el saldo
       const _madreE = _todasE.find(o => o && o.id === _eid.slice(5));
@@ -23499,7 +23502,7 @@ async function generarOrdenCompra(){
         fecha: fechaOc,
         fechaEntrega: fechaEntregaNueva, // como toda OC (decisión de Antonio, 30-jul)
         proyecto: proyectoOc, area: areaOc, // "automáticamente ya detecta para qué área va"
-        destinoProyectoId: _destinoProyectoDePedido(pd),
+        destinoProyectoId: _destD, // v1071: el gasto llega a la obra aunque el pedido sea viejo
         entregarA,
         formaPago: 'COMPRA ANTICIPADA — YA PAGADO', credito: 0,
         items: _itemsDpp,
@@ -23519,7 +23522,7 @@ async function generarOrdenCompra(){
       const _obraId = _eid.slice(6);
       const _obraO = ((state && state.projects) || []).find(x => x && x.id === _obraId);
       if (!_obraO) { showToast('LA OBRA ORIGEN DEL TRASIEGO YA NO EXISTE — ESE GRUPO NO SE GENERÓ', 'red'); continue; }
-      const _destT = _destinoProyectoDePedido(pd);
+      const _destT = _destD; // v1071: mismo destino derivado
       if (_destT && _destT === _obraId) { showToast('EL TRASIEGO NO PUEDE SALIR DE LA MISMA OBRA QUE PIDE', 'red'); continue; }
       const _usadosT = [];
       (_bm.ordenes || []).forEach(o => { if (o && _ocSerieDe(o) === 'TRAS') _usadosT.push(Number(o.folio) || 0); });
@@ -34037,11 +34040,28 @@ function _dppOrdenesGlobal(){
    el propio DPP que se iba a reemplazar — la opción desaparecía del picker, el grupo
    "sobregiraba" y el barrido tombstoneaba el despacho: se esfumaba de un pedido APROBADO.
    Esta fuente excluye los DPP PENDIENTES del pedido en corrección. */
+/* v1071 (bug de Antonio: "no me sale la opción" de TRASIEGO — SIN RESULTADOS en el picker):
+   `currentPedidoDetalleId` se declara con `let`, así que NO es propiedad de window —
+   leerlo desde el objeto window daba undefined y el destino salía vacío SIEMPRE
+   (TRASIEGO nunca apareció; COMPRA PRE-PAGO se rompió en v1070 con el guard).
+   Además el destino crudo depende de pd.proyectoId, que los pedidos viejos no traen:
+   respaldo con la obra donde VIVE el pedido (patrón _gastoDestinoDeOrden v1041). */
+function _pedidoDestinoActual(){
+  try {
+    if (!currentPedidoDetalleId) return '';
+    var cx = (typeof _findPedidoGlobal === 'function') ? _findPedidoGlobal(currentPedidoDetalleId) : null;
+    if (!cx || !cx.pd) return '';
+    var d = (typeof _destinoProyectoDePedido === 'function') ? _destinoProyectoDePedido(cx.pd) : '';
+    if (d) return String(d);
+    if (cx.pd.esBodega || cx.pd.esVarios || cx.pd.proyectoManual) return '';
+    return String(cx.projectId || '');
+  } catch(e){ return ''; }
+}
 function _dppOrdenesSinBorrador(){
   var todas = _dppOrdenesGlobal();
   try {
     if (!window._ocEditandoId) return todas;
-    var cx = (typeof _findPedidoGlobal === 'function') ? _findPedidoGlobal(window.currentPedidoDetalleId) : null;
+    var cx = (typeof _findPedidoGlobal === 'function') ? _findPedidoGlobal(currentPedidoDetalleId) : null;
     var pid = cx && cx.pd && cx.pd.id;
     if (!pid) return todas;
     return todas.filter(function(o){ return !(o && o.pedidoId === pid && _ocSerieDe(o) === 'DPP' && (o.status || 'AUTORIZADA') === 'PENDIENTE_AUTORIZACION'); });
@@ -34054,8 +34074,7 @@ function _dppOrdenesSinBorrador(){
 function _dppOpcionesDeItem(nombre){
   var ops = [];
   try {
-    var _cxD = (typeof _findPedidoGlobal === 'function') ? _findPedidoGlobal(window.currentPedidoDetalleId) : null;
-    if (!(_cxD && _cxD.pd && typeof _destinoProyectoDePedido === 'function' && _destinoProyectoDePedido(_cxD.pd))) return ops;
+    if (!_pedidoDestinoActual()) return ops; // v1071: destino derivado (con respaldo)
     var k = _ocItemMemKey(nombre);
     var todas = _dppOrdenesSinBorrador();
     todas.forEach(function(o){
@@ -34074,8 +34093,7 @@ function _dppOpcionesDeItem(nombre){
 function _trasOpcionesDeItem(){
   var ops = [];
   try {
-    var _cx = (typeof _findPedidoGlobal === 'function') ? _findPedidoGlobal(window.currentPedidoDetalleId) : null;
-    var dest = (_cx && _cx.pd && typeof _destinoProyectoDePedido === 'function') ? _destinoProyectoDePedido(_cx.pd) : '';
+    var dest = _pedidoDestinoActual(); // v1071: destino derivado (con respaldo a la obra donde vive)
     if (!dest) return ops; // v1070: sin obra destino no hay trasiego (el gasto se perdería en el aire)
     ((state && state.projects) || []).forEach(function(x){
       if (!x || !x.id || x.id === dest) return;

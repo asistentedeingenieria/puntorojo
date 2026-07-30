@@ -41,10 +41,10 @@ ok('ficha de OC y autorización también', (html.match(/_dppOrdenesGlobal\(/g) |
 console.log('\n— 2. Opciones nuevas del picker por ítem —');
 const zOp = ex('function _dppOpcionesDeItem(');
 let ops = null;
-/* v1070: la función ganó guardas de corrección de borrador y de destino — el sandbox
-   inyecta window/currentPedidoDetalleId, _findPedidoGlobal, _destinoProyectoDePedido y
-   _dppOrdenesSinBorrador (pedido CON obra destino para que las opciones aparezcan) */
-try { ops = new Function('state','_bodegaMatStore','_ocItemMemKey','_ocEsPrepagoMadre','_dppSaldoDeMadre','_dppOrdenesGlobal','_numLimpio','window','_findPedidoGlobal','_destinoProyectoDePedido','_dppOrdenesSinBorrador','return (' + zOp + ')'); } catch(e){}
+/* v1071: el destino ya no se resuelve acá adentro — sale de _pedidoDestinoActual() (el
+   bug era leer currentPedidoDetalleId desde window, donde no existe por ser un `let`).
+   El sandbox inyecta ese resolvedor devolviendo una obra real para que haya opciones. */
+try { ops = new Function('_ocItemMemKey','_ocEsPrepagoMadre','_dppSaldoDeMadre','_numLimpio','_pedidoDestinoActual','_dppOrdenesSinBorrador','return (' + zOp + ')'); } catch(e){}
 ok('existe _dppOpcionesDeItem', !!ops && zOp.length > 200);
 if (ops) {
   const madre = { id: 'm1', numero: 'BODEGA – OC 6', proveedorNombre: 'SISTEGUA, S.A.', status: 'AUTORIZADA', formaPago: 'COMPRA ANTICIPADA', items: [{ name: 'TABLA', qty: 100, precio: 65 }] };
@@ -52,18 +52,20 @@ if (ops) {
   const todas = [madre, pend, { id: 'd1', refOcMadre: 'm1', esDespacho: true, esPrepago: true, items: [{ name: 'TABLA', qty: 40 }] }];
   const esM = o => !!o && !o.esDespacho && /COMPRA\s*ANTICIPADA/i.test(String(o.formaPago || ''));
   const saldo = (m, ordenes) => { let q = m.items[0].qty; ordenes.forEach(o => { if (o && o.refOcMadre === m.id) q -= o.items[0].qty; }); return { porItem: { TABLA: { saldo: q, qty: m.items[0].qty, precio: m.items[0].precio, name: 'TABLA' } }, orden: ['TABLA'] }; };
-  const stubWin = { currentPedidoDetalleId: 'pd1' };
-  const stubCtx = () => ({ pd: { id: 'pd1' } });
-  const stubDest = () => 'p1';
-  const f = ops(null, null, n => String(n).toUpperCase(), esM, saldo, () => todas, s => s, stubWin, stubCtx, stubDest, () => todas);
+  const stubDest = () => 'p1'; // el pedido en curso SÍ tiene obra destino
+  const f = ops(n => String(n).toUpperCase(), esM, saldo, s => s, stubDest, () => todas);
   const r = f('tabla');
   ok('madre AUTORIZADA con saldo → opción _dpp:<id> con saldo a la vista', r.length === 1 && r[0].id === '_dpp:m1' && /COMPRA PRE-PAGO/.test(r[0].label) && /60/.test(r[0].label));
   ok('madre PENDIENTE no se ofrece', !r.some(x => x.id === '_dpp:m2'));
-  const f2 = ops(null, null, n => String(n).toUpperCase(), esM, (m, o) => ({ porItem: {}, orden: [] }), () => todas, s => s, stubWin, stubCtx, stubDest, () => todas);
+  const f2 = ops(n => String(n).toUpperCase(), esM, (m, o) => ({ porItem: {}, orden: [] }), s => s, stubDest, () => todas);
   ok('sin saldo del material no hay opción', f2('tabla').length === 0);
+  /* v1071: pedido de bodega/varios (sin obra destino) — ninguna opción, el gasto no tendría dueño */
+  const f3 = ops(n => String(n).toUpperCase(), esM, saldo, s => s, () => '', () => todas);
+  ok('pedido sin obra destino: sin opciones', f3('tabla').length === 0);
 } else { ['opción _dpp','pendiente no','sin saldo'].forEach(n => ok(n, false)); }
 const zTOp = ex('function _trasOpcionesDeItem(');
-ok('existe _trasOpcionesDeItem (obras menos la que pide, TRASIEGO · <obra>)', /'_tras:' \+/.test(zTOp) && /TRASIEGO · /.test(zTOp) && /_destinoProyectoDePedido/.test(zTOp));
+/* v1071: el destino sale de _pedidoDestinoActual() (antes _destinoProyectoDePedido crudo) */
+ok('existe _trasOpcionesDeItem (obras menos la que pide, TRASIEGO · <obra>)', /'_tras:' \+/.test(zTOp) && /TRASIEGO · /.test(zTOp) && /_pedidoDestinoActual\(/.test(zTOp));
 const zPick = ex('function _abrirPickerProveedor(');
 ok('las 3 ramas del picker ofrecen las opciones nuevas', (zPick.match(/_dppOpcionesDeItem\(/g) || []).length >= 3 && (zPick.match(/_trasOpcionesDeItem\(/g) || []).length >= 3);
 ok('el candado v978 sigue (AUTO ↔ BODEGA ↔ nuevas)', /_ocProvLocked/.test(zPick) && /_provAuto/.test(zPick) && /BODEGA CENTRAL \(DESPACHO\)/.test(zPick));
