@@ -3330,7 +3330,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1060</span>
+    <span style="opacity:.5;font-size:9px">v1061</span>
   </footer>
 
 </div>
@@ -3723,6 +3723,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
           <option>CONTADO</option>
           <option>TRANSFERENCIA BANCARIA</option>
           <option>CHEQUE</option>
+          <option>COMPRA ANTICIPADA</option><!-- v1061: OC madre de despachos pre-pago (ya pagada) -->
         </select>
       </div>
 
@@ -23679,7 +23680,9 @@ function printOrdenCompra(ocId, isDraft){
   const entregaLarga = formatFechaLarga(oc.fechaEntrega, true);
 
   // v921: ORDEN DE DESPACHO (bodega central) — solo producto y cantidad, sin dinero
-  const esDespacho = !!oc.esDespacho;
+  /* v1061: el DESPACHO PRE-PAGO es esDespacho (exclusiones/ledger) pero su impreso SÍ
+     lleva dinero — los precios congelados de la madre y el proveedor real */
+  const esDespacho = !!oc.esDespacho && !oc.esPrepago;
   const itemsHtml = oc.items.map(it => `
     <tr>
       <td style="padding:6px 10px;border:1px solid #888">${it.name}</td>
@@ -23892,8 +23895,9 @@ ${showDraft ? '<div class="no-print" style="background:var(--red-soft);padding:1
     <!-- v948: solo el logo (el texto "APP" se movió al bloque del No., abajo de la sigla) -->
     <div style="display:flex;align-items:center;gap:8px"><img src="${_LOGO_PR}" style="height:62px;max-width:165px;object-fit:contain" alt="PUNTO ROJO"></div>
     <div class="oc-title-col">
-      <div class="oc-title">${esDespacho ? 'ORDEN DE DESPACHO' : (oc.esProduccion ? 'ORDEN DE PRODUCCIÓN' : 'ORDEN DE COMPRA')}</div>
+      <div class="oc-title">${oc.esPrepago ? 'DESPACHO PRE-PAGO' : (esDespacho ? 'ORDEN DE DESPACHO' : (oc.esProduccion ? 'ORDEN DE PRODUCCIÓN' : 'ORDEN DE COMPRA'))}</div>
       ${esDespacho ? '<div style="font-size:10px;color:#555;letter-spacing:2px;margin-top:4px;font-weight:700">BODEGA CENTRAL → OBRA</div>' : ''}
+      ${oc.esPrepago ? '<div style="font-size:10px;color:#555;letter-spacing:2px;margin-top:4px;font-weight:700">LIBERACIÓN DE MATERIAL YA PAGADO · ' + String(_numLimpio(oc.refOcMadreNumero || '')).replace(/[<>]/g, '') + '</div>' : ''}
       ${!esDespacho && oc.esProduccion ? '<div style="font-size:10px;color:#555;letter-spacing:2px;margin-top:4px;font-weight:700">FABRICACIÓN DE POSTES A LA MEDIDA</div>' : ''}
       ${showDraft ? '<div style="font-size:10px;color:var(--red-dark);letter-spacing:3px;margin-top:4px;font-weight:700">BORRADOR · PENDIENTE DE AUTORIZACIÓN</div>' : ''}
     </div>
@@ -24118,6 +24122,20 @@ function renderOrdenesList(){
        tarjeta ("en otro lado", no flotando junto al total) y el BOTÓN va en la columna de
        acciones, justo arriba de la ✕. */
     let _opEstado = '', _opBtn = '';
+    /* v1061: la COMPRA ANTICIPADA (madre de despachos pre-pago) muestra su saldo por
+       liberar en la tarjeta y el botón para generar el despacho a una obra */
+    if (isAuth && typeof _ocEsPrepagoMadre === 'function' && _ocEsPrepagoMadre(oc)) {
+      try {
+        const _fS = _bodegaFindOc(oc.id);
+        const _sS = _dppSaldoDeMadre(oc, (_fS && _fS.cont && _fS.cont.ordenes) || []);
+        const _sobre = _sS.orden.some(k => _sS.porItem[k].saldo < -0.0001);
+        const _resumenS = _sS.orden.map(k => { const it = _sS.porItem[k]; return it.saldo + ' de ' + it.qty; }).join(' · ');
+        _opEstado = `<div style="font-size:9px;font-weight:700;letter-spacing:.8px;margin-top:4px;color:${_sobre ? '#B91C1C' : (_sS.totalSaldo > 0 ? '#B45309' : '#15803D')}">PRE-PAGO · POR LIBERAR: ${_resumenS}${_sobre ? ' · ¡SOBREGIRADO!' : ''}</div>`;
+        if (_sS.totalSaldo > 0 && (can('compras.autorizar') || can('users.manage'))) {
+          _opBtn = `<button class="btn sm" style="font-size:9.5px" onclick="window._dppCrearDesdeMadre('${oc.id}')">DESPACHO PRE-PAGO →</button>`;
+        }
+      } catch(e){}
+    }
     if (_ocSerieDe(oc) === 'OP' && isAuth) {
       const _lista = !!(oc.produccionLista && oc.produccionLista.ts);
       const _puedeMarcar = can('compras.autorizar') || can('materiales.bodega') || can('users.manage');
@@ -24425,6 +24443,20 @@ async function autorizarOrden(id){
   p = (_hit && _hit.p) || activeProj();
   if (!oc) return showToast('LA OC YA NO EXISTE (CAMBIÓ EN OTRO DISPOSITIVO) — RECARGÁ LA LISTA', 'red');
   if (oc.status === 'AUTORIZADA') return showToast('YA ESTÁ AUTORIZADA', 'amber');
+
+  /* v1061: un DESPACHO PRE-PAGO no puede autorizar más de lo que queda por liberar de su
+     compra anticipada — si otro despacho se adelantó mientras este esperaba, se frena acá
+     (el saldo ya cuenta a ESTE pendiente: negativo = sobregiro real) */
+  if (oc.esPrepago && oc.refOcMadre) {
+    try {
+      const _fm = _bodegaFindOc(oc.refOcMadre);
+      if (_fm && _fm.oc) {
+        const _sm = _dppSaldoDeMadre(_fm.oc, (_fm.cont && _fm.cont.ordenes) || []);
+        const _rojo = _sm.orden.find(k => _sm.porItem[k].saldo < -0.0001);
+        if (_rojo) return showToast('SALDO PRE-PAGO SOBREGIRADO EN "' + _sm.porItem[_rojo].name + '" — OTRO DESPACHO SE ADELANTÓ. REVISÁ LA ' + _numLimpio(_fm.oc.numero), 'red');
+      }
+    } catch(e){ console.warn('[v1061] saldo prepago', e); }
+  }
 
   // v919: SELLO DIGITAL automático — nombre + fecha y hora quedan estampados en la OC
   const _ahora = new Date();
@@ -33047,6 +33079,7 @@ function _gastosDeProyecto(projectId){
     if (esDesp) totalDespacho += monto; else totalCompra += monto;
     ordenes.push({
       id: o.id, numero: o.numero, serie: serie, esDespacho: esDesp,
+      esPrepago: !!o.esPrepago, // v1061: para rotular DESPACHO PRE-PAGO en la lista de gastos
       proveedorNombre: o.proveedorNombre || '', ts: o.ts || 0,
       status: o.status || '', formaPago: o.formaPago || '', credito: Number(o.credito) || 0,
       pedidoId: o.pedidoId || '', items: items, monto: monto
@@ -33514,6 +33547,141 @@ window._ocMarcarProduccionLista = async function(ocId){
       tipo de uno existente se puede perder.
    NO se reusa generarOrdenCompra: esa re-arma todo desde el pedido, borra los borradores
    pendientes y choca con el candado v927. Constructor propio y corto. */
+/* ═══════════ v1061 · DESPACHOS PRE-PAGO ═══════════
+   Antonio: "compras que hacemos anticipadamente… ellos nos van liberando según la cantidad
+   que vamos pidiendo… se hace una OC para la BODEGA CENTRAL con TODO el material prepagado
+   y el gasto se carga a la bodega; conforme vayan pidiendo vamos haciendo el cargo de ese
+   gasto a cada proyecto". Decisiones: la madre se registra DESDE LA APP (forma de pago
+   COMPRA ANTICIPADA en el flujo normal de OC) y los permisos son LOS MISMOS de las OCs.
+   El DPP es una orden serie DPP en el MISMO contenedor (union-merge v972 gratis) con
+   esDespacho:true (exclusiones + SALIDA del ledger) y esPrepago:true (impreso CON los
+   precios CONGELADOS de la madre y el proveedor real). El saldo por liberar es 100%
+   DERIVADO (patrón _pedidoCubre): qty de la madre − Σ despachos vivos. */
+function _ocEsPrepagoMadre(oc){
+  return !!oc && !oc.esDespacho && /COMPRA\s*ANTICIPADA/i.test(String(oc.formaPago || ''));
+}
+function _dppSaldoDeMadre(madre, ordenes){
+  var porItem = {}; var orden = [];
+  (((madre && madre.items)) || []).forEach(function(it){
+    if (!it) return;
+    var k = _ocItemMemKey(it.name);
+    if (!porItem[k]){ porItem[k] = { name: it.name, unidad: it.unidad || '', qty: 0, despachado: 0, precio: Number(it.precio) || 0 }; orden.push(k); }
+    porItem[k].qty += Number(it.qty) || 0;
+    if (!(porItem[k].precio > 0) && Number(it.precio) > 0) porItem[k].precio = Number(it.precio);
+  });
+  (ordenes || []).forEach(function(o){
+    if (!o || o.status === 'CANCELADA') return;
+    if (String(o.refOcMadre || '') !== String((madre && madre.id) || '')) return;
+    (o.items || []).forEach(function(it){
+      if (!it) return;
+      var k = _ocItemMemKey(it.name);
+      if (porItem[k]) porItem[k].despachado += Number(it.qty) || 0;
+    });
+  });
+  var totalSaldo = 0;
+  orden.forEach(function(k){ porItem[k].saldo = +(porItem[k].qty - porItem[k].despachado).toFixed(4); totalSaldo += porItem[k].saldo; });
+  return { porItem: porItem, orden: orden, totalSaldo: +totalSaldo.toFixed(4) };
+}
+window._dppCrearDesdeMadre = async function(ocId){
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
+  const _f = _bodegaFindOc(ocId);
+  if (!_f || !_f.oc) return showToast('ORDEN NO ENCONTRADA', 'red');
+  const madre = _f.oc;
+  if (!_ocEsPrepagoMadre(madre)) return showToast('ESTA ORDEN NO ES UNA COMPRA ANTICIPADA', 'red');
+  if ((madre.status || 'AUTORIZADA') !== 'AUTORIZADA') return showToast('LA COMPRA ANTICIPADA AÚN NO ESTÁ AUTORIZADA', 'red');
+  const s0 = _dppSaldoDeMadre(madre, (_f.cont && _f.cont.ordenes) || []);
+  if (!(s0.totalSaldo > 0)) return showToast('YA SE DESPACHÓ TODO LO PRE-PAGADO DE ESTA ORDEN', 'red');
+  /* formulario: obra destino + cantidad por material (capturado por oninput porque
+     prConfirm destruye el modal antes de resolver el await — patrón v813) */
+  window._dppForm = { destino: '', qtys: {} };
+  const _e = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  const obras = ((state && state.projects) || []).filter(x => x && x.id);
+  const opts = '<option value="">— ELEGÍ LA OBRA —</option>' + obras.map(x => '<option value="' + _e(x.id) + '">' + _e((x.name || x.id).toUpperCase()) + '</option>').join('');
+  const filas = s0.orden.map((k, i) => {
+    const it = s0.porItem[k];
+    if (!(it.saldo > 0)) return '';
+    return '<div style="display:grid;grid-template-columns:minmax(0,1fr) 92px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #F3F4F6">'
+      + '<div style="min-width:0"><div style="font-size:11.5px;font-weight:600">' + _e(it.name) + '</div>'
+      + '<div style="font-size:9.5px;color:#78716C">POR LIBERAR: <b>' + it.saldo + '</b> · Q ' + fmtQ(it.precio) + ' c/u (congelado)</div></div>'
+      + '<input type="number" inputmode="decimal" min="0" max="' + it.saldo + '" step="any" placeholder="0" class="pr-fld" style="text-align:center" '
+      + 'oninput="window._dppForm.qtys[' + JSON.stringify(k).replace(/"/g, '&quot;') + '] = this.value">'
+      + '</div>';
+  }).join('');
+  const okc = await window.prConfirm({
+    title: 'DESPACHO PRE-PAGO',
+    bodyHTML: '<div style="font-size:12px;color:#444;line-height:1.6">Liberar material de la <b>' + _e(_numLimpio(madre.numero)) + '</b> (' + _e(madre.proveedorNombre || '') + '). '
+      + 'El gasto se traslada de BODEGA a la obra elegida, al precio con que se pagó.</div>'
+      + '<label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">OBRA QUE PIDE</label>'
+      + '<select data-nativo class="pr-fld" style="width:100%" onchange="window._dppForm.destino = this.value">' + opts + '</select>'
+      + '<div style="margin-top:12px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">CANTIDAD A LIBERAR</div>' + filas,
+    okText: 'GENERAR DESPACHO', cancelText: 'CANCELAR', wide: true
+  });
+  if (!okc) return;
+  const form = window._dppForm || { destino: '', qtys: {} };
+  if (!form.destino) return showToast('ELEGÍ LA OBRA QUE PIDE EL MATERIAL', 'red');
+  /* re-leer TODO del state vivo (regla v769/v940) y validar contra el saldo FRESCO:
+     dos dispositivos despachando contra la misma madre a la vez se sobregirarían */
+  const _f2 = _bodegaFindOc(ocId);
+  if (!_f2 || !_f2.oc) return showToast('ORDEN NO ENCONTRADA', 'red');
+  const madre2 = _f2.oc;
+  const cont = _f2.cont;
+  const s1 = _dppSaldoDeMadre(madre2, (cont && cont.ordenes) || []);
+  const items = [];
+  let total = 0;
+  for (const k of s1.orden) {
+    const q = Number(String(form.qtys[k] == null ? '' : form.qtys[k]).replace(/[^0-9.]/g, '')) || 0;
+    if (!(q > 0)) continue;
+    const it = s1.porItem[k];
+    if (q > it.saldo + 0.0001) return showToast('DE "' + it.name + '" SOLO QUEDAN ' + it.saldo + ' POR LIBERAR', 'red');
+    items.push({ name: it.name, unidad: it.unidad || '', qty: q, precio: it.precio });
+    total += q * it.precio;
+  }
+  if (!items.length) return showToast('PONÉ LA CANTIDAD DE AL MENOS UN MATERIAL', 'red');
+  total = +total.toFixed(2);
+  const _usados = [];
+  (cont.ordenes || []).forEach(o => { if (o && _ocSerieDe(o) === 'DPP') _usados.push(Number(o.folio) || 0); });
+  const folio = _primerNumeroLibre(_usados);
+  const u0 = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  const t = Date.now();
+  /* se CLONA la madre (como derivar OP→OC): hereda proveedor, dirección y datos del
+     impreso; lo que cambia se pisa explícito. Nace PENDIENTE: quien genera no autoriza. */
+  const dpp = Object.assign({}, madre2, {
+    id: 'oc-' + uid(),
+    serie: 'DPP',
+    folio: folio,
+    numero: 'DESPACHO PRE-PAGO ' + folio,
+    esDespacho: true,
+    esPrepago: true,
+    esProduccion: false,
+    refOcMadre: madre2.id,
+    refOcMadreNumero: madre2.numero,
+    destinoProyectoId: String(form.destino),
+    formaPago: 'COMPRA ANTICIPADA — YA PAGADO',
+    credito: 0,
+    items: items,
+    subtotal: total, iva: 0, total: total,
+    totalLetras: numeroALetras(total).toUpperCase(),
+    status: 'PENDIENTE_AUTORIZACION',
+    autorizadoPor: '', autorizadoTs: null, firmaAutoriza: null,
+    generadoPor: String(u0.displayName || u0.username || '').toUpperCase(),
+    generadoPorUsername: String(u0.username || '').toLowerCase(),
+    impreso: false,
+    factura: null, facturaUrl: null, facturaTs: null,
+    recibidoBodega: null, produccionLista: null, ocDerivadaId: null, ocDerivadaNumero: null,
+    opOrigenId: null, opOrigenNumero: null,
+    ts: t, _ts: t
+  });
+  cont.ordenes.push(dpp);
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  window._dppForm = null;
+  await window.prAlert({
+    title: 'DESPACHO PRE-PAGO GENERADO',
+    bodyHTML: '<div style="line-height:1.7">Se creó el <b>DESPACHO PRE-PAGO ' + folio + '</b> para <b>' + _e((obras.find(x => x.id === form.destino) || {}).name || '') + '</b> por <b>Q ' + fmtQ(total) + '</b>.<br>Queda PENDIENTE de autorización de finanzas (quien genera no autoriza).</div>'
+  });
+  try { renderOrdenesList(); } catch(e){}
+  try { if (document.getElementById('_bodegaPanelModal')) { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } } catch(e){}
+};
 window._ocDerivarDeOp = async function(opId){
   if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
   const _f = _bodegaFindOc(opId);
@@ -33627,6 +33795,10 @@ function _cuentasPorPagar(projectId){
     if (!o || o.status === 'CANCELADA') return;
     const serie = (typeof _ocSerieDe === 'function') ? _ocSerieDe(o) : (o.serie || 'OC');
     if (serie === 'OP' || serie === 'DESP' || o.esDespacho) return;
+    /* v1061: la COMPRA ANTICIPADA ya se pagó — jamás es cuenta por pagar. La exclusión
+       de rebote (credito=0 vía _diasCredito) no basta: la ficha del proveedor podría
+       sembrar 'CRÉDITO…' encima y colar una cuenta fantasma. */
+    if (/COMPRA\s*ANTICIPADA/i.test(String(o.formaPago || ''))) return;
     if (pid && _gastoDestinoDeOrden(o) !== pid) return; // v1041: mismas órdenes que GASTOS
     if (!(Number(o.credito) > 0)) return;            // solo lo que es a crédito
     const montoOc = Number(o.total) || 0;
@@ -33784,7 +33956,7 @@ function renderGastos(){
       <div class="pr-fila-panel" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 0;cursor:pointer" onclick="window._gastosToggleOrden('${_esc(o.id)}')">
         <div style="min-width:0">
           <div style="font-size:11.5px"><b>${_esc(_numLimpio(o.numero))}</b>
-            <span style="font-size:9px;font-weight:700;letter-spacing:.8px;margin-left:6px;color:${o.esDespacho ? '#166534' : '#1D4ED8'}">${o.esDespacho ? 'DESPACHO DE BODEGA' : 'COMPRA'}</span></div>
+            <span style="font-size:9px;font-weight:700;letter-spacing:.8px;margin-left:6px;color:${o.esDespacho ? '#166534' : '#1D4ED8'}">${o.esPrepago ? 'DESPACHO PRE-PAGO' : (o.esDespacho ? 'DESPACHO DE BODEGA' : 'COMPRA')}</span></div>
           <div style="font-size:10px;color:#78716C;margin-top:2px">${_esc(o.proveedorNombre)}${o.formaPago ? ' · ' + _esc(o.formaPago) : ''}</div>
         </div>
         <div style="text-align:right;font-weight:700;font-size:12.5px;font-variant-numeric:tabular-nums">Q ${fmtQ(o.monto)}<div style="font-size:8.5px;color:#9CA3AF;font-weight:700;letter-spacing:.5px">VER DETALLE</div>
