@@ -91,5 +91,23 @@ const zHead = ex('function _invRenderActual(');
 ok('la tarjeta de la toma tiene clase (rediseñable por CSS)', /inv-head/.test(zHead));
 ok('CSS móvil: centrado y botones chicos', /@media[^{]*\{[^@]*\.inv-head\{[^}]*text-align:center/.test(html) || /\.inv-head[^{]*\{[^}]*text-align:center/.test(html.slice(html.indexOf('@media (max-width:640px)'))));
 
+console.log('\n— 5. v1055: hora de inicio + firma automática de quien cierra —');
+/* Antonio: "en la caja de información quiero la hora en que se inició la toma. Y a la
+   persona que lo cierra quiero que le firmes automáticamente." La firma vive como dataURL
+   JPEG en state.firmasUsuarios (v934) — se incrusta directo en el jsPDF, sin red. */
+const zFH = ex('function _invFmtFechaHora(');
+let fh = null;
+try { fh = new Function('return (' + zFH + ')')(); } catch(e){}
+ok('el formateador fecha · hora existe', typeof fh === 'function' && /·/.test(fh('2026-07-29T17:42:00')));
+ok('con hora de dos dígitos', /\d{2}:\d{2}/.test(fh ? fh('2026-07-29T08:05:00') : ''));
+const zCer = ex('async function cerrarTomaInventario(');
+ok('el cierre estampa quién cerró', /cerradoPorNombre/.test(zCer));
+ok('y su firma (dataURL del core, v934)', /cerradoFirma/.test(zCer) && /_miFirmaImg\(\)/.test(zCer));
+const zDoc2 = ex('function _invReporteDoc(');
+ok('la caja de información trae el INICIO con hora', /INICIO DE LA TOMA/.test(zDoc2) && /_invFmtFechaHora\(toma\.fechaInicio\)/.test(zDoc2));
+ok('y el cierre también con hora', /_invFmtFechaHora\(toma\.fechaCierre\)/.test(zDoc2));
+ok('la firma se incrusta en el pie', /addImage\(/.test(zDoc2) && /cerradoFirma/.test(zDoc2));
+ok('con el nombre de quien cerró (fallback al que inició)', /CERRÓ LA TOMA/.test(zDoc2) && /cerradoPorNombre \|\| toma\.byNombre/.test(zDoc2));
+
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

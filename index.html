@@ -3296,7 +3296,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1054</span>
+    <span style="opacity:.5;font-size:9px">v1055</span>
   </footer>
 
 </div>
@@ -17505,15 +17505,17 @@ function _invReporteDoc(p, toma){
   doc.text('TOMA DE INVENTARIO VALORIZADA', W - M, y + 13, { align: 'right' });
   doc.setFillColor(198, 40, 40); doc.rect(M, y + 22, W - M * 2, 3, 'F');
   y += 42;
+  /* v1055: la caja lleva las DOS horas — inicio y cierre — todo a la izquierda */
   doc.setFontSize(8); doc.setTextColor(120, 113, 108);
   doc.text('PROYECTO', M, y); doc.text('FECHA DE CIERRE', W / 2, y);
   doc.setFontSize(12); doc.setTextColor(28, 25, 23);
   doc.text(_projSiglas((p && p.name) || ''), M, y + 14);
-  doc.text(_invFmtFecha(toma.fechaCierre), W / 2, y + 14);
+  doc.text(_invFmtFechaHora(toma.fechaCierre), W / 2, y + 14);
   doc.setFontSize(8); doc.setTextColor(120, 113, 108);
-  doc.text('TOMA REALIZADA POR', M, y + 30);
+  doc.text('TOMA REALIZADA POR', M, y + 30); doc.text('INICIO DE LA TOMA', W / 2, y + 30);
   doc.setFontSize(10); doc.setTextColor(28, 25, 23);
   doc.text(String(toma.byNombre || toma.by || '—').toUpperCase(), M, y + 43);
+  doc.text(_invFmtFechaHora(toma.fechaInicio), W / 2, y + 43);
   y += 60;
   /* BODEGA: sección simple MATERIAL | CANT | P.U. | VALOR */
   if (g.bodega.orden.length) {
@@ -17562,7 +17564,9 @@ function _invReporteDoc(p, toma){
       theme: 'striped' });
     y = doc.lastAutoTable.finalY + 14;
   });
-  /* total general + pie */
+  /* total general + pie con la FIRMA de quien cerró (v1055: dataURL del core — sin red) */
+  var H = doc.internal.pageSize.getHeight();
+  if (y + 120 > H) { doc.addPage(); y = 48; }
   doc.setDrawColor(28, 25, 23); doc.setLineWidth(2); doc.line(M, y, W - M, y);
   doc.setFont(undefined, 'bold'); doc.setFontSize(11); doc.setTextColor(28, 25, 23);
   doc.text('TOTAL GENERAL', M, y + 18);
@@ -17570,6 +17574,13 @@ function _invReporteDoc(p, toma){
   doc.text(money(totalGeneral), W - M, y + 18, { align: 'right' });
   doc.setFont(undefined, 'normal'); doc.setFontSize(7); doc.setTextColor(156, 163, 175);
   doc.text('MATERIALES: ' + Object.keys(matsUnicos).length + ' · UNIDADES: ' + totalUnidades + ' · Valorizado con el catálogo de precios vigente al día del cierre.', M, y + 32);
+  var yF = y + 50;
+  if (toma.cerradoFirma) {
+    try { doc.addImage(toma.cerradoFirma, 'JPEG', M, yF, 130, 42); yF += 46; } catch(e){ yF += 30; }
+  } else { yF += 30; }
+  doc.setDrawColor(28, 25, 23); doc.setLineWidth(0.8); doc.line(M, yF, M + 180, yF);
+  doc.setFontSize(8); doc.setTextColor(120, 113, 108);
+  doc.text(String(toma.cerradoPorNombre || toma.byNombre || toma.by || '—').toUpperCase() + ' · CERRÓ LA TOMA', M, yF + 11);
   return doc;
 }
 window._invReporteDescargar = function(tomaId){
@@ -17586,6 +17597,14 @@ window._invReporteCompartir = function(tomaId){
   var doc = _invReporteDoc(p, toma); if (!doc) return;
   _pdfCompartir(doc, _invReporteNombre(p, toma)); // escalera v810: nativo → web → aviso
 };
+/* v1055: fecha · hora (la caja de información del reporte lleva la hora de inicio y cierre) */
+function _invFmtFechaHora(iso){
+  try {
+    var d = new Date(iso); if (isNaN(d.getTime())) return String(iso || '');
+    return d.toLocaleDateString('es-GT', { day: '2-digit', month: '2-digit', year: 'numeric' })
+      + ' · ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  } catch(e){ return String(iso || ''); }
+}
 function _invFmtFecha(iso){
   try { var d=new Date(iso); if(isNaN(d.getTime())) return String(iso||''); return d.toLocaleDateString('es-GT',{day:'2-digit',month:'2-digit',year:'numeric'}); }
   catch(e){ return String(iso||''); }
@@ -17985,7 +18004,16 @@ async function cerrarTomaInventario(){
   if(!okc) return;
   toma = _invActiveToma(); if(!toma) return; // v769: otro await más arriba
   var idx=(p.materiales.tomas||[]).findIndex(function(t){return t.id===toma.id;});
-  if(idx>=0) p.materiales.tomas[idx]=_invCerrarToma(p.materiales.tomas[idx], new Date().toISOString());
+  if(idx>=0){
+    var _cerrada=_invCerrarToma(p.materiales.tomas[idx], new Date().toISOString());
+    /* v1055 (Antonio): quién cerró queda estampado y su FIRMA (dataURL del core, v934) viaja
+       con la toma — el reporte PDF la incrusta automáticamente en el pie */
+    var _uC=getCurrentUser()||{};
+    _cerrada.cerradoPor=String(_uC.username||_uC.email||'').toLowerCase();
+    _cerrada.cerradoPorNombre=String(_uC.displayName||_uC.username||'').toUpperCase();
+    _cerrada.cerradoFirma=_miFirmaImg()||'';
+    p.materiales.tomas[idx]=_cerrada;
+  }
   saveState(); _invUpload();
   try { if(typeof logActivity==='function') logActivity('update','Toma de inventario cerrada', p.name+' · '+n+' materiales'); } catch(e){}
   invUI.sub='historial'; invUI.view='root'; invUI.loc=null; invUI.histId=null;
