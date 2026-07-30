@@ -2838,6 +2838,9 @@ select.pr-filtro{padding:5px 30px 5px 12px}
         <div class="card-hd"><h3>RESUMEN POR PROYECTO</h3></div>
         <div id="dashProjects"></div>
       </div>
+      <!-- v1083: RENTABILIDAD POR PROYECTO — venta vs costo real, margen, CPI y semáforo.
+           Se pinta solo si el usuario puede ver montos de gasto (_puedeVerGastos). -->
+      <div id="dashRent"></div>
       <!-- v848: análisis de apartamentos desparejos (cobro/físico/materiales/planilla fuera de nivel) -->
       <div class="card" data-perm="view.avance">
         <div class="card-hd" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
@@ -3346,7 +3349,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1082</span>
+    <span style="opacity:.5;font-size:9px">v1083</span>
   </footer>
 
 </div>
@@ -11790,6 +11793,65 @@ function _manoObraDeProyecto(p){
      pero ya se devengó; y los descuentos no son costo (van por caja) */
   return { bruto: bruto, retenido: retenido, retencionPagada: retencionPagada, descuentos: descuentos, costo: bruto };
 }
+/* ═══ v1083 · RENTABILIDAD — Fase 2: la vista ═══ */
+function _rentEsc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(m){ return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[m]); }); }
+/* consolidado de TODA la empresa + la lista de obras ordenada por la peor primero */
+function _rentTotales(proyectos){
+  var obras = ((proyectos) || []).map(function(p){ return _rentDatosProyecto(p); }).filter(Boolean);
+  var t = { ventaContratadaCI: 0, ventaEjecutadaSI: 0, costoRealSI: 0, cobradoCI: 0, porCobrarCI: 0, enRojo: 0 };
+  obras.forEach(function(o){
+    t.ventaContratadaCI += Number(o.ventaContratadaCI) || 0;
+    t.ventaEjecutadaSI += Number(o.ventaEjecutadaSI) || 0;
+    t.costoRealSI += Number(o.costoRealSI) || 0;
+    t.cobradoCI += Number(o.cobradoCI) || 0;
+    t.porCobrarCI += Number(o.porCobrarCI) || 0;
+    if (o.semaforo === 'rojo') t.enRojo++;
+  });
+  t.margenSI = t.ventaEjecutadaSI - t.costoRealSI;
+  t.margenPct = t.ventaEjecutadaSI > 0 ? (t.margenSI / t.ventaEjecutadaSI) : null;
+  /* la peor primero: es lo que hay que mirar. Las que no tienen datos, al final. */
+  t.obras = obras.slice().sort(function(a, b){
+    var ma = (a.margenProyectadoPct != null) ? a.margenProyectadoPct : (a.margenHoyPct != null ? a.margenHoyPct : 99);
+    var mb = (b.margenProyectadoPct != null) ? b.margenProyectadoPct : (b.margenHoyPct != null ? b.margenHoyPct : 99);
+    return ma - mb;
+  });
+  return t;
+}
+function _rentTablaHTML(){
+  try {
+    if (!(typeof _puedeVerGastos === 'function' && _puedeVerGastos())) return ''; // el costo no se le enseña a cualquiera
+    var t = _rentTotales(((state && state.projects) || []).filter(function(p){ return p && p.id; }));
+    if (!t.obras.length) return '';
+    var COL = { verde: '#166534', amarillo: '#B45309', rojo: '#B91C1C', 'sin-datos': '#9CA3AF' };
+    var pct = function(v){ return v == null ? '—' : (v * 100).toFixed(1) + '%'; };
+    var filas = t.obras.map(function(o){
+      var c = COL[o.semaforo] || COL['sin-datos'];
+      var margenPct = (o.margenProyectadoPct != null) ? o.margenProyectadoPct : o.margenHoyPct;
+      var sinDatos = o.semaforo === 'sin-datos';
+      return '<div style="display:grid;grid-template-columns:14px minmax(0,1.6fr) repeat(4,minmax(0,1fr));gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line-soft)">'
+        + '<span style="width:10px;height:10px;border-radius:50%;background:' + c + '" title="' + _rentEsc(o.semaforo.toUpperCase()) + '"></span>'
+        + '<div style="min-width:0"><div style="font-size:12px;font-weight:600">' + _rentEsc(o.nombre) + '</div>'
+        + '<div style="font-size:9.5px;color:var(--mute)">AVANCE ' + (o.avancePct * 100).toFixed(0) + '% · ' + o.terminados + ' DE ' + o.aptos + ' APTOS</div></div>'
+        + '<div style="text-align:right;font-variant-numeric:tabular-nums"><div style="font-size:11.5px">Q ' + fmtQ(o.ventaContratadaCI) + '</div><div style="font-size:9px;color:var(--mute)">CONTRATADO</div></div>'
+        + '<div style="text-align:right;font-variant-numeric:tabular-nums"><div style="font-size:11.5px">Q ' + fmtQ(o.costoRealSI) + '</div><div style="font-size:9px;color:var(--mute)">COSTO</div></div>'
+        + '<div style="text-align:right;font-variant-numeric:tabular-nums"><div style="font-size:12px;font-weight:700;color:' + c + '">' + (sinDatos ? 'SIN DATOS' : pct(margenPct)) + '</div><div style="font-size:9px;color:var(--mute)">MARGEN</div></div>'
+        + '<div style="text-align:right;font-variant-numeric:tabular-nums"><div style="font-size:11.5px;font-weight:700;color:' + (o.alertaCosto ? COL.rojo : 'inherit') + '">' + (o.cpi == null ? '—' : o.cpi.toFixed(2)) + '</div><div style="font-size:9px;color:var(--mute)">CPI</div></div>'
+        + '</div>';
+    }).join('');
+    var cTot = t.margenPct == null ? COL['sin-datos'] : (t.margenPct >= 0.15 ? COL.verde : (t.margenPct >= 0.05 ? COL.amarillo : COL.rojo));
+    return '<div class="card" style="margin-top:14px">'
+      + '<div class="card-hd"><h3>RENTABILIDAD POR PROYECTO</h3></div>'
+      + '<div style="padding:0 16px 14px">'
+      + '<div style="font-size:9px;letter-spacing:1.2px;color:var(--mute);padding:6px 0 10px">LOS MONTOS SE MUESTRAN COMO LOS COBRÁS · EL MARGEN SE CALCULA SIN IVA</div>'
+      + filas
+      + '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding-top:12px;margin-top:6px;border-top:2px solid var(--ink)">'
+      + '<div><div style="font-size:8.5px;letter-spacing:1.5px;color:var(--mute);font-weight:700">TODA LA EMPRESA</div>'
+      + '<div style="font-size:10.5px;color:var(--mute);margin-top:2px">EJECUTADO Q ' + fmtQ(t.ventaEjecutadaSI) + ' · COSTO Q ' + fmtQ(t.costoRealSI) + (t.enRojo ? ' · <b style="color:' + COL.rojo + '">' + t.enRojo + ' OBRA' + (t.enRojo > 1 ? 'S' : '') + ' EN ROJO</b>' : '') + '</div></div>'
+      + '<div style="text-align:right"><div style="font-size:18px;font-weight:700;color:' + cTot + ';font-variant-numeric:tabular-nums">' + (t.margenPct == null ? 'SIN DATOS' : pct(t.margenPct)) + '</div>'
+      + '<div style="font-size:9px;letter-spacing:1.5px;color:var(--mute)">MARGEN · Q ' + fmtQ(t.margenSI) + '</div></div>'
+      + '</div></div></div>';
+  } catch(e){ console.warn('[v1083] rentabilidad', e); return ''; }
+}
 function _rentDatosProyecto(p){
   var iva = Number((p && p.ivaPct) || 0);
   var aSI = function(conIva){ return (Number(conIva) || 0) / (1 + iva); };
@@ -12285,6 +12347,9 @@ function renderDashboard(){
       </div>
     `;
   }).join('');
+  /* v1083: la rentabilidad, debajo del resumen por proyecto. El HTML sale vacío si el
+     usuario no puede ver montos de gasto, así que el bloque simplemente no aparece. */
+  try { var _rw = document.getElementById('dashRent'); if (_rw) _rw.innerHTML = _rentTablaHTML(); } catch(e){ console.warn('[v1083]', e); }
 }
 
 /* ─────────────── COBRO ─────────────── */
