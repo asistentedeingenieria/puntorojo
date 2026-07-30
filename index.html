@@ -3349,7 +3349,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1083</span>
+    <span style="opacity:.5;font-size:9px">v1084</span>
   </footer>
 
 </div>
@@ -11817,6 +11817,91 @@ function _rentTotales(proyectos){
   });
   return t;
 }
+/* v1084 · FLUJO DE CAJA — lo que ENTRA (estimaciones presentadas y no cobradas, ya netas de
+   amortización y retención: es lo que el cliente realmente deposita) contra lo que SALE
+   (cuentas por pagar a proveedores, con su vencimiento). Todo derivado. */
+function _rentFlujoCaja(proyectos){
+  var porCobrarCI = 0, cobradoCI = 0;
+  ((proyectos) || []).forEach(function(p){
+    var d = _rentDatosProyecto(p) || {};
+    porCobrarCI += Number(d.porCobrarCI) || 0;
+    cobradoCI += Number(d.cobradoCI) || 0;
+  });
+  var cxp = _cuentasPorPagar('') || { total: 0, totalVencido: 0, cuentas: [] };
+  /* lo vencido primero (es lo urgente); lo que no tiene fecha, al final */
+  var proximas = (cxp.cuentas || []).slice().sort(function(a, b){
+    if (!!b.vencida !== !!a.vencida) return b.vencida ? 1 : -1;
+    var fa = String((a && a.vence) || ''), fb = String((b && b.vence) || '');
+    if (!fa) return 1; if (!fb) return -1;
+    var pa = fa.split('/'), pb = fb.split('/');
+    return new Date(pa[2], pa[1] - 1, pa[0]) - new Date(pb[2], pb[1] - 1, pb[0]);
+  });
+  var porPagar = Number(cxp.total) || 0;
+  return { porCobrarCI: porCobrarCI, cobradoCI: cobradoCI, porPagar: porPagar,
+    vencido: Number(cxp.totalVencido) || 0, saldo: porCobrarCI - porPagar, proximas: proximas };
+}
+function _rentFlujoHTML(){
+  try {
+    if (!(typeof _puedeVerGastos === 'function' && _puedeVerGastos())) return '';
+    var f = _rentFlujoCaja(((state && state.projects) || []).filter(function(p){ return p && p.id; }));
+    if (!f.porCobrarCI && !f.porPagar) return '';
+    var VERDE = '#166534', ROJO = '#B91C1C';
+    var filas = f.proximas.slice(0, 6).map(function(c){
+      return '<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:5px 0;border-bottom:1px solid #F9FAFB;font-size:10.5px">'
+        + '<span style="min-width:0"><b>' + _rentEsc(_numLimpio(c.numero)) + '</b> <span style="color:var(--mute)">· ' + _rentEsc(c.proveedorNombre) + '</span></span>'
+        + '<span style="color:' + (c.vencida ? ROJO : 'var(--mute)') + ';font-weight:' + (c.vencida ? '700' : '400') + '">' + (c.vence ? _rentEsc(c.vence) : 'SIN FECHA') + '</span>'
+        + '<span style="font-variant-numeric:tabular-nums;font-weight:600">Q ' + fmtQ(c.saldo) + '</span></div>';
+    }).join('');
+    return '<div class="card" style="margin-top:14px"><div class="card-hd"><h3>FLUJO DE CAJA</h3></div>'
+      + '<div style="padding:0 16px 14px">'
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;padding:8px 0 12px">'
+      + '<div><div style="font-size:16px;font-weight:700;color:' + VERDE + ';font-variant-numeric:tabular-nums">Q ' + fmtQ(f.porCobrarCI) + '</div><div style="font-size:9px;letter-spacing:1.3px;color:var(--mute)">POR COBRAR</div></div>'
+      + '<div><div style="font-size:16px;font-weight:700;color:' + ROJO + ';font-variant-numeric:tabular-nums">Q ' + fmtQ(f.porPagar) + '</div><div style="font-size:9px;letter-spacing:1.3px;color:var(--mute)">POR PAGAR' + (f.vencido > 0 ? ' · <b style="color:' + ROJO + '">Q ' + fmtQ(f.vencido) + ' VENCIDO</b>' : '') + '</div></div>'
+      + '<div><div style="font-size:16px;font-weight:700;color:' + (f.saldo >= 0 ? VERDE : ROJO) + ';font-variant-numeric:tabular-nums">Q ' + fmtQ(f.saldo) + '</div><div style="font-size:9px;letter-spacing:1.3px;color:var(--mute)">SALDO</div></div>'
+      + '</div>'
+      + (filas ? '<div style="font-size:8.5px;letter-spacing:1.3px;color:#9CA3AF;font-weight:700;padding-bottom:4px">PRÓXIMOS PAGOS</div>' + filas : '')
+      + '</div></div>';
+  } catch(e){ console.warn('[v1084] flujo', e); return ''; }
+}
+/* los 2 datos que Antonio captura por obra (los indirectos los daría después: arrancan en 0
+   y así no inventan costo) */
+window._rentGuardarConfig = function(pid, margenTxt, indirectosTxt){
+  var p = ((state && state.projects) || []).find(function(x){ return x && x.id === pid; });
+  if (!p) return;
+  var lim = function(txt, def){
+    var n = Number(String(txt == null ? '' : txt).replace(/[^0-9.]/g, ''));
+    if (!isFinite(n)) n = def;
+    if (n < 0) n = 0; if (n > 100) n = 100;
+    return n / 100;
+  };
+  if (String(margenTxt || '').trim() !== '') p.rentMargenObjetivo = lim(margenTxt, 20);
+  p.rentIndirectosPct = lim(indirectosTxt, 0);
+  saveState();
+  try { showToast('AJUSTES GUARDADOS · ' + String(p.name || '').toUpperCase(), 'green'); } catch(e){}
+  try { renderDashboard(); } catch(e){}
+};
+window._rentAbrirConfig = async function(pid){
+  if (!(typeof _puedeVerGastos === 'function' && _puedeVerGastos())) return showToast('SIN PERMISO', 'red');
+  var p = ((state && state.projects) || []).find(function(x){ return x && x.id === pid; });
+  if (!p) return;
+  var mo = Math.round((Number(p.rentMargenObjetivo) || 0.20) * 100);
+  var ind = Math.round((Number(p.rentIndirectosPct) || 0) * 100);
+  window._rentForm = { margen: String(mo), ind: String(ind) };
+  var okc = await window.prConfirm({
+    title: 'RENTABILIDAD · ' + _rentEsc(String(p.name || '').toUpperCase()),
+    bodyHTML: '<div style="font-size:12px;color:#444;line-height:1.6">Con esto la app decide el color del semáforo y cuánto costo indirecto le carga a la obra.</div>'
+      + '<label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">MARGEN OBJETIVO (%)</label>'
+      + '<input type="number" min="0" max="100" step="0.5" class="pr-fld" style="width:100%" value="' + mo + '" oninput="window._rentForm.margen=this.value">'
+      + '<label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">COSTOS INDIRECTOS (% sobre el costo directo)</label>'
+      + '<input type="number" min="0" max="100" step="0.5" class="pr-fld" style="width:100%" value="' + ind + '" oninput="window._rentForm.ind=this.value">'
+      + '<div style="font-size:10.5px;color:#78716C;margin-top:8px">Dejalo en 0 mientras no tengás el dato: no se inventa costo.</div>',
+    okText: 'GUARDAR', cancelText: 'CANCELAR'
+  });
+  if (!okc) { window._rentForm = null; return; }
+  var f = window._rentForm || {};
+  window._rentGuardarConfig(pid, f.margen, f.ind);
+  window._rentForm = null;
+};
 function _rentTablaHTML(){
   try {
     if (!(typeof _puedeVerGastos === 'function' && _puedeVerGastos())) return ''; // el costo no se le enseña a cualquiera
@@ -11828,7 +11913,7 @@ function _rentTablaHTML(){
       var c = COL[o.semaforo] || COL['sin-datos'];
       var margenPct = (o.margenProyectadoPct != null) ? o.margenProyectadoPct : o.margenHoyPct;
       var sinDatos = o.semaforo === 'sin-datos';
-      return '<div style="display:grid;grid-template-columns:14px minmax(0,1.6fr) repeat(4,minmax(0,1fr));gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line-soft)">'
+      return '<div style="display:grid;grid-template-columns:14px minmax(0,1.6fr) repeat(4,minmax(0,1fr)) 30px;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line-soft)">'
         + '<span style="width:10px;height:10px;border-radius:50%;background:' + c + '" title="' + _rentEsc(o.semaforo.toUpperCase()) + '"></span>'
         + '<div style="min-width:0"><div style="font-size:12px;font-weight:600">' + _rentEsc(o.nombre) + '</div>'
         + '<div style="font-size:9.5px;color:var(--mute)">AVANCE ' + (o.avancePct * 100).toFixed(0) + '% · ' + o.terminados + ' DE ' + o.aptos + ' APTOS</div></div>'
@@ -11836,6 +11921,8 @@ function _rentTablaHTML(){
         + '<div style="text-align:right;font-variant-numeric:tabular-nums"><div style="font-size:11.5px">Q ' + fmtQ(o.costoRealSI) + '</div><div style="font-size:9px;color:var(--mute)">COSTO</div></div>'
         + '<div style="text-align:right;font-variant-numeric:tabular-nums"><div style="font-size:12px;font-weight:700;color:' + c + '">' + (sinDatos ? 'SIN DATOS' : pct(margenPct)) + '</div><div style="font-size:9px;color:var(--mute)">MARGEN</div></div>'
         + '<div style="text-align:right;font-variant-numeric:tabular-nums"><div style="font-size:11.5px;font-weight:700;color:' + (o.alertaCosto ? COL.rojo : 'inherit') + '">' + (o.cpi == null ? '—' : o.cpi.toFixed(2)) + '</div><div style="font-size:9px;color:var(--mute)">CPI</div></div>'
+        /* v1084: ajustes de la obra (margen objetivo e indirectos) */
+        + '<button class="btn-icon" title="Margen objetivo e indirectos de esta obra" onclick="window._rentAbrirConfig(\'' + _rentEsc(o.id) + '\')" style="justify-self:end">⚙</button>'
         + '</div>';
     }).join('');
     var cTot = t.margenPct == null ? COL['sin-datos'] : (t.margenPct >= 0.15 ? COL.verde : (t.margenPct >= 0.05 ? COL.amarillo : COL.rojo));
@@ -12349,7 +12436,7 @@ function renderDashboard(){
   }).join('');
   /* v1083: la rentabilidad, debajo del resumen por proyecto. El HTML sale vacío si el
      usuario no puede ver montos de gasto, así que el bloque simplemente no aparece. */
-  try { var _rw = document.getElementById('dashRent'); if (_rw) _rw.innerHTML = _rentTablaHTML(); } catch(e){ console.warn('[v1083]', e); }
+  try { var _rw = document.getElementById('dashRent'); if (_rw) _rw.innerHTML = _rentTablaHTML() + _rentFlujoHTML(); } catch(e){ console.warn('[v1083]', e); } // v1084: + flujo de caja
 }
 
 /* ─────────────── COBRO ─────────────── */
