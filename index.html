@@ -3346,7 +3346,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1079</span>
+    <span style="opacity:.5;font-size:9px">v1080</span>
   </footer>
 
 </div>
@@ -17785,6 +17785,28 @@ function _invEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/
    espacio normal es punto de quiebre y el encabezado partía TORRE / 3 en dos renglones.
    Con espacio DURO queda siempre en una línea. */
 function _invEncCorto(s){ return String(s == null ? '' : s).replace(/ /g, ' '); }
+/* v1080 (Antonio: "el número se sigue viendo mal, quiero que TODO se vea súper bien"):
+   el espacio duro de v1079 evitó que la Q se separara, pero el NÚMERO se seguía partiendo
+   ("Q 3,270.6" / "0") porque la columna era más angosta que su contenido. No alcanza con
+   no-quebrar: hay que DARLE a cada columna el ancho que necesita.
+   Mide el texto real con las fuentes del documento y, si con esos anchos no queda espacio
+   decente para el nombre del material, baja el tamaño de letra hasta que quepa.
+   PURA: recibe la función de medir, así se puede probar sin un PDF de por medio. */
+function _invAnchosTabla(medir, colsTextos, anchoUtil, minMaterial){
+  /* PAD = el cellPadding real de la tabla (3.5 a cada lado = 7) + 5 de colchón */
+  var PAD = 12, MIN_FS = 5, fs = 8, anchos = [];
+  while (true) {
+    anchos = (colsTextos || []).map(function(txts){
+      var w = 0;
+      (txts || []).forEach(function(t){ w = Math.max(w, Number(medir(String(t == null ? '' : t), fs)) || 0); });
+      return Math.max(10, Math.ceil(w) + PAD);
+    });
+    var suma = anchos.reduce(function(a, b){ return a + b; }, 0);
+    if (anchoUtil - suma >= minMaterial) return { anchos: anchos, fontSize: fs, cabe: true };
+    if (fs <= MIN_FS) return { anchos: anchos, fontSize: fs, cabe: false };
+    fs = Math.round((fs - 0.5) * 10) / 10;
+  }
+}
 function _invConsolidado(g){
   var cols = [{ nombre: 'BODEGA', key: '_bod' }];
   ((g && g.ordenTorres) || []).forEach(function(tk){
@@ -17855,8 +17877,12 @@ function _invReporteDoc(p, toma){
   var g = _invReporteMatriz(p, toma);
   /* con muchos niveles la matriz es ancha: apaisado a partir de 7 columnas de nivel */
   var maxNiv = 0; g.ordenTorres.forEach(function(tk){ maxNiv = Math.max(maxNiv, g.torres[tk].niveles.length); });
-  var doc = new jsPDF({ unit: 'pt', format: 'a4', orientation: maxNiv > 6 ? 'landscape' : 'portrait' });
+  /* v1080: el consolidado tiene sus PROPIAS columnas (BODEGA + una por torre + TOTAL +
+     VALOR) y antes no contaban para decidir la orientación */
+  var doc = new jsPDF({ unit: 'pt', format: 'a4', orientation: (maxNiv > 6 || (g.ordenTorres.length + 2) > 6) ? 'landscape' : 'portrait' });
   var W = doc.internal.pageSize.getWidth(), M = 42;
+  /* v1080: medidor real del documento — con la fuente y el tamaño con que se va a dibujar */
+  var _medir = function(t, fs){ try { doc.setFontSize(fs); return doc.getTextWidth(String(t)); } catch(e){ return String(t).length * fs * 0.55; } };
   var precioDe = function(nombre){
     var info = null; try { info = precioDeProductoReceta(provs, nombre, ''); } catch(e){}
     var rend = (info && info.rendimiento) ? info.rendimiento : 1;
@@ -17924,14 +17950,23 @@ function _invReporteDoc(p, toma){
     /* v1075 (decisión de Antonio): fuera la fila que sumaba por nivel — la bodega no tiene
        niveles y el documento quedaba con dos criterios distintos. Cada tabla muestra SU
        total en el encabezado y al final va UN solo TOTAL GENERAL. */
+    /* v1080: el ancho de cada columna sale de MEDIR su contenido real (encabezado incluido);
+       si no queda espacio decente para el nombre del material, baja el tamaño de letra */
+    var _tTxts = T.niveles.map(function(nk, ni){
+      return [_invEncCorto(nk)].concat(filas.map(function(fl){ return fl[ni + 1]; }));
+    }).concat([
+      ['TOTAL'].concat(filas.map(function(fl){ var c = fl[T.niveles.length + 1]; return (c && c.content != null) ? c.content : c; })),
+      [money(subT)].concat(filas.map(function(fl){ var c = fl[T.niveles.length + 2]; return (c && c.content != null) ? c.content : c; }))
+    ]);
+    var _tAnchos = _invAnchosTabla(_medir, _tTxts, W - 2 * M, 150);
     var colStyles = { 0: { cellWidth: 'auto' } };
-    for (var ci = 1; ci <= T.niveles.length + 2; ci++) colStyles[ci] = { halign: 'center' };
+    for (var ci = 1; ci <= T.niveles.length + 2; ci++) colStyles[ci] = { halign: 'center', cellWidth: _tAnchos.anchos[ci - 1] };
     doc.autoTable({ startY: y, margin: { left: M, right: M },
       head: [[{ content: _invEncCorto(T.nombre), styles: { halign: 'left' } }].concat(T.niveles.map(function(nk){ return { content: _invEncCorto(nk), styles: { halign: 'center' } }; }), [{ content: 'TOTAL', styles: { halign: 'center' } }, { content: money(subT), styles: { halign: 'center' } }])],
       body: filas,
-      headStyles: { fillColor: [28, 25, 23], textColor: 255, fontSize: 8 },
+      headStyles: { fillColor: [28, 25, 23], textColor: 255, fontSize: _tAnchos.fontSize },
       alternateRowStyles: { fillColor: [250, 250, 249] }, // v1056: zebra gris suave, no café
-      styles: { fontSize: 8, cellPadding: 3.5 },
+      styles: { fontSize: _tAnchos.fontSize, cellPadding: 3.5 },
       columnStyles: colStyles,
       pageBreak: 'avoid', rowPageBreak: 'avoid', // v1075: la tabla no se parte con el título huérfano
       theme: 'striped' });
@@ -17952,16 +17987,25 @@ function _invReporteDoc(p, toma){
         [{ content: String(fl.total), styles: { fontStyle: 'bold' } },
          { content: pr ? money(val) : '—', styles: { fontStyle: 'bold' } }]);
     });
+    /* v1080: mismo criterio — medir el contenido real de cada columna antes de dibujar, para
+       que la Q y su número nunca se partan (el caso "Q 3,270.6" / "0" que reportó Antonio) */
+    var _cTxts = cons.cols.map(function(c, cidx){
+      return [_invEncCorto(c.nombre)].concat(_cFilas.map(function(fl){ return fl[cidx + 1]; }));
+    }).concat([
+      ['TOTAL'].concat(_cFilas.map(function(fl){ var x = fl[cons.cols.length + 1]; return (x && x.content != null) ? x.content : x; })),
+      ['VALOR'].concat(_cFilas.map(function(fl){ var x = fl[cons.cols.length + 2]; return (x && x.content != null) ? x.content : x; }))
+    ]);
+    var _cAnchos = _invAnchosTabla(_medir, _cTxts, W - 2 * M, 150);
     var _cStyles = { 0: { cellWidth: 'auto' } };
-    for (var cj = 1; cj <= cons.cols.length + 2; cj++) _cStyles[cj] = { halign: 'center' };
+    for (var cj = 1; cj <= cons.cols.length + 2; cj++) _cStyles[cj] = { halign: 'center', cellWidth: _cAnchos.anchos[cj - 1] };
     doc.autoTable({ startY: y, margin: { left: M, right: M },
       head: [[{ content: 'TOTAL GLOBAL POR PRODUCTO', styles: { halign: 'left' } }]
         .concat(cons.cols.map(function(c){ return { content: _invEncCorto(c.nombre), styles: { halign: 'center' } }; }),
           [{ content: 'TOTAL', styles: { halign: 'center' } }, { content: 'VALOR', styles: { halign: 'center' } }])],
       body: _cFilas,
-      headStyles: { fillColor: [155, 14, 20], textColor: 255, fontSize: 8 }, // rojo: es el resumen, no una ubicación
+      headStyles: { fillColor: [155, 14, 20], textColor: 255, fontSize: _cAnchos.fontSize }, // rojo: es el resumen, no una ubicación
       alternateRowStyles: { fillColor: [250, 250, 249] },
-      styles: { fontSize: 8, cellPadding: 3.5 },
+      styles: { fontSize: _cAnchos.fontSize, cellPadding: 3.5 }, // v1080
       columnStyles: _cStyles,
       pageBreak: 'avoid', rowPageBreak: 'avoid', // v1075
       theme: 'striped' });
