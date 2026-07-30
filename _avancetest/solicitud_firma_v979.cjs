@@ -31,8 +31,10 @@ ok('la imagen lleva margen blanco alrededor', /drawImage\(canvas, M, M\)/.test(e
 ok('captura en iframe oculto con el MISMO builder del doc', /_solicitudDocHTML\(pd, p, true\)/.test(html) && /_solicitudDocHTML\(_ctx\.pd, activeProj\(\), false\)/.test(html));
 ok('botón COMPARTIR IMAGEN en el detalle del pedido (app)', /compartirSolicitudImg\(\)"/.test(html));
 // ── 4. v980: Android dejaba el doc en modo oscuro ilegible y VOLVER no hacía nada ──
-ok('los DOS docs fuerzan luz (color-scheme only light)', (html.match(/name="color-scheme" content="only light"/g) || []).length >= 2 && (html.match(/color-scheme:only light/g) || []).length >= 2);
-ok('VOLVER con red final: navegar al origen si la ventana no cierra', (html.match(/if\(!window\.closed\) location\.replace\('\$\{location\.origin\}'\)/g) || []).length >= 2);
+/* v1053: el only light vive en _docHeadMeta (compartido por las 3 hojas) y el VOLVER en
+   _docVolverOnclick — la red final navega al origen SIN depender de window.closed */
+ok('los DOS docs fuerzan luz (color-scheme only light)', /color-scheme" content="only light"/.test(ex('function _docHeadMeta(')) && (html.match(/\$\{_docHeadMeta\(\)\}/g) || []).length >= 3 && (html.match(/color-scheme:only light/g) || []).length >= 2);
+ok('VOLVER con red final: navegar al origen si la ventana no cierra', /location\.replace\('" \+ location\.origin \+ "'\)/.test(ex('function _docVolverOnclick(')) && (html.match(/\$\{_docVolverOnclick\(\)\}/g) || []).length >= 3);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

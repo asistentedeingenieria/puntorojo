@@ -13,8 +13,11 @@ const iOc = html.indexOf('<title>Orden de Compra No.');
 ok('doc de OC existe', iOc > 0);
 const zOc = html.slice(iOc, iOc + 16000);
 ok('OC: botón VOLVER A LA APP', /VOLVER A LA APP/.test(zOc));
-ok('OC: cierra la ventana con fallback a history.back()', /window\.close\(\)/.test(zOc) && /history\.back\(\)/.test(zOc));
-ok('OC: el volver también sale en BORRADOR (fuera del ternario showDraft)', /no-print"[^>]*>\s*<button[^>]*onclick="try\{window\.close\(\)\}/.test(zOc.replace(/\n/g,' ')));
+/* v1053: history.back() era un no-op (la ventana nace de window.open('') sin historial) y el
+   rescate viejo dependía de window.closed, que Android reporta mal. El VOLVER vive ahora en
+   _docVolverOnclick: close + navegar al origen a los 350ms si sigue viva. */
+ok('OC: cierra la ventana con fallback a history.back()', /\$\{_docVolverOnclick\(\)\}/.test(zOc));
+ok('OC: el volver también sale en BORRADOR (fuera del ternario showDraft)', /no-print"[^>]*>\s*<button[^>]*onclick="\$\{_docVolverOnclick\(\)\}/.test(zOc.replace(/\n/g,' ')));
 ok('OC: IMPRIMIR sigue solo cuando NO es borrador', /\$\{!showDraft \? '<button[^']*window\.print\(\)/.test(zOc));
 
 // ── solicitud de pedido ──
@@ -22,7 +25,7 @@ const iSol = html.indexOf('FORMATO DE SOLICITUD');
 ok('doc de solicitud existe', iSol > 0);
 const zSol = html.slice(iSol - 5000, iSol + 1200);
 ok('SOLICITUD: botón VOLVER A LA APP', /VOLVER A LA APP/.test(zSol));
-ok('SOLICITUD: cierra con fallback a history.back()', /window\.close\(\)/.test(zSol) && /history\.back\(\)/.test(zSol));
+ok('SOLICITUD: cierra con fallback a history.back()', /\$\{_docVolverOnclick\(\)\}/.test(zSol)); // v1053: mecanismo nuevo
 ok('SOLICITUD: el botón no sale impreso (.no-print en el @media print del doc)', /\.no-print\{display:none/.test(zSol));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
