@@ -3346,7 +3346,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1075</span>
+    <span style="opacity:.5;font-size:9px">v1076</span>
   </footer>
 
 </div>
@@ -15131,6 +15131,21 @@ function renderPhotosModal(){
   const _aptoTerminado = aptoCompleted(a) === 6;
   const _ro = !canEdit || _aptoTerminado;
   if (!a.photos) a.photos = {};
+  /* v1076: las fotos anteriores al sello no traen fecha — se le pregunta al servidor UNA
+     vez por foto (en segundo plano, sin trabar el modal) y cuando llegan se repinta. */
+  try {
+    if (!a._fotoTsPedido) {
+      a._fotoTsPedido = true;
+      const _pend = [];
+      Object.keys(a.photos || {}).forEach(function(ei){
+        (a.photos[ei] || []).forEach(function(u, si){ if (u && !(_fotoTs(a, ei, si) > 0)) _pend.push([ei, si]); });
+      });
+      if (_pend.length) {
+        Promise.all(_pend.slice(0, 24).map(function(par){ return window._fotoTsRescatar(a, Number(par[0]), par[1]); }))
+          .then(function(rs){ if (rs.some(function(x){ return x > 0; }) && photoCtx && photoCtx.aptoId === a.id) renderPhotosModal(); });
+      }
+    }
+  } catch(e){}
 
   document.getElementById('photosTitle').textContent = `${t.name} · ${l.name} · ${a.name}`;
   // v822b: el user pidió quitar el subtítulo bajo el título (no le gusta).
@@ -15169,9 +15184,11 @@ function renderPhotosModal(){
     const minToComplete = 2;
     const photoTiles = photos.map((src, photoIdx) => {
       if(!src) return '';
+      /* v1076 (Antonio): el día y la hora de cada foto, en su propio cuadrito */
+      const _fT = _fotoFechaTxt(_fotoTs(a, idx, photoIdx));
       return `<div class="photo-slot has-img">
         <img src="${src}" loading="lazy" decoding="async" onclick="viewPhoto('${src.replace(/'/g,"\\'")}')">
-        <div class="photo-slot-lbl">FOTO ${photoIdx+1}</div>
+        <div class="photo-slot-lbl">FOTO ${photoIdx+1}${_fT ? `<span class="photo-slot-fecha" style="display:block;font-size:8.5px;font-weight:600;letter-spacing:.6px;opacity:.85;margin-top:1px">${_fT}</span>` : ''}</div>
         ${(typeof _fotoEstaPendiente==='function' && _fotoEstaPendiente(src)) ? `<div style="position:absolute;top:6px;left:6px;background:#B45309;color:#fff;font-size:9px;font-weight:800;letter-spacing:.6px;padding:3px 7px;border-radius:999px;z-index:2" title="Guardada en este teléfono; esperando confirmación de la nube">POR COMPARTIR</div>` : ''}
         ${!_ro ? `<div class="photo-slot-actions">
           <button class="photo-slot-action" onclick="deletePhoto(${idx},${photoIdx})">ELIMINAR</button>
@@ -16458,7 +16475,7 @@ function viewPhoto(src){
           if (Array.isArray(slots)) {
             slots.forEach((url, slotIdx) => {
               if (url) {
-                list.push({ url, etapaName: e.name, etapaIdx, slotIdx, label: `Etapa ${etapaIdx+1} · ${e.name} · Foto ${slotIdx+1}` });
+                list.push({ url, etapaName: e.name, etapaIdx, slotIdx, apto: a, ts: _fotoTs(a, etapaIdx, slotIdx), label: `Etapa ${etapaIdx+1} · ${e.name} · Foto ${slotIdx+1}` }); // v1076
                 if (url === src) activeIdx = list.length - 1;
               }
             });
@@ -16479,6 +16496,51 @@ function viewPhoto(src){
   document.getElementById('photoViewer').classList.add('show');
 }
 
+/* ═══ v1076 · DÍA Y HORA DE CADA FOTO DEL AVANCE (pedido de Antonio, 30-jul) ═══
+   "ver en el avance físico el día y la hora en que se tomó y subió la foto en cada etapa...
+   para las fotos nuevas y para las que ya se subieron".
+   La app ya sella a.photoTs[etapa][slot] al subir (v903+). Para las anteriores a ese sello,
+   la fecha se rescata del propio Storage (timeCreated) la primera vez que se miran y queda
+   guardada — decisión de Antonio. Cascada, de más confiable a menos:
+     1) el sello guardado; 2) el epoch que las fotos "push" llevan en el nombre del archivo
+     (n{idx}_{Date.now()}); 3) nada — y ahí entra el rescate contra el servidor. */
+function _fotoTs(a, etapaIdx, slotIdx){
+  try {
+    var t = Number((((a || {}).photoTs || {})[etapaIdx] || [])[slotIdx]) || 0;
+    if (t > 0) return t;
+    var url = String((((a || {}).photos || {})[etapaIdx] || [])[slotIdx] || '');
+    var m = url.match(/n\d+_(\d{13})/);
+    if (m) return Number(m[1]) || 0;
+  } catch(e){}
+  return 0;
+}
+function _fotoFechaTxt(ts){
+  var t = Number(ts) || 0;
+  if (!(t > 0)) return '';
+  var d = new Date(t);
+  if (isNaN(d.getTime())) return '';
+  var p = function(n){ return String(n).padStart(2, '0'); };
+  return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear() + ' · ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+/* rescate perezoso: le pregunta al servidor cuándo se guardó la foto y sella el resultado,
+   así se pregunta UNA sola vez por foto. Devuelve el ts (0 si no se pudo). */
+window._fotoTsRescatar = async function(a, etapaIdx, slotIdx){
+  try {
+    if (!a) return 0;
+    var ya = _fotoTs(a, etapaIdx, slotIdx);
+    if (ya > 0) return ya;
+    var url = String(((a.photos || {})[etapaIdx] || [])[slotIdx] || '');
+    if (!url || url.indexOf('http') !== 0) return 0;
+    var md = await firebase.storage().refFromURL(url).getMetadata();
+    var t = md && md.timeCreated ? new Date(md.timeCreated).getTime() : 0;
+    if (!(t > 0)) return 0;
+    a.photoTs = a.photoTs || {};
+    if (!Array.isArray(a.photoTs[etapaIdx])) a.photoTs[etapaIdx] = [];
+    a.photoTs[etapaIdx][slotIdx] = t;
+    saveState();
+    return t;
+  } catch(e){ return 0; } // sin red o sin permiso: se muestra sin fecha, no se rompe nada
+};
 function showPhotoAtIndex(idx){
   const ctx = _photoViewerCtx;
   if (!ctx.list.length) return;
@@ -16493,14 +16555,26 @@ function showPhotoAtIndex(idx){
     cap.style.cssText = 'position:absolute;bottom:24px;left:50%;transform:translateX(-50%);background:rgba(28,25,23,.85);color:#fff;padding:8px 14px;border-radius:3px;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;font-weight:600;text-align:center;line-height:1.4';
     document.getElementById('photoViewer').appendChild(cap);
   }
+  /* v1076: el día y la hora de ESTA foto, bajo la imagen. Si no la tiene (foto anterior al
+     sello), se le pregunta al servidor y se repinta el caption cuando llega. */
+  const _fTxt = _fotoFechaTxt(photo.ts || 0);
+  const _fLinea = _fTxt ? `<div style="font-size:10px;color:#FCA5A5;letter-spacing:1.5px;margin-top:4px">${_fTxt}</div>` : '';
   if (ctx.list.length > 1) {
-    cap.innerHTML = `<div>${photo.label || ''}</div><div style="font-size:9px;color:rgba(255,255,255,.6);letter-spacing:2px;margin-top:3px">${ctx.idx + 1} / ${ctx.list.length} · ← → para navegar</div>`;
+    cap.innerHTML = `<div>${photo.label || ''}</div>${_fLinea}<div style="font-size:9px;color:rgba(255,255,255,.6);letter-spacing:2px;margin-top:3px">${ctx.idx + 1} / ${ctx.list.length} · ← → para navegar</div>`;
     cap.style.display = '';
-  } else if (photo.label) {
-    cap.innerHTML = `<div>${photo.label}</div>`;
+  } else if (photo.label || _fTxt) {
+    cap.innerHTML = `<div>${photo.label || ''}</div>${_fLinea}`;
     cap.style.display = '';
   } else {
     cap.style.display = 'none';
+  }
+  if (!_fTxt && photo.apto && photo.etapaIdx >= 0) {
+    const _mio = ctx.idx;
+    window._fotoTsRescatar(photo.apto, photo.etapaIdx, photo.slotIdx).then(function(t){
+      if (!(t > 0)) return;
+      photo.ts = t;
+      if (_photoViewerCtx === ctx && ctx.idx === _mio) showPhotoAtIndex(_mio); // solo si sigue a la vista
+    });
   }
 }
 
