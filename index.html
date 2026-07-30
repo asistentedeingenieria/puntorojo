@@ -3349,7 +3349,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1084</span>
+    <span style="opacity:.5;font-size:9px">v1085</span>
   </footer>
 
 </div>
@@ -11817,6 +11817,67 @@ function _rentTotales(proyectos){
   });
   return t;
 }
+/* ═══ v1085 · CURVA S — el avance acumulado en el tiempo ═══
+   Se reconstruye del historial que la app YA guarda: a.stagesTs[i] es el sello del momento
+   en que se marcó cada paso del avance. La etapa económica i queda cerrada con el sello del
+   ÚLTIMO paso que la compone (RENT_ETAPAS[i].pasos - 1).
+   NO se dibuja una "curva planificada": el proyecto no tiene fecha de fin, e inventarla
+   sería mentir. Se grafica el avance REAL acumulado, que es lo que sí se sabe. */
+function _rentSerieAvance(p, hastaTs){
+  var corte = Number(hastaTs) || Date.now();
+  var porMes = {}, totalEtapas = 0;
+  ((p && p.towers) || []).forEach(function(t){
+    ((t && t.levels) || []).forEach(function(l){
+      ((l && l.aptos) || []).forEach(function(a){
+        if (!a) return;
+        totalEtapas += RENT_ETAPAS.length;
+        var ts = (a.stagesTs) || [];
+        RENT_ETAPAS.forEach(function(e){
+          var v = Number(ts[e.pasos - 1]) || 0;
+          /* v948 dejó el 1 como centinela de "sin fecha real": no se grafica en 1970 */
+          if (v <= 1 || v > corte) return;
+          var d = new Date(v);
+          if (isNaN(d.getTime())) return;
+          var ym = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+          porMes[ym] = (porMes[ym] || 0) + 1;
+        });
+      });
+    });
+  });
+  var meses = Object.keys(porMes).sort();
+  if (!meses.length || !totalEtapas) return [];
+  /* rellenar los meses sin movimiento para que la línea no mienta sobre el ritmo */
+  var out = [], acum = 0;
+  var ini = meses[0].split('-'), fin = new Date(corte);
+  var y = Number(ini[0]), m = Number(ini[1]);
+  var yF = fin.getFullYear(), mF = fin.getMonth() + 1;
+  var guard = 0;
+  while ((y < yF || (y === yF && m <= mF)) && guard++ < 240) {
+    var ym = y + '-' + String(m).padStart(2, '0');
+    acum += (porMes[ym] || 0);
+    out.push({ ym: ym, pct: acum / totalEtapas, etapas: acum });
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  return out;
+}
+function _rentCurvaHTML(p){
+  try {
+    var serie = _rentSerieAvance(p, Date.now());
+    if (!serie || serie.length < 2) return ''; // con un solo punto no hay curva que mostrar
+    var W = 150, H = 34;
+    var pts = serie.map(function(s, i){
+      var x = (i / (serie.length - 1)) * W;
+      var y = H - (Math.max(0, Math.min(1, s.pct)) * H);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    var ult = serie[serie.length - 1];
+    return '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" style="overflow:visible" role="img" aria-label="Avance acumulado">'
+      + '<polyline points="' + pts + '" fill="none" stroke="#9B0E14" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"></polyline>'
+      + '<line x1="0" y1="' + H + '" x2="' + W + '" y2="' + H + '" stroke="#E7E5E4" stroke-width="1"></line>'
+      + '</svg>'
+      + '<div style="font-size:8.5px;color:var(--mute);letter-spacing:.6px;margin-top:1px">' + _rentEsc(serie[0].ym) + ' → ' + _rentEsc(ult.ym) + ' · ' + (ult.pct * 100).toFixed(0) + '%</div>';
+  } catch(e){ return ''; }
+}
 /* v1084 · FLUJO DE CAJA — lo que ENTRA (estimaciones presentadas y no cobradas, ya netas de
    amortización y retención: es lo que el cliente realmente deposita) contra lo que SALE
    (cuentas por pagar a proveedores, con su vencimiento). Todo derivado. */
@@ -11916,7 +11977,9 @@ function _rentTablaHTML(){
       return '<div style="display:grid;grid-template-columns:14px minmax(0,1.6fr) repeat(4,minmax(0,1fr)) 30px;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line-soft)">'
         + '<span style="width:10px;height:10px;border-radius:50%;background:' + c + '" title="' + _rentEsc(o.semaforo.toUpperCase()) + '"></span>'
         + '<div style="min-width:0"><div style="font-size:12px;font-weight:600">' + _rentEsc(o.nombre) + '</div>'
-        + '<div style="font-size:9.5px;color:var(--mute)">AVANCE ' + (o.avancePct * 100).toFixed(0) + '% · ' + o.terminados + ' DE ' + o.aptos + ' APTOS</div></div>'
+        + '<div style="font-size:9.5px;color:var(--mute)">AVANCE ' + (o.avancePct * 100).toFixed(0) + '% · ' + o.terminados + ' DE ' + o.aptos + ' APTOS</div>'
+        /* v1085: la curva del avance real acumulado, reconstruida de los sellos de cada etapa */
+        + '<div style="margin-top:4px">' + _rentCurvaHTML(o._p) + '</div></div>'
         + '<div style="text-align:right;font-variant-numeric:tabular-nums"><div style="font-size:11.5px">Q ' + fmtQ(o.ventaContratadaCI) + '</div><div style="font-size:9px;color:var(--mute)">CONTRATADO</div></div>'
         + '<div style="text-align:right;font-variant-numeric:tabular-nums"><div style="font-size:11.5px">Q ' + fmtQ(o.costoRealSI) + '</div><div style="font-size:9px;color:var(--mute)">COSTO</div></div>'
         + '<div style="text-align:right;font-variant-numeric:tabular-nums"><div style="font-size:12px;font-weight:700;color:' + c + '">' + (sinDatos ? 'SIN DATOS' : pct(margenPct)) + '</div><div style="font-size:9px;color:var(--mute)">MARGEN</div></div>'
@@ -11984,6 +12047,7 @@ function _rentDatosProyecto(p){
   if (costoRealSI > 0 && refPct != null) semaforo = (refPct >= objetivo) ? 'verde' : ((refPct >= objetivo - 0.05) ? 'amarillo' : 'rojo');
   return {
     id: (p && p.id) || '', nombre: (p && p.name) || '', ivaPct: iva,
+    _p: p, // v1085: la vista necesita el proyecto para dibujar su curva de avance
     ventaContratadaCI: ventaContratadaCI, ventaContratadaSI: ventaContratadaSI,
     ventaEjecutadaSI: ventaEjecutadaSI, presentadoCI: presentadoCI,
     cobradoCI: cobradoCI, porCobrarCI: porCobrarCI, anticipoCobradoCI: anticipoCobradoCI,
