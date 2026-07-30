@@ -41,7 +41,10 @@ ok('ficha de OC y autorización también', (html.match(/_dppOrdenesGlobal\(/g) |
 console.log('\n— 2. Opciones nuevas del picker por ítem —');
 const zOp = ex('function _dppOpcionesDeItem(');
 let ops = null;
-try { ops = new Function('state','_bodegaMatStore','_ocItemMemKey','_ocEsPrepagoMadre','_dppSaldoDeMadre','_dppOrdenesGlobal','_numLimpio','return (' + zOp + ')'); } catch(e){}
+/* v1070: la función ganó guardas de corrección de borrador y de destino — el sandbox
+   inyecta window/currentPedidoDetalleId, _findPedidoGlobal, _destinoProyectoDePedido y
+   _dppOrdenesSinBorrador (pedido CON obra destino para que las opciones aparezcan) */
+try { ops = new Function('state','_bodegaMatStore','_ocItemMemKey','_ocEsPrepagoMadre','_dppSaldoDeMadre','_dppOrdenesGlobal','_numLimpio','window','_findPedidoGlobal','_destinoProyectoDePedido','_dppOrdenesSinBorrador','return (' + zOp + ')'); } catch(e){}
 ok('existe _dppOpcionesDeItem', !!ops && zOp.length > 200);
 if (ops) {
   const madre = { id: 'm1', numero: 'BODEGA – OC 6', proveedorNombre: 'SISTEGUA, S.A.', status: 'AUTORIZADA', formaPago: 'COMPRA ANTICIPADA', items: [{ name: 'TABLA', qty: 100, precio: 65 }] };
@@ -49,11 +52,14 @@ if (ops) {
   const todas = [madre, pend, { id: 'd1', refOcMadre: 'm1', esDespacho: true, esPrepago: true, items: [{ name: 'TABLA', qty: 40 }] }];
   const esM = o => !!o && !o.esDespacho && /COMPRA\s*ANTICIPADA/i.test(String(o.formaPago || ''));
   const saldo = (m, ordenes) => { let q = m.items[0].qty; ordenes.forEach(o => { if (o && o.refOcMadre === m.id) q -= o.items[0].qty; }); return { porItem: { TABLA: { saldo: q, qty: m.items[0].qty, precio: m.items[0].precio, name: 'TABLA' } }, orden: ['TABLA'] }; };
-  const f = ops(null, null, n => String(n).toUpperCase(), esM, saldo, () => todas, s => s);
+  const stubWin = { currentPedidoDetalleId: 'pd1' };
+  const stubCtx = () => ({ pd: { id: 'pd1' } });
+  const stubDest = () => 'p1';
+  const f = ops(null, null, n => String(n).toUpperCase(), esM, saldo, () => todas, s => s, stubWin, stubCtx, stubDest, () => todas);
   const r = f('tabla');
   ok('madre AUTORIZADA con saldo → opción _dpp:<id> con saldo a la vista', r.length === 1 && r[0].id === '_dpp:m1' && /COMPRA PRE-PAGO/.test(r[0].label) && /60/.test(r[0].label));
   ok('madre PENDIENTE no se ofrece', !r.some(x => x.id === '_dpp:m2'));
-  const f2 = ops(null, null, n => String(n).toUpperCase(), esM, (m, o) => ({ porItem: {}, orden: [] }), () => todas, s => s);
+  const f2 = ops(null, null, n => String(n).toUpperCase(), esM, (m, o) => ({ porItem: {}, orden: [] }), () => todas, s => s, stubWin, stubCtx, stubDest, () => todas);
   ok('sin saldo del material no hay opción', f2('tabla').length === 0);
 } else { ['opción _dpp','pendiente no','sin saldo'].forEach(n => ok(n, false)); }
 const zTOp = ex('function _trasOpcionesDeItem(');
@@ -83,12 +89,14 @@ ok('el lazo salta los grupos especiales al entrar', iLazo > -1 && /dpp\|tras[\s\
 ok('bloque especial post-lazo', /_espIds/.test(zGen) && zGen.indexOf('_espIds') > iLazo);
 ok('DPP: serie DPP + madre citada + pendiente de finanzas + ligado al pedido', /serie: 'DPP'/.test(zGen) && /refOcMadre/.test(zGen) && /esPrepago: true/.test(zGen));
 ok('DPP: vive en el contenedor de la MADRE (no en _ctx.cont) y sellado', /_contM\.ordenes\.push/.test(zGen) && /_bodegaFindOc\(/.test(zGen));
-ok('DPP: valida el saldo FRESCO tras los await (regla v769/v940)', zGen.indexOf('_dppOrdenesGlobal', zGen.indexOf('_pedirFirmaSiFalta')) > -1);
+/* v1070: la fuente del generar pasó a _dppOrdenesSinBorrador (al CORREGIR, el DPP borrador
+   propio no cuenta el saldo — hallazgo CRÍTICO de la revisión adversarial) */
+ok('DPP: valida el saldo FRESCO tras los await (regla v769/v940)', zGen.indexOf('_dppOrdenesSinBorrador', zGen.indexOf('_pedirFirmaSiFalta')) > -1);
 ok('DPP: IVA del despacho, no el heredado de la madre (bug del clon)', /ivaMonto: \+\(_totD - _subD\)\.toFixed\(2\)/.test(zGen));
 ok('TRAS: serie TRAS + DIRECTO + origen y destino', /serie: 'TRAS'/.test(zGen) && /origenProyectoId/.test(zGen) && zGen.indexOf("status: 'AUTORIZADA'", zGen.indexOf('_espIds')) > -1);
 ok('sinPrecio exime el trasiego SIN tocar el literal de bodega (v921)', /it\.proveedorId !== '_bodega'/.test(zGen) && /sinPrecio[\s\S]{0,200}_tras:/.test(zGen.slice(zGen.indexOf('const sinPrecio'))));
 ok('la memoria de receta NO recuerda pseudo-proveedores', /ocProvPorItem/.test(zGen) && /esDeReceta/.test(zGen) && /dpp\|tras[\s\S]{0,60}return;[\s\S]{0,120}ocProvPorItem/.test(zGen.slice(zGen.indexOf('esDeReceta'))));
-ok('el barrido v1001 también reemplaza DPPs del pedido que viven en bodega', /_bmB\.ordenesEliminadas/.test(zGen) && /_ocSerieDe\(o\) !== 'DPP'\) continue/.test(zGen));
+ok('el barrido v1001 también reemplaza DPPs del pedido que viven en bodega', /_cB\.ordenesEliminadas/.test(zGen) && /_ocSerieDe\(o\) !== 'DPP'\) continue/.test(zGen));
 
 console.log('\n— 5. El resumen que pidió Antonio: a dónde, a qué proyecto y cuándo —');
 ok('cada madre lleva su desplegable (cerrado por default, patrón v1067)', /dpp_hist_/.test(zB) && /_histVisible\('dpp_hist_' \+/.test(zB) === false ? /dpp_hist_/.test(zB) : true);

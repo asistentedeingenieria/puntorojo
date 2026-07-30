@@ -3346,7 +3346,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1069</span>
+    <span style="opacity:.5;font-size:9px">v1070</span>
   </footer>
 
 </div>
@@ -9204,7 +9204,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 921; // v1064: self-heal del sello de planilla en el merge (un cliente viejo puede volver a borrar el planillaId de los pagos — cuarta mordida del patrón objeto-entero)
+const APP_SYNC_VERSION = 922; // v1064: self-heal del sello de planilla en el merge (un cliente viejo puede volver a borrar el planillaId de los pagos — cuarta mordida del patrón objeto-entero)
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10101,6 +10101,46 @@ const CloudSync = {
         merged.solicitudesAnticipoEliminadas = _solAnTomb;
         const _mSolAn = _mergeById((state && state.solicitudesAnticipo) || [], merged.solicitudesAnticipo || [], _solAnTomb); // v777: solicitudes de anticipo · v844: con tombstone
         merged.solicitudesAnticipo = _mSolAn.list; if (_mSolAn.changed) needsResync = true;
+
+        /* v1070 (bug de Antonio: "no cambia el precio / no me llegan las solicitudes"):
+           el CATÁLOGO DE PRECIOS y sus solicitudes eran los ÚLTIMOS datos operativos en
+           LWW objeto-entero — cualquier subida de otro dispositivo revertía el precio
+           editado y se tragaba las solicitudes antes de que el admin las viera (quinta
+           mordida del patrón: cobro v953, pedidos v972, facturas v1039, sellos v1064). */
+        const _spTomb = Object.assign({}, (state && state.solicitudesPreciosEliminadas) || {}, merged.solicitudesPreciosEliminadas || {});
+        merged.solicitudesPreciosEliminadas = _spTomb;
+        const _mSolPre = _mergeById((state && state.solicitudesPrecios) || [], merged.solicitudesPrecios || [], _spTomb);
+        merged.solicitudesPrecios = _mSolPre.list; if (_mSolPre.changed) needsResync = true;
+
+        const _provTomb = Object.assign({}, (state && state.proveedoresEliminados) || {}, merged.proveedoresEliminados || {});
+        merged.proveedoresEliminados = _provTomb;
+        const _locProvs = {}; ((state && state.proveedoresGlobales) || []).forEach(function(x){ if (x && x.id) _locProvs[x.id] = x; });
+        const _remProvs = {}; ((merged.proveedoresGlobales) || []).forEach(function(x){ if (x && x.id) _remProvs[x.id] = x; });
+        const _mProv = _mergeById((state && state.proveedoresGlobales) || [], merged.proveedoresGlobales || [], _provTomb);
+        merged.proveedoresGlobales = _mProv.list; if (_mProv.changed) needsResync = true;
+        /* fusión INTERNA de productos: el conflicto real es dos personas editando precios de
+           productos DISTINTOS del mismo proveedor — el ganador por proveedor absorbe los
+           productos con sello _ts más nuevo del perdedor (idempotente: re-correr no cambia nada) */
+        const _fuseProds = function(win, lose){
+          if (!win || !lose || win === lose) return;
+          const wp = win.productos = win.productos || [];
+          const key = function(pr){ try { return (typeof matchKeyProducto === 'function') ? matchKeyProducto(pr) : String((pr && pr.nombre) || '').toUpperCase(); } catch(e){ return String((pr && pr.nombre) || '').toUpperCase(); } };
+          const idx = {};
+          wp.forEach(function(pr, i){ if (pr) idx[key(pr)] = i; });
+          (lose.productos || []).forEach(function(pr){
+            if (!pr) return;
+            const k = key(pr);
+            if (!(k in idx)) { idx[k] = wp.length; wp.push(pr); return; }
+            const cur = wp[idx[k]];
+            if ((Number(pr._ts) || 0) > (Number((cur && cur._ts)) || 0)) wp[idx[k]] = pr;
+          });
+        };
+        merged.proveedoresGlobales.forEach(function(w){
+          if (!w || !w.id) return;
+          const l = _locProvs[w.id], r = _remProvs[w.id];
+          const lose = (w === l) ? r : l;
+          if (lose && lose !== w) _fuseProds(w, lose);
+        });
 
         // v860: GERENCIA — roster privado; mismo union-merge idempotente + tombstones que el resto.
         const _gerTomb = Object.assign({}, (state && state.gerenciaEliminados) || {}, merged.gerenciaEliminados || {});
@@ -22741,7 +22781,7 @@ function updateOcItemProveedor(idx, provId){
   /* v1068: COMPRA PRE-PAGO — el precio es el CONGELADO de la madre y el saldo manda.
      Return temprano como la rama '_bodega': nada de catálogo después. */
   if (_esDpp) {
-    const _todasD = _dppOrdenesGlobal();
+    const _todasD = _dppOrdenesSinBorrador(); // v1070: al corregir, el borrador propio no cuenta
     const _madreD = _todasD.find(o => o && o.id === provId.slice(5));
     const _sD = _madreD ? _dppSaldoDeMadre(_madreD, _todasD) : null;
     const _regD = _sD && _sD.porItem[_ocItemMemKey(item.name)];
@@ -23427,8 +23467,10 @@ async function generarOrdenCompra(){
     if (!_eitems.length) continue;
     const _bm = _bodegaMatStore();
     _bm.ordenes = _bm.ordenes || [];
+    /* v1070: sin obra destino no se genera ni DPP ni TRAS (el gasto quedaría en el aire) */
+    if (!_destinoProyectoDePedido(pd)) { showToast('ESTE PEDIDO NO TIENE OBRA DESTINO — EL GRUPO PRE-PAGO/TRASIEGO NO SE GENERÓ', 'red'); continue; }
     if (_eid.indexOf('_dpp:') === 0) {
-      const _todasE = _dppOrdenesGlobal();
+      const _todasE = _dppOrdenesSinBorrador(); // v1070: al corregir, el borrador propio no cuenta el saldo
       const _madreE = _todasE.find(o => o && o.id === _eid.slice(5));
       if (!_madreE || (_madreE.status || 'AUTORIZADA') !== 'AUTORIZADA') { showToast('LA COMPRA ANTICIPADA YA NO ESTÁ DISPONIBLE — ESE GRUPO NO SE GENERÓ', 'red'); continue; }
       const _fM = _bodegaFindOc(_madreE.id);
@@ -23579,21 +23621,26 @@ async function generarOrdenCompra(){
        la corrección del borrador también los reemplaza o quedarían duplicados. Solo
        PENDIENTES (el TRAS nace AUTORIZADA y un trasiego ya registrado no se toca acá). */
     try {
-      const _bmB = _bodegaMatStore();
-      if (_bmB !== _ctx.cont && _bmB.ordenes) {
-        const _nuevos2 = {};
-        created.forEach(o => { _nuevos2[o.id] = true; });
-        for (let i = _bmB.ordenes.length - 1; i >= 0; i--) {
-          const o = _bmB.ordenes[i];
+      /* v1070 (revisión): la madre puede vivir en VARIOS o en cualquier obra y el DPP vive
+         CON ella — el barrido recorre los TRES contenedores, no solo bodega */
+      const _contsB = [_bodegaMatStore()];
+      try { if (state && state.variosMat) _contsB.push(state.variosMat); } catch(e){}
+      ((state && state.projects) || []).forEach(pp => { if (pp && pp.materiales) _contsB.push(pp.materiales); });
+      const _nuevos2 = {};
+      created.forEach(o => { _nuevos2[o.id] = true; });
+      _contsB.forEach(_cB => {
+        if (!_cB || _cB === _ctx.cont || !_cB.ordenes) return;
+        for (let i = _cB.ordenes.length - 1; i >= 0; i--) {
+          const o = _cB.ordenes[i];
           if (!o || _nuevos2[o.id]) continue;
           if (o.pedidoId !== pd.id) continue;
           if (_ocSerieDe(o) !== 'DPP') continue;
           if ((o.status || 'AUTORIZADA') !== 'PENDIENTE_AUTORIZACION') continue;
-          _bmB.ordenes.splice(i, 1);
-          _bmB.ordenesEliminadas = _bmB.ordenesEliminadas || {};
-          _bmB.ordenesEliminadas[o.id] = Date.now(); // tombstone: no resucita por union-merge (v972)
+          _cB.ordenes.splice(i, 1);
+          _cB.ordenesEliminadas = _cB.ordenesEliminadas || {};
+          _cB.ordenesEliminadas[o.id] = Date.now(); // tombstone: no resucita por union-merge (v972)
         }
-      }
+      });
     } catch(e){ console.warn('[v1068] reemplazo de DPPs del borrador', e); }
     window._ocEditandoId = '';
   }
@@ -33986,13 +34033,31 @@ function _dppOrdenesGlobal(){
   try { ((state && state.projects) || []).forEach(function(p){ if (p && p.materiales && p.materiales.ordenes) todas = todas.concat(p.materiales.ordenes); }); } catch(e){}
   return todas;
 }
+/* v1070 (revisión adversarial de v1068, CRÍTICO): al CORREGIR un borrador, el saldo contaba
+   el propio DPP que se iba a reemplazar — la opción desaparecía del picker, el grupo
+   "sobregiraba" y el barrido tombstoneaba el despacho: se esfumaba de un pedido APROBADO.
+   Esta fuente excluye los DPP PENDIENTES del pedido en corrección. */
+function _dppOrdenesSinBorrador(){
+  var todas = _dppOrdenesGlobal();
+  try {
+    if (!window._ocEditandoId) return todas;
+    var cx = (typeof _findPedidoGlobal === 'function') ? _findPedidoGlobal(window.currentPedidoDetalleId) : null;
+    var pid = cx && cx.pd && cx.pd.id;
+    if (!pid) return todas;
+    return todas.filter(function(o){ return !(o && o.pedidoId === pid && _ocSerieDe(o) === 'DPP' && (o.status || 'AUTORIZADA') === 'PENDIENTE_AUTORIZACION'); });
+  } catch(e){ return todas; }
+}
 /* v1068: opciones COMPRA PRE-PAGO del picker de proveedor por ítem — una por cada compra
-   anticipada AUTORIZADA que tenga saldo de ESE material. El precio va congelado. */
+   anticipada AUTORIZADA que tenga saldo de ESE material. El precio va congelado.
+   v1070: SIN opciones si el pedido no tiene obra destino (bodega/varios/manual) — un
+   despacho con destino vacío resta el gasto y no se lo acredita a nadie. */
 function _dppOpcionesDeItem(nombre){
   var ops = [];
   try {
+    var _cxD = (typeof _findPedidoGlobal === 'function') ? _findPedidoGlobal(window.currentPedidoDetalleId) : null;
+    if (!(_cxD && _cxD.pd && typeof _destinoProyectoDePedido === 'function' && _destinoProyectoDePedido(_cxD.pd))) return ops;
     var k = _ocItemMemKey(nombre);
-    var todas = _dppOrdenesGlobal();
+    var todas = _dppOrdenesSinBorrador();
     todas.forEach(function(o){
       if (!o || (o.status || 'AUTORIZADA') !== 'AUTORIZADA') return;
       if (!_ocEsPrepagoMadre(o)) return;
@@ -34011,6 +34076,7 @@ function _trasOpcionesDeItem(){
   try {
     var _cx = (typeof _findPedidoGlobal === 'function') ? _findPedidoGlobal(window.currentPedidoDetalleId) : null;
     var dest = (_cx && _cx.pd && typeof _destinoProyectoDePedido === 'function') ? _destinoProyectoDePedido(_cx.pd) : '';
+    if (!dest) return ops; // v1070: sin obra destino no hay trasiego (el gasto se perdería en el aire)
     ((state && state.projects) || []).forEach(function(x){
       if (!x || !x.id || x.id === dest) return;
       ops.push({ id: '_tras:' + x.id, label: 'TRASIEGO · ' + String(x.name || x.id).toUpperCase() });
@@ -34115,7 +34181,9 @@ window._dppCrearDesdeMadre = async function(ocId){
     items: items,
     /* v1068: IVA del DESPACHO — el clon heredaba el ivaMonto de TODA la madre y el impreso
        no cuadraba (subtotal + IVA ≠ total) */
-    subtotal: +(total / 1.12).toFixed(2), iva: 0, ivaMonto: +(total - total / 1.12).toFixed(2), ivaIncluido: true, total: total,
+    /* v1070: subtotal redondeado PRIMERO y el IVA contra ese redondeo — dos redondeos
+       independientes descuadraban un centavo (subtotal + IVA ≠ total en el impreso) */
+    subtotal: +(total / 1.12).toFixed(2), iva: 0, ivaMonto: +(total - +(total / 1.12).toFixed(2)).toFixed(2), ivaIncluido: true, total: total,
     totalLetras: numeroALetras(total).toUpperCase(),
     status: 'PENDIENTE_AUTORIZACION',
     autorizadoPor: '', autorizadoTs: null, firmaAutoriza: null,
@@ -35919,9 +35987,13 @@ window.setPrecioRecetaProducto = function(nombre, valor){
   if (!cur){ showToast('ELEGÍ PROVEEDOR PRIMERO','red'); return; }
   // No-autorizador → genera SOLICITUD (no aplica directo)
   if (!_puedeAutorizar) { _solicitarCambioPrecioReceta(cur, valor); return; }
-  if (!can('users.manage')) return;
+  /* v1070: mismo fix que updateCatProvProducto — quien autoriza escribe directo (el gate
+     users.manage era un return silencioso), sella _ts (union-merge) y sube ya */
   cur.prv.productos[cur.idx].precio = Number(valor)||0;
+  cur.prv.productos[cur.idx]._ts = Date.now();
+  cur.prv._ts = Date.now();
   saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
 };
 let _solicitandoPrecioReceta = false;
 async function _solicitarCambioPrecioReceta(cur, valor){
@@ -37223,7 +37295,11 @@ function updateCatProvProducto(idx, field, value){
     _solicitarCambioPrecioCat(idx, value);
     return;
   }
-  if (!can('users.manage')) return;
+  /* v1070 (bug de Antonio: "no está cambiando los precios"): el gate viejo era
+     `if (!can('users.manage')) return;` — un return SILENCIOSO que mataba la edición de
+     quien tiene precios.autorizar sin ser admin (la UI invitaba a editar y el código
+     descartaba). Quien puede AUTORIZAR precios puede cambiarlos directo. */
+  if (!_puedeAutorizar) return;
   const p = activeProj();
   const prv = _getProveedores().find(x => x.id === currentCatProvId);
   if (!prv || !prv.productos[idx]) return;
@@ -37232,7 +37308,15 @@ function updateCatProvProducto(idx, field, value){
   } else {
     prv.productos[idx][field] = String(value).toUpperCase();
   }
+  /* v1070: sello por PRODUCTO y por PROVEEDOR — el catálogo ahora va por union-merge
+     (el precio "no cambiaba" porque proveedoresGlobales era LWW objeto-entero y
+     cualquier subida de otro dispositivo lo revertía) */
+  prv.productos[idx]._ts = Date.now();
+  prv._ts = Date.now();
   saveState();
+  /* v1070: subida INMEDIATA — este era el ÚNICO escritor del catálogo sin forceUploadNow
+     (ventana de 1200ms en la que otro dispositivo pisaba el cambio) */
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
   // No re-render completo — sería distractivo mientras escribe
   // Solo actualizo el sidebar con el count
   renderCatProvList();
@@ -37296,8 +37380,13 @@ function _crearSolicitudPrecio(tipo, proveedorId, productoNombre, unidad, precio
   const _u = (typeof currentUser!=='undefined') ? currentUser : null;
   const _nombre = ((_u && (_u.displayName||_u.username||_u.email)) || '').toUpperCase();
   const s={ id:'sp-'+uid(), tipo:tipo, proveedorId, proveedorNombre:(prov.nombre||proveedorNombreFallback||''), productoNombre:String(productoNombre||''), unidad:unidad||'', precioActual:(precioActual==null?null:Number(precioActual)), precioNuevo:Number(precioNuevo), motivo:motivo||'', solicitadoPor:((_u&&(_u.email||_u.username))||''), solicitadoNombre:_nombre, ts:Date.now(), estado:'PENDIENTE' };
+  s._ts=Date.now(); // v1070: solicitudesPrecios por union-merge
   list.push(s); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
   try{ if(typeof _notifyByPerm==='function') _notifyByPerm('precios.autorizar', { type:'precio-solicitud', title:'SOLICITUD DE PRECIO', body:(tipo==='ALTA'?'Alta':'Cambio')+' de "'+s.productoNombre+'" a Q'+s.precioNuevo }).catch(()=>{}); }catch(e){}
+  /* v1070 (bug de Antonio: "no me llega esa solicitud"): _notifyByPerm exige que el ACTOR
+     pueda leer la colección users — un solicitante no-admin no puede y la notificación
+     moría en silencio. La campanita (sistema B) sí funciona para cualquier actor. */
+  try{ if(typeof window.prAddNotif==='function') window.prAddNotif({ toPerms:['precios.autorizar','users.manage'], title:'SOLICITUD DE PRECIO', body:(tipo==='ALTA'?'Alta':'Cambio')+' de "'+s.productoNombre+'" a Q'+s.precioNuevo+' — pedida por '+_nombre+'. Aprobala en COMPRAS → CATÁLOGO DE PRECIOS.', type:'precio.solicitud' }); }catch(e){}
   return s;
 }
 function autorizarSolicitudPrecio(id){
@@ -37313,15 +37402,16 @@ function autorizarSolicitudPrecio(id){
   prov.productos=prov.productos||[];
   const k=matchKeyProducto(s.productoNombre);
   const ex=prov.productos.find(q=>matchKeyProducto(q.nombre)===k);
-  if(ex){ ex.precio=Number(s.precioNuevo); } else { prov.productos.push({nombre:String(s.productoNombre).toUpperCase(),unidad:s.unidad||'',precio:Number(s.precioNuevo),rendimiento:1}); }
-  s.estado='AUTORIZADA'; s.resueltoTs=Date.now();
+  if(ex){ ex.precio=Number(s.precioNuevo); ex._ts=Date.now(); } else { prov.productos.push({nombre:String(s.productoNombre).toUpperCase(),unidad:s.unidad||'',precio:Number(s.precioNuevo),rendimiento:1,_ts:Date.now()}); }
+  prov._ts=Date.now(); // v1070: catálogo por union-merge — toda mutación se sella
+  s.estado='AUTORIZADA'; s.resueltoTs=Date.now(); s._ts=Date.now(); // v1070: el cambio de estado gana el merge por elemento
   saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
   showToast('PRECIO AUTORIZADO','green'); if(typeof renderCatProvList==='function') renderCatProvList(); if(typeof _renderSolicitudesPrecio==='function') _renderSolicitudesPrecio();
 }
 function rechazarSolicitudPrecio(id){
   if(!(can('precios.autorizar')||can('users.manage'))) return showToast('SIN PERMISO','red');
   const s=(state.solicitudesPrecios||[]).find(x=>x.id===id); if(!s||s.estado!=='PENDIENTE') return;
-  s.estado='RECHAZADA'; s.resueltoTs=Date.now(); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  s.estado='RECHAZADA'; s.resueltoTs=Date.now(); s._ts=Date.now(); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} // v1070: sellada
   showToast('SOLICITUD RECHAZADA',''); if(typeof _renderSolicitudesPrecio==='function') _renderSolicitudesPrecio();
 }
 
@@ -37421,8 +37511,12 @@ function _doDeleteCurrentProveedor(provId){
   if (!prv) return;
   const numProds = (prv.productos || []).length;
   state.proveedoresGlobales = _getProveedores().filter(x => x.id !== targetId);
+  /* v1070: el catálogo va por union-merge — sin lápida, el sync revivía al proveedor borrado */
+  state.proveedoresEliminados = state.proveedoresEliminados || {};
+  state.proveedoresEliminados[targetId] = Date.now();
   logActivity('delete', `Proveedor eliminado: ${prv.nombre}`, `${p.name} · ${numProds} productos`);
   saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
   currentCatProvId = null;
   const empty = document.getElementById('catProvEmpty');
   const editor = document.getElementById('catProvEditor');
