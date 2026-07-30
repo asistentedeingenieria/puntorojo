@@ -17,7 +17,8 @@ ok('se encuentra el generador del PDF', z.length > 1500 && /autoTable/.test(z));
 
 console.log('\n— 1. una tabla no se parte dejando el título huérfano —');
 ok('la tabla de BODEGA salta entera a la hoja siguiente', /head: \[\[\{ content: 'BODEGA'[\s\S]{0,900}pageBreak: 'avoid'/.test(z));
-ok('la tabla de cada TORRE también', /head: \[\[\{ content: T\.nombre[\s\S]{0,900}pageBreak: 'avoid'/.test(z));
+/* v1079: el nombre de la torre pasa por _invEncCorto (espacio duro: "TORRE 3" en una línea) */
+ok('la tabla de cada TORRE también', /head: \[\[\{ content: _invEncCorto\(T\.nombre\)[\s\S]{0,900}pageBreak: 'avoid'/.test(z));
 ok('y ninguna fila se corta a la mitad', (z.match(/rowPageBreak: 'avoid'/g) || []).length >= 2);
 
 console.log('\n— 2. la fila TOTAL NIVEL se fue: un solo TOTAL GENERAL —');
