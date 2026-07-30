@@ -3334,7 +3334,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1063</span>
+    <span style="opacity:.5;font-size:9px">v1064</span>
   </footer>
 
 </div>
@@ -9192,7 +9192,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 920; // v1058: blindaje de tomas de inventario (líneas union SIEMPRE + lápidas de línea + rescate) — un cliente viejo con el merge cerrada-gana-entera re-abre la pérdida
+const APP_SYNC_VERSION = 921; // v1064: self-heal del sello de planilla en el merge (un cliente viejo puede volver a borrar el planillaId de los pagos — cuarta mordida del patrón objeto-entero)
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -34783,10 +34783,45 @@ function _mergePlanillaProyecto(lp, rp){
     var mRet = _mergeById(lpl.retencionesPlanillas || [], rp.planilla.retencionesPlanillas || [], tombPl);
     if (mRet.changed) changed = true;
     if (mRet.changed || rp.planilla.retencionesPlanillas) rp.planilla.retencionesPlanillas = mRet.list.concat(sinIdRet);
+    /* v1064: tras el merge, re-estampar los sellos de planilla que el objeto-entero
+       haya borrado (el pago vive en pl.pagosIds — la planilla es la verdad) */
+    if (typeof _planillaSelloSelfHeal === 'function' && _planillaSelloSelfHeal(rp)) changed = true;
     return changed;
   } catch(e){ console.warn('[v891] _mergePlanillaProyecto:', e); return false; }
 }
 
+/* ═══ v1064 · SELF-HEAL DEL SELLO DE PLANILLA (incidente ESSENZA 30-jul) ═══
+   54 pagos autorizados del 16-jul aparecieron SIN pg.planillaId y volvían a salir como
+   armables en la planilla nueva (se sumaban de nuevo). Causa raíz: el merge de pagos es
+   objeto-ENTERO por _ts — una copia sin sello con _ts más nuevo gana y borra el
+   planillaId (CUARTA mordida del patrón: cobro v953, pedidos v972, facturas v1039).
+   La planilla armada siempre conoce sus pagos (pl.pagosIds), así que el sello es
+   DERIVABLE y se re-estampa solo. Idempotente (regla v854-856).
+   ⚠️ Las RECHAZADAS se saltan: liberarPagosPlanillaRechazada borra el sello A PROPÓSITO
+   para que esos pagos vuelvan a armarse. */
+function _planillaSelloSelfHeal(p){
+  try {
+    if (!p || !p.planilla) return false;
+    var pls = (p.planilla.planillasArmadas || []).filter(function(pl){
+      return pl && pl.id && pl.estado !== 'rechazada' && Array.isArray(pl.pagosIds);
+    });
+    if (!pls.length) return false;
+    var dueno = {};
+    pls.slice().sort(function(a, b){ return (Number(a.fechaCreacion) || 0) - (Number(b.fechaCreacion) || 0); })
+      .forEach(function(pl){ pl.pagosIds.forEach(function(id){ dueno[id] = pl; }); }); // dos dueñas → gana la más nueva
+    var changed = false;
+    (p.planilla.pagos || []).forEach(function(pg){
+      if (!pg || !pg.id || pg.planillaId) return;
+      var pl = dueno[pg.id];
+      if (!pl) return;
+      pg.planillaId = pl.id;
+      pg.estadoPlanilla = pl.estado;
+      pg._ts = Date.now();
+      changed = true;
+    });
+    return changed;
+  } catch(e){ console.warn('[v1064] sello self-heal', e); return false; }
+}
 function _mergeAsistencia(localAsis, remoteAsis, tombSet){
   var _ts = function(r){ return (r && typeof r._ts === 'number') ? r._ts : ((r && typeof r.ausenteTs === 'number') ? r.ausenteTs : 0); };
   var _score = function(r){ if(!r) return -1; if(r.presente===false && r.motivo) return 3; return (r.presente?2:0)+(r.entrada?1:0)+(r.salida?1:0)+(r.motivo?1:0); };
@@ -39639,6 +39674,9 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   window.renderPlanilla = function(){
     ensureEnhancedData();
     const p = activeProj(); const pl = p.planilla;
+    /* v1064: curación local — si algún pago perdió su sello de planilla (merge
+       objeto-entero), se re-estampa desde pl.pagosIds antes de pintar */
+    try { if (typeof _planillaSelloSelfHeal === 'function' && _planillaSelloSelfHeal(p)) saveState(); } catch(e){}
     const pagos = pl.pagos || [], ajustes = pl.ajustes || [];
     const bruto = pagos.reduce((s,x)=>s+Number(x.bruto||0),0) + ajustes.filter(a=>a.tipo!=='DESCUENTO').reduce((s,x)=>s+Number(x.monto||0),0);
     const retenido = pagos.reduce((s,x)=>s+Number(x.retencion||0),0);

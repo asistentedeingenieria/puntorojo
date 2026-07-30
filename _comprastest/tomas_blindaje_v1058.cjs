@@ -91,7 +91,9 @@ ok('repinta tras renderAll (solo si la sección está a la vista y sin input enf
   /renderAll\(\); applyPermissions\(\);[\s\S]{0,900}mat-inventario[\s\S]{0,400}renderInventarios\(\)/.test(html));
 
 console.log('\n— 10. ritual v892: cambio de sync ⇒ versión nueva —');
-ok('APP_SYNC_VERSION subió a 920', /APP_SYNC_VERSION = 920/.test(html));
+/* v1064: la versión siguió subiendo (921 = sello de planilla) — este test fija que el
+   blindaje de tomas exigió AL MENOS la 920 */
+ok('APP_SYNC_VERSION subió a 920+', (parseInt((html.match(/APP_SYNC_VERSION = (\d+)/)||[])[1],10)||0) >= 920);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
