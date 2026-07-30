@@ -26,7 +26,9 @@ if (datos) {
   const g = pid => pid === 'p1'
     ? { totalCompra: 100, totalDespacho: 50, total: 150, ordenes: [ { proveedorNombre:'SISTEGUA', monto: 100, items: [{ name:'POSTE', qty: 10, precio: 10 }] }, { proveedorNombre:'FERRE', monto: 50, items: [{ name:'CLAVO', qty: 50, precio: 1 }] } ] }
     : { totalCompra: 300, totalDespacho: 0, total: 300, ordenes: [ { proveedorNombre:'SISTEGUA', monto: 300, items: [{ name:'POSTE', qty: 30, precio: 10 }] } ] };
-  const cxp = pid => pid === 'p1' ? { total: 80, totalVencido: 30 } : { total: 0, totalVencido: 0 };
+  /* v1059: el POR PAGAR sale de UNA derivada de empresa (_cuentasPorPagar('')) — sumar por
+     proyecto dejaba invisible la OC a crédito de BODEGA (destino '') */
+  const cxp = pid => pid === '' ? { total: 80, totalVencido: 30 } : { total: 0, totalVencido: 0 };
   const r = datos(st, g, cxp)();
   ok('totales de empresa', r.total === 450 && r.totalCompra === 400 && r.totalDespacho === 50);
   ok('por pagar con su vencido', r.porPagar === 80 && r.vencido === 30);
@@ -54,7 +56,8 @@ ok('sin datos no pinta barras vacías', /SIN GASTO REGISTRADO|Todavía no hay ga
 
 console.log('\n— 3. vive en la sección GASTOS de COMPRAS —');
 const zT = ex('function _comprasSetTab(');
-ok('el despacho lo pinta antes del resumen', /_comprasGastosDashHTML\(\) \+ _comprasGastosResumenHTML\(\)/.test(zT));
+/* v1059: entre el dashboard y el resumen ahora viven las CUENTAS POR PAGAR */
+ok('el despacho lo pinta antes del resumen', /_comprasGastosDashHTML\(\) \+ _comprasCxpHTML\(\) \+ _comprasGastosResumenHTML\(\)/.test(zT));
 ok('respetando el permiso de montos', /_puedeVerGastos\(\)/.test(zT));
 
 console.log('\n— 4. v1045: el detalle por proyecto usa las MISMAS tarjetas compactas —');

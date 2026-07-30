@@ -13,9 +13,23 @@ console.log('\n— 1. las sub-pestañas del panel son BOTONES con diseño —');
 /* cuadrícula de botones parejos, escopeada a LOS PANELES (la obra no se toca) */
 ok('cuadrícula ordenada en los dos paneles', /#_bodegaPanelModal \.mat-tabs\.ped-tabs-bar,\s*\r?\n?#_adminPanelModal \.mat-tabs\.ped-tabs-bar\{[^}]*grid/.test(html));
 ok('botones con borde y radio (no texto suelto)', /#_bodegaPanelModal \.mat-tabs\.ped-tabs-bar \.mat-tab[^{]*\{[^}]*border-radius/.test(html));
-/* v1056 (Antonio): el activo SIN relleno negro — se marca con borde grueso y negrita */
-ok('el activo se rellena (se ve cuál es)', /ped-tabs-bar \.mat-tab\.active\{[^}]*border:2px solid var\(--ink/.test(html) && !/ped-tabs-bar \.mat-tab\.active\{[^}]*background:var\(--ink/.test(html));
+/* v1056: sin relleno negro. v1059 (Antonio: "NO me gusta la línea que rodea los botones
+   que es negra… quiero los botones normales"): tampoco borde grueso — el activo se marca
+   con TEXTO ROJO y negrita, el botón queda con su borde normal de 1px. */
+ok('el activo es un botón normal marcado en rojo', /ped-tabs-bar \.mat-tab\.active\{[^}]*color:var\(--red/.test(html)
+  && !/ped-tabs-bar \.mat-tab\.active\{[^}]*border:2px solid var\(--ink/.test(html)
+  && !/ped-tabs-bar \.mat-tab\.active\{[^}]*background:var\(--ink/.test(html));
 ok('sin el subrayado de pestaña vieja', /ped-tabs-bar \.mat-tab[^{]*\{[^}]*border-bottom[^}]*\}/.test(html) || true);
+
+console.log('\n— 1b. v1059: la línea separadora y el AGREGAR parejo —');
+/* Antonio (foto con raya roja bajo VOLVER): "quiero que me separes los sub botones con una
+   línea para diferenciarlos de los principales. Esto en todo lo que aplique." La barra de
+   secciones de los paneles Y las sub-barras (TOMA ACTUAL/HISTORIAL) llevan línea arriba. */
+ok('la barra de secciones lleva línea separadora arriba', /#_bodegaPanelModal \.mat-tabs\.ped-tabs-bar,\s*\r?\n?#_adminPanelModal \.mat-tabs\.ped-tabs-bar\{[^}]*border-top:1px solid var\(--line/.test(html));
+ok('las sub-barras de inventario también (en obra y panel)', /class="mat-tabs ped-tabs-bar inv-subtabs"/.test(html) && /\.inv-subtabs\{[^}]*border-top:1px solid var\(--line/.test(html));
+/* "El botón de agregar lo quiero del mismo tamaño que los demás" — el .btn móvil le metía
+   min-height táctil por encima del height:36px del formulario v1056 */
+ok('AGREGAR de la toma queda en 36px de verdad', /style="height:36px;min-height:36px;padding:4px 8px" onclick="invAgregarLinea\(\)"/.test(html));
 
 console.log('\n— 2. el encabezado en celular: botones uno al lado del otro —');
 ok('hay reglas móviles para el encabezado', /@media \(max-width:640px\)\{[\s\S]{0,600}?\.bodega-hd/.test(html) || /\.bodega-hd[\s\S]{0,400}?@media/.test(html) || /@media[^{]*\{[^@]*#_bodegaPanelModal \.bodega-hd/.test(html));
