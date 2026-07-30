@@ -70,10 +70,12 @@ try {
      && soloBodega.indexOf('PROYECTOS VARIOS') < 0
      && soloBodega.indexOf('USUARIOS') < 0);
   const todo = fB(['menu.dashboard','users.manage','menu.bodega','menu.varios','menu.admin']);
-  ok('el admin las sigue viendo todas', ['DASHBOARD EJECUTIVO','USUARIOS','COMPRAS','PROYECTOS VARIOS','ADMINISTRACIÓN']
-     .every(t => todo.indexOf(t) >= 0));
+  /* v1059 (Antonio): PROYECTOS VARIOS se mudó a la sección OBRAS (_cuadroVariosHTML) —
+     el bloque de empresa quedó con 4 tarjetas */
+  ok('el admin las sigue viendo todas', ['DASHBOARD EJECUTIVO','USUARIOS','COMPRAS','ADMINISTRACIÓN']
+     .every(t => todo.indexOf(t) >= 0) && todo.indexOf('PROYECTOS VARIOS') < 0);
   /* Antonio v1030: "quiero que todos los cuadros estén del mismo tamaño" */
-  ok('los cinco cuadros se arman con el mismo molde', (todo.match(/padding:12px 16px;border-radius:10px/g) || []).length === 5);
+  ok('los cinco cuadros se arman con el mismo molde', (todo.match(/padding:12px 16px;border-radius:10px/g) || []).length === 4);
 } catch(e){ console.log('   (no evaluable: ' + e.message + ')'); ['nada','rotulo','rotulo si','solo esa','admin todo','mismo molde'].forEach(n => ok(n, false)); }
 const zP = ex('window._abrirPantallaObra = function');
 ok('la pantalla usa el bloque, no lo escribe fijo', /_bloqueEmpresaHTML\(\)/.test(zP));

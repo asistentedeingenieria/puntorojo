@@ -39,8 +39,9 @@ ok('PEDIDOS ACTIVOS', /PEDIDO\$\{[^}]*\} ACTIVO/.test(zP));
 ok('LA ÚLTIMA DONDE TRABAJASTE', /LA ÚLTIMA DONDE TRABAJASTE/.test(zP));
 /* v1040: la tarjeta pasó a COMPRAS con bajada nueva, siempre en MAYÚSCULA */
 ok('EXISTENCIAS Y COMPRAS', /'BODEGA, PEDIDOS, OC, INVENTARIOS Y GASTOS'/.test(zP));
-/* v1056 (Antonio): "quiero que diga abajo OBRAS PEQUEÑAS Y REPARACIONES" */
-ok('OBRAS PEQUEÑAS Y REPARACIONES', /'OBRAS PEQUEÑAS Y REPARACIONES'/.test(zP) && !/'OBRAS CHICAS/.test(zP));
+/* v1056: "OBRAS PEQUEÑAS Y REPARACIONES". v1059: la tarjeta vive en la sección OBRAS
+   (_cuadroVariosHTML), ya no en el bloque de empresa */
+ok('OBRAS PEQUEÑAS Y REPARACIONES', />OBRAS PEQUEÑAS Y REPARACIONES</.test(html.slice(html.indexOf('function _cuadroVariosHTML('), html.indexOf('function _cuadroVariosHTML(') + 900)) && !/OBRAS CHICAS/.test(html));
 /* v1050: la tarjeta creció con COBROS y PERSONAL, siempre en MAYÚSCULA */
 ok('PÓLIZAS Y ANTICIPOS', /'PÓLIZAS, ANTICIPOS, COBROS Y PERSONAL'/.test(zP));
 ok('y la bajada del título', /TODO LO QUE VEAS DESPUÉS/.test(zP));

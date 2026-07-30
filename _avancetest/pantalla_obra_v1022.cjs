@@ -28,7 +28,9 @@ ok('con sus pendientes a la vista', /PEDIDO\$\{|SIN PENDIENTES/.test(zP));
    persona no tiene NINGUNA (antes quedaba el rótulo TODA LA EMPRESA sobre un hueco) */
 const zEmp = ex('function _bloqueEmpresaHTML(');
 ok('y las ubicaciones de empresa', /BODEGA CENTRAL/.test(zEmp) && /PROYECTOS VARIOS/.test(zEmp) && /ADMINISTRACIÓN/.test(zEmp));
-ok('cada una respeta su permiso', /_puedeVerBodega/.test(zEmp) && /_puedeVerVarios/.test(zEmp) && /_puedeVerAdmin/.test(zEmp));
+/* v1059: PROYECTOS VARIOS vive en la sección OBRAS (_cuadroVariosHTML) con su mismo permiso */
+ok('cada una respeta su permiso', /_puedeVerBodega/.test(zEmp) && /_puedeVerAdmin/.test(zEmp)
+  && /_puedeVerVarios/.test(ex('function _cuadroVariosHTML(')));
 ok('la pantalla lo usa', /_bloqueEmpresaHTML\(\)/.test(zP));
 /* v1026: renderAll ya no la llama directo — usa el insistidor, porque en el primer render
    los proyectos todavía no llegaron de la nube y esa única oportunidad se perdía */
