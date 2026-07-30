@@ -3257,6 +3257,8 @@ select.pr-filtro{padding:5px 30px 5px 12px}
         <button class="mat-tab" data-plantab="reporte" onclick="setPlanillaTab('reporte')">AVANCE POR APARTAMENTO</button>
         <button class="mat-tab" data-plantab="resumenpersona" onclick="setPlanillaTab('resumenpersona')">RESUMEN POR PERSONA</button>
         <!-- v1018: ANTICIPOS se movió a ADMINISTRACIÓN (desplegable de PROYECTO). #planilla-anticipos y su render siguen igual. -->
+        <!-- v1065 (Antonio): los supervisores SOLICITAN anticipos desde la obra — solo la solicitud, la gestión sigue en ADMINISTRACIÓN -->
+        <button class="mat-tab" data-plantab="antsolic" onclick="setPlanillaTab('antsolic')" data-perm="anticipos.solicitar|users.manage">ANTICIPOS</button>
         <button class="mat-tab" data-plantab="receta" onclick="setPlanillaTab('receta')" data-perm="users.manage">MODELOS Y COSTOS</button>
         <!-- COLABORADORES se inyecta al FINAL por injectPlanillaTabs -->
       </div>
@@ -3274,6 +3276,16 @@ select.pr-filtro{padding:5px 30px 5px 12px}
       <div id="planilla-excepciones" style="display:none"></div>
       <div id="planilla-reporte" style="display:none"></div>
       <div id="planilla-resumenpersona" style="display:none"></div>
+      <div id="planilla-antsolic" style="display:none">
+        <!-- v1065 (Antonio): "lo ÚNICO que quiero que tenga es poder hacer la solicitud de
+             un anticipo para alguien" — el flujo v777 (cotizar/autorizar/entregar) y el
+             seguimiento completo viven en ADMINISTRACIÓN -->
+        <div class="card" style="padding:22px 18px;max-width:560px">
+          <div class="card-hd"><h3>SOLICITAR ANTICIPO</h3></div>
+          <div style="font-size:12px;color:var(--mute);line-height:1.6;margin-bottom:14px">Pedí un anticipo (préstamo, equipo o herramienta) para alguien del equipo. Compras lo cotiza y finanzas lo autoriza — los avisos llegan por la campanita.</div>
+          <button class="btn primary" data-perm="anticipos.solicitar|users.manage" onclick="window._antAbrirSolicitar()">+ SOLICITAR ANTICIPO</button>
+        </div>
+      </div>
       <div id="planilla-anticipos" style="display:none"></div>
       <div id="planilla-ocs" style="display:none"></div>
     </section>
@@ -3334,7 +3346,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1064</span>
+    <span style="opacity:.5;font-size:9px">v1065</span>
   </footer>
 
 </div>
@@ -21535,6 +21547,8 @@ function _abrirPanelBodega(){
     </div>
     ${_comprasBarraHTML()}
     <div id="_comprasSecBodega">
+    <!-- v1065: BODEGA PRE-PAGO — material COMPRA ANTICIPADA por liberar (vista derivada) -->
+    <div id="_bodegaPrepagoWrap"></div>
     <!-- v976: header en tarjetitas (pedido de Antonio: el párrafo denso se veía desordenado)
          v987: en celular las 4 tarjetas se esconden tras el botón CÓMO FUNCIONA (comían
          toda la primera pantalla); en desktop el botón no aparece y el grid queda igual. -->
@@ -21745,6 +21759,7 @@ function _comprasSetTab(t){
       setMatTab('gastos');
       var r = document.getElementById('_comprasResumenGastos');
       if (r) r.innerHTML = _puedeVerGastos() ? (_comprasGastosDashHTML() + _comprasCxpHTML() + _comprasGastosResumenHTML()) : ''; // v1042: dashboard arriba · v1059: + cuentas por pagar
+      try { var _bp = document.getElementById('_bodegaPrepagoWrap'); if (_bp) _bp.innerHTML = _bodegaPrepagoHTML(); } catch(e){} // v1065: bodega pre-pago
     }
   } catch(e){ console.warn('[v1040] despachar sección', e); }
   /* setMatTab pisa los .active de TODOS los .mat-tab — el activo de la barra de secciones se
@@ -33757,6 +33772,45 @@ window._dppCrearDesdeMadre = async function(ocId){
   try { renderOrdenesList(); } catch(e){}
   try { if (document.getElementById('_bodegaPanelModal')) { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } } catch(e){}
 };
+/* v1065 (Antonio): "una sola bodega que sea solo de compras prepago" — vista única con
+   TODO lo comprado COMPRA ANTICIPADA y su saldo por liberar, despachando desde acá.
+   100% DERIVADA: registrar = crear la OC madre con esa forma de pago; nada se guarda. */
+function _bodegaPrepagoHTML(){
+  try {
+    var esc = function(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]); }); };
+    var fuentes = [];
+    try { fuentes.push(_bodegaMatStore()); } catch(e){}
+    try { if (state && state.variosMat) fuentes.push(state.variosMat); } catch(e){}
+    ((state && state.projects) || []).forEach(function(p){ if (p && p.materiales) fuentes.push(p.materiales); });
+    var madres = [];
+    fuentes.forEach(function(c){ ((c && c.ordenes) || []).forEach(function(o){
+      if (!o || o.status === 'CANCELADA') return;
+      if (!_ocEsPrepagoMadre(o)) return;
+      madres.push({ oc: o, cont: c });
+    }); });
+    var puedeDespachar = false; try { puedeDespachar = can('compras.autorizar') || can('users.manage'); } catch(e){}
+    var filas = madres.map(function(m){
+      var s = _dppSaldoDeMadre(m.oc, (m.cont && m.cont.ordenes) || []);
+      var pend = (m.oc.status || 'AUTORIZADA') !== 'AUTORIZADA';
+      var items = s.orden.map(function(k){
+        var it = s.porItem[k];
+        return '<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;font-size:10.5px;padding:3px 0;color:#57534E;border-bottom:1px solid #F9FAFB">'
+          + '<span>' + esc(it.name) + '</span>'
+          + '<span style="font-variant-numeric:tabular-nums;font-weight:700;color:' + (it.saldo > 0 ? '#166534' : (it.saldo < 0 ? '#B91C1C' : '#9CA3AF')) + '">POR LIBERAR: ' + it.saldo + ' de ' + it.qty + '</span></div>';
+      }).join('');
+      return '<div style="border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:8px;background:#fff">'
+        + '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:4px">'
+        + '<div style="min-width:0;flex:1 1 200px"><div style="font-size:11.5px"><b>' + esc(_numLimpio(m.oc.numero)) + '</b> <span style="color:#78716C">· ' + esc(m.oc.proveedorNombre || '') + '</span></div>'
+        + (pend ? '<div style="font-size:9px;color:#B45309;font-weight:700;letter-spacing:.6px;margin-top:2px">PENDIENTE DE AUTORIZAR — aún no se puede despachar</div>' : '') + '</div>'
+        + ((puedeDespachar && !pend && s.totalSaldo > 0) ? '<button class="btn sm" style="font-size:9.5px" onclick="window._dppCrearDesdeMadre(\'' + esc(m.oc.id) + '\')">DESPACHO PRE-PAGO →</button>' : '')
+        + '</div>' + items + '</div>';
+    }).join('');
+    return '<div class="card" style="padding:12px 18px 14px;margin-bottom:14px;border-left:3px solid #1D4ED8">'
+      + '<div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;padding-bottom:6px">BODEGA PRE-PAGO · MATERIAL YA PAGADO POR LIBERAR</div>'
+      + (filas || '<div style="font-size:11px;color:#9CA3AF;padding:6px 0">Sin compras anticipadas todavía. Se registran generando una orden de compra con forma de pago <b>COMPRA ANTICIPADA</b> — aparecen acá solas con su saldo, y de acá se despachan a las obras.</div>')
+      + '</div>';
+  } catch(e){ console.warn('[v1065] bodega prepago', e); return ''; }
+}
 window._ocDerivarDeOp = async function(opId){
   if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
   const _f = _bodegaFindOc(opId);
@@ -46356,7 +46410,7 @@ window.addEventListener('load', () => {
     injectPlanillaTabs();
     document.querySelectorAll('[data-plantab]').forEach(b => b.classList.toggle('active', b.dataset.plantab === tab));
     // v384: agregado 'ocs' a la lista. Sin esto la pestaña ORDENES DE CAMBIO quedaba en display:none permanente.
-    ['etapas','receta','colaboradores','retenciones','ajustes','reporte','excepciones','resumenpersona','anticipos','ocs'].forEach(k => { const el=document.getElementById('planilla-'+k); if(el) el.style.display = tab === k ? '' : 'none'; }); // v952: la sub-pestaña LIQUIDACIÓN POR PERSONA se eliminó (pedido de Antonio); el generador queda dormido
+    ['etapas','receta','colaboradores','retenciones','ajustes','reporte','excepciones','resumenpersona','anticipos','antsolic','ocs'].forEach(k => { const el=document.getElementById('planilla-'+k); if(el) el.style.display = tab === k ? '' : 'none'; }); // v952: LIQUIDACIÓN POR PERSONA eliminada · v1065: +antsolic (solicitar anticipo desde la obra)
     { var _aeb=document.getElementById('_anulEtapaBar'); if(_aeb) _aeb.style.display = ((typeof can==='function'&&can('users.manage')) && tab==='etapas')?'flex':'none'; } // v753/v754: HABILITAR/ANULAR ETAPA solo admin + pestaña PAGOS POR ETAPA
     renderPlanilla();
     // v384: triggerea renders de los catalogos (si no se llaman, los containers quedan vacios al cambiar de tab)
