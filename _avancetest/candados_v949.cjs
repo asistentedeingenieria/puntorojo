@@ -20,7 +20,9 @@ ok('importarRecetaExcel ya no acepta receta.edit', !/can\('receta\.edit'\)/.test
 // ── 2. Botón PRECIOS quitado de la barra de receta ──
 const barra = (html.match(/id="btnVerSolReceta"[\s\S]{0,600}?<\/div>/) || [''])[0];
 ok('la barra de receta ya no tiene el botón PRECIOS', !!barra && !/btnPreciosReceta/.test(barra) && !/verCatalogoPreciosReceta\(\)/.test(barra));
-ok('el CATÁLOGO DE PRECIOS de ÓRDENES sigue existiendo', /onclick="openCatalogoProveedores\(\)"/.test(html));
+/* v1062 (Antonio): el catálogo salió del encabezado de ÓRDENES — ahora es pestaña propia
+   de COMPRAS que abre la misma ventana (openCatalogoProveedores vive) */
+ok('el CATÁLOGO DE PRECIOS sigue accesible (pestaña de COMPRAS)', /openCatalogoProveedores/.test(extractFn('_comprasSetTab')) && /function openCatalogoProveedores\(/.test(html));
 
 // ── 3. Permiso de receta = PROPONER; admin aplica directo ──
 const render = extractAssign('renderRecetaV2');

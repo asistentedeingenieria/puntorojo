@@ -19,7 +19,10 @@ console.log('\n— 1. el vencimiento se calcula, no se guarda —');
 const zV = ex('function _vencimientoOc(');
 ok('existe', zV.length > 80);
 let fV = null;
-try { fV = new Function('_fechaLatamADate','_dateALatam', 'return (' + zV + ')')(
+/* v1062: _vencimientoOc ahora deriva los días con _ocDiasCredito (la forma de pago manda;
+   el campo guardado es respaldo de órdenes viejas) — la extracción arrastra las dos deps.
+   Los fixtures de abajo no traen formaPago, así que caen al campo credito como antes. */
+try { fV = new Function('_fechaLatamADate','_dateALatam', ex('function _diasCredito(') + '\n' + ex('function _ocDiasCredito(') + '\nreturn (' + zV + ')')(
   s => { const m = String(s||'').match(/^(\d{2})\/(\d{2})\/(\d{4})$/); return m ? new Date(+m[3], +m[2]-1, +m[1]) : null; },
   d => (!d||isNaN(d.getTime())) ? '' : String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear()
 ); } catch(e){ console.log('   (no evaluable: ' + e.message + ')'); }

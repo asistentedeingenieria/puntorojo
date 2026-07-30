@@ -56,5 +56,27 @@ ok('repinta el dashboard además del detalle', /_comprasResumenGastos/.test(zP))
 console.log('\n— 5. el bloque por obra también cuenta los días —');
 ok('renderGastos usa la cuenta regresiva', /_cxpCuentaRegresiva/.test(ex('function renderGastos(')));
 
+console.log('\n— 6. v1062: la FORMA DE PAGO manda (Antonio: "¿por qué Q0 si ya hay OCs de bodega al crédito?") —');
+/* Causa raíz: toda OC de BODEGA nacía con credito:0 a la fuerza (esBodega ? 0 : …, regla
+   de cuando bodega solo compraba con tarjeta) y _cuentasPorPagar/_vencimientoOc filtraban
+   por ese campo GUARDADO. La OC 5 de NOVEX decía CRÉDITO y no aparecía. Doctrina v1010:
+   el vencimiento se CALCULA — los días salen del TEXTO de la forma de pago; el campo
+   guardado queda de respaldo para órdenes viejas sin texto. */
+const zDC = ex('function _ocDiasCredito(');
+ok('existe el derivador', zDC.length > 100);
+let diasDe = null;
+try { diasDe = new Function(ex('function _diasCredito(') + '\nreturn (' + zDC + ')')(); } catch(e){}
+ok('extraíble', typeof diasDe === 'function');
+if (diasDe) {
+  ok('CRÉDITO 15 DÍAS → 15 aunque el campo diga 0', diasDe({ formaPago: 'CRÉDITO 15 DÍAS', credito: 0 }) === 15);
+  ok('TARJETA DE ABASTO → 0', diasDe({ formaPago: 'TARJETA DE ABASTO', credito: 0 }) === 0);
+  ok('CONTADO con campo viejo sucio → 0 (el texto manda)', diasDe({ formaPago: 'CONTADO', credito: 30 }) === 0);
+  ok('orden vieja SIN texto → cae al campo guardado', diasDe({ formaPago: '', credito: 30 }) === 30);
+  ok('COMPRA ANTICIPADA → 0', diasDe({ formaPago: 'COMPRA ANTICIPADA' }) === 0);
+}
+ok('_cuentasPorPagar filtra con el derivador', /_ocDiasCredito\(o\)/.test(ex('function _cuentasPorPagar(')));
+ok('_vencimientoOc también', /_ocDiasCredito\(/.test(ex('function _vencimientoOc(')));
+ok('la OC de bodega ya NO nace con credito 0 forzado', !/credito: esBodega \? 0 :/.test(html));
+
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

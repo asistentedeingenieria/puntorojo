@@ -52,7 +52,10 @@ console.log('\n— 3b. el despacho de bodega no lleva forma de pago —');
    la OC, ya que es algo que ya se compró y está en la bodega de la oficina". Es un traslado,
    no una compra: si llevara forma de pago entraría a cuentas por pagar como una deuda falsa. */
 ok('la OC de despacho lo dice explícito', /NO APLICA · DESPACHO DE BODEGA/.test(zGen));
-ok('y no arrastra días de crédito', /credito: esBodega \? 0 :/.test(zGen));
+/* v1062 (Antonio: "¿por qué Q0 en cuentas por pagar si hay OCs de bodega al crédito?"):
+   la bodega TAMBIÉN compra a crédito — el 0 forzado se quitó a propósito y los días se
+   derivan del texto de la forma de pago (cxp_gastos_v1059.cjs sección 6) */
+ok('y los días de crédito salen de la forma de pago', /credito: _diasCredito\(_pp\.formaPago \|\| formaPago\)/.test(zGen) && !/credito: esBodega \? 0 :/.test(zGen));
 
 console.log('\n— 3c. ENVIAR A COMPRAS avisa de verdad —');
 /* Antonio: "se envia a compras y solo no pasa nada... no se si se pidio". v996 ya limpiaba y

@@ -3141,7 +3141,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
         <div class="card">
           <div class="card-hd"><h3>ÓRDENES DE COMPRA GENERADAS</h3>
             <span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mute);font-weight:600" id="ocCountLabel">— 0 ÓRDENES</span>
-            <button class="btn ghost sm" onclick="openCatalogoProveedores()" title="Ver el catálogo maestro de precios por proveedor">CATÁLOGO DE PRECIOS</button>
+            <!-- v1062 (Antonio): el CATÁLOGO DE PRECIOS salió de acá — es pestaña propia de COMPRAS -->
           </div>
           <div id="ordenesListContainer"></div>
         </div>
@@ -3330,7 +3330,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1061</span>
+    <span style="opacity:.5;font-size:9px">v1062</span>
   </footer>
 
 </div>
@@ -3695,7 +3695,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
           <!-- v918: la fecha de la OC es SIEMPRE el día en que se genera — no editable -->
           <input id="ocFecha" type="date" disabled style="background:var(--cream);cursor:not-allowed;color:var(--ink)">
         </div>
-        <div class="field">
+        <div class="field" id="ocFechaEntregaWrap">
           <label>FECHA DE ENTREGA</label>
           <input id="ocFechaEntrega" type="date" autocomplete="off">
         </div>
@@ -3715,7 +3715,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
       <div class="field" id="ocFormaPagoWrap">
         <label>FORMA DE PAGO</label>
-        <select id="ocFormaPago">
+        <select id="ocFormaPago" onchange="_ocSyncEntregaVisible()">
           <option>TARJETA DE ABASTO</option>
           <option>CRÉDITO 15 DÍAS</option>
           <option>CRÉDITO 30 DÍAS</option>
@@ -3725,9 +3725,10 @@ select.pr-filtro{padding:5px 30px 5px 12px}
           <option>CHEQUE</option>
           <option>COMPRA ANTICIPADA</option><!-- v1061: OC madre de despachos pre-pago (ya pagada) -->
         </select>
+        <!-- v1062: el onchange esconde FECHA DE ENTREGA y ENTREGAR A cuando es COMPRA ANTICIPADA -->
       </div>
 
-      <div class="field">
+      <div class="field" id="ocEntregarAWrap">
         <label>ENTREGAR A</label>
         <div style="display:grid;grid-template-columns:1fr auto;gap:6px;margin-bottom:6px">
           <select id="ocDireccionSel" onchange="applyOcDireccion(this.value)"></select>
@@ -21427,7 +21428,7 @@ function _abrirPanelBodega(){
       return `<button class="btn ghost sm" style="font-size:10px" onclick="previewOrden('${o.id}')">VER ${_nOc}</button>`;
     }).join(' ');
     const btnGenerar = (!ocsPd.length)
-      ? `<button class="btn sm" style="font-size:10px" onclick="_cerrarPanelBodegaDom(); currentPedidoDetalleId='${pd.id}'; openOrdenCompra()">GENERAR OC</button>`
+      ? `<button class="btn sm" style="font-size:10px" onclick="currentPedidoDetalleId='${pd.id}'; openOrdenCompra()" title="Generar la orden sin salir de acá">GENERAR OC</button>`
       : '';
     return `
     <div class="pr-fila-panel" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #F3F4F6">
@@ -21633,6 +21634,10 @@ function _comprasBarraHTML(){
   if (!oc.includes('inventario')) b += btn('inventarios', 'INVENTARIOS');
   var _veGas = false; try { _veGas = _puedeVerGastos(); } catch(e){}
   if (_veGas) b += btn('gastos', 'GASTOS');
+  /* v1062 (Antonio): el CATÁLOGO DE PRECIOS es una pestaña más de COMPRAS (salió del
+     encabezado de ÓRDENES). Mismos permisos que siempre tuvo el botón. */
+  var _veCat = false; try { _veCat = can('users.manage') || can('precios.autorizar') || can('precios.proponer'); } catch(e){}
+  if (_veCat) b += btn('catalogo', 'CATÁLOGO DE PRECIOS');
   return '<div class="mat-tabs ped-tabs-bar" style="margin:10px 0 14px">' + b + '</div>';
 }
 /* selector de proyecto de las secciones 2-5: select data-nativo (el picker v925 lo respeta).
@@ -21703,6 +21708,9 @@ function _comprasDevolverNodos(){
   });
 }
 function _comprasSetTab(t){
+  /* v1062: CATÁLOGO DE PRECIOS abre su ventana ENCIMA del panel (patrón v1007) y la
+     sección de fondo no cambia — al cerrarla seguís donde estabas */
+  if (t === 'catalogo') { try { openCatalogoProveedores(); } catch(e){} return; }
   window._comprasTab = t;
   var m = document.getElementById('_bodegaPanelModal'); if (!m) return;
   var mapa = { bodega: '_comprasSecBodega', pedidos: '_comprasSecPedidos', ordenes: '_comprasSecOrdenes', inventarios: '_comprasSecInventarios', gastos: '_comprasSecGastos' };
@@ -22359,6 +22367,7 @@ async function openOrdenCompra(){
   })();
   // v1015: si el pedido entero sale de bodega, la forma de pago no aplica desde el arranque
   try { _ocSyncFormaPagoVisible(); } catch(e){}
+  try { _ocSyncEntregaVisible(); } catch(e){} // v1062: por si el select ya viene sembrado en COMPRA ANTICIPADA
 
   const autoCount = ocWorkingItems.filter(x => x.proveedorId).length;
   const note = document.getElementById('ocCatalogNote');
@@ -22795,6 +22804,16 @@ function _ocSyncFormaPagoVisible(){
   if (!wrap) return;
   wrap.style.display = _ocTodoDeBodega() ? 'none' : '';
 }
+/* v1062 (Antonio): la COMPRA ANTICIPADA no se entrega — el proveedor la va liberando con
+   despachos pre-pago. Ni fecha ni dirección de entrega en el formulario. */
+function _ocSyncEntregaVisible(){
+  const sel = document.getElementById('ocFormaPago');
+  const esPre = !!sel && /COMPRA\s*ANTICIPADA/i.test(String(sel.value || ''));
+  const w1 = document.getElementById('ocFechaEntregaWrap');
+  const w2 = document.getElementById('ocEntregarAWrap');
+  if (w1) w1.style.display = esPre ? 'none' : '';
+  if (w2) w2.style.display = esPre ? 'none' : '';
+}
 function updateOcPrecio(idx, val){
   if (!ocWorkingItems[idx]) return;
   /* v923: los precios viven SOLO en el catálogo; el único digitable era el poste a medida
@@ -23084,10 +23103,13 @@ async function generarOrdenCompra(){
   }
 
 
+  /* v1062 (Antonio): la COMPRA ANTICIPADA no se entrega (se libera por despachos pre-pago)
+     — ni fecha ni dirección de entrega: no se piden, no se validan, no se guardan */
+  const _esCompraAnticipada = /COMPRA\s*ANTICIPADA/i.test(String(((document.getElementById('ocFormaPago') || {}).value) || ''));
   /* v1000 (pedido de Antonio): una obra NUEVA o un proyecto pequeño no trae dirección — sin
      dirección y sin quién recibe, la orden le llega al proveedor sin dónde entregar. Se
      bloquea acá, ANTES de crear nada. */
-  const _faltaEnt = _ocEntregaFalta((document.getElementById('ocEntregarA') || {}).value || '');
+  const _faltaEnt = _esCompraAnticipada ? [] : _ocEntregaFalta((document.getElementById('ocEntregarA') || {}).value || '');
   if (_faltaEnt.length) {
     const _elEnt = document.getElementById('ocEntregarA');
     if (_elEnt) { try { _elEnt.style.borderColor = '#DC2626'; _elEnt.focus(); } catch(e){} }
@@ -23132,14 +23154,14 @@ async function generarOrdenCompra(){
 
   const fechaOc = inputToDate(document.getElementById('ocFecha').value);
   // v932: ocFechaEntrega es type=date (ISO) → el resto del flujo sigue en DD/MM/YYYY
-  const fechaEntregaNueva = _fechaInputALatam(document.getElementById('ocFechaEntrega').value);
-  if (!fechaEntregaNueva) {
+  const fechaEntregaNueva = _esCompraAnticipada ? '' : _fechaInputALatam(document.getElementById('ocFechaEntrega').value); // v1062
+  if (!fechaEntregaNueva && !_esCompraAnticipada) {
     return showToast('ELEGÍ LA FECHA DE ENTREGA EN EL CALENDARIO', 'red');
   }
   const proyectoOc = document.getElementById('ocProyecto').value.trim().toUpperCase();
   const areaOc = document.getElementById('ocArea').value.trim().toUpperCase();
   const formaPago = document.getElementById('ocFormaPago').value;
-  const entregarA = document.getElementById('ocEntregarA').value.trim().toUpperCase();
+  const entregarA = _esCompraAnticipada ? '' : document.getElementById('ocEntregarA').value.trim().toUpperCase(); // v1062
 
   // v926: si el generador no ha registrado su firma dibujada, ofrecérsela (opcional —
   // si cierra sin firmar, el PDF usa el texto cursivo de siempre).
@@ -23216,7 +23238,7 @@ async function generarOrdenCompra(){
          un traslado. Se deja explícito para que nadie lo cuente como una cuenta por pagar. */
       formaPago: esBodega ? 'NO APLICA · DESPACHO DE BODEGA' : (_pp.formaPago || formaPago),
       // v1011: los DÍAS como número, para poder vencer la cuenta por pagar sin parsear texto
-      credito: esBodega ? 0 : _diasCredito(_pp.formaPago || formaPago),
+      credito: _diasCredito(_pp.formaPago || formaPago), // v1062: bodega también compra a crédito (antes esBodega forzaba 0 y la cuenta por pagar era invisible)
       /* v1013: la obra destino por ID. oc.proyecto es texto libre escrito a mano y una orden
          de una obra puede mostrar el nombre de otra; el resumen "qué se fue a cada obra" no
          puede apoyarse en eso. El texto se conserva intacto. */
@@ -23925,8 +23947,8 @@ ${showDraft ? '<div class="no-print" style="background:var(--red-soft);padding:1
       </dl>
     </div>
     <div class="oc-info-right">
-      <div class="fe-lbl">FECHA DE ENTREGA</div>
-      <div class="fe-val">${entregaLarga}</div>
+      ${String(oc.fechaEntrega || '').trim() ? `<div class="fe-lbl">FECHA DE ENTREGA</div>
+      <div class="fe-val">${entregaLarga}</div>` : ''}
     </div>
   </div>
 
@@ -23979,10 +24001,10 @@ ${showDraft ? '<div class="no-print" style="background:var(--red-soft);padding:1
     </div>`;
   })()}
 
-  <div class="oc-entregar">
+  ${String(oc.entregarA || '').trim() ? `<div class="oc-entregar">
     <div class="oc-entregar-title">*ENTREGAR A:</div>
     <div class="oc-entregar-box">${_ocTelGuiones(oc.entregarA)}</div>
-  </div>
+  </div>` : ''}
 
   <div class="oc-firmas">
     <div class="oc-firma">
@@ -25454,11 +25476,13 @@ function renderPersonal(){
           ${canEd?`<div class="colab-acts"><button class="btn-icon" style="margin-right:8px" onclick="event.stopPropagation();editarPersonaGlobal('${c.id}')">✎ EDITAR</button>${c.baja?`<button class="btn-icon" style="margin-right:8px;color:#166534;font-weight:700" onclick="event.stopPropagation();reactivarPersona('${c.id}')">REACTIVAR</button>`:`<button class="btn-icon" style="margin-right:8px;color:#92400E;font-weight:700" onclick="event.stopPropagation();darBajaPersona('${c.id}')">DAR DE BAJA</button>`}<button class="btn-icon danger" onclick="event.stopPropagation();eliminarPersonaGlobal('${c.id}')">✕ ELIMINAR</button></div>`:''}
         </div>
       </div>`; };
-      // v754 fix: _filtrando = ¿hay búsqueda/empresa activa? Debe comparar contra el conteo del MODO
-      // actual (activos, o de-baja), NO contra personal.length crudo — si no, tener 1 de baja lo dejaba
-      // siempre true y forzaba los grupos abiertos (no se podían colapsar). Regresión de v751.
-      const _baseModeCount = (window._persVerBaja ? personal.filter(p=>p&&p.baja).length : personal.filter(p=>p&&!p.baja).length);
-      const _filtrando = (lista.length !== _baseModeCount);
+      /* v1062 (Antonio: "cuando me meto a personal los listados deben de estar cerrados"):
+         los grupos se auto-abren SOLO si el usuario está BUSCANDO de verdad (texto o
+         empresa). El truco viejo (lista.length !== conteo base, v754) contaba también el
+         filtro de obra del panel ADMINISTRACIÓN — con un proyecto elegido, la lista se
+         achica y los grupos quedaban siempre abiertos. */
+      const _filtrando = !!(String(typeof _persBuscar !== 'undefined' ? _persBuscar : '').trim())
+        || !!(String(typeof _persEmpresaFilter !== 'undefined' ? _persEmpresaFilter : '').trim());
       const _obraG = lista.filter(c=>c.tipo!=='OFICINA');
       const _ofiG = lista.filter(c=>c.tipo==='OFICINA');
       const _grpOpen = k => _filtrando || ((typeof _persGruposAbiertos!=='undefined') && _persGruposAbiertos.has(k));
@@ -33761,7 +33785,7 @@ function _dateALatam(d){
   return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + d.getFullYear();
 }
 function _vencimientoOc(oc){
-  const dias = Number(oc && oc.credito) || 0;
+  const dias = _ocDiasCredito(oc); // v1062: la forma de pago manda (el campo guardado quedaba en 0 para bodega)
   if (dias <= 0) return null;                       // contado: no hay nada que vencer
   let base = null, cual = '';
   if (oc.factura && oc.factura.fecha) { base = _fechaLatamADate(oc.factura.fecha); cual = 'FACTURA'; }
@@ -33800,7 +33824,7 @@ function _cuentasPorPagar(projectId){
        sembrar 'CRÉDITO…' encima y colar una cuenta fantasma. */
     if (/COMPRA\s*ANTICIPADA/i.test(String(o.formaPago || ''))) return;
     if (pid && _gastoDestinoDeOrden(o) !== pid) return; // v1041: mismas órdenes que GASTOS
-    if (!(Number(o.credito) > 0)) return;            // solo lo que es a crédito
+    if (!(_ocDiasCredito(o) > 0)) return;            // v1062: solo crédito — derivado del TEXTO de la forma de pago
     const montoOc = Number(o.total) || 0;
     const pagado = _pagosDeOc(o.id).reduce((s, x) => s + (Number(x.monto) || 0), 0);
     const saldo = +(montoOc - pagado).toFixed(2);
@@ -34050,6 +34074,17 @@ function _diasCredito(formaPago){
   if (t.indexOf('CREDITO') < 0) return 0;   // CONTADO, TRANSFERENCIA, CHEQUE, TARJETA DE ABASTO
   const m = t.match(/(\d+)\s*DIAS?/);
   return m ? (Number(m[1]) || 0) : 0;
+}
+/* v1062 (Antonio: "¿por qué Q0 en cuentas por pagar si ya hay OCs de bodega al crédito?"):
+   los días de crédito se DERIVAN del texto de la forma de pago — el campo guardado quedaba
+   en 0 para TODA OC de bodega (regla vieja 'esBodega ? 0', de cuando bodega solo compraba
+   con tarjeta) y además cambiar la forma de pago por consola/UI no lo actualizaba. El texto
+   manda (doctrina v1010: el vencimiento se CALCULA); el campo guardado es solo el respaldo
+   de órdenes viejas sin texto. */
+function _ocDiasCredito(oc){
+  const fp = String((oc && oc.formaPago) || '').trim();
+  if (fp) return _diasCredito(fp);
+  return Number(oc && oc.credito) || 0;
 }
 /* v1011: la forma de pago la manda la FICHA del proveedor (pv.pago.tipoCompra) — un campo que
    ya se guardaba y que no leía nadie. Hasta ahora openOrdenCompra hacía selectedIndex = 0 y
@@ -36330,6 +36365,12 @@ function openCatalogoProveedores(){
   renderCatProvList();
   document.getElementById('catProvEmpty').style.display = 'block';
   document.getElementById('catProvEditor').style.display = 'none';
+  /* v1062: abierto desde la pestaña de COMPRAS, la ventana va ENCIMA del panel (98000) —
+     sin esto quedaba enterrada (mismo patrón v1007 del modal de OC) */
+  try {
+    const _mCat = document.getElementById('modalCatalogoProveedores');
+    _mCat.style.zIndex = document.getElementById('_bodegaPanelModal') ? '99000' : '';
+  } catch(e){}
   document.getElementById('modalCatalogoProveedores').classList.add('show');
   if (typeof applyPermissions === 'function') applyPermissions();
 }
