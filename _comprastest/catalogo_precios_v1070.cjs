@@ -23,7 +23,10 @@ ok('el editor de precios de la receta igual (mismo patrón)', /_ts = Date\.now\(
 
 console.log('\n— B. union-merge del catálogo y las solicitudes (adiós LWW) —');
 ok('proveedoresGlobales por _mergeById + lápida', /_mProv = _mergeById\(\(state && state\.proveedoresGlobales\)/.test(html) && /proveedoresEliminados/.test(html));
-ok('fusión INTERNA de productos por clave con _ts (dos personas, productos distintos)', /_fuseProds/.test(html) && /matchKeyProducto === 'function'\) \? matchKeyProducto\(pr\)/.test(html));
+/* v1074: la clave se calcula sobre pr.nombre — en v1070 se pasaba el OBJETO a
+   matchKeyProducto(nombre) y TODOS los productos colapsaban a "[OBJECT OBJECT]"
+   (no fusionaba y pisaba filas del catálogo). El detalle vive en fuseprods_v1074.cjs. */
+ok('fusión INTERNA de productos por clave con _ts (dos personas, productos distintos)', /_fuseProds/.test(html) && /matchKeyProducto\(pr && pr\.nombre\)/.test(html));
 ok('solicitudesPrecios por _mergeById + lápida', /_mSolPre = _mergeById\(\(state && state\.solicitudesPrecios\)/.test(html) && /solicitudesPreciosEliminadas/.test(html));
 ok('eliminar proveedor deja lápida y sube ya (el sync lo revivía)', /state\.proveedoresEliminados\[targetId\] = Date\.now\(\)/.test(html));
 const zA = ex('function autorizarSolicitudPrecio(');

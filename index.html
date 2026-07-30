@@ -3346,7 +3346,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1073</span>
+    <span style="opacity:.5;font-size:9px">v1074</span>
   </footer>
 
 </div>
@@ -10148,29 +10148,39 @@ const CloudSync = {
         const _spTomb = Object.assign({}, (state && state.solicitudesPreciosEliminadas) || {}, merged.solicitudesPreciosEliminadas || {});
         merged.solicitudesPreciosEliminadas = _spTomb;
         const _mSolPre = _mergeById((state && state.solicitudesPrecios) || [], merged.solicitudesPrecios || [], _spTomb);
-        merged.solicitudesPrecios = _mSolPre.list; if (_mSolPre.changed) needsResync = true;
+        /* v1074: SOLO LECTURA no sube nada — marcar needsResync ahí solo cicla (el mismo
+           guard que ya tenían los merges viejos de este bloque) */
+        merged.solicitudesPrecios = _mSolPre.list;
+        if (_mSolPre.changed && !(typeof isReadOnly === 'function' && isReadOnly())) needsResync = true;
+        var _fusionoAlgo = false;
 
         const _provTomb = Object.assign({}, (state && state.proveedoresEliminados) || {}, merged.proveedoresEliminados || {});
         merged.proveedoresEliminados = _provTomb;
         const _locProvs = {}; ((state && state.proveedoresGlobales) || []).forEach(function(x){ if (x && x.id) _locProvs[x.id] = x; });
         const _remProvs = {}; ((merged.proveedoresGlobales) || []).forEach(function(x){ if (x && x.id) _remProvs[x.id] = x; });
         const _mProv = _mergeById((state && state.proveedoresGlobales) || [], merged.proveedoresGlobales || [], _provTomb);
-        merged.proveedoresGlobales = _mProv.list; if (_mProv.changed) needsResync = true;
+        merged.proveedoresGlobales = _mProv.list;
+        if (_mProv.changed && !(typeof isReadOnly === 'function' && isReadOnly())) needsResync = true;
         /* fusión INTERNA de productos: el conflicto real es dos personas editando precios de
            productos DISTINTOS del mismo proveedor — el ganador por proveedor absorbe los
            productos con sello _ts más nuevo del perdedor (idempotente: re-correr no cambia nada) */
         const _fuseProds = function(win, lose){
           if (!win || !lose || win === lose) return;
           const wp = win.productos = win.productos || [];
-          const key = function(pr){ try { return (typeof matchKeyProducto === 'function') ? matchKeyProducto(pr) : String((pr && pr.nombre) || '').toUpperCase(); } catch(e){ return String((pr && pr.nombre) || '').toUpperCase(); } };
+          /* v1074: la clave sale del NOMBRE. En v1070 se le pasaba el OBJETO a
+             matchKeyProducto(nombre) → String({...}) = "[object Object]" → TODOS los
+             productos colapsaban a una sola clave: no fusionaba nada y pisaba filas. */
+          const key = function(pr){ try { return (typeof matchKeyProducto === 'function') ? matchKeyProducto(pr && pr.nombre) : String((pr && pr.nombre) || '').toUpperCase(); } catch(e){ return String((pr && pr.nombre) || '').toUpperCase(); } };
           const idx = {};
           wp.forEach(function(pr, i){ if (pr) idx[key(pr)] = i; });
           (lose.productos || []).forEach(function(pr){
             if (!pr) return;
             const k = key(pr);
-            if (!(k in idx)) { idx[k] = wp.length; wp.push(pr); return; }
+            if (!(k in idx)) { idx[k] = wp.length; wp.push(pr); _fusionoAlgo = true; return; }
             const cur = wp[idx[k]];
-            if ((Number(pr._ts) || 0) > (Number((cur && cur._ts)) || 0)) wp[idx[k]] = pr;
+            /* v1074: se avisa que hubo fusión — antes se mutaba el merge sin marcar
+               needsResync y lo fusionado se quedaba local para siempre */
+            if ((Number(pr._ts) || 0) > (Number((cur && cur._ts)) || 0)) { wp[idx[k]] = pr; _fusionoAlgo = true; }
           });
         };
         merged.proveedoresGlobales.forEach(function(w){
@@ -10179,6 +10189,9 @@ const CloudSync = {
           const lose = (w === l) ? r : l;
           if (lose && lose !== w) _fuseProds(w, lose);
         });
+        /* v1074: si la fusión aportó algo, hay que SUBIRLO — antes se mutaba el merge sin
+           avisar y el precio fusionado se quedaba local para siempre */
+        if (_fusionoAlgo && !(typeof isReadOnly === 'function' && isReadOnly())) needsResync = true;
 
         // v860: GERENCIA — roster privado; mismo union-merge idempotente + tombstones que el resto.
         const _gerTomb = Object.assign({}, (state && state.gerenciaEliminados) || {}, merged.gerenciaEliminados || {});
@@ -37243,8 +37256,8 @@ function renderCatProvProductos(){
 
   cont.innerHTML = _hint + filtered.map(({prod, origIdx}) => `
     <div class="cat-prov-producto-row">
-      <input type="text" value="${(prod.nombre || '').replace(/"/g,'&quot;')}" placeholder="NOMBRE DEL PRODUCTO" oninput="updateCatProvProducto(${origIdx}, 'nombre', this.value)"${_esAdminCat ? '' : ' disabled'}>
-      <input type="text" value="${(prod.unidad || _catUnidadAuto(prod.nombre, _uIdx) || '').replace(/"/g,'&quot;')}" placeholder="UNIDAD" oninput="updateCatProvProducto(${origIdx}, 'unidad', this.value)"${_esAdminCat ? '' : ' disabled'}>
+      <input type="text" value="${(prod.nombre || '').replace(/"/g,'&quot;')}" placeholder="NOMBRE DEL PRODUCTO" onchange="updateCatProvProducto(${origIdx}, 'nombre', this.value)"${_esAdminCat ? '' : ' disabled'}>
+      <input type="text" value="${(prod.unidad || _catUnidadAuto(prod.nombre, _uIdx) || '').replace(/"/g,'&quot;')}" placeholder="UNIDAD" onchange="updateCatProvProducto(${origIdx}, 'unidad', this.value)"${_esAdminCat ? '' : ' disabled'}>
       <!-- v1000 (reporte de Antonio): el precio va por CHANGE, no por INPUT. Con oninput, a
            quien propone se le abría la solicitud en la PRIMERA tecla y el re-render revertía
            el campo: "se queda en el 1 y no deja escribir más". Ahora se escribe el número
@@ -37375,6 +37388,11 @@ function updateCatProvProducto(idx, field, value){
   prv.productos[idx]._ts = Date.now();
   prv._ts = Date.now();
   saveState();
+  /* v1074: la subida inmediata SOLO para el precio. Nombre y unidad se editan mientras se
+     escribe, y v1070 forzaba una subida del core entero por CADA TECLA (serializar el state
+     + comprimirlo + escribir ~900KB). Ahora esos dos guardan al salir del campo (onchange)
+     y viajan con el debounce normal. */
+  if (field !== 'precio') { try { renderCatProvList(); } catch(e){} return; }
   /* v1070: subida INMEDIATA — este era el ÚNICO escritor del catálogo sin forceUploadNow
      (ventana de 1200ms en la que otro dispositivo pisaba el cambio) */
   try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
