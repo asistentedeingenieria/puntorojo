@@ -24,8 +24,13 @@ const wSrc = extractFn('_cacheWrite'), rSrc = extractFn('_cacheRead');
 ok('_cacheWrite y _cacheRead existen', !!wSrc && !!rSrc);
 if (wSrc && rSrc && LZ) {
   const store = {};
-  const env = 'var STORAGE_KEY="k"; var localStorage={ setItem:function(k,v){ store[k]=String(v); }, getItem:function(k){ return (k in store)?store[k]:null; } };\n';
-  const fns = new Function('store','LZString', env + wSrc + '\n' + rSrc + '\nreturn {w:_cacheWrite, r:_cacheRead};')(store, LZ);
+  /* v1073: la compresión pasó a DIFERIDA (bloqueaba 809 ms el hilo en cada guardado) — el
+     sandbox declara las variables del scope y hace que el plazo corra al instante, así
+     estas pruebas del formato (marker, roundtrip, compat) siguen valiendo igual. */
+  const env = 'var STORAGE_KEY="k"; var _cachePend=null, _cacheTimer=null;'
+    + ' var setTimeout=function(fn){ fn(); return 1; }, clearTimeout=function(){}, requestIdleCallback=function(fn){ fn(); };'
+    + ' var localStorage={ setItem:function(k,v){ store[k]=String(v); }, getItem:function(k){ return (k in store)?store[k]:null; } };\n';
+  const fns = new Function('store','LZString','console', env + extractFn('_cacheWriteAhora') + '\n' + wSrc + '\n' + rSrc + '\nreturn {w:_cacheWrite, r:_cacheRead};')(store, LZ, console);
   fns.w('{"hola":1}');
   ok('escribe comprimido con marker LZ1|', String(store.k).indexOf('LZ1|') === 0);
   ok('lee lo comprimido y devuelve el original', fns.r() === '{"hola":1}');
@@ -38,7 +43,10 @@ if (wSrc && rSrc && LZ) {
 // ── wiring: todos los caminos del cache pasan por los helpers ──
 ok('boot lee con _cacheRead', html.indexOf('const raw = _cacheRead();') >= 0);
 ok('ya no queda setItem directo del state', html.indexOf('localStorage.setItem(STORAGE_KEY, JSON.stringify(state))') < 0);
-ok('savePrefs pasa por _cacheWrite', /savePrefs\(p\)\{ try\{_cacheWrite\(JSON\.stringify\(p\)\)\}/.test(html));
+/* v1073 — ESTA ASERCIÓN ESTABA AL REVÉS Y ESCONDÍA UN BUG: las prefs de secciones
+   colapsables NO deben pasar por _cacheWrite, porque ese helper escribe en STORAGE_KEY y
+   les pisaba el cache del state completo (4 MB) cada vez que alguien colapsaba algo. */
+ok('las prefs de secciones NO tocan el cache del state', !/savePrefs\(p\)\{ try\{_cacheWrite\(/.test(html) && /pr_secciones/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
