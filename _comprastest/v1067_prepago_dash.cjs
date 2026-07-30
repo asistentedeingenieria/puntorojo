@@ -38,7 +38,10 @@ ok('y entra al total de empresa (cuadra con lo pagado)', /totC \+= _pp\.total/.t
 console.log('\n— B. la fecha del documento —');
 const zC = ex('window._dppCrearDesdeMadre = async function');
 ok('el despacho lleva la fecha del DÍA (no la de la madre)', /fecha: \(typeof _dateALatam/.test(zC));
-ok('y sin fecha de entrega heredada', /fechaEntrega: ''/.test(zC));
+/* v1068 (Antonio, 30-jul): "la fecha de entrega va a depender de la fecha que el supervisor
+   lo pida... manejémoslo como con las órdenes de compra" — el modal manual ganó un campo
+   OPCIONAL; vacío sigue sin heredar nada de la madre. */
+ok('y sin fecha de entrega heredada (vacío u opcional del form, nunca la de la madre)', /fechaEntrega: form\.entrega \? _fechaInputALatam\(form\.entrega\) : ''/.test(zC));
 ok('el trasiego también estampa su fecha', /fecha: \(typeof _dateALatam/.test(ex('window._trasRegistrar = async function')));
 
 console.log('\n— C. las tarjetas SÍ se pintan al entrar a BODEGA CENTRAL —');

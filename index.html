@@ -3346,7 +3346,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1067</span>
+    <span style="opacity:.5;font-size:9px">v1068</span>
   </footer>
 
 </div>
@@ -10307,6 +10307,19 @@ const CloudSync = {
         if (!(_ae && /^(INPUT|TEXTAREA|SELECT)$/.test(_ae.tagName))) renderInventarios();
       }
     } catch(e){ console.warn('[v1058] repintado de inventarios', e); }
+    /* v1068 (Antonio: "DEBE DE ESTAR IGUAL"): la BODEGA PRE-PAGO y los TRASIEGOS también se
+       repintan al llegar datos de otro dispositivo — mismo patrón v1058, sin input enfocado. */
+    try {
+      const _wp = document.getElementById('_bodegaPrepagoWrap');
+      if (_wp && typeof _bodegaPrepagoHTML === 'function') {
+        const _ae2 = document.activeElement;
+        if (!(_ae2 && /^(INPUT|TEXTAREA|SELECT)$/.test(_ae2.tagName))) {
+          _wp.innerHTML = _bodegaPrepagoHTML();
+          const _wt = document.getElementById('_trasiegosWrap');
+          if (_wt && typeof _trasiegosHTML === 'function') _wt.innerHTML = _trasiegosHTML();
+        }
+      }
+    } catch(e){ console.warn('[v1068] repintado pre-pago', e); }
     // v277: sync silencioso, sin toast intrusivo.
     // Si la limpieza removió filas, re-subir el state limpio a la nube para que
     // todos los dispositivos se sincronicen sin la basura.
@@ -22559,7 +22572,7 @@ function _abrirPickerProveedor(btn, idx){
     const _multi = _provsDelProducto(it.name);
     if (_multi.length > 1){
       _abrirPicker(btn, {
-        items: _multi.map(x => ({ id: x.id, label: x.nombre + '  ·  Q' + fmtQ(x.precio) })).concat([{ id: '_bodega', label: 'BODEGA CENTRAL (DESPACHO)' }]), // v990: precio con formato
+        items: _multi.map(x => ({ id: x.id, label: x.nombre + '  ·  Q' + fmtQ(x.precio) })).concat([{ id: '_bodega', label: 'BODEGA CENTRAL (DESPACHO)' }]).concat(_dppOpcionesDeItem(it.name)).concat(_trasOpcionesDeItem()), // v990: precio con formato · v1068: pre-pago y trasiego
         selectedId: it.proveedorId || '',
         onPick: function(id){ updateOcItemProveedor(idx, id); }
       });
@@ -22568,7 +22581,7 @@ function _abrirPickerProveedor(btn, idx){
     if (it._provAuto){
       const provA = _getProveedores().find(x => x.id === it._provAuto);
       _abrirPicker(btn, {
-        items: [ { id: it._provAuto, label: (provA ? provA.nombre : 'PROVEEDOR DEL CATÁLOGO') }, { id: '_bodega', label: 'BODEGA CENTRAL (DESPACHO)' } ],
+        items: [ { id: it._provAuto, label: (provA ? provA.nombre : 'PROVEEDOR DEL CATÁLOGO') }, { id: '_bodega', label: 'BODEGA CENTRAL (DESPACHO)' } ].concat(_dppOpcionesDeItem(it.name)).concat(_trasOpcionesDeItem()), // v1068
         selectedId: it.proveedorId || '',
         onPick: function(id){ updateOcItemProveedor(idx, id); }
       });
@@ -22577,7 +22590,7 @@ function _abrirPickerProveedor(btn, idx){
     // sin proveedor auto (no hubo match en el catálogo): se deja elegir para no trabar la OC
   }
   _abrirPicker(btn, {
-    items: _provPickerItems('— ASIGNAR —'),
+    items: _provPickerItems('— ASIGNAR —').concat(_dppOpcionesDeItem(it.name)).concat(_trasOpcionesDeItem()), // v1068
     selectedId: it.proveedorId || '',
     onPick: function(id){ updateOcItemProveedor(idx, id); }
   });
@@ -22609,7 +22622,7 @@ function renderOcItems(){
   const groups = {};
   ocWorkingItems.forEach(it => {
     const key = it.proveedorId || OC_NO_PROVIDER;
-    if (!groups[key]) groups[key] = { count:0, total:0, nombre: key === OC_NO_PROVIDER ? 'SIN PROVEEDOR' : (key === '_bodega' ? 'BODEGA CENTRAL (DESPACHO)' : ((proveedores.find(pv => pv.id === key)||{}).nombre || 'PROVEEDOR')) };
+    if (!groups[key]) groups[key] = { count:0, total:0, nombre: key === OC_NO_PROVIDER ? 'SIN PROVEEDOR' : (key === '_bodega' ? 'BODEGA CENTRAL (DESPACHO)' : (String(key).indexOf('_dpp:') === 0 ? 'COMPRA PRE-PAGO (DESPACHO)' : (String(key).indexOf('_tras:') === 0 ? ('TRASIEGO · ' + String((( (state && state.projects) || []).find(x => x && x.id === String(key).slice(6)) || {}).name || 'OBRA').toUpperCase()) : ((proveedores.find(pv => pv.id === key)||{}).nombre || 'PROVEEDOR')))) };
     groups[key].count += 1;
     groups[key].total += (Number(it.qty)||0) * (Number(it.precio)||0); // v922: precios con IVA incluido
   });
@@ -22620,7 +22633,7 @@ function renderOcItems(){
   const _fpOpts = (document.getElementById('ocFormaPago') || { innerHTML: '' }).innerHTML;
   let html = `<div class="oc-multi-summary">
     ${Object.entries(groups).map(([gid, g]) => `<div class="oc-multi-chip"><strong>${g.nombre}</strong>${g.count} MATERIAL${g.count!==1?'ES':''} · Q ${fmtQ(g.total)}
-      ${(gid && gid !== '_bodega' && gid !== OC_NO_PROVIDER) ? `
+      ${(gid && gid !== '_bodega' && gid !== OC_NO_PROVIDER && gid.indexOf('_dpp:') !== 0 && gid.indexOf('_tras:') !== 0) ? `
       <div style="margin-top:8px;display:grid;gap:6px;text-transform:none">
         <label style="display:block;font-size:8px;letter-spacing:1px;color:var(--mute);font-weight:700">ENTREGA DE ESTE PROVEEDOR
           <input type="date" value="${((window._ocPorProv || {})[gid] || {}).fechaEntrega || ''}" onchange="_ocPorProvSet('${gid}','fechaEntrega',this.value)" style="width:100%;padding:5px 7px;border:1px solid var(--line);border-radius:5px;font:inherit;font-size:11px;margin-top:2px;box-sizing:border-box">
@@ -22653,8 +22666,8 @@ function renderOcItems(){
           : ''
       }</div>
       <div class="oc-qty">${it.qty}</div>
-      <div><button type="button" onclick="_abrirPickerProveedor(this, ${idx})" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 10px;border:1px solid ${it.proveedorId ? '#D1D5DB' : '#FCA5A5'};border-radius:8px;background:#fff;font-family:inherit;font-size:11px;cursor:pointer;text-align:left"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${it.proveedorId === '_bodega' ? 'BODEGA CENTRAL (DESPACHO)' : ((proveedores.find(pv => pv.id === it.proveedorId)||{}).nombre || '— ASIGNAR —')}</span><span style="color:#9CA3AF">▾</span></button></div>
-      <div>${(it.aMedida || it.eventual || it.proveedorId === '_bodega')
+      <div><button type="button" onclick="_abrirPickerProveedor(this, ${idx})" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 10px;border:1px solid ${it.proveedorId ? '#D1D5DB' : '#FCA5A5'};border-radius:8px;background:#fff;font-family:inherit;font-size:11px;cursor:pointer;text-align:left"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${it.proveedorId === '_bodega' ? 'BODEGA CENTRAL (DESPACHO)' : (String(it.proveedorId||'').indexOf('_dpp:') === 0 ? 'COMPRA PRE-PAGO' : (String(it.proveedorId||'').indexOf('_tras:') === 0 ? ('TRASIEGO · ' + String((((state && state.projects) || []).find(pv => pv && pv.id === String(it.proveedorId).slice(6)) || {}).name || 'OBRA').toUpperCase()) : ((proveedores.find(pv => pv.id === it.proveedorId)||{}).nombre || '— ASIGNAR —')))}</span><span style="color:#9CA3AF">▾</span></button></div>
+      <div>${((it.aMedida || it.eventual || it.proveedorId === '_bodega' || String(it.proveedorId||'').indexOf('_tras:') === 0) && String(it.proveedorId||'').indexOf('_dpp:') !== 0)
         ? `<input type="number" step="0.01" min="0" value="${it.precio || ''}" placeholder="0.00" oninput="updateOcPrecio(${idx}, this.value)" title="${it.aMedida ? 'Poste a medida: precio de fabricación digitable' : 'Material extraordinario: no está en el catálogo, escribí el precio acordado'}">`
         : `<input type="number" value="${it.precio || ''}" placeholder="—" disabled style="background:var(--cream);cursor:not-allowed" title="El precio viene del catálogo de precios — para cambiarlo enviá una solicitud">`}</div>
       <div class="oc-subtotal" id="ocSubtotal-${idx}">Q ${fmtQ(it.qty * (it.precio || 0))}</div>
@@ -22717,10 +22730,46 @@ window.updateOcItemVariante = function(idx, valor){
 function updateOcItemProveedor(idx, provId){
   const item = ocWorkingItems[idx];
   if (!item) return;
+  // v1068: pseudo-fuentes nuevas — liberar de una COMPRA PRE-PAGO o TRASEGAR de otra obra
+  const _esDpp = String(provId || '').indexOf('_dpp:') === 0;
+  const _esTras = String(provId || '').indexOf('_tras:') === 0;
   // v978: defensa de frontera del candado — en pedidos de receta solo AUTO ↔ BODEGA.
   // v989: … o cualquiera de los proveedores que SÍ venden ese material (varios en catálogo).
-  if (window._ocProvLocked && item._provAuto && provId && provId !== '_bodega' && provId !== item._provAuto
+  // v1068: … o las fuentes nuevas (pre-pago y trasiego), que el picker ya filtró por saldo.
+  if (window._ocProvLocked && item._provAuto && provId && provId !== '_bodega' && provId !== item._provAuto && !_esDpp && !_esTras
       && !_provsDelProducto(item.name).some(x => x.id === provId)) return showToast('EN PEDIDOS DE RECETA EL PROVEEDOR VIENE DEL CATÁLOGO — SOLO PODÉS ELEGIR ENTRE LOS QUE VENDEN ESE MATERIAL O MANDARLO A BODEGA', 'red');
+  /* v1068: COMPRA PRE-PAGO — el precio es el CONGELADO de la madre y el saldo manda.
+     Return temprano como la rama '_bodega': nada de catálogo después. */
+  if (_esDpp) {
+    const _todasD = _dppOrdenesGlobal();
+    const _madreD = _todasD.find(o => o && o.id === provId.slice(5));
+    const _sD = _madreD ? _dppSaldoDeMadre(_madreD, _todasD) : null;
+    const _regD = _sD && _sD.porItem[_ocItemMemKey(item.name)];
+    if (!_regD || !(_regD.saldo > 0)) return showToast('ESA COMPRA ANTICIPADA YA NO TIENE SALDO DE ESTE MATERIAL', 'red');
+    if ((Number(item.qty) || 0) > _regD.saldo + 0.0001) return showToast('SOLO QUEDAN ' + _regD.saldo + ' POR LIBERAR Y EL PEDIDO LLEVA ' + item.qty, 'red');
+    item.proveedorId = provId;
+    item.autoAssigned = true;
+    item.eventual = false;
+    item.precio = Number(_regD.precio) || 0;
+    showToast('COMPRA PRE-PAGO · ' + (_madreD.proveedorNombre || '') + ' — SALDO ' + _regD.saldo + ' · PRECIO CONGELADO Q ' + fmtQ(item.precio), 'ok');
+    renderOcItems();
+    return;
+  }
+  /* v1068: TRASIEGO — el precio sale de la cascada v1066 (lo que costó al entrar a bodega →
+     catálogo) y queda digitable por si la obra origen lo tiene a otro precio. */
+  if (_esTras) {
+    item.proveedorId = provId;
+    item.autoAssigned = false;
+    item.eventual = false;
+    if (!(Number(item.precio) > 0)) {
+      let _pu = 0;
+      try { _pu = Number(_precioEntradaBodega(_ocItemMemKey(item.name))) || 0; } catch(e){}
+      if (!(_pu > 0)) { try { const _inf = precioDeProductoReceta(_getProveedores(), item.name, ''); _pu = (_inf && Number(_inf.precio)) || 0; } catch(e){} }
+      item.precio = _pu;
+    }
+    renderOcItems();
+    return;
+  }
   item.proveedorId = provId || '';
   item.autoAssigned = false;
   // v_pcat: con proveedor real ya no es eventual; sin proveedor (SIN PROVEEDOR) sí lo es
@@ -22875,7 +22924,15 @@ function updateOcPrecio(idx, val){
      que costó cuando entró a la bodega; si la app no lo encuentra (movimientos viejos sin
      precio sellado), tiene que poder escribirse a mano o el despacho sale en Q 0 y falsea el
      gasto de la obra. */
-  if (!ocWorkingItems[idx].aMedida && !ocWorkingItems[idx].eventual && ocWorkingItems[idx].proveedorId !== '_bodega') {
+  /* v1068: el precio de una COMPRA PRE-PAGO es el congelado de la madre — no se digita NUNCA,
+     ni aunque el ítem venga marcado eventual (ese agujero dejaba pisar el congelado). */
+  if (String(ocWorkingItems[idx].proveedorId || '').indexOf('_dpp:') === 0) {
+    showToast('EL PRECIO DEL PRE-PAGO ES EL CONGELADO DE LA COMPRA MADRE', 'red');
+    return;
+  }
+  // v1068: el TRASIEGO sí es digitable (mismo argumento que bodega v1019)
+  if (!ocWorkingItems[idx].aMedida && !ocWorkingItems[idx].eventual && ocWorkingItems[idx].proveedorId !== '_bodega'
+      && String(ocWorkingItems[idx].proveedorId || '').indexOf('_tras:') !== 0) {
     showToast('EL PRECIO VIENE DEL CATÁLOGO — PEDÍ EL CAMBIO POR SOLICITUD', 'red');
     return;
   }
@@ -23190,7 +23247,9 @@ async function generarOrdenCompra(){
      formas?" que se aceptaba sin leer y la orden salía en Q 0 — y cada orden en cero es una
      mentira permanente en el gasto del proyecto. El extraordinario ya puede llevar precio
      escrito a mano (updateOcPrecio), así que no queda ningún caso sin salida. */
-  const sinPrecio = ocWorkingItems.filter(it => it.proveedorId !== '_bodega' && !(Number(it.precio) > 0));
+  /* v1068: el TRASIEGO tampoco exige precio (mueve el gasto al valor que tenga — v1066 permite
+     Q0 con aviso); el PRE-PAGO lleva el congelado de la madre, que siempre es > 0. */
+  const sinPrecio = ocWorkingItems.filter(it => it.proveedorId !== '_bodega' && String(it.proveedorId || '').indexOf('_tras:') !== 0 && !(Number(it.precio) > 0));
   if (sinPrecio.length > 0) {
     const _lst = sinPrecio.slice(0, 4).map(it => `<li>${it.name}</li>`).join('');
     await window.prAlert({
@@ -23245,6 +23304,7 @@ async function generarOrdenCompra(){
   const created = [];
 
   providerIds.forEach((provId, idx) => {
+    if (/^_(dpp|tras):/.test(provId)) return; // v1068: pre-pago y trasiego nacen aparte, después del lazo
     // v921: '_bodega' = ORDEN DE DESPACHO desde la bodega central (proveedor sintético)
     const esBodega = provId === '_bodega';
     const prov = esBodega ? { id: '_bodega', nombre: 'BODEGA CENTRAL' } : _getProveedores().find(x => x.id === provId);
@@ -23318,6 +23378,106 @@ async function generarOrdenCompra(){
     created.push(oc);
   });
 
+  /* ═══ v1068 (Antonio, 30-jul): grupos ESPECIALES — el material del pedido sale de una
+     COMPRA PRE-PAGO ('_dpp:<madreId>') o se TRASIEGA de otra obra ('_tras:<obraId>').
+     Nacen FUERA del lazo de proveedores a propósito (los tests v985/v993 anclan ventanas
+     de caracteres sobre ese lazo) y NO son compras:
+     · El DPP libera material ya pagado: vive en el contenedor DE LA MADRE (o el saldo
+       derivado no lo vería), cita refOcMadre, precio congelado, PENDIENTE de finanzas.
+     · El TRAS mueve material y gasto entre obras: DIRECTO (decisión v1066), vive en el
+       store de bodega como todos los trasiegos.
+     Ambos llevan pedidoId: cuentan para la cobertura y se reciben en obra con su firma.
+     El saldo se valida FRESCO acá (después de todos los await — regla v769/v940). */
+  const _espIds = providerIds.filter(id => /^_(dpp|tras):/.test(id));
+  for (const _eid of _espIds) {
+    const _eitems = groups[_eid] || [];
+    if (!_eitems.length) continue;
+    const _bm = _bodegaMatStore();
+    _bm.ordenes = _bm.ordenes || [];
+    if (_eid.indexOf('_dpp:') === 0) {
+      const _todasE = _dppOrdenesGlobal();
+      const _madreE = _todasE.find(o => o && o.id === _eid.slice(5));
+      if (!_madreE || (_madreE.status || 'AUTORIZADA') !== 'AUTORIZADA') { showToast('LA COMPRA ANTICIPADA YA NO ESTÁ DISPONIBLE — ESE GRUPO NO SE GENERÓ', 'red'); continue; }
+      const _fM = _bodegaFindOc(_madreE.id);
+      const _contM = (_fM && _fM.cont) || _bm; // el DPP vive CON su madre
+      const _sE = _dppSaldoDeMadre(_madreE, _todasE);
+      let _sobregira = '';
+      const _itemsDpp = _eitems.map(it => {
+        const _reg = _sE.porItem[_ocItemMemKey(it.name)];
+        if (!_reg || (Number(it.qty) || 0) > _reg.saldo + 0.0001) _sobregira = it.name;
+        if (_reg) _reg.saldo = +(_reg.saldo - (Number(it.qty) || 0)).toFixed(4); // dos ítems del mismo material suman
+        return { name: it.name, unidad: (_reg && _reg.unidad) || '', qty: it.qty, precio: _reg ? (Number(_reg.precio) || 0) : (Number(it.precio) || 0) };
+      });
+      if (_sobregira) { showToast('"' + _sobregira + '" SOBREGIRA EL SALDO PRE-PAGO — ESE GRUPO NO SE GENERÓ', 'red'); continue; }
+      const _usadosD = [];
+      (_contM.ordenes || []).forEach(o => { if (o && _ocSerieDe(o) === 'DPP') _usadosD.push(Number(o.folio) || 0); });
+      const _folioD = _primerNumeroLibre(_usadosD);
+      const _tD = Date.now();
+      const _totD = +(_itemsDpp.reduce((a, x) => a + (Number(x.qty) || 0) * (Number(x.precio) || 0), 0)).toFixed(2);
+      const _subD = +(_totD / 1.12).toFixed(2);
+      const dpp = {
+        id: 'oc-' + uid(), serie: 'DPP', folio: _folioD, numero: 'DESPACHO PRE-PAGO ' + _folioD,
+        ts: _tD, _ts: _tD, // sellado SIEMPRE, sin condicionar por contenedor (v972)
+        pedidoId: pd.id, pedidoNumero: pd.numero,
+        refOcMadre: _madreE.id, refOcMadreNumero: _madreE.numero,
+        proveedorId: _madreE.proveedorId || '', proveedorNombre: _madreE.proveedorNombre || '',
+        fecha: fechaOc,
+        fechaEntrega: fechaEntregaNueva, // como toda OC (decisión de Antonio, 30-jul)
+        proyecto: proyectoOc, area: areaOc, // "automáticamente ya detecta para qué área va"
+        destinoProyectoId: _destinoProyectoDePedido(pd),
+        entregarA,
+        formaPago: 'COMPRA ANTICIPADA — YA PAGADO', credito: 0,
+        items: _itemsDpp,
+        subtotal: _subD, ivaPct: 0.12, ivaIncluido: true, ivaMonto: +(_totD - _subD).toFixed(2), total: _totD,
+        totalLetras: numeroALetras(_totD).toUpperCase(),
+        generadoPor: String((getCurrentUser() || {}).displayName || (getCurrentUser() || {}).username || 'COMPRAS').toUpperCase(),
+        generadoPorUsername: String((getCurrentUser() || {}).username || '').toLowerCase(),
+        generadoTs: _tD,
+        autorizadoPor: '', autorizadoTs: null,
+        impreso: false,
+        esDespacho: true, esPrepago: true, esTrasiego: false, esProduccion: false,
+        status: 'PENDIENTE_AUTORIZACION' // quien genera no autoriza (v919)
+      };
+      _contM.ordenes.push(dpp);
+      created.push(dpp);
+    } else {
+      const _obraId = _eid.slice(6);
+      const _obraO = ((state && state.projects) || []).find(x => x && x.id === _obraId);
+      if (!_obraO) { showToast('LA OBRA ORIGEN DEL TRASIEGO YA NO EXISTE — ESE GRUPO NO SE GENERÓ', 'red'); continue; }
+      const _destT = _destinoProyectoDePedido(pd);
+      if (_destT && _destT === _obraId) { showToast('EL TRASIEGO NO PUEDE SALIR DE LA MISMA OBRA QUE PIDE', 'red'); continue; }
+      const _usadosT = [];
+      (_bm.ordenes || []).forEach(o => { if (o && _ocSerieDe(o) === 'TRAS') _usadosT.push(Number(o.folio) || 0); });
+      const _folioT = _primerNumeroLibre(_usadosT);
+      const _tT = Date.now();
+      const _itemsT = _eitems.map(it => ({ name: it.name, unidad: '', qty: it.qty, precio: Number(it.precio) || 0 }));
+      const _totT = +(_itemsT.reduce((a, x) => a + (Number(x.qty) || 0) * (Number(x.precio) || 0), 0)).toFixed(2);
+      const _uT = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+      const _nomDest = _destT ? String((((state && state.projects) || []).find(x => x && x.id === _destT) || {}).name || _destT).toUpperCase() : String(proyectoOc || '');
+      const tras = {
+        id: 'oc-' + uid(), serie: 'TRAS', folio: _folioT, numero: 'TRASIEGO ' + _folioT,
+        ts: _tT, _ts: _tT,
+        pedidoId: pd.id, pedidoNumero: pd.numero,
+        fecha: fechaOc, fechaEntrega: fechaEntregaNueva,
+        proyecto: proyectoOc, area: areaOc,
+        esDespacho: true, esTrasiego: true, esPrepago: false, esProduccion: false,
+        origenProyectoId: _obraId, destinoProyectoId: _destT,
+        origenProyectoNombre: String(_obraO.name || _obraId).toUpperCase(), destinoProyectoNombre: _nomDest,
+        proveedorId: '', proveedorNombre: 'TRASIEGO ENTRE OBRAS',
+        formaPago: 'NO APLICA · TRASIEGO', credito: 0,
+        items: _itemsT, subtotal: _totT, iva: 0, total: _totT,
+        totalLetras: numeroALetras(_totT).toUpperCase(),
+        status: 'AUTORIZADA', // DIRECTO: no sale dinero, solo se mueve (v1066, confirmado 30-jul)
+        autorizadoPor: String(_uT.displayName || _uT.username || '').toUpperCase(), autorizadoTs: _tT,
+        generadoPor: String(_uT.displayName || _uT.username || '').toUpperCase(),
+        generadoPorUsername: String(_uT.username || '').toLowerCase(),
+        impreso: false
+      };
+      _bm.ordenes.push(tras);
+      created.push(tras);
+    }
+  }
+
   /* v1001 (pedido de Antonio): si esto fue una CORRECCIÓN de un borrador —compras se
      equivocó y lo editó antes de que finanzas firmara—, la orden vieja se reemplaza. Se
      borra DESPUÉS de crear las nuevas: si algo falla arriba, el borrador sigue intacto. */
@@ -23341,6 +23501,26 @@ async function generarOrdenCompra(){
         _ctx.cont.ordenesEliminadas[o.id] = Date.now();
       }
     } catch(e){ console.warn('[v1001] reemplazo del borrador', e); }
+    /* v1068: los DPP del pedido viven con su madre (store de bodega), FUERA de _ctx.cont —
+       la corrección del borrador también los reemplaza o quedarían duplicados. Solo
+       PENDIENTES (el TRAS nace AUTORIZADA y un trasiego ya registrado no se toca acá). */
+    try {
+      const _bmB = _bodegaMatStore();
+      if (_bmB !== _ctx.cont && _bmB.ordenes) {
+        const _nuevos2 = {};
+        created.forEach(o => { _nuevos2[o.id] = true; });
+        for (let i = _bmB.ordenes.length - 1; i >= 0; i--) {
+          const o = _bmB.ordenes[i];
+          if (!o || _nuevos2[o.id]) continue;
+          if (o.pedidoId !== pd.id) continue;
+          if (_ocSerieDe(o) !== 'DPP') continue;
+          if ((o.status || 'AUTORIZADA') !== 'PENDIENTE_AUTORIZACION') continue;
+          _bmB.ordenes.splice(i, 1);
+          _bmB.ordenesEliminadas = _bmB.ordenesEliminadas || {};
+          _bmB.ordenesEliminadas[o.id] = Date.now(); // tombstone: no resucita por union-merge (v972)
+        }
+      }
+    } catch(e){ console.warn('[v1068] reemplazo de DPPs del borrador', e); }
     window._ocEditandoId = '';
   }
 
@@ -23362,6 +23542,9 @@ async function generarOrdenCompra(){
   if (pd.esDeReceta) {
     ocWorkingItems.forEach(it => {
       if (!it.proveedorId) return;
+      /* v1068: las fuentes _dpp:/_tras: NO se recuerdan — recordarlas pre-asignaría prepago o
+         trasiego para SIEMPRE en el próximo pedido, contra una madre que puede ya no tener saldo */
+      if (/^_(dpp|tras):/.test(it.proveedorId)) return;
       if (!_memDest.ocProvPorItem) _memDest.ocProvPorItem = {};
       _memDest.ocProvPorItem[_ocItemMemKey(it.name)] = it.proveedorId;
     });
@@ -24199,8 +24382,7 @@ function renderOrdenesList(){
        liberar en la tarjeta y el botón para generar el despacho a una obra */
     if (isAuth && typeof _ocEsPrepagoMadre === 'function' && _ocEsPrepagoMadre(oc)) {
       try {
-        const _fS = _bodegaFindOc(oc.id);
-        const _sS = _dppSaldoDeMadre(oc, (_fS && _fS.cont && _fS.cont.ordenes) || []);
+        const _sS = _dppSaldoDeMadre(oc, _dppOrdenesGlobal()); // v1068: la misma fuente en TODOS lados
         const _sobre = _sS.orden.some(k => _sS.porItem[k].saldo < -0.0001);
         const _resumenS = _sS.orden.map(k => { const it = _sS.porItem[k]; return it.saldo + ' de ' + it.qty; }).join(' · ');
         _opEstado = `<div style="font-size:9px;font-weight:700;letter-spacing:.8px;margin-top:4px;color:${_sobre ? '#B91C1C' : (_sS.totalSaldo > 0 ? '#B45309' : '#15803D')}">PRE-PAGO · POR LIBERAR: ${_resumenS}${_sobre ? ' · ¡SOBREGIRADO!' : ''}</div>`;
@@ -24240,7 +24422,9 @@ function renderOrdenesList(){
     // con factura, el link VER en la info + reemplazo solo admin.
     /* v1039 (Antonio): la ORDEN DE PRODUCCIÓN no se factura — es un aviso al proveedor para
        fabricar. La factura va en la ORDEN DE COMPRA que nace de ella. */
-    const facturaBtn = (isAuth && canFactura && !oc.facturaUrl && _ocSerieDe(oc) !== 'OP')
+    /* v1068: el DPP tampoco se factura — la factura del pre-pago vive en la OC madre (mismo
+       argumento que la OP: el documento que respalda el gasto real es otro) */
+    const facturaBtn = (isAuth && canFactura && !oc.facturaUrl && _ocSerieDe(oc) !== 'OP' && _ocSerieDe(oc) !== 'DPP')
       ? `<button class="btn ghost sm" onclick="_ocAbrirSubirFactura('${oc.id}')" title="Subir la factura que generó el proveedor">SUBIR FACTURA</button>`
       : '';
 
@@ -24524,7 +24708,7 @@ async function autorizarOrden(id){
     try {
       const _fm = _bodegaFindOc(oc.refOcMadre);
       if (_fm && _fm.oc) {
-        const _sm = _dppSaldoDeMadre(_fm.oc, (_fm.cont && _fm.cont.ordenes) || []);
+        const _sm = _dppSaldoDeMadre(_fm.oc, _dppOrdenesGlobal()); // v1068: fuente única
         const _rojo = _sm.orden.find(k => _sm.porItem[k].saldo < -0.0001);
         if (_rojo) return showToast('SALDO PRE-PAGO SOBREGIRADO EN "' + _sm.porItem[_rojo].name + '" — OTRO DESPACHO SE ADELANTÓ. REVISÁ LA ' + _numLimpio(_fm.oc.numero), 'red');
       }
@@ -33716,6 +33900,55 @@ function _dppSaldoDeMadre(madre, ordenes){
   orden.forEach(function(k){ porItem[k].saldo = +(porItem[k].qty - porItem[k].despachado).toFixed(4); totalSaldo += porItem[k].saldo; });
   return { porItem: porItem, orden: orden, totalSaldo: +totalSaldo.toFixed(4) };
 }
+/* v1068 (Antonio, 30-jul: "tenemos diferentes datos de POR LIBERAR. DEBE DE ESTAR IGUAL"):
+   la ÚNICA fuente de órdenes para calcular saldos pre-pago. El panel usaba el contenedor
+   de la madre y el modal el suyo — con un despacho viviendo en otro contenedor (p.ej.
+   PROYECTOS VARIOS) los números divergían. TODOS los llamadores de _dppSaldoDeMadre
+   pasan esta lista; un despacho cuenta viva donde viva. */
+function _dppOrdenesGlobal(){
+  var todas = [];
+  try { var b = _bodegaMatStore(); if (b && b.ordenes) todas = todas.concat(b.ordenes); } catch(e){}
+  try { var v = (state && state.variosMat) || {}; if (v.ordenes) todas = todas.concat(v.ordenes); } catch(e){}
+  try { ((state && state.projects) || []).forEach(function(p){ if (p && p.materiales && p.materiales.ordenes) todas = todas.concat(p.materiales.ordenes); }); } catch(e){}
+  return todas;
+}
+/* v1068: opciones COMPRA PRE-PAGO del picker de proveedor por ítem — una por cada compra
+   anticipada AUTORIZADA que tenga saldo de ESE material. El precio va congelado. */
+function _dppOpcionesDeItem(nombre){
+  var ops = [];
+  try {
+    var k = _ocItemMemKey(nombre);
+    var todas = _dppOrdenesGlobal();
+    todas.forEach(function(o){
+      if (!o || (o.status || 'AUTORIZADA') !== 'AUTORIZADA') return;
+      if (!_ocEsPrepagoMadre(o)) return;
+      var s = _dppSaldoDeMadre(o, todas);
+      var it = s.porItem[k];
+      if (!it || !(it.saldo > 0)) return;
+      ops.push({ id: '_dpp:' + o.id, label: 'COMPRA PRE-PAGO · ' + String(o.proveedorNombre || '') + ' (' + _numLimpio(o.numero) + ' · SALDO ' + it.saldo + ')' });
+    });
+  } catch(e){}
+  return ops;
+}
+/* v1068: opciones TRASIEGO · <obra> — todas las obras menos la que pide el material.
+   Al generar nace el TRASIEGO v1066 (DIRECTO) ligado al pedido. */
+function _trasOpcionesDeItem(){
+  var ops = [];
+  try {
+    var _cx = (typeof _findPedidoGlobal === 'function') ? _findPedidoGlobal(window.currentPedidoDetalleId) : null;
+    var dest = (_cx && _cx.pd && typeof _destinoProyectoDePedido === 'function') ? _destinoProyectoDePedido(_cx.pd) : '';
+    ((state && state.projects) || []).forEach(function(x){
+      if (!x || !x.id || x.id === dest) return;
+      ops.push({ id: '_tras:' + x.id, label: 'TRASIEGO · ' + String(x.name || x.id).toUpperCase() });
+    });
+  } catch(e){}
+  return ops;
+}
+/* v1068: desplegable del resumen de despachos por madre — repinta el wrap sin cerrar el panel */
+window._dppHistToggle = function(k){
+  _histToggle(k);
+  try { var w = document.getElementById('_bodegaPrepagoWrap'); if (w) w.innerHTML = _bodegaPrepagoHTML(); } catch(e){}
+};
 window._dppCrearDesdeMadre = async function(ocId){
   if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
   const _f = _bodegaFindOc(ocId);
@@ -33723,11 +33956,11 @@ window._dppCrearDesdeMadre = async function(ocId){
   const madre = _f.oc;
   if (!_ocEsPrepagoMadre(madre)) return showToast('ESTA ORDEN NO ES UNA COMPRA ANTICIPADA', 'red');
   if ((madre.status || 'AUTORIZADA') !== 'AUTORIZADA') return showToast('LA COMPRA ANTICIPADA AÚN NO ESTÁ AUTORIZADA', 'red');
-  const s0 = _dppSaldoDeMadre(madre, (_f.cont && _f.cont.ordenes) || []);
+  const s0 = _dppSaldoDeMadre(madre, _dppOrdenesGlobal()); // v1068: la MISMA fuente que el panel
   if (!(s0.totalSaldo > 0)) return showToast('YA SE DESPACHÓ TODO LO PRE-PAGADO DE ESTA ORDEN', 'red');
   /* formulario: obra destino + cantidad por material (capturado por oninput porque
      prConfirm destruye el modal antes de resolver el await — patrón v813) */
-  window._dppForm = { destino: '', qtys: {} };
+  window._dppForm = { destino: '', entrega: '', qtys: {} };
   const _e = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
   const obras = ((state && state.projects) || []).filter(x => x && x.id);
   const opts = '<option value="">— ELEGÍ LA OBRA —</option>' + obras.map(x => '<option value="' + _e(x.id) + '">' + _e((x.name || x.id).toUpperCase()) + '</option>').join('');
@@ -33747,6 +33980,11 @@ window._dppCrearDesdeMadre = async function(ocId){
       + 'El gasto se traslada de BODEGA a la obra elegida, al precio con que se pagó.</div>'
       + '<label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">OBRA QUE PIDE</label>'
       + '<select data-nativo class="pr-fld" style="width:100%" onchange="window._dppForm.destino = this.value">' + opts + '</select>'
+      /* v1068 (Antonio, 30-jul): la fecha de entrega "como venimos haciéndolo con las órdenes
+         de compra" — depende de cuándo lo pide el supervisor. Opcional; capturada por onchange
+         (patrón v813: prConfirm destruye el modal antes del await). */
+      + '<label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">FECHA DE ENTREGA (opcional)</label>'
+      + '<input type="date" class="pr-fld" style="width:100%" onchange="window._dppForm.entrega = this.value">'
       + '<div style="margin-top:12px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">CANTIDAD A LIBERAR</div>' + filas,
     okText: 'GENERAR DESPACHO', cancelText: 'CANCELAR', wide: true
   });
@@ -33759,7 +33997,7 @@ window._dppCrearDesdeMadre = async function(ocId){
   if (!_f2 || !_f2.oc) return showToast('ORDEN NO ENCONTRADA', 'red');
   const madre2 = _f2.oc;
   const cont = _f2.cont;
-  const s1 = _dppSaldoDeMadre(madre2, (cont && cont.ordenes) || []);
+  const s1 = _dppSaldoDeMadre(madre2, _dppOrdenesGlobal()); // v1068: saldo FRESCO y GLOBAL
   const items = [];
   let total = 0;
   for (const k of s1.orden) {
@@ -33792,12 +34030,18 @@ window._dppCrearDesdeMadre = async function(ocId){
     /* v1067 (decisión de Antonio): el documento lleva la fecha del DÍA del despacho, no
        la de la OC madre; y no hereda fecha de entrega */
     fecha: (typeof _dateALatam === 'function') ? _dateALatam(new Date()) : (madre2.fecha || ''),
-    fechaEntrega: '',
+    /* v1068: con fecha si la pusieron (como las OC — decisión de Antonio 30-jul); antes v1067 era siempre '' */
+    fechaEntrega: form.entrega ? _fechaInputALatam(form.entrega) : '',
     destinoProyectoId: String(form.destino),
+    /* v1068: el papel del despacho dice la OBRA que recibe, no la bodega (el clon heredaba
+       el proyecto de la madre y el impreso mentía) */
+    proyecto: String(((obras.find(x => x.id === form.destino) || {}).name || '')).toUpperCase() || (madre2.proyecto || ''),
     formaPago: 'COMPRA ANTICIPADA — YA PAGADO',
     credito: 0,
     items: items,
-    subtotal: total, iva: 0, total: total,
+    /* v1068: IVA del DESPACHO — el clon heredaba el ivaMonto de TODA la madre y el impreso
+       no cuadraba (subtotal + IVA ≠ total) */
+    subtotal: +(total / 1.12).toFixed(2), iva: 0, ivaMonto: +(total - total / 1.12).toFixed(2), ivaIncluido: true, total: total,
     totalLetras: numeroALetras(total).toUpperCase(),
     status: 'PENDIENTE_AUTORIZACION',
     autorizadoPor: '', autorizadoTs: null, firmaAutoriza: null,
@@ -33828,10 +34072,13 @@ function _prepagoSinDespachar(){
   try { fuentes.push(_bodegaMatStore()); } catch(e){}
   try { if (state && state.variosMat) fuentes.push(state.variosMat); } catch(e){}
   ((state && state.projects) || []).forEach(function(p){ if (p && p.materiales) fuentes.push(p.materiales); });
+  /* v1068: el saldo se calcula contra las órdenes de TODOS los contenedores — un despacho
+     que viva en VARIOS también descuenta. El guard typeof deja correr el sandbox v1067. */
+  var _todasG = (typeof _dppOrdenesGlobal === 'function') ? _dppOrdenesGlobal() : null;
   fuentes.forEach(function(c){ ((c && c.ordenes) || []).forEach(function(o){
     if (!o || o.status === 'CANCELADA') return;
     if (!_ocEsPrepagoMadre(o)) return;
-    var s = _dppSaldoDeMadre(o, (c && c.ordenes) || []);
+    var s = _dppSaldoDeMadre(o, _todasG || ((c && c.ordenes) || []));
     s.orden.forEach(function(k){ var it = s.porItem[k]; if (it.saldo > 0) total += it.saldo * (Number(it.precio) || 0); });
     madres++;
   }); });
@@ -33854,8 +34101,10 @@ function _bodegaPrepagoHTML(){
       madres.push({ oc: o, cont: c });
     }); });
     var puedeDespachar = false; try { puedeDespachar = can('compras.autorizar') || can('users.manage'); } catch(e){}
+    /* v1068: UNA sola fuente para el saldo (la misma del modal) — nunca más 4201 vs 5000 */
+    var todas = _dppOrdenesGlobal();
     var filas = madres.map(function(m){
-      var s = _dppSaldoDeMadre(m.oc, (m.cont && m.cont.ordenes) || []);
+      var s = _dppSaldoDeMadre(m.oc, todas);
       var pend = (m.oc.status || 'AUTORIZADA') !== 'AUTORIZADA';
       var items = s.orden.map(function(k){
         var it = s.porItem[k];
@@ -33863,12 +34112,33 @@ function _bodegaPrepagoHTML(){
           + '<span>' + esc(it.name) + '</span>'
           + '<span style="font-variant-numeric:tabular-nums;font-weight:700;color:' + (it.saldo > 0 ? '#166534' : (it.saldo < 0 ? '#B91C1C' : '#9CA3AF')) + '">POR LIBERAR: ' + it.saldo + ' de ' + it.qty + '</span></div>';
       }).join('');
+      /* v1068 (Antonio: "UN RESUMEN DE A DONDE SE HAN IDO LOS PRODUCTOS Y A QUE PROYECTOS Y
+         CUANDO"): los despachos de ESTA madre, con fecha, obra destino y referencia del
+         proveedor — desplegable cerrado por default (patrón v1067). */
+      var hijos = todas.filter(function(o){ return o && String(o.refOcMadre || '') === String(m.oc.id) && o.status !== 'CANCELADA'; })
+        .slice().sort(function(a, b){ return (b.ts || 0) - (a.ts || 0); });
+      var hk = 'dpp_hist_' + m.oc.id;
+      var histFilas = hijos.map(function(o){
+        var obraN = '';
+        try { obraN = String((((state && state.projects) || []).find(function(x){ return x && x.id === o.destinoProyectoId; }) || {}).name || o.proyecto || ''); } catch(e){}
+        var q = (o.items || []).reduce(function(a, x){ return a + (Number(x && x.qty) || 0); }, 0);
+        return '<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;font-size:10px;padding:4px 0;color:#57534E;border-bottom:1px solid #F9FAFB;align-items:center">'
+          + '<span style="min-width:0"><b>' + esc(_numLimpio(o.numero)) + '</b> · ' + esc(obraN.toUpperCase()) + (o.refExterna ? ' · REF ' + esc(o.refExterna) : '') + ((o.status || 'AUTORIZADA') !== 'AUTORIZADA' ? ' · <span style="color:#B45309;font-weight:700">PENDIENTE</span>' : '') + '</span>'
+          + '<span style="color:#78716C">' + esc(o.fecha || '') + '</span>'
+          + '<span style="font-variant-numeric:tabular-nums;font-weight:700">' + q + ' u · Q ' + fmtQ(o.total || 0) + '</span></div>';
+      }).join('');
+      var resumen = hijos.length
+        ? '<div onclick="window._dppHistToggle(\'' + esc(hk) + '\')" style="margin-top:6px;padding-top:6px;border-top:1px solid #F3F4F6;cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:center">'
+          + '<span style="font-size:8.5px;letter-spacing:1.2px;color:#9CA3AF;font-weight:700">A DÓNDE SE HA IDO · ' + hijos.length + ' DESPACHO' + (hijos.length !== 1 ? 'S' : '') + '</span>'
+          + '<span style="font-size:9.5px;color:#666;font-weight:600">' + (_histVisible(hk) ? '▼ OCULTAR' : '▶ MOSTRAR') + '</span></div>'
+          + (_histVisible(hk) ? '<div style="padding-top:2px">' + histFilas + '</div>' : '')
+        : '';
       return '<div style="border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:8px;background:#fff">'
         + '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:4px">'
         + '<div style="min-width:0;flex:1 1 200px"><div style="font-size:11.5px"><b>' + esc(_numLimpio(m.oc.numero)) + '</b> <span style="color:#78716C">· ' + esc(m.oc.proveedorNombre || '') + '</span></div>'
         + (pend ? '<div style="font-size:9px;color:#B45309;font-weight:700;letter-spacing:.6px;margin-top:2px">PENDIENTE DE AUTORIZAR — aún no se puede despachar</div>' : '') + '</div>'
         + ((puedeDespachar && !pend && s.totalSaldo > 0) ? '<button class="btn sm" style="font-size:9.5px" onclick="window._dppCrearDesdeMadre(\'' + esc(m.oc.id) + '\')">DESPACHO PRE-PAGO →</button>' : '')
-        + '</div>' + items + '</div>';
+        + '</div>' + items + resumen + '</div>';
     }).join('');
     return '<div class="card" style="padding:12px 18px 14px;margin-bottom:14px;border-left:3px solid #1D4ED8">'
       + '<div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;padding-bottom:6px">BODEGA PRE-PAGO · MATERIAL YA PAGADO POR LIBERAR</div>'

@@ -51,7 +51,9 @@ ok('y marca resync para re-subir el rescate', /_ocFacturaShield\(_moc\.list[^)]*
 console.log('\n— 3. la producción NO se factura —');
 /* la OP es un aviso al proveedor para fabricar — la factura va en la OC que nace de ella */
 const zBtn = ex('function renderOrdenesList(');
-ok('el botón SUBIR FACTURA no sale en las OP', /facturaBtn = \(isAuth && canFactura && !oc\.facturaUrl && _ocSerieDe\(oc\) !== 'OP'\)/.test(zBtn));
+/* v1068: el DPP tampoco se factura — la factura del pre-pago vive en la OC madre (mismo
+   argumento que la OP: el documento que respalda el gasto real es otro) */
+ok('el botón SUBIR FACTURA no sale en las OP ni en los DPP', /facturaBtn = \(isAuth && canFactura && !oc\.facturaUrl && _ocSerieDe\(oc\) !== 'OP' && _ocSerieDe\(oc\) !== 'DPP'\)/.test(zBtn));
 ok('abrir el modal en una OP se rechaza', /_ocSerieDe\(oc\) === 'OP'\) return showToast\('LA FACTURA VA EN LA ORDEN DE COMPRA/.test(ex('function _ocAbrirSubirFactura(')));
 ok('y el subidor también (cinturón)', /_ocSerieDe\(oc\) === 'OP'/.test(ex('async function _ocSubirFactura(')));
 /* si alguien alcanzó a subirle factura a una OP durante la ventana del bug, al derivar la OC
