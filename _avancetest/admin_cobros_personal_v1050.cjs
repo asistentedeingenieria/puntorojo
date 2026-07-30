@@ -14,7 +14,10 @@ const zA = ex('window._abrirPanelAdmin = function');
    primera en orden de documento. El inline display:block le gana a .view{display:none}. */
 ok('a #view-cobro NUNCA se le pone .active', !/classList\.add\('active'\)/.test(zA));
 ok('la barra tiene las 4 secciones', ['polizas','anticipos','cobros','personal'].every(t => new RegExp('data-admintab="' + t + '"').test(zA)));
-ok('el badge de cobro vive en el botón COBROS', /data-admintab="cobros"[^>]*>[^<]*COBROS<span id="badgeCobro">/.test(zA));
+/* v1056 (Antonio): "me sale un 16 en el título, debe decir solo COBROS" — el span badgeCobro
+   mostraba el conteo de estimaciones SIN FECHA DE PAGO de renderCobro, que aquí no es un
+   pendiente-de-atender. El botón queda pelado; renderCobro le escribe con null-guard (sección 4). */
+ok('el botón dice solo COBROS (sin badge)', />COBROS<\/button>/.test(zA) && !/COBROS<span id="badgeCobro">/.test(zA));
 ok('se recuerda la obra de origen', /_adminObraOrigen/.test(zA));
 ok('y se marca el body (antídoto de apilado v1035)', /pr-admin-abierto/.test(zA));
 ok('el CSS del antídoto existe', /body\.pr-admin-abierto \.modal-bg\{z-index:99100\}/.test(html));
@@ -60,6 +63,14 @@ ok('pedir lista/gerencia SIN el panel cae en asistencia', /_adminPanelModal/.tes
 ok('el default de PERSONAL es asistencia', /return 'asistencia'/.test(ex('function _defaultSubPestPersonal(')));
 ok('el arranque también', /window\.currentPersonalSubTab = 'asistencia'/.test(html));
 ok('la lista filtra por el proyecto del selector', /_adminObraFiltro/.test(ex('function _persListaFiltrada(')));
+
+console.log('\n— 6. v1056: el badge de LIQUIDACIÓN ya no cuenta anticipos —');
+/* Antonio: "me sigue saliendo el 4 si ya pasamos los anticipos para otro lado" — el badge de
+   la pestaña sumaba _cntAnticipoPend aunque los anticipos viven en ADMINISTRACIÓN (v1018),
+   donde ya tienen su propio tabBadge-anticipos */
+const zCnt = ex('window._cntPlanillaPend = function');
+ok('sin el sumando de anticipos', !/_cntAnticipoPend/.test(zCnt) && /_cntPagoEtapaPend/.test(zCnt));
+ok('el badge de anticipos sigue vivo en ADMINISTRACIÓN', /tabBadge-anticipos/.test(ex('window._abrirPanelAdmin = function')) || /set\('tabBadge-anticipos'/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

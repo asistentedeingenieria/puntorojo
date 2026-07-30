@@ -13,7 +13,8 @@ console.log('\n— 1. las sub-pestañas del panel son BOTONES con diseño —');
 /* cuadrícula de botones parejos, escopeada a LOS PANELES (la obra no se toca) */
 ok('cuadrícula ordenada en los dos paneles', /#_bodegaPanelModal \.mat-tabs\.ped-tabs-bar,\s*\r?\n?#_adminPanelModal \.mat-tabs\.ped-tabs-bar\{[^}]*grid/.test(html));
 ok('botones con borde y radio (no texto suelto)', /#_bodegaPanelModal \.mat-tabs\.ped-tabs-bar \.mat-tab[^{]*\{[^}]*border-radius/.test(html));
-ok('el activo se rellena (se ve cuál es)', /ped-tabs-bar \.mat-tab\.active\{[^}]*background:var\(--ink/.test(html));
+/* v1056 (Antonio): el activo SIN relleno negro — se marca con borde grueso y negrita */
+ok('el activo se rellena (se ve cuál es)', /ped-tabs-bar \.mat-tab\.active\{[^}]*border:2px solid var\(--ink/.test(html) && !/ped-tabs-bar \.mat-tab\.active\{[^}]*background:var\(--ink/.test(html));
 ok('sin el subrayado de pestaña vieja', /ped-tabs-bar \.mat-tab[^{]*\{[^}]*border-bottom[^}]*\}/.test(html) || true);
 
 console.log('\n— 2. el encabezado en celular: botones uno al lado del otro —');

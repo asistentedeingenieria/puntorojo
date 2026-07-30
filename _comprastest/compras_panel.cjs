@@ -73,6 +73,14 @@ ok('y si no, avisa dónde quedó', /ÓRDENES DE COMPRA/.test(zGen) && /setMatTab
 /* dentro del panel, el botón COMPRAS de la barra de pedidos abriría el panel sobre sí mismo */
 ok('el botón COMPRAS se esconde dentro del panel', /#_bodegaPanelModal \.ped-tabs-bar button\[onclick\*="_abrirPanelBodega"\]\{display:none!important\}/.test(html));
 
+console.log('\n— 4b. v1056: el repintado NO te manda hasta arriba —');
+/* Antonio: "cuando apacho el historial me redirige hasta arriba y tengo que bajar" — los
+   toggles repintan el panel entero (cerrar+reabrir) y el scroll moría con el nodo. El par de
+   repintado guarda y restaura la posición: cubre los ~10 repintados de una vez. */
+ok('el cierre interno GUARDA el scroll antes de destruir', (function(){ const z = ex('function _cerrarPanelBodegaDom('); return /_comprasScroll/.test(z) && z.indexOf('_comprasScroll') < z.indexOf('.remove()'); })());
+ok('el abrir lo RESTAURA', /wrap\.scrollTop = window\._comprasScroll/.test(ex('function _abrirPanelBodega(')));
+ok('ADMINISTRACIÓN igual', /_adminScroll/.test(ex('function _cerrarPanelAdminDom(')) && /wrap\.scrollTop = window\._adminScroll/.test(ex('window._abrirPanelAdmin = function')));
+
 console.log('\n— 5. el selector de proyecto —');
 const zSecs = ex('function _comprasSeccionesHTML(');
 ok('cada sección por-proyecto trae selector nativo', (zSecs.match(/_comprasSelectorHTML\(\)/g) || []).length >= 4 && /_comprasSeccionesHTML\(\)/.test(zP));

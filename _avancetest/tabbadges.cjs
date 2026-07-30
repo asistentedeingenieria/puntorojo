@@ -21,7 +21,9 @@ ok('span badge PAGOS POR ETAPA (sub)', html.indexOf('id="tabBadge-etapas"')>=0);
 ok('span badge ÓRDENES DE COMPRA (sub)', html.indexOf('id="tabBadge-ordenes"')>=0);
 ok('_cntOCsPend gateado por compras.autorizar + status', /_cntOCsPend[\s\S]{0,260}compras\.autorizar[\s\S]{0,400}AUTORIZADA/.test(html));
 // contadores suman las fuentes correctas
-ok('planilla suma anticipo+pagoetapa+admin358', /_cntPlanillaPend\s*=\s*function\(\)\{[\s\S]{0,200}_cntAnticipoPend\(\)[\s\S]{0,80}_cntPagoEtapaPend\(\)[\s\S]{0,80}_cntAdmin358Pend\(\)/.test(html));
+/* v1056: los ANTICIPOS viven en ADMINISTRACIÓN (v1018) con su propio badge — la pestaña
+   LIQUIDACIÓN de la obra cuenta solo lo que se atiende ahí */
+ok('planilla suma anticipo+pagoetapa+admin358', /_cntPlanillaPend\s*=\s*function\(\)\{ return window\._cntPagoEtapaPend\(\) \+ window\._cntAdmin358Pend\(\); \}/.test(html) && !/_cntPlanillaPend\s*=\s*function\(\)\{[^}]*_cntAnticipoPend/.test(html));
 ok('anticipo usa _antSolicPendientesParaMi', /_cntAnticipoPend[\s\S]{0,500}_antSolicPendientesParaMi/.test(html)); // v878: la rama solo-lectura corrió el offset
 ok('pago etapa gateado por gerente + suma desmarcar', /_cntPagoEtapaPend[\s\S]{0,400}_solPagoEtapaPendientes[\s\S]{0,200}desmarcarSolicitudes/.test(html));
 ok('admin358 gateado por users.manage + estado PENDIENTE', /_cntAdmin358Pend[\s\S]{0,200}users\.manage[\s\S]{0,300}PENDIENTE/.test(html)); // v878: +isReadOnly corrió el offset

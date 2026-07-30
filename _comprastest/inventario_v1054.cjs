@@ -104,10 +104,17 @@ const zCer = ex('async function cerrarTomaInventario(');
 ok('el cierre estampa quién cerró', /cerradoPorNombre/.test(zCer));
 ok('y su firma (dataURL del core, v934)', /cerradoFirma/.test(zCer) && /_miFirmaImg\(\)/.test(zCer));
 const zDoc2 = ex('function _invReporteDoc(');
-ok('la caja de información trae el INICIO con hora', /INICIO DE LA TOMA/.test(zDoc2) && /_invFmtFechaHora\(toma\.fechaInicio\)/.test(zDoc2));
-ok('y el cierre también con hora', /_invFmtFechaHora\(toma\.fechaCierre\)/.test(zDoc2));
+/* v1056 (Antonio, con el PDF real): el INICIO va PRIMERO, con nombres completos */
+ok('la caja trae INICIO DE LA TOMA DE INVENTARIO con hora', /INICIO DE LA TOMA DE INVENTARIO/.test(zDoc2) && /_invFmtFechaHora\(toma\.fechaInicio\)/.test(zDoc2));
+ok('y FINALIZACIÓN DE LA TOMA DE INVENTARIO con hora', /FINALIZACIÓN DE LA TOMA DE INVENTARIO/.test(zDoc2) && /_invFmtFechaHora\(toma\.fechaCierre\)/.test(zDoc2));
+ok('el INICIO va antes que la finalización', zDoc2.indexOf('INICIO DE LA TOMA DE INVENTARIO') < zDoc2.indexOf('FINALIZACIÓN DE LA TOMA DE INVENTARIO'));
 ok('la firma se incrusta en el pie', /addImage\(/.test(zDoc2) && /cerradoFirma/.test(zDoc2));
-ok('con el nombre de quien cerró (fallback al que inició)', /CERRÓ LA TOMA/.test(zDoc2) && /cerradoPorNombre \|\| toma\.byNombre/.test(zDoc2));
+ok('con el nombre y CERRÓ LA TOMA abajo a la izquierda', /doc\.text\('CERRÓ LA TOMA'/.test(zDoc2) && /cerradoPorNombre \|\| toma\.byNombre/.test(zDoc2));
+/* la información del pie va EN FILA PARA ABAJO (cada dato su línea) */
+ok('MATERIALES, UNIDADES y la nota, apilados', /doc\.text\('MATERIALES: '/.test(zDoc2) && /doc\.text\('UNIDADES: '/.test(zDoc2) && /doc\.text\('Valorizado/.test(zDoc2));
+/* el fondo café clarito de las filas alternas se cambia y el TOTAL se destaca */
+ok('zebra elegante (gris suave, no café)', /alternateRowStyles/.test(zDoc2));
+ok('la fila del TOTAL con fondo propio, negritas y más grande', /fillColor: \[231, 229, 228\]/.test(zDoc2) && /fontSize: 9\.5/.test(zDoc2));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
