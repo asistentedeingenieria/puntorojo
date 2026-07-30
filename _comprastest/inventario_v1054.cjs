@@ -69,7 +69,10 @@ ok('con su TOTAL por material', rM && rM.torres['TORRE 3'].mats['TABLAYESO'].tot
 ok('BODEGA es su propia sección', rM && rM.bodega.mats['MASKING'].cantidad === 7);
 const zDoc = ex('function _invReporteDoc(');
 ok('el documento se arma con jsPDF + autotable', /window\.jspdf/.test(zDoc) && /autoTable/.test(zDoc));
-ok('con fila TOTAL NIVEL y TOTAL GENERAL', /TOTAL NIVEL/.test(zDoc) && /TOTAL GENERAL/.test(zDoc));
+/* v1075 (decisión de Antonio): fuera la fila TOTAL NIVEL — la bodega no tiene niveles y el
+   documento mezclaba dos criterios. Queda UN solo TOTAL GENERAL, y el total de cada tabla
+   sigue mostrándose en su encabezado. */
+ok('sin fila TOTAL NIVEL, con TOTAL GENERAL', !/TOTAL NIVEL/.test(zDoc) && /TOTAL GENERAL/.test(zDoc));
 ok('números centrados', /halign: ?'center'/.test(zDoc));
 ok('solo la abreviatura del proyecto', /_projSiglas\(/.test(zDoc));
 ok('con muchos niveles se va a apaisado', /landscape/.test(zDoc));
@@ -114,7 +117,8 @@ ok('con el nombre y CERRÓ LA TOMA abajo a la izquierda', /doc\.text\('CERRÓ LA
 ok('MATERIALES, UNIDADES y la nota, apilados', /doc\.text\('MATERIALES: '/.test(zDoc2) && /doc\.text\('UNIDADES: '/.test(zDoc2) && /doc\.text\('Valorizado/.test(zDoc2));
 /* el fondo café clarito de las filas alternas se cambia y el TOTAL se destaca */
 ok('zebra elegante (gris suave, no café)', /alternateRowStyles/.test(zDoc2));
-ok('la fila del TOTAL con fondo propio, negritas y más grande', /fillColor: \[231, 229, 228\]/.test(zDoc2) && /fontSize: 9\.5/.test(zDoc2));
+/* v1075: esa fila ya no existe — lo que se conserva es el total de cada tabla en su encabezado */
+ok('cada tabla lleva su total en el encabezado', /content: money\(subB\)/.test(zDoc2) && /content: money\(subT\)/.test(zDoc2));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
