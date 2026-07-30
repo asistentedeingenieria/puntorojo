@@ -3346,7 +3346,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1068</span>
+    <span style="opacity:.5;font-size:9px">v1069</span>
   </footer>
 
 </div>
@@ -22966,6 +22966,39 @@ function _ocTotalesIvaIncluido(items){
   const subtotal = total / 1.12;
   return { total, subtotal, ivaMonto: total - subtotal };
 }
+/* v1069 (Antonio, 30-jul): "las órdenes de compra NO sobrepasen los Q10,000... que
+   automáticamente se divida". Repartidor PURO (sin globals — los tests lo ejecutan):
+   1) las líneas que solas pasan el tope se parten por cantidades (ENTERAS si la cantidad
+      original era entera — nadie compra 153.84 tablas);
+   2) las líneas se agrupan en lotes que no pasen el tope;
+   3) una UNIDAD que sola pasa el tope no se puede partir: va sola y se marca indivisible.
+   El tope se compara contra el total CON IVA (los precios ya lo traen, v922). */
+function _ocLotesPorTope(items, tope){
+  var lineas = [];
+  (items || []).forEach(function(it){
+    var pu = Number(it && it.precio) || 0;
+    var q = Number(it && it.qty) || 0;
+    if (!(q > 0)) return;
+    if (!(pu > 0) || q * pu <= tope + 0.001) { lineas.push(Object.assign({}, it)); return; }
+    var entera = Math.round(q) === q;
+    var qMax = entera ? Math.floor(tope / pu) : Math.floor((tope / pu) * 10000) / 10000;
+    if (!(qMax > 0)) qMax = 1; // una unidad ya pasa el tope: de a una (indivisible)
+    while (q > 0.00005) {
+      var qi = Math.min(q, qMax);
+      lineas.push(Object.assign({}, it, { qty: +qi.toFixed(4) }));
+      q = +(q - qi).toFixed(4);
+    }
+  });
+  var lotes = [], lote = [], suma = 0, indivisible = false;
+  lineas.forEach(function(l){
+    var m = (Number(l.qty) || 0) * (Number(l.precio) || 0);
+    if (m > tope + 0.001) indivisible = true;
+    if (lote.length && suma + m > tope + 0.001) { lotes.push(lote); lote = []; suma = 0; }
+    lote.push(l); suma += m;
+  });
+  if (lote.length) lotes.push(lote);
+  return { lotes: lotes, dividido: lotes.length > 1, indivisible: indivisible };
+}
 
 function updateOcTotal(){
   // v922: precios CON IVA — el 12% ya viene adentro, no se suma encima
@@ -23476,6 +23509,47 @@ async function generarOrdenCompra(){
       _bm.ordenes.push(tras);
       created.push(tras);
     }
+  }
+
+  /* ═══ v1069 (Antonio, 30-jul): TOPE DE Q10,000 POR ORDEN DE COMPRA ═══
+     "si alguna OC de algún proveedor sobrepasa ese monto quiero que automáticamente se
+     divida y se generen más órdenes de compra para el mismo proveedor".
+     Corre DESPUÉS del lazo (ventanas v985/v993) y ANTES del barrido v1001 (así el
+     reemplazo del borrador ya ve las divididas). Solo compras REALES (serie OC): los
+     despachos, DPP, TRAS y OP no son compras, y la COMPRA ANTICIPADA se registra
+     completa a propósito (la madre de SISTEGUA es de Q325,000). Las originales nunca
+     salieron de esta función: se reemplazan sin tombstone. */
+  const OC_TOPE_Q = 10000;
+  for (let ci = created.length - 1; ci >= 0; ci--) {
+    const _oc0 = created[ci];
+    if (!_oc0 || _ocSerieDe(_oc0) !== 'OC') continue;
+    if (_oc0.esDespacho || _oc0.esProduccion || _oc0.esPrepago || _oc0.esTrasiego) continue;
+    if (/COMPRA\s*ANTICIPADA/i.test(String(_oc0.formaPago || ''))) continue;
+    if (!((Number(_oc0.total) || 0) > OC_TOPE_Q + 0.001)) continue;
+    const _rep = _ocLotesPorTope(_oc0.items || [], OC_TOPE_Q);
+    if (_rep.indivisible) showToast('OJO: HAY UNA UNIDAD DE MÁS DE Q ' + fmtQ(OC_TOPE_Q) + ' — NO SE PUEDE PARTIR Y SU ORDEN PASA EL TOPE', 'red');
+    if (!_rep.dividido) continue; // una sola unidad indivisible: se queda como está, ya avisado
+    const _iCont = (_ctx.cont.ordenes || []).findIndex(o => o && o.id === _oc0.id);
+    if (_iCont < 0) continue;
+    const _nuevasT = _rep.lotes.map((_loteI, li) => {
+      /* la primera hereda el folio de la original (queda libre); el resto estrena folio */
+      const _folioL = li === 0 ? _oc0.folio : _primerNumeroLibre(_usadosSerie['OC'] = _usadosSerie['OC'] || []);
+      if (li > 0) _usadosSerie['OC'].push(_folioL);
+      const _totL = _ocTotalesIvaIncluido(_loteI);
+      const _tL = Date.now() + li;
+      return Object.assign({}, _oc0, {
+        id: li === 0 ? _oc0.id : 'oc-' + uid(),
+        folio: _folioL,
+        numero: `${pd.numero} - OC ${_folioL}`,
+        items: _loteI,
+        subtotal: _totL.subtotal, ivaMonto: _totL.ivaMonto, total: _totL.total,
+        totalLetras: numeroALetras(_totL.total).toUpperCase(),
+        ts: _tL, _ts: _tL // v972: toda orden nace sellada
+      });
+    });
+    _ctx.cont.ordenes.splice(_iCont, 1, ..._nuevasT);
+    created.splice(ci, 1, ..._nuevasT);
+    showToast('LA OC DE ' + String(_oc0.proveedorNombre || '') + ' PASABA DE Q ' + fmtQ(OC_TOPE_Q) + ' — SE DIVIDIÓ EN ' + _nuevasT.length + ' ÓRDENES', 'amber');
   }
 
   /* v1001 (pedido de Antonio): si esto fue una CORRECCIÓN de un borrador —compras se
