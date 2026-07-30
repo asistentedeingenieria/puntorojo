@@ -3346,7 +3346,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1065</span>
+    <span style="opacity:.5;font-size:9px">v1066</span>
   </footer>
 
 </div>
@@ -21549,6 +21549,8 @@ function _abrirPanelBodega(){
     <div id="_comprasSecBodega">
     <!-- v1065: BODEGA PRE-PAGO — material COMPRA ANTICIPADA por liberar (vista derivada) -->
     <div id="_bodegaPrepagoWrap"></div>
+    <!-- v1066: TRASIEGOS — material (y su gasto) de obra a obra -->
+    <div id="_trasiegosWrap"></div>
     <!-- v976: header en tarjetitas (pedido de Antonio: el párrafo denso se veía desordenado)
          v987: en celular las 4 tarjetas se esconden tras el botón CÓMO FUNCIONA (comían
          toda la primera pantalla); en desktop el botón no aparece y el grid queda igual. -->
@@ -21760,6 +21762,7 @@ function _comprasSetTab(t){
       var r = document.getElementById('_comprasResumenGastos');
       if (r) r.innerHTML = _puedeVerGastos() ? (_comprasGastosDashHTML() + _comprasCxpHTML() + _comprasGastosResumenHTML()) : ''; // v1042: dashboard arriba · v1059: + cuentas por pagar
       try { var _bp = document.getElementById('_bodegaPrepagoWrap'); if (_bp) _bp.innerHTML = _bodegaPrepagoHTML(); } catch(e){} // v1065: bodega pre-pago
+      try { var _tw = document.getElementById('_trasiegosWrap'); if (_tw) _tw.innerHTML = _trasiegosHTML(); } catch(e){} // v1066: trasiegos
     }
   } catch(e){ console.warn('[v1040] despachar sección', e); }
   /* setMatTab pisa los .active de TODOS los .mat-tab — el activo de la barra de secciones se
@@ -23732,8 +23735,8 @@ function printOrdenCompra(ocId, isDraft){
 
   // v921: ORDEN DE DESPACHO (bodega central) — solo producto y cantidad, sin dinero
   /* v1061: el DESPACHO PRE-PAGO es esDespacho (exclusiones/ledger) pero su impreso SÍ
-     lleva dinero — los precios congelados de la madre y el proveedor real */
-  const esDespacho = !!oc.esDespacho && !oc.esPrepago;
+     lleva dinero. v1066: el TRASIEGO también — es el gasto que viaja de obra a obra. */
+  const esDespacho = !!oc.esDespacho && !oc.esPrepago && !oc.esTrasiego;
   const itemsHtml = oc.items.map(it => `
     <tr>
       <td style="padding:6px 10px;border:1px solid #888">${it.name}</td>
@@ -23946,7 +23949,8 @@ ${showDraft ? '<div class="no-print" style="background:var(--red-soft);padding:1
     <!-- v948: solo el logo (el texto "APP" se movió al bloque del No., abajo de la sigla) -->
     <div style="display:flex;align-items:center;gap:8px"><img src="${_LOGO_PR}" style="height:62px;max-width:165px;object-fit:contain" alt="PUNTO ROJO"></div>
     <div class="oc-title-col">
-      <div class="oc-title">${oc.esPrepago ? 'DESPACHO PRE-PAGO' : (esDespacho ? 'ORDEN DE DESPACHO' : (oc.esProduccion ? 'ORDEN DE PRODUCCIÓN' : 'ORDEN DE COMPRA'))}</div>
+      <div class="oc-title">${oc.esTrasiego ? 'TRASIEGO DE MATERIAL' : (oc.esPrepago ? 'DESPACHO PRE-PAGO' : (esDespacho ? 'ORDEN DE DESPACHO' : (oc.esProduccion ? 'ORDEN DE PRODUCCIÓN' : 'ORDEN DE COMPRA')))}</div>
+      ${oc.esTrasiego ? '<div style="font-size:10px;color:#555;letter-spacing:2px;margin-top:4px;font-weight:700">' + String(oc.origenProyectoNombre || '').replace(/[<>]/g, '') + ' → ' + String(oc.destinoProyectoNombre || '').replace(/[<>]/g, '') + '</div>' : ''}
       ${esDespacho ? '<div style="font-size:10px;color:#555;letter-spacing:2px;margin-top:4px;font-weight:700">BODEGA CENTRAL → OBRA</div>' : ''}
       ${oc.esPrepago ? '<div style="font-size:10px;color:#555;letter-spacing:2px;margin-top:4px;font-weight:700">LIBERACIÓN DE MATERIAL YA PAGADO · ' + String(_numLimpio(oc.refOcMadreNumero || '')).replace(/[<>]/g, '') + '</div>' : ''}
       ${!esDespacho && oc.esProduccion ? '<div style="font-size:10px;color:#555;letter-spacing:2px;margin-top:4px;font-weight:700">FABRICACIÓN DE POSTES A LA MEDIDA</div>' : ''}
@@ -33138,6 +33142,14 @@ function _gastoDestinoDeOrden(o){
   });
   return dest;
 }
+/* v1066: signo del TRASIEGO para una obra — el gasto viaja CON el material (decisión de
+   Antonio): a la obra DESTINO le suma, a la ORIGEN le resta, a las demás nada. PURA. */
+function _trasSigno(o, pid){
+  if (!o || !o.esTrasiego) return 0;
+  if (String(o.destinoProyectoId || '') === String(pid)) return 1;
+  if (String(o.origenProyectoId || '') === String(pid)) return -1;
+  return 0;
+}
 function _gastosDeProyecto(projectId){
   const pid = String(projectId || '');
   const conts = [];
@@ -33151,6 +33163,20 @@ function _gastosDeProyecto(projectId){
     if (!o || o.status === 'CANCELADA') return;
     const serie = (typeof _ocSerieDe === 'function') ? _ocSerieDe(o) : (o.serie || 'OC');
     if (serie === 'OP') return;                       // la producción NO es gasto
+    /* v1066: el TRASIEGO afecta a DOS obras — suma al destino, resta a la origen */
+    if (o.esTrasiego) {
+      const signo = _trasSigno(o, pid);
+      if (!signo) return;
+      const itemsT = (o.items || []).map(it => ({ name: it.name, qty: Number(it.qty) || 0, precio: Number(it.precio) || 0 }));
+      const montoT = signo * itemsT.reduce((s, it) => s + it.qty * it.precio, 0);
+      totalDespacho += montoT; // material movido: viaja por la vía del despacho (con signo)
+      ordenes.push({
+        id: o.id, numero: o.numero, serie: serie, esDespacho: true, esTrasiego: true, esPrepago: false,
+        proveedorNombre: signo > 0 ? ('DESDE ' + String(o.origenProyectoNombre || '')) : ('HACIA ' + String(o.destinoProyectoNombre || '')),
+        ts: o.ts || 0, formaPago: o.formaPago || '', pedidoId: '', items: itemsT, monto: +montoT.toFixed(2)
+      });
+      return;
+    }
     if (_gastoDestinoDeOrden(o) !== pid) return; // v1041: deriva el destino de las órdenes viejas
     const esDesp = (serie === 'DESP') || !!o.esDespacho;
     /* el despacho se valoriza línea por línea con el precio de entrada a bodega; la compra ya
@@ -33811,6 +33837,118 @@ function _bodegaPrepagoHTML(){
       + '</div>';
   } catch(e){ console.warn('[v1065] bodega prepago', e); return ''; }
 }
+/* ═══════════ v1066 · TRASIEGOS DE MATERIAL OBRA→OBRA ═══════════
+   Antonio: "llevar un registro de movimientos de materiales de una obra a otra".
+   Decisiones: mueve el GASTO entre obras, SOLO compras registra, DIRECTO (sin
+   autorización). Serie TRAS en bodegaMat.ordenes (union-merge v972 — sin cambio de
+   sync); esDespacho:true hereda exclusiones y como nace AUTORIZADA jamás pasa por
+   autorizarOrden (no toca el ledger de bodega). El gasto es derivado (_trasSigno). */
+window._trasForm = null;
+window._trasRowHTML = function(i){
+  return '<div style="display:grid;grid-template-columns:minmax(0,1fr) 80px;gap:8px;margin-bottom:6px">'
+    + '<input class="pr-fld" placeholder="MATERIAL (como en el catálogo)" autocomplete="off" oninput="if(window._trasForm)window._trasForm.items[' + i + '].name=this.value">'
+    + '<input class="pr-fld" type="number" inputmode="decimal" min="0" step="any" placeholder="0" style="text-align:center" oninput="if(window._trasForm)window._trasForm.items[' + i + '].qty=this.value">'
+    + '</div>';
+};
+window._trasAddRow = function(){
+  const c = document.getElementById('_trasRows');
+  if (!c || !window._trasForm) return;
+  const i = window._trasForm.items.length;
+  window._trasForm.items.push({ name: '', qty: '' });
+  c.insertAdjacentHTML('beforeend', window._trasRowHTML(i));
+};
+window._trasRegistrar = async function(){
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS PUEDE REGISTRAR TRASIEGOS', 'red');
+  window._trasForm = { origen: '', destino: '', items: [{ name: '', qty: '' }, { name: '', qty: '' }, { name: '', qty: '' }] };
+  const _e = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  const obras = ((state && state.projects) || []).filter(x => x && x.id);
+  const opts = '<option value="">— ELEGÍ LA OBRA —</option>' + obras.map(x => '<option value="' + _e(x.id) + '">' + _e((x.name || x.id).toUpperCase()) + '</option>').join('');
+  const rows = window._trasForm.items.map((_, i) => window._trasRowHTML(i)).join('');
+  /* captura por oninput: prConfirm destruye el modal ANTES de resolver el await (v813) */
+  const okc = await window.prConfirm({
+    title: 'TRASIEGO DE MATERIAL ENTRE OBRAS',
+    bodyHTML: '<div style="font-size:12px;color:#444;line-height:1.6;margin-bottom:10px">El material y su GASTO pasan de la obra origen a la destino, al precio con que entró a la obra (o el del catálogo). Queda registrado directo, con su documento.</div>'
+      + '<label style="display:block;margin:8px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">OBRA ORIGEN (de dónde sale)</label>'
+      + '<select data-nativo class="pr-fld" style="width:100%" onchange="if(window._trasForm)window._trasForm.origen=this.value">' + opts + '</select>'
+      + '<label style="display:block;margin:10px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">OBRA DESTINO (a dónde llega)</label>'
+      + '<select data-nativo class="pr-fld" style="width:100%" onchange="if(window._trasForm)window._trasForm.destino=this.value">' + opts + '</select>'
+      + '<div style="margin:12px 0 6px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">MATERIALES Y CANTIDADES</div>'
+      + '<div id="_trasRows">' + rows + '</div>'
+      + '<button type="button" class="btn ghost sm" style="font-size:10px" onclick="window._trasAddRow()">+ AGREGAR MATERIAL</button>',
+    okText: 'REGISTRAR TRASIEGO', cancelText: 'CANCELAR', wide: true
+  });
+  if (!okc) { window._trasForm = null; return; }
+  const f = window._trasForm || {};
+  const origen = String(f.origen || ''), destino = String(f.destino || '');
+  if (!origen || !destino) return showToast('ELEGÍ LA OBRA ORIGEN Y LA DESTINO', 'red');
+  if (origen === destino) return showToast('EL ORIGEN Y EL DESTINO NO PUEDEN SER LA MISMA OBRA', 'red');
+  const items = [];
+  let total = 0; const sinPrecio = [];
+  (f.items || []).forEach(it => {
+    const name = String((it && it.name) || '').trim().toUpperCase();
+    const qty = Number(String((it && it.qty) || '').replace(/[^0-9.]/g, '')) || 0;
+    if (!name || !(qty > 0)) return;
+    let pu = 0;
+    try { pu = Number(_precioEntradaBodega(_ocItemMemKey(name))) || 0; } catch(e){}
+    if (!(pu > 0)) { try { const inf = precioDeProductoReceta(_getProveedores(), name, ''); pu = (inf && Number(inf.precio)) || 0; } catch(e){} }
+    if (!(pu > 0)) sinPrecio.push(name);
+    items.push({ name: name, unidad: '', qty: qty, precio: +(pu.toFixed ? pu.toFixed(4) : pu) * 1 });
+    total += qty * pu;
+  });
+  if (!items.length) return showToast('PONÉ AL MENOS UN MATERIAL CON CANTIDAD', 'red');
+  total = +total.toFixed(2);
+  const cont = _bodegaMatStore();
+  const _usados = [];
+  (cont.ordenes || []).forEach(o => { if (o && _ocSerieDe(o) === 'TRAS') _usados.push(Number(o.folio) || 0); });
+  const folio = _primerNumeroLibre(_usados);
+  const u0 = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  const nombreDe = id => String((((state && state.projects) || []).find(x => x && x.id === id) || {}).name || id).toUpperCase();
+  const t = Date.now();
+  const tras = {
+    id: 'oc-' + uid(), serie: 'TRAS', folio: folio, numero: 'TRASIEGO ' + folio,
+    esDespacho: true, esTrasiego: true, esPrepago: false, esProduccion: false,
+    origenProyectoId: origen, destinoProyectoId: destino,
+    origenProyectoNombre: nombreDe(origen), destinoProyectoNombre: nombreDe(destino),
+    proveedorId: '', proveedorNombre: 'TRASIEGO ENTRE OBRAS',
+    formaPago: 'NO APLICA · TRASIEGO', credito: 0,
+    items: items, subtotal: total, iva: 0, total: total,
+    totalLetras: (typeof numeroALetras === 'function') ? numeroALetras(total).toUpperCase() : '',
+    status: 'AUTORIZADA', // decisión de Antonio: queda directo al registrarse
+    autorizadoPor: String(u0.displayName || u0.username || '').toUpperCase(), autorizadoTs: t,
+    generadoPor: String(u0.displayName || u0.username || '').toUpperCase(),
+    generadoPorUsername: String(u0.username || '').toLowerCase(),
+    ts: t, _ts: t
+  };
+  cont.ordenes.push(tras);
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  window._trasForm = null;
+  showToast('TRASIEGO ' + folio + ' · Q ' + fmtQ(total) + ' DE ' + nombreDe(origen) + ' → ' + nombreDe(destino) + (sinPrecio.length ? ' · ' + sinPrecio.length + ' MATERIAL(ES) SIN PRECIO (mueven Q0)' : ''), sinPrecio.length ? 'amber' : 'green');
+  try { if (document.getElementById('_bodegaPanelModal')) { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } } catch(e){}
+};
+/* v1066: tarjeta TRASIEGOS en BODEGA CENTRAL — registro + historial con documento */
+function _trasiegosHTML(){
+  try {
+    var esc = function(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]); }); };
+    var lista = ((_bodegaMatStore().ordenes) || []).filter(function(o){ return o && o.esTrasiego && o.status !== 'CANCELADA'; })
+      .slice().sort(function(a, b){ return (b.ts || 0) - (a.ts || 0); });
+    var puede = false; try { puede = can('compras.autorizar') || can('users.manage'); } catch(e){}
+    var filas = lista.map(function(o){
+      return '<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #F3F4F6">'
+        + '<div style="min-width:0"><div style="font-size:11.5px"><b>' + esc(_numLimpio(o.numero)) + '</b> <span style="color:#78716C">· ' + esc(o.origenProyectoNombre || '') + ' → ' + esc(o.destinoProyectoNombre || '') + '</span></div>'
+        + '<div style="font-size:10px;color:#78716C;margin-top:2px">' + (o.ts ? new Date(o.ts).toLocaleDateString('es-GT') : '') + ' · ' + ((o.items || []).length) + ' material(es) · Q ' + fmtQ(o.total || 0) + '</div></div>'
+        + '<button class="btn ghost sm" style="font-size:9px" onclick="printOrdenCompra(\'' + esc(o.id) + '\')" title="Ver el documento del trasiego">VER →</button>'
+        + '</div>';
+    }).join('');
+    return '<div class="card" style="padding:12px 18px 14px;margin-bottom:14px;border-left:3px solid #7C3AED">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding-bottom:6px">'
+      + '<div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700">TRASIEGOS · MATERIAL DE OBRA A OBRA</div>'
+      + (puede ? '<button class="btn sm" style="font-size:9.5px" onclick="window._trasRegistrar()">+ REGISTRAR TRASIEGO</button>' : '')
+      + '</div>'
+      + (filas || '<div style="font-size:11px;color:#9CA3AF;padding:6px 0">Sin trasiegos todavía. Al registrar uno, el material y su gasto pasan de la obra origen a la destino y queda el documento.</div>')
+      + '</div>';
+  } catch(e){ console.warn('[v1066] trasiegos', e); return ''; }
+}
 window._ocDerivarDeOp = async function(opId){
   if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
   const _f = _bodegaFindOc(opId);
@@ -34085,7 +34223,7 @@ function renderGastos(){
       <div class="pr-fila-panel" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 0;cursor:pointer" onclick="window._gastosToggleOrden('${_esc(o.id)}')">
         <div style="min-width:0">
           <div style="font-size:11.5px"><b>${_esc(_numLimpio(o.numero))}</b>
-            <span style="font-size:9px;font-weight:700;letter-spacing:.8px;margin-left:6px;color:${o.esDespacho ? '#166534' : '#1D4ED8'}">${o.esPrepago ? 'DESPACHO PRE-PAGO' : (o.esDespacho ? 'DESPACHO DE BODEGA' : 'COMPRA')}</span></div>
+            <span style="font-size:9px;font-weight:700;letter-spacing:.8px;margin-left:6px;color:${o.esTrasiego ? '#7C3AED' : (o.esDespacho ? '#166534' : '#1D4ED8')}">${o.esTrasiego ? 'TRASIEGO' : (o.esPrepago ? 'DESPACHO PRE-PAGO' : (o.esDespacho ? 'DESPACHO DE BODEGA' : 'COMPRA'))}</span></div>
           <div style="font-size:10px;color:#78716C;margin-top:2px">${_esc(o.proveedorNombre)}${o.formaPago ? ' · ' + _esc(o.formaPago) : ''}</div>
         </div>
         <div style="text-align:right;font-weight:700;font-size:12.5px;font-variant-numeric:tabular-nums">Q ${fmtQ(o.monto)}<div style="font-size:8.5px;color:#9CA3AF;font-weight:700;letter-spacing:.5px">VER DETALLE</div>
