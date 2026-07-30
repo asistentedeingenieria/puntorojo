@@ -79,7 +79,8 @@ const zP = ex('function _abrirPanelBodega(');
 ok('el título togglea', /_bodegaMovsToggle/.test(zP));
 ok('muestra el conteo y MOSTRAR/OCULTAR', /MOSTRAR/.test(zP) && /OCULTAR/.test(zP));
 ok('la preferencia se guarda', /bodega_movs_visible/.test(html));
-ok('cerrado por defecto (historial, no muro)', /getItem\('bodega_movs_visible'\) === '1'/.test(zP));
+/* v1067: el flag pasó a memoria de sesión — cerrado en CADA entrada (regla de Antonio) */
+ok('cerrado por defecto (historial, no muro)', /_histVisible\('bodega_movs_visible'\)/.test(zP));
 ok('existe el toggle', /window\._bodegaMovsToggle = function/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);

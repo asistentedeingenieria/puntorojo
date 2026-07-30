@@ -19,7 +19,9 @@ ok('recuerda la preferencia POR PROYECTO', /pedidos_historial_visible_' \+ \(\(p
 ok('solo pinta las tarjetas del historial si está abierto', /_hVis \? `<div style="padding:4px 0 12px">/.test(zL));
 ok('si no queda ningún activo lo dice (no una lista vacía muda)', /No hay pedidos activos/.test(zL));
 const zT = ex('window.togglePedidosHistorial = function');
-ok('el toggle invierte la preferencia y repinta', /localStorage\.setItem/.test(zT) && /renderPedidosList\(\)/.test(zT));
+/* v1067 (Antonio: "todos los historiales cerrados por default cuando me meto"): el flag
+   pasó de localStorage (quedaba pegado para siempre) a memoria de sesión (_histToggle) */
+ok('el toggle invierte la preferencia y repinta', /_histToggle\(/.test(zT) && /renderPedidosList\(\)/.test(zT));
 ok('el toggle no explota sin localStorage', /catch\(e\)\{\}/.test(zT));
 
 // ── ENVIAR A COMPRAS deja todo limpio ──

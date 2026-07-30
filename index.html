@@ -3346,7 +3346,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1066</span>
+    <span style="opacity:.5;font-size:9px">v1067</span>
   </footer>
 
 </div>
@@ -17429,6 +17429,14 @@ async function loadNotasStructureToCurrentProject(){
    - Toma CERRADA = inmutable, queda en historial fechado.
    - _mergeTomas: unión multidispositivo (cerrada gana; abiertas unen líneas por
      loc+material con ts mayor; tombstones por id). Mismo patrón que asistencia. */
+/* v1067 (Antonio: "TODOS los historiales deben estar predeterminadamente cerrados —
+   ahorita cuando me meto están abiertos"): el abierto/cerrado vivía en localStorage y
+   quedaba pegado PARA SIEMPRE tras abrirlo una vez. Ahora vive en memoria: cada vez que
+   se entra a la app, todo historial nace cerrado; dentro de la sesión se respeta lo que
+   el usuario abra. */
+window._histFlags = window._histFlags || {};
+function _histVisible(k){ return window._histFlags[k] === true; }
+function _histToggle(k){ window._histFlags[k] = !window._histFlags[k]; }
 function _invNorm(s){
   return String(s==null?'':s).trim().toUpperCase().replace(/\s+/g,' ');
 }
@@ -18579,7 +18587,7 @@ function renderPedidosList(){
   const _act = pedidos.filter(pd => pd && pd.status !== 'RECIBIDO');
   const _hist = pedidos.filter(pd => pd && pd.status === 'RECIBIDO');
   const _hKey = 'pedidos_historial_visible_' + ((p && p.id) || 'def');
-  const _hVis = (() => { try { return localStorage.getItem(_hKey) === '1'; } catch(e){ return false; } })();
+  const _hVis = _histVisible(_hKey); // v1067: cerrado por default en cada entrada
   let _html = _avisoAjenos;
   _html += _act.map(pd => renderPedidoCard(pd, p)).join('');
   if (!_act.length && _hist.length) {
@@ -18600,7 +18608,7 @@ function renderPedidosList(){
 window.togglePedidosHistorial = function(){
   const p = activeProj();
   const k = 'pedidos_historial_visible_' + ((p && p.id) || 'def');
-  try { localStorage.setItem(k, localStorage.getItem(k) === '1' ? '0' : '1'); } catch(e){}
+  _histToggle(k); // v1067
   try { renderPedidosList(); } catch(e){}
 };
 
@@ -21435,7 +21443,7 @@ function _abrirPanelBodega(){
   const _pedAbAct = pedAb.filter(pd => !_pedidoYaRecibido(pd));
   const _pedAbHist = pedAb.filter(pd => _pedidoYaRecibido(pd));
   const _hKeyBod = 'bodega_historial_visible';
-  const _hVisBod = (function(){ try { return localStorage.getItem(_hKeyBod) === '1'; } catch(e){ return false; } })();
+  const _hVisBod = _histVisible(_hKeyBod); // v1067: cerrado por default en cada entrada
   const _filaPedAb = pd => {
     const ocsPd = _bm.ordenes.filter(o => o && o.pedidoId === pd.id);
     // v1005: el chip dice PENDIENTE DE AUTORIZACIÓN mientras finanzas no firme sus órdenes
@@ -21604,9 +21612,9 @@ function _abrirPanelBodega(){
     <div class="card" style="padding:0 18px;margin-top:12px">
       <div onclick="window._bodegaMovsToggle()" style="padding:12px 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px">
         <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700">ÚLTIMOS MOVIMIENTOS</div>
-        <span style="font-size:10px;color:#666;font-weight:600">${(((state || {}).bodegaMovs) || []).length} · ${(function(){ try { return localStorage.getItem('bodega_movs_visible') === '1'; } catch(e){ return false; } })() ? '▼ OCULTAR' : '▶ MOSTRAR'}</span>
+        <span style="font-size:10px;color:#666;font-weight:600">${(((state || {}).bodegaMovs) || []).length} · ${_histVisible('bodega_movs_visible') ? '▼ OCULTAR' : '▶ MOSTRAR'}</span>
       </div>
-      ${(function(){ try { return localStorage.getItem('bodega_movs_visible') === '1'; } catch(e){ return false; } })() ? `<div style="padding-bottom:12px">${histo}</div>` : ''}
+      ${_histVisible('bodega_movs_visible') ? `<div style="padding-bottom:12px">${histo}</div>` : ''}
     </div>
     </div><!-- /_comprasSecBodega (v1040) -->
     ${_comprasSeccionesHTML()}
@@ -21757,12 +21765,16 @@ function _comprasSetTab(t){
     }
     if (t === 'ordenes') setMatTab('ordenes');
     if (t === 'inventarios') setMatTab('inventario');
+    if (t === 'bodega') {
+      /* v1067 (Antonio: "no veo nada de trasiegos ni de bodega pre-pago"): los rellenados
+         estaban en la rama de GASTOS por un mal anclaje — van AQUÍ, al entrar a BODEGA */
+      try { var _bp = document.getElementById('_bodegaPrepagoWrap'); if (_bp) _bp.innerHTML = _bodegaPrepagoHTML(); } catch(e){} // v1065
+      try { var _tw = document.getElementById('_trasiegosWrap'); if (_tw) _tw.innerHTML = _trasiegosHTML(); } catch(e){} // v1066
+    }
     if (t === 'gastos') {
       setMatTab('gastos');
       var r = document.getElementById('_comprasResumenGastos');
       if (r) r.innerHTML = _puedeVerGastos() ? (_comprasGastosDashHTML() + _comprasCxpHTML() + _comprasGastosResumenHTML()) : ''; // v1042: dashboard arriba · v1059: + cuentas por pagar
-      try { var _bp = document.getElementById('_bodegaPrepagoWrap'); if (_bp) _bp.innerHTML = _bodegaPrepagoHTML(); } catch(e){} // v1065: bodega pre-pago
-      try { var _tw = document.getElementById('_trasiegosWrap'); if (_tw) _tw.innerHTML = _trasiegosHTML(); } catch(e){} // v1066: trasiegos
     }
   } catch(e){ console.warn('[v1040] despachar sección', e); }
   /* setMatTab pisa los .active de TODOS los .mat-tab — el activo de la barra de secciones se
@@ -21884,7 +21896,7 @@ window._comprasCostoSet = function(campo, valor){
   if (costo) { try { costo.innerHTML = _comprasRecetaCostoHTML(); } catch(e){ console.warn('[v1044] costo', e); } }
 };
 window._bodegaMovsToggle = function(){
-  try { localStorage.setItem('bodega_movs_visible', localStorage.getItem('bodega_movs_visible') === '1' ? '0' : '1'); } catch(e){}
+  _histToggle('bodega_movs_visible'); // v1067
   try { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } catch(e){}
 };
 window._comprasCambiarProyecto = function(id){
@@ -21930,6 +21942,12 @@ function _comprasGastosDashDatos(){
   /* v1059: UNA sola derivada SIN filtro de obra — sumando _cuentasPorPagar(p.id) por
      proyecto, una OC a crédito de BODEGA (destino '') no aparecía en ningún total */
   try { var _cxpAll = _cuentasPorPagar(''); cxpTotal = (_cxpAll && _cxpAll.total) || 0; cxpVenc = (_cxpAll && _cxpAll.totalVencido) || 0; } catch(e){}
+  /* v1067 (Antonio): el dinero PREPAGADO sin despachar aparece como fila BODEGA CENTRAL —
+     antes era invisible en GASTOS hasta despacharse; la fila baja sola con cada despacho */
+  try {
+    var _pp = _prepagoSinDespachar();
+    if (_pp.total > 0.009) { filas.push({ nombre: 'BODEGA CENTRAL · PRE-PAGO POR LIBERAR', compra: _pp.total, despacho: 0, total: _pp.total }); totC += _pp.total; }
+  } catch(e){}
   var top = function(m){
     return Object.keys(m).map(function(k){ return { name: k, monto: m[k] }; })
       .filter(function(x){ return x.monto > 0; })
@@ -22041,7 +22059,7 @@ window._abrirPanelVarios = function(){
   // v1007: los ya recibidos se guardan en el historial del panel
   const pedidos = _todosVar.filter(pd => !_pedidoYaRecibido(pd));
   const _varHist = _todosVar.filter(pd => _pedidoYaRecibido(pd));
-  const _hVisVar = (function(){ try { return localStorage.getItem('varios_historial_visible') === '1'; } catch(e){ return false; } })();
+  const _hVisVar = _histVisible('varios_historial_visible'); // v1067
   // agrupados por CLIENTE / proyecto pequeño
   const porCliente = {};
   pedidos.forEach(pd => {
@@ -22161,11 +22179,11 @@ window._abrirPanelVarios = function(){
    no se duplica — se MUEVE el mismo nodo (#pedido-nuevo) adentro del panel y se devuelve a
    su lugar al salir. Los handlers son onclick inline, así que sobreviven al movimiento. */
 window.toggleBodegaHistorial = function(){
-  try { localStorage.setItem('bodega_historial_visible', localStorage.getItem('bodega_historial_visible') === '1' ? '0' : '1'); } catch(e){}
+  _histToggle('bodega_historial_visible'); // v1067
   try { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } catch(e){}
 };
 window.toggleVariosHistorial = function(){
-  try { localStorage.setItem('varios_historial_visible', localStorage.getItem('varios_historial_visible') === '1' ? '0' : '1'); } catch(e){}
+  _histToggle('varios_historial_visible'); // v1067
   try { window._variosRepintar(); } catch(e){}
 };
 window._variosNuevoPedido = function(){
@@ -24149,7 +24167,7 @@ function renderOrdenesList(){
     (_ocPendienteDeRecibir(oc, _pdOc && _pdOc.pd) ? _ocPend : _ocRecib).push(oc);
   });
   const _hKeyOc = 'oc_historial_visible_' + ((p && p.id) || 'def');
-  const _hVisOc = (function(){ try { return localStorage.getItem(_hKeyOc) === '1'; } catch(e){ return false; } })();
+  const _hVisOc = _histVisible(_hKeyOc); // v1067
   const _filaOc = oc => {
     const st = oc.status || 'AUTORIZADA'; // fallback para OCs antiguas
     const isPending = st === 'PENDIENTE_AUTORIZACION';
@@ -24308,7 +24326,7 @@ function renderOrdenesList(){
 window.toggleOcHistorial = function(){
   const p = activeProj();
   const k = 'oc_historial_visible_' + ((p && p.id) || 'def');
-  try { localStorage.setItem(k, localStorage.getItem(k) === '1' ? '0' : '1'); } catch(e){}
+  _histToggle(k); // v1067
   try { renderOrdenesList(); } catch(e){}
 };
 
@@ -33771,6 +33789,10 @@ window._dppCrearDesdeMadre = async function(ocId){
     esProduccion: false,
     refOcMadre: madre2.id,
     refOcMadreNumero: madre2.numero,
+    /* v1067 (decisión de Antonio): el documento lleva la fecha del DÍA del despacho, no
+       la de la OC madre; y no hereda fecha de entrega */
+    fecha: (typeof _dateALatam === 'function') ? _dateALatam(new Date()) : (madre2.fecha || ''),
+    fechaEntrega: '',
     destinoProyectoId: String(form.destino),
     formaPago: 'COMPRA ANTICIPADA — YA PAGADO',
     credito: 0,
@@ -33798,6 +33820,23 @@ window._dppCrearDesdeMadre = async function(ocId){
   try { renderOrdenesList(); } catch(e){}
   try { if (document.getElementById('_bodegaPanelModal')) { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } } catch(e){}
 };
+/* v1067 (decisión de Antonio): lo PREPAGADO que aún no se despacha, en dinero — la fila
+   BODEGA CENTRAL del dashboard de GASTOS. Derivado: Σ saldo × precio congelado. */
+function _prepagoSinDespachar(){
+  var total = 0, madres = 0;
+  var fuentes = [];
+  try { fuentes.push(_bodegaMatStore()); } catch(e){}
+  try { if (state && state.variosMat) fuentes.push(state.variosMat); } catch(e){}
+  ((state && state.projects) || []).forEach(function(p){ if (p && p.materiales) fuentes.push(p.materiales); });
+  fuentes.forEach(function(c){ ((c && c.ordenes) || []).forEach(function(o){
+    if (!o || o.status === 'CANCELADA') return;
+    if (!_ocEsPrepagoMadre(o)) return;
+    var s = _dppSaldoDeMadre(o, (c && c.ordenes) || []);
+    s.orden.forEach(function(k){ var it = s.porItem[k]; if (it.saldo > 0) total += it.saldo * (Number(it.precio) || 0); });
+    madres++;
+  }); });
+  return { total: +total.toFixed(2), madres: madres };
+}
 /* v1065 (Antonio): "una sola bodega que sea solo de compras prepago" — vista única con
    TODO lo comprado COMPRA ANTICIPADA y su saldo por liberar, despachando desde acá.
    100% DERIVADA: registrar = crear la OC madre con esa forma de pago; nada se guarda. */
@@ -33906,6 +33945,8 @@ window._trasRegistrar = async function(){
   const t = Date.now();
   const tras = {
     id: 'oc-' + uid(), serie: 'TRAS', folio: folio, numero: 'TRASIEGO ' + folio,
+    fecha: (typeof _dateALatam === 'function') ? _dateALatam(new Date()) : '', // v1067: fecha del día
+    fechaEntrega: '',
     esDespacho: true, esTrasiego: true, esPrepago: false, esProduccion: false,
     origenProyectoId: origen, destinoProyectoId: destino,
     origenProyectoNombre: nombreDe(origen), destinoProyectoNombre: nombreDe(destino),
@@ -40458,7 +40499,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       });
       if(aprobadas.length > 0 && (canApprove || canSend)){
         const histKey = 'retplanillas_historial_visible_' + (p.id || 'def');
-        const histVisible = (() => { try { return localStorage.getItem(histKey) === '1'; } catch(e){ return false; } })();
+        const histVisible = _histVisible(histKey); // v1067: cerrado por default en cada entrada
         html += '<div style="border-top:2px solid #ddd;margin-top:8px;background:#FAFAFA">';
         html += `<div onclick="toggleRetencionesHistorial('${p.id||'def'}')" style="padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none;background:#F0F0F0">`;
         html += `<strong style="font-size:12px;letter-spacing:.4px;color:#444">HISTORIAL DE LIQUIDACIONES DE RETENCIONES · ${aprobadas.length}</strong>`;
@@ -41627,8 +41668,7 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
 
   window.toggleRetencionesHistorial = function(projId){
     const key = 'retplanillas_historial_visible_' + (projId || 'def');
-    const cur = (() => { try { return localStorage.getItem(key) === '1'; } catch(e){ return false; } })();
-    try { localStorage.setItem(key, cur ? '0' : '1'); } catch(e){}
+    _histToggle(key); // v1067
     if(typeof renderPlanillaRetenciones === 'function') renderPlanillaRetenciones();
   };
 
@@ -53938,7 +53978,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       // ven todas; supervisor solo las propias).
       if(cerradas.length > 0){
         const histKey = 'planillas_historial_visible_' + (p.id || 'def');
-        const histVisible = (() => { try { return localStorage.getItem(histKey) === '1'; } catch(e){ return false; } })();
+        const histVisible = _histVisible(histKey); // v1067: cerrado por default en cada entrada
         html += '<div style="border-top:2px solid #ddd;margin-top:8px;background:#FAFAFA">';
         html += '<div onclick="window.togglePlanillasHistorial(\''+esc(p.id||'def')+'\')" style="padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:nowrap;user-select:none;background:#F0F0F0">';
         html += '<strong style="font-size:11px;letter-spacing:.3px;color:#444;white-space:nowrap">HISTORIAL DE PLANILLAS CERRADAS</strong>'; // v823: el conteo se mueve al control para no quedar feo en otra fila
@@ -53970,10 +54010,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   // v238: toggle del historial de planillas cerradas (persiste por proyecto).
   window.togglePlanillasHistorial = function(pid){
     const key = 'planillas_historial_visible_' + (pid || 'def');
-    try {
-      if(localStorage.getItem(key) === '1') localStorage.removeItem(key);
-      else localStorage.setItem(key, '1');
-    } catch(e){}
+    _histToggle(key); // v1067
     try { if(typeof renderPlanilla === 'function') renderPlanilla(); } catch(e){}
   };
 
