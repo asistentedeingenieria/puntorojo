@@ -3346,7 +3346,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1076</span>
+    <span style="opacity:.5;font-size:9px">v1077</span>
   </footer>
 
 </div>
@@ -17776,6 +17776,36 @@ function _invEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/
 /* ═══ v1054 · REPORTE DE INVENTARIO PARA GERENCIA (maqueta v2 aprobada por Antonio):
    resumen por TORRE y NIVEL (los aptos se SUMAN en su nivel), números CENTRADOS, y solo la
    ABREVIATURA del proyecto. Nombre del archivo: INVENTARIO - SIGLAS - DD-MM-YYYY.pdf */
+/* v1077 (Antonio): "si en la bodega hay 35 postes y en la torre 1 hay 40 y en la torre 2 hay
+   2, necesito una suma que sea un total global". Consolida el mismo material esté donde esté
+   (bodega + todas las torres) y conserva el desglose por ubicación. PURA: recibe la matriz
+   que ya arma _invReporteMatriz y no toca el documento. */
+function _invConsolidado(g){
+  var cols = [{ nombre: 'BODEGA', key: '_bod' }];
+  ((g && g.ordenTorres) || []).forEach(function(tk){
+    cols.push({ nombre: ((g.torres[tk] || {}).nombre) || String(tk), key: tk });
+  });
+  var porMat = {};
+  var meter = function(material, cant, colIdx){
+    var nombre = String(material == null ? '' : material).trim();
+    if (!nombre) return;
+    var k = nombre.toUpperCase();
+    if (!porMat[k]) porMat[k] = { material: nombre, porCol: cols.map(function(){ return 0; }), total: 0 };
+    porMat[k].porCol[colIdx] += Number(cant) || 0;
+    porMat[k].total += Number(cant) || 0;
+  };
+  (((g || {}).bodega || {}).orden || []).forEach(function(mk){
+    var m = g.bodega.mats[mk]; if (m) meter(m.material, m.cantidad, 0);
+  });
+  ((g && g.ordenTorres) || []).forEach(function(tk, i){
+    var T = g.torres[tk] || {};
+    (T.ordenMats || []).forEach(function(mk){
+      var m = (T.mats || {})[mk]; if (m) meter(m.material, m.total, i + 1);
+    });
+  });
+  var filas = Object.keys(porMat).sort().map(function(k){ return porMat[k]; });
+  return { cols: cols, filas: filas };
+}
 function _invReporteNombre(p, toma){
   var d = new Date((toma && toma.fechaCierre) || Date.now());
   if (isNaN(d.getTime())) d = new Date();
@@ -17902,6 +17932,36 @@ function _invReporteDoc(p, toma){
       theme: 'striped' });
     y = doc.lastAutoTable.finalY + 14;
   });
+  /* ═══ v1077 (Antonio): TOTAL GLOBAL POR PRODUCTO ═══
+     "si en la bodega hay 35 postes y en la torre 1 hay 40 y en la torre 2 hay 2, necesito
+     una suma que sea un total global". Resumen del MISMO material esté donde esté, con el
+     desglose por ubicación al lado. NO vuelve a sumar al TOTAL GENERAL: es un resumen de
+     lo ya contado arriba. */
+  var cons = _invConsolidado(g);
+  if (cons.filas.length) {
+    var _cFilas = cons.filas.map(function(fl){
+      var pr = precioDe(fl.material);
+      var val = pr ? (fl.total / pr.rend) * pr.pu : 0;
+      return [fl.material].concat(
+        fl.porCol.map(function(q){ return q ? String(q) : '—'; }),
+        [{ content: String(fl.total), styles: { fontStyle: 'bold' } },
+         { content: pr ? money(val) : '—', styles: { fontStyle: 'bold' } }]);
+    });
+    var _cStyles = { 0: { cellWidth: 'auto' } };
+    for (var cj = 1; cj <= cons.cols.length + 2; cj++) _cStyles[cj] = { halign: 'center' };
+    doc.autoTable({ startY: y, margin: { left: M, right: M },
+      head: [[{ content: 'TOTAL GLOBAL POR PRODUCTO', styles: { halign: 'left' } }]
+        .concat(cons.cols.map(function(c){ return { content: c.nombre, styles: { halign: 'center' } }; }),
+          [{ content: 'TOTAL', styles: { halign: 'center' } }, { content: 'VALOR', styles: { halign: 'center' } }])],
+      body: _cFilas,
+      headStyles: { fillColor: [155, 14, 20], textColor: 255, fontSize: 8 }, // rojo: es el resumen, no una ubicación
+      alternateRowStyles: { fillColor: [250, 250, 249] },
+      styles: { fontSize: 8, cellPadding: 3.5 },
+      columnStyles: _cStyles,
+      pageBreak: 'avoid', rowPageBreak: 'avoid', // v1075
+      theme: 'striped' });
+    y = doc.lastAutoTable.finalY + 14;
+  }
   /* total general + pie con la FIRMA de quien cerró (v1055: dataURL del core — sin red) */
   var H = doc.internal.pageSize.getHeight();
   if (y + 205 > H) { doc.addPage(); y = 48; } // v1075: el bloque de firma creció
