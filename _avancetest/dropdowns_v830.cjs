@@ -20,10 +20,12 @@ const uniTokens = /border:1px solid #E2E8F0;border-radius:8px;font:inherit;font-
 // los 3 selStyle idénticos (eran #DDD/4px/11px)
 ok('selStyle (3 filtros) ya no usa el estilo viejo #DDD/4px/11px',
   !/var selStyle = 'padding:6px 10px;border:1px solid #DDD;border-radius:4px;font:inherit;font-size:11px';/.test(html));
-ok('selStyle (3 filtros) usa tokens unificados', // v960: border pasó a var(--line) (sin hex, respeta dark)
-  (html.match(/var selStyle = 'padding:9px 12px;border:1px solid var\(--line\);border-radius:8px;font:inherit;font-size:12\.5px;font-weight:600;min-height:40px;box-sizing:border-box;background:#fff;color:#111827;text-transform:uppercase';/g) || []).length === 3);
+/* v1057 (Antonio: "todas las listas desplegables más pequeñas"): el patrón unificado bajó
+   de 40px/12.5px a 34px/12px — mismos tokens, tamaño chico (desplegables_chicos_v1057.cjs) */
+ok('selStyle (3 filtros) usa tokens unificados', // v960: border var(--line); v1057: 34px
+  (html.match(/var selStyle = 'padding:5px 12px;border:1px solid var\(--line\);border-radius:8px;font:inherit;font-size:12px;font-weight:600;min-height:34px;box-sizing:border-box;background:#fff;color:#111827;text-transform:uppercase';/g) || []).length === 3);
 // el selStyle full-width (era var(--line)/4px/13px)
-ok('selStyle full-width unificado', /var selStyle='width:100%;padding:9px 12px;border:1px solid #E2E8F0;border-radius:8px;[^']*min-height:40px/.test(html));
+ok('selStyle full-width unificado', /var selStyle='width:100%;padding:5px 12px;border:1px solid #E2E8F0;border-radius:8px;[^']*min-height:34px/.test(html));
 // _antInp
 ok('_antInp unificado (#E2E8F0/8px/40px) y conserva margin-top',
   /var _antInp='width:100%;[^']*border:1px solid #E2E8F0;border-radius:8px;[^']*min-height:40px;[^']*margin-top:4px/.test(html));

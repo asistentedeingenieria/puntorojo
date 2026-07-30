@@ -51,7 +51,8 @@ if (srcSig){
 // ── wiring TODAS LAS OBRAS (v834) ──
 ok('_generarPdfSemanal acepta explicit', /function _generarPdfSemanal\(fechaBase, obraCtx, explicit\)/.test(html));
 /* v1047: pasa _getUserObraAsignada — el SEMANAL es multi-obra por naturaleza (admin ''=TODAS) */
-ok('abrirPdfSemanal pasa _obraFiltroAsist() + true', (html.match(/_generarPdfSemanal\([^;]*_getUserObraAsignada\(\)[^;]*true\)/g)||[]).length>=2);
+/* v1057: los callers pasan la OBRA ELEGIDA (obraPdf) con explicit=true — v1047 revertida */
+ok('abrirPdfSemanal pasa la obra elegida + true', (html.match(/_generarPdfSemanal\([^;]*obraPdf,\s*true\)/g)||[]).length>=2);
 ok('verObras = (obra==="")', /verObras\s*=\s*\(obra===''\)/.test(html));
 
 // ── v836: sigla por celda + leyenda ──

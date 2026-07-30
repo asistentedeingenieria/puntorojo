@@ -56,7 +56,9 @@ ok('botón PDF MENSUAL con data-perm', /data-perm="personal\.asistenciaMensual"[
 ok('_generarPdfMensual exige el permiso', /function _generarPdfMensual[\s\S]{0,160}can\('personal\.asistenciaMensual'\)\|\|can\('users\.manage'\)/.test(html));
 /* v1047: pasa _getUserObraAsignada — el MENSUAL es multi-obra por naturaleza (admin ''=TODAS);
    _obraFiltroAsist ya nunca devuelve '' (siempre hay obra activa) y mataría el modo TODAS */
-ok('abrirPdfMensual pasa _obraFiltroAsist() + true', /_generarPdfMensual\([^;]*_getUserObraAsignada\(\)[^;]*true\)/.test(html));
+/* v1057: los callers pasan la OBRA ELEGIDA (obraPdf de _obraFiltroAsist / selector admin)
+   con explicit=true — la regla v1047 (_getUserObraAsignada) se revirtió a pedido de Antonio */
+ok('abrirPdfMensual pasa la obra elegida + true', /_generarPdfMensual\([^;]*obraPdf,\s*true\)/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

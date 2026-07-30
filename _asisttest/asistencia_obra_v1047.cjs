@@ -54,13 +54,14 @@ ok('el registro de caras también', /_personaEnObraUsuario\(/.test(ex('function 
 
 console.log('\n— 4. los PDF: el del día es de la obra; los multi-obra quedan intactos —');
 ok('PRESENTES DEL DÍA sigue a la obra activa', /_obraFiltroAsist\(\)/.test(ex('function descargarPdfDiaPresentes(')));
-/* ⚠️ LA TRAMPA CENTRAL del mapeo: los callers de SEMANAL/MENSUAL pasaban _obraFiltroAsist()
-   con explicit=true, donde '' = TODAS LAS OBRAS. Con el filtro nuevo ya nunca habría '' y el
-   admin perdería el modo TODAS en silencio. Pasan _getUserObraAsignada: admin '' = TODAS. */
-ok('SEMANAL conserva TODAS para el admin', !/_generarPdfSemanal\([^)]*_obraFiltroAsist/.test(html) && (html.match(/_generarPdfSemanal\([^)]*_getUserObraAsignada/g) || []).length >= 2);
-ok('MENSUAL igual', !/_generarPdfMensual\([^)]*_obraFiltroAsist/.test(html) && (html.match(/_generarPdfMensual\([^)]*_getUserObraAsignada/g) || []).length >= 2);
+/* v1057 (Antonio, 29-jul): "todos los reportes de asistencia con base al proyecto que se
+   seleccionó" — la regla v1047 (admin ''=TODAS desde la obra) SE REVIRTIÓ a propósito.
+   Los callers pasan la obra activa con guard (sin proyecto → toast, no TODAS en silencio);
+   el modo conjunto vive SOLO en ADMINISTRACIÓN (pdf_por_obra_v1057.cjs lo cubre). */
+ok('SEMANAL sale de la obra elegida', /_obraFiltroAsist/.test(ex('window.abrirPdfSemanal = function')) && /ELEG[ÍI] UN PROYECTO/.test(ex('window.abrirPdfSemanal = function')));
+ok('MENSUAL igual', /_obraFiltroAsist/.test(ex('window.abrirPdfMensual = function')));
 const zEf = ex('function _efTargetObra(');
-ok('ESTADO DE FUERZA: admin todas las obras, encargado la suya', /_getUserObraAsignada/.test(zEf) && !/asistObraPdf/.test(zEf));
+ok('ESTADO DE FUERZA: también por obra elegida (encargado clavado a la suya)', /_obraFiltroAsist/.test(zEf) && !/asistObraPdf/.test(zEf));
 
 console.log('\n— 5. la marca manual no queda sin obra —');
 const zT = ex('function toggleAsistenciaGlobal(');
