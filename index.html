@@ -1521,6 +1521,10 @@ body.pr-admin-abierto .modal-bg{z-index:99100}
 /* v1059: las sub-barras (TOMA ACTUAL/HISTORIAL…) llevan su línea separadora también fuera
    de los paneles (la misma regla de arriba las cubre adentro) */
 .inv-subtabs{border-top:1px solid var(--line,#E7E5E4);padding-top:12px;margin-top:12px}
+/* v1063: el botón OBRA PEQUEÑA de las filas de colaboradores solo vive en el panel
+   ADMINISTRACIÓN (en la obra estorbaría) */
+.pr-btn-peq{display:none}
+#_adminPanelModal .pr-btn-peq{display:inline-block}
 /* 2. El encabezado del panel en celular: VOLVER arriba a lo ancho, y CARGAR EXISTENCIAS +
       ABASTECER uno al lado del otro (no apilados a lo ancho). */
 @media (max-width:640px){
@@ -3330,7 +3334,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1062</span>
+    <span style="opacity:.5;font-size:9px">v1063</span>
   </footer>
 
 </div>
@@ -5807,6 +5811,16 @@ function _personaEnListaObra(p, obra){
   const o = (obra===undefined) ? _getUserObraAsignada() : (obra||'');
   if (!o) return true; // sin restricción (admin sin obra / sin filtro)
   if (!p) return false;
+  if (o === '__PEQ__') {
+    /* v1063: OBRAS PEQUEÑAS — pasa quien tiene la marca de HOY en una (obraId 'OTRA'),
+       incluidas las sesiones de los supervisores multiSesion */
+    try {
+      const r=(_getAsistencia()[_asistFechaActual()]||{})[p.id];
+      if (r && String(r.obraId||'')==='OTRA') return true;
+      if (r && Array.isArray(r.sessions) && r.sessions.some(s=> s && String(s.obraId||'')==='OTRA')) return true;
+    } catch(e){}
+    return false;
+  }
   if (p.obraAsignada === o && !p.multiObra) return true; // asignado fijo a esta obra
   try {
     const r=(_getAsistencia()[_asistFechaActual()]||{})[p.id];
@@ -25256,7 +25270,7 @@ window._v644ResumenPresentesPorObra = function(){
     const projName = id => { if(!id) return 'SIN OBRA'; if(id==='OTRA') return 'OTRA'; const pr=projs.find(x=>x.id===id); return pr?String(pr.name||id).toUpperCase():String(id).toUpperCase(); };
     const escH = s => String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
     const porObra = {};
-    Object.values(dia).forEach(r=>{ if(!r||!r.presente) return; const oid=String(r.obraId||''); if(filtro && oid!==filtro) return; const k=projName(oid); porObra[k]=(porObra[k]||0)+1; });
+    Object.values(dia).forEach(r=>{ if(!r||!r.presente) return; const oid=String(r.obraId||''); if(filtro && oid!==filtro) return; let k=projName(oid); if(oid==='OTRA'&&r.obraDesc) k='OTRA: '+String(r.obraDesc).toUpperCase(); porObra[k]=(porObra[k]||0)+1; }); // v1063: cada obra pequeña con su nombre
     const arr = Object.keys(porObra).map(k=>({obra:k,n:porObra[k]})).sort((a,b)=>b.n-a.n||a.obra.localeCompare(b.obra,'es',{sensitivity:'base'}));
     const total = arr.reduce((s,o)=>s+o.n,0);
     const nObras = arr.length;
@@ -25428,7 +25442,7 @@ function renderPersonal(){
     const _avgSal = (typeof promedioHoraHHMM==='function') ? promedioHoraHHMM(_regsDia.map(r=>r.salida)) : '—';
     const _projName = id => { if(id==='OTRA') return 'OTRA'; const pr=((typeof state!=='undefined'&&state.projects)?state.projects:[]).find(x=>x.id===id); return pr?String(pr.name||id):(id||'—'); };
     // v644: agrupar por nombre en MAYÚSCULAS para que el promedio del KPI coincida exactamente con el modal (_v644ResumenPresentesPorObra).
-    const _porObra = {}; _regsDia.forEach(r=>{ const k=String(_projName(r.obraId||'')).toUpperCase(); _porObra[k]=(_porObra[k]||0)+1; });
+    const _porObra = {}; _regsDia.forEach(r=>{ let k=String(_projName(r.obraId||'')).toUpperCase(); if(String(r.obraId||'')==='OTRA'&&r.obraDesc) k='OTRA: '+String(r.obraDesc).toUpperCase(); _porObra[k]=(_porObra[k]||0)+1; }); // v1063: cada obra pequeña con su nombre
     // v639: KPI solo para ENCARGADOS — cuánta gente tienen en el listado de su obra.
     const _genteObra = _uObraKpi ? `<div class="kpi olive"><div class="lbl">Personal en tu obra</div><div class="val">${_asistListaFiltrada().length}</div><div class="sub">${String(((state.projects||[]).find(x=>x.id===_uObraKpi)||{}).name||'').toUpperCase()}</div></div>` : '';
     const _kAsist = _genteObra + `<div class="kpi green"><div class="lbl">Hora prom. entrada</div><div class="val">${_avgEnt}</div><div class="sub">${fecha}</div></div>`
@@ -25460,11 +25474,20 @@ function renderPersonal(){
       const _empTag=c.empresa?('<span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 8px;border-radius:10px;background:#EEF2FF;color:#3730A3">'+esc(c.empresa)+'</span>'):'<span style="color:var(--mute)">—</span>';
       const _tipoTag=c.tipo==='OFICINA'?' <span style="display:inline-block;font-size:8px;font-weight:700;padding:2px 7px;border-radius:10px;background:#FEF3C7;color:#92400E">OFICINA</span>':' <span style="display:inline-block;font-size:8px;font-weight:700;padding:2px 7px;border-radius:10px;background:var(--green-soft);color:var(--green-dark)">OBRA</span>';
       const _verDpi=(c.dpiFrenteURL||c.dpiReversoURL)?' <span onclick="event.stopPropagation();_verDPIPersona(\''+c.id+'\')" title="Ver DPI" style="cursor:pointer;font-size:9px;color:var(--green-dark);text-decoration:underline">&#9679;VER DPI</span>':'';
+      /* v1063: obra pequeña — chip con la marca de HOY (obraId 'OTRA') y botón para marcar
+         (el botón solo se ve dentro del panel ADMINISTRACIÓN, CSS .pr-btn-peq) */
+      let _peqChip='', _peqBtn='';
+      try {
+        const _rHoy=(_getAsistencia()[_asistFechaActual()]||{})[c.id];
+        const _dPeq=(_rHoy&&String(_rHoy.obraId||'')==='OTRA')?String(_rHoy.obraDesc||''):'';
+        if(_dPeq) _peqChip=' <span style="display:inline-block;font-size:8px;font-weight:700;padding:2px 7px;border-radius:10px;background:#DBEAFE;color:#1E40AF;white-space:nowrap" title="Marcado hoy en esta obra pequeña">'+esc(_dPeq)+'</span>';
+        if(!c.baja && !c.multiSesion && !_dPeq) _peqBtn='<button class="btn ghost sm pr-btn-peq" style="font-size:9px;margin-top:4px" onclick="event.stopPropagation();_marcarObraPequena(\''+c.id+'\')" title="Marcar presente en una obra que no es proyecto de la app">OBRA PEQUEÑA</button>';
+      } catch(e){}
       return `<div class="colab-item">
         <div class="colab-head" id="colabHead-${c.id}" onclick="_toggleColab('${c.id}')">
           <span class="colab-chev">${_abierto?'▾':'▸'}</span>
-          <span class="colab-name"${c.baja?' style="opacity:.6;text-decoration:line-through"':''}>${esc(c.nombre||'')}${_caraOk?' <span title="Cara registrada" style="color:var(--green-dark);font-size:11px;font-weight:700">&#10003;</span>':''}</span>${c.baja?' <span style="display:inline-block;font-size:8px;font-weight:700;padding:2px 7px;border-radius:10px;background:#FEE2E2;color:#B91C1C;white-space:nowrap;flex:0 0 auto;align-self:center">DE BAJA</span>':''}
-          <span class="colab-obra" onclick="event.stopPropagation()">${_obraCell}${_torreCell}</span>
+          <span class="colab-name"${c.baja?' style="opacity:.6;text-decoration:line-through"':''}>${esc(c.nombre||'')}${_caraOk?' <span title="Cara registrada" style="color:var(--green-dark);font-size:11px;font-weight:700">&#10003;</span>':''}${_peqChip}</span>${c.baja?' <span style="display:inline-block;font-size:8px;font-weight:700;padding:2px 7px;border-radius:10px;background:#FEE2E2;color:#B91C1C;white-space:nowrap;flex:0 0 auto;align-self:center">DE BAJA</span>':''}
+          <span class="colab-obra" onclick="event.stopPropagation()">${_obraCell}${_torreCell}${_peqBtn}</span>
         </div>
         <div class="colab-det" id="colabDet-${c.id}" style="display:${_abierto?'block':'none'}">
           <div class="colab-row"><b>CARGO</b> · ${esc(c.cargo||'—')}</div>
@@ -25584,6 +25607,32 @@ function reactivarPersona(id){
   });
 }
 function toggleAsistenciaGlobal(id){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const _pms=(_getPersonal()||[]).find(x=>x.id===id); if(_pms&&_pms.multiSesion){ showToast('ESTA PERSONA MARCA POR ESCANEO EN VARIAS OBRAS','red'); return; } const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; const cur=A[f][id]||{}; if(cur.presente===true){ showToast('YA ESTÁ PRESENTE · ESE CHEQUE NO SE PUEDE MODIFICAR','red'); return; } const _d=new Date(); const _h=String(_d.getHours()).padStart(2,'0')+':'+String(_d.getMinutes()).padStart(2,'0'); A[f][id]={presente:true,obraId:cur.obraId||((_pms&&_pms.obraAsignada)||''),obraDesc:cur.obraDesc||'',hora:_h,_ts:Date.now()}; try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){} saveAsistencia(); renderPersonal(); }
+/* v1063 (Antonio): asistencia en OBRAS PEQUEÑAS (las que NO son proyectos de la app) desde
+   ADMINISTRACIÓN>PERSONAL. El nombre es OBLIGATORIO (texto libre — decisión de Antonio) y la
+   marca se escribe ATÓMICA (presente+obraId+obraDesc+_ts juntos: regla objeto-entero del
+   merge). Reusa el modelo del kiosko: obraId centinela 'OTRA' + obraDesc. */
+async function _marcarObraPequena(id){
+  if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red');
+  const _pms=(_getPersonal()||[]).find(x=>x.id===id);
+  if(_pms&&_pms.multiSesion){ return showToast('ESTA PERSONA MARCA POR ESCANEO EN VARIAS OBRAS','red'); }
+  const f=_asistFechaActual(); const A=_getAsistencia();
+  const cur=(A[f]||{})[id]||{};
+  if(cur.presente===true){ return showToast('YA ESTÁ PRESENTE HOY','red'); }
+  const nom = await window.prPrompt({ title:'OBRA PEQUEÑA', body:'¿En qué obra pequeña está trabajando ' + String((_pms&&_pms.nombre)||'') + '? El nombre es OBLIGATORIO y sale así en los reportes.', placeholder:'EJ: REPARACIÓN ZONA 15', required:true });
+  if (nom === null) return;
+  const desc = String(nom||'').trim().toUpperCase();
+  if (!desc) return showToast('EL NOMBRE DE LA OBRA PEQUEÑA ES OBLIGATORIO','red');
+  /* re-leer tras el await (regla v769/v940): el sync pudo aplicar mientras el modal estaba abierto */
+  const A2=_getAsistencia(); if(!A2[f])A2[f]={};
+  const cur2=A2[f][id]||{};
+  if(cur2.presente===true){ return showToast('YA ESTÁ PRESENTE HOY','red'); }
+  const _d=new Date(); const _h=String(_d.getHours()).padStart(2,'0')+':'+String(_d.getMinutes()).padStart(2,'0');
+  A2[f][id]={presente:true,obraId:'OTRA',obraDesc:desc,hora:_h,via:'admin',_ts:Date.now()};
+  try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){}
+  saveAsistencia(); renderPersonal();
+  showToast('PRESENTE EN ' + desc,'green');
+}
+window._marcarObraPequena=_marcarObraPequena;
 function setAsistenciaObra(id,obraId){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return showToast('SIN PERMISO','red'); const f=_asistFechaActual(); const A=_getAsistencia(); if(!A[f])A[f]={}; if(!A[f][id])A[f][id]={presente:true}; A[f][id].obraId=obraId; if(obraId!=='OTRA')A[f][id].obraDesc=''; A[f][id]._ts=Date.now(); try{ _asistPendingAdd(f, id); _asistTombClear(f, id); }catch(e){} saveAsistencia(); renderPersonal(); }
 function setAsistenciaObraDesc(id,desc){ if(typeof can==='function' && !(can('personal.asistencia')||can('users.manage'))) return; const f=_asistFechaActual(); const A=_getAsistencia(); if(A[f]&&A[f][id]){ A[f][id].obraDesc=desc; A[f][id]._ts=Date.now(); try{ _asistPendingAdd(f, id); }catch(e){} saveAsistencia(); } }
 let _colabAbiertos = new Set(); // ids de colaboradores con su ficha desplegada (se preserva entre renders)
@@ -33398,7 +33447,9 @@ window._cerrarPanelAdmin = function(){
 function _adminSelectorHTML(conTodas){
   var pid = String((state && state.activeProjectId) || '');
   var filtro = conTodas ? String(window._adminObraFiltro || '') : pid;
-  var opts = (conTodas ? '<option value=""' + (filtro === '' ? ' selected' : '') + '>TODAS LAS OBRAS</option>' : '')
+  /* v1063 (Antonio): OBRAS PEQUEÑAS = obras que NO son proyectos de la app — filtro propio */
+  var opts = (conTodas ? '<option value=""' + (filtro === '' ? ' selected' : '') + '>TODAS LAS OBRAS</option>'
+      + '<option value="__PEQ__"' + (filtro === '__PEQ__' ? ' selected' : '') + '>OBRAS PEQUEÑAS</option>' : '')
     + (((state || {}).projects) || []).filter(function(p){ return p && p.id; })
       .map(function(p){ return '<option value="' + escapeAttr(p.id) + '"' + (String(p.id) === filtro ? ' selected' : '') + '>' + String(p.name || '').replace(/</g, '&lt;') + '</option>'; }).join('');
   return '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
