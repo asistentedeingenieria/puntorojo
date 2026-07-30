@@ -3346,7 +3346,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1081</span>
+    <span style="opacity:.5;font-size:9px">v1082</span>
   </footer>
 
 </div>
@@ -11767,6 +11767,88 @@ function _rentAvancePorEtapa(p){
   return RENT_ETAPAS.map(function(e, i){
     return { nombre: e.nombre, hechos: cuenta[i], aptos: aptos, pct: aptos ? cuenta[i] / aptos : 0 };
   });
+}
+/* ═══ v1082 · RENTABILIDAD — Fase 1b: el motor (venta, costo, margen, CPI) ═══
+   Todo DERIVADO de lo que la app ya tiene. Reglas contables que salieron del mapeo:
+   · Los montos guardados llevan IVA → los márgenes se calculan SIN IVA (decisión de Antonio:
+     "con IVA pero en algún momento se debe quitar para saber la rentabilidad real").
+   · Los DESCUENTOS de planilla NO son costo: son recuperación de préstamos ya desembolsados.
+   · La retención del 10% YA está dentro del bruto — pagarla es caja, no costo nuevo.
+   · Las ÓRDENES DE CAMBIO sí son costo extra real de mano de obra (trabajo adicional).
+   · El ANTICIPO del cliente no es venta ejecutada: es un adelanto que se amortiza. */
+/* La mano de obra por proyecto NO existía como función: su aritmética vivía incrustada en
+   renderPlanilla (v1082 la extrae con la MISMA fórmula para que no puedan divergir). */
+function _manoObraDeProyecto(p){
+  var pl = (p && p.planilla) || {};
+  var pagos = pl.pagos || [], ajustes = pl.ajustes || [];
+  var bruto = pagos.reduce(function(s, x){ return s + (Number(x && x.bruto) || 0); }, 0)
+    + ajustes.filter(function(a){ return a && a.tipo !== 'DESCUENTO'; }).reduce(function(s, x){ return s + (Number(x && x.monto) || 0); }, 0);
+  var retenido = pagos.reduce(function(s, x){ return s + (Number(x && x.retencion) || 0); }, 0);
+  var retencionPagada = pagos.filter(function(x){ return x && x.retencionPagada; }).reduce(function(s, x){ return s + (Number(x.retencion) || 0); }, 0);
+  var descuentos = ajustes.filter(function(a){ return a && a.tipo === 'DESCUENTO'; }).reduce(function(s, x){ return s + (Number(x && x.monto) || 0); }, 0);
+  /* el COSTO es el bruto: la retención es plata del colaborador que todavía no se le entregó,
+     pero ya se devengó; y los descuentos no son costo (van por caja) */
+  return { bruto: bruto, retenido: retenido, retencionPagada: retencionPagada, descuentos: descuentos, costo: bruto };
+}
+function _rentDatosProyecto(p){
+  var iva = Number((p && p.ivaPct) || 0);
+  var aSI = function(conIva){ return (Number(conIva) || 0) / (1 + iva); };
+  /* VENTA — reutiliza los derivadores del cobro */
+  var ventaContratadaCI = Number(totalProyectoNeto(p)) || 0;
+  var cfg = cobroConfig(p);
+  var presentadoCI = 0, cobradoCI = 0, porCobrarCI = 0, anticipoCobradoCI = 0;
+  (((p && p.cobro) || {}).rows || []).forEach(function(r){
+    if (!r) return;
+    var v = rowValues(r, cfg) || {};
+    var esAnt = !!r.isAnticipo;
+    if (esAnt) { if (r.sc === 'PAGADO') anticipoCobradoCI += Number(v.vpCI) || 0; }
+    else presentadoCI += Number(v.vpCI) || 0;
+    if (r.sc === 'PAGADO') cobradoCI += Number(v.netCI) || 0;
+    else porCobrarCI += Number(v.netCI) || 0;
+  });
+  /* COSTO — materiales (con IVA en el dato guardado) + mano de obra (sin IVA) + indirectos */
+  var mat = _gastosDeProyecto((p && p.id) || '') || {};
+  var costoMaterialesSI = aSI(mat.total);
+  var mob = _manoObraDeProyecto(p) || {};
+  var costoManoObra = Number(mob.costo) || 0;
+  var pctInd = Number((p && p.rentIndirectosPct) || 0);
+  var costoDirectoSI = costoMaterialesSI + costoManoObra;
+  var costoIndirectos = costoDirectoSI * pctInd;
+  var costoRealSI = costoDirectoSI + costoIndirectos;
+  /* AVANCE y VALOR GANADO */
+  var av = _rentAvanceProyecto(p) || { pct: 0, aptos: 0, terminados: 0 };
+  var ventaContratadaSI = aSI(ventaContratadaCI);
+  var valorGanadoSI = ventaContratadaSI * (Number(av.pct) || 0);
+  var cpi = costoRealSI > 0 ? (valorGanadoSI / costoRealSI) : null;
+  var costoProyectadoSI = (cpi && cpi > 0) ? (ventaContratadaSI / cpi) : null;
+  var margenProyectadoSI = costoProyectadoSI == null ? null : (ventaContratadaSI - costoProyectadoSI);
+  var margenProyectadoPct = (costoProyectadoSI == null || !ventaContratadaSI) ? null : (margenProyectadoSI / ventaContratadaSI);
+  /* MARGEN A LA FECHA — lo ejecutado contra lo gastado */
+  var ventaEjecutadaSI = aSI(presentadoCI);
+  var margenHoySI = ventaEjecutadaSI - costoRealSI;
+  var margenHoyPct = ventaEjecutadaSI > 0 ? (margenHoySI / ventaEjecutadaSI) : null;
+  /* SEMÁFORO contra el margen objetivo (default 20%): verde si llega, amarillo hasta 5
+     puntos abajo, rojo si cae más. Sin costo todavía no se opina. */
+  var objetivo = Number((p && p.rentMargenObjetivo) || 0.20);
+  var refPct = (margenProyectadoPct != null) ? margenProyectadoPct : margenHoyPct;
+  var semaforo = 'sin-datos';
+  if (costoRealSI > 0 && refPct != null) semaforo = (refPct >= objetivo) ? 'verde' : ((refPct >= objetivo - 0.05) ? 'amarillo' : 'rojo');
+  return {
+    id: (p && p.id) || '', nombre: (p && p.name) || '', ivaPct: iva,
+    ventaContratadaCI: ventaContratadaCI, ventaContratadaSI: ventaContratadaSI,
+    ventaEjecutadaSI: ventaEjecutadaSI, presentadoCI: presentadoCI,
+    cobradoCI: cobradoCI, porCobrarCI: porCobrarCI, anticipoCobradoCI: anticipoCobradoCI,
+    costoMaterialesSI: costoMaterialesSI, costoManoObra: costoManoObra,
+    costoIndirectos: costoIndirectos, costoRealSI: costoRealSI,
+    manoObra: mob, materiales: mat,
+    avancePct: Number(av.pct) || 0, aptos: av.aptos || 0, terminados: av.terminados || 0,
+    etapas: (typeof _rentAvancePorEtapa === 'function') ? _rentAvancePorEtapa(p) : [],
+    valorGanadoSI: valorGanadoSI, cpi: cpi,
+    costoProyectadoSI: costoProyectadoSI, margenProyectadoSI: margenProyectadoSI, margenProyectadoPct: margenProyectadoPct,
+    margenHoySI: margenHoySI, margenHoyPct: margenHoyPct,
+    margenObjetivo: objetivo, semaforo: semaforo,
+    alertaCosto: cpi != null && cpi < 1
+  };
 }
 /* Cuántas etapas tiene completas un apto */
 function aptoCompleted(a){
