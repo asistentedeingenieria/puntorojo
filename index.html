@@ -1537,6 +1537,11 @@ body.pr-admin-abierto .modal-bg{z-index:99100}
   #modalPedidoDetalle .pd-track-row{grid-template-columns:1fr;gap:3px}
   #modalPedidoDetalle .modal-actions .btn{flex:1 1 100%;padding:11px 10px;font-size:11px}
 }
+/* v1054: INVENTARIO en el celular — tarjeta de la toma centrada y botones chicos */
+@media (max-width:640px){
+  .inv-head{flex-direction:column;text-align:center}
+  .inv-head .btn, .inv-head .btn-icon{font-size:10px;padding:7px 14px}
+}
 /* 4. EL selector de PROYECTO — uno solo para toda la app, chico y elegante. En celular la
       letra sube a 16px al tamaño mínimo que no dispara zoom al enfocar (regla v976). */
 .pr-obra-sel{height:34px;padding:4px 28px 4px 10px;font-size:12px;font-weight:600;letter-spacing:.3px;border:1px solid var(--line,#E7E5E4);border-radius:8px;background:var(--card,#fff);color:var(--ink,#1C1917);min-width:160px;max-width:300px;font-family:inherit}
@@ -3291,7 +3296,7 @@ body.pr-dark .pr-buscador::placeholder{color:#8A8171}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1053</span>
+    <span style="opacity:.5;font-size:9px">v1054</span>
   </footer>
 
 </div>
@@ -17437,6 +17442,150 @@ function _mergeTomas(localList, remoteList, tombSet){
 var invUI = { sub:'actual', view:'root', torreId:'', nivelId:'', loc:null, histId:null };
 
 function _invEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+/* ═══ v1054 · REPORTE DE INVENTARIO PARA GERENCIA (maqueta v2 aprobada por Antonio):
+   resumen por TORRE y NIVEL (los aptos se SUMAN en su nivel), números CENTRADOS, y solo la
+   ABREVIATURA del proyecto. Nombre del archivo: INVENTARIO - SIGLAS - DD-MM-YYYY.pdf */
+function _invReporteNombre(p, toma){
+  var d = new Date((toma && toma.fechaCierre) || Date.now());
+  if (isNaN(d.getTime())) d = new Date();
+  var f = String(d.getDate()).padStart(2,'0') + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + d.getFullYear();
+  return 'INVENTARIO - ' + _projSiglas((p && p.name) || '') + ' - ' + f + '.pdf';
+}
+/* v1054 (maqueta v3 de Antonio, foto de referencia): MATRIZ POR TORRE — materiales en filas,
+   NIVELES en columnas (los aptos de cada nivel se SUMAN: "solo el total de cada nivel"),
+   más TOTAL y VALOR por material y fila TOTAL NIVEL. BODEGA es su propia sección simple.
+   PURA. */
+function _invReporteMatriz(p, toma){
+  var aptoIdx = {};
+  ((p && p.towers) || []).forEach(function(t){ ((t.levels) || []).forEach(function(l){ ((l.aptos) || []).forEach(function(a){ if (a && a.id) aptoIdx[a.id] = { torre: t.name || '', nivel: l.name || '' }; }); }); });
+  var torres = {}, ordenTorres = [], bodega = { mats: {}, orden: [] };
+  ((toma && toma.lineas) || []).forEach(function(ln){
+    if (!ln || !ln.material) return;
+    var mk = String(ln.material).toUpperCase();
+    var qty = Number(ln.cantidad) || 0;
+    if (ln.locKey === 'BODEGA' || /BODEGA/i.test(String(ln.locKey || ''))) {
+      if (!bodega.mats[mk]) { bodega.mats[mk] = { material: mk, unidad: ln.unidad || '', cantidad: 0 }; bodega.orden.push(mk); }
+      bodega.mats[mk].cantidad += qty;
+      return;
+    }
+    var ub = aptoIdx[ln.locKey] || { torre: String(ln.locLabel || ln.locKey || 'OTRA'), nivel: '—' };
+    var tk = String(ub.torre).toUpperCase(), nk = String(ub.nivel).toUpperCase();
+    if (!torres[tk]) { torres[tk] = { nombre: tk, niveles: [], mats: {}, ordenMats: [] }; ordenTorres.push(tk); }
+    var T = torres[tk];
+    if (T.niveles.indexOf(nk) < 0) T.niveles.push(nk);
+    if (!T.mats[mk]) { T.mats[mk] = { material: mk, unidad: ln.unidad || '', porNivel: {}, total: 0 }; T.ordenMats.push(mk); }
+    T.mats[mk].porNivel[nk] = (T.mats[mk].porNivel[nk] || 0) + qty;
+    T.mats[mk].total += qty;
+  });
+  ordenTorres.sort(); Object.keys(torres).forEach(function(k){ torres[k].niveles.sort(); torres[k].ordenMats.sort(); });
+  bodega.orden.sort();
+  return { torres: torres, ordenTorres: ordenTorres, bodega: bodega };
+}
+function _invReporteDoc(p, toma){
+  if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) { showToast('JSPDF NO CARGÓ — RECARGAR LA APP', 'red'); return null; }
+  var jsPDF = window.jspdf.jsPDF;
+  var provs = []; try { provs = _getProveedores(); } catch(e){}
+  var money = function(n){ return 'Q ' + (Number(n) || 0).toLocaleString('es-GT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+  var g = _invReporteMatriz(p, toma);
+  /* con muchos niveles la matriz es ancha: apaisado a partir de 7 columnas de nivel */
+  var maxNiv = 0; g.ordenTorres.forEach(function(tk){ maxNiv = Math.max(maxNiv, g.torres[tk].niveles.length); });
+  var doc = new jsPDF({ unit: 'pt', format: 'a4', orientation: maxNiv > 6 ? 'landscape' : 'portrait' });
+  var W = doc.internal.pageSize.getWidth(), M = 42;
+  var precioDe = function(nombre){
+    var info = null; try { info = precioDeProductoReceta(provs, nombre, ''); } catch(e){}
+    var rend = (info && info.rendimiento) ? info.rendimiento : 1;
+    return (info && info.precio > 0) ? { pu: info.precio, rend: rend } : null;
+  };
+  var totalGeneral = 0, totalUnidades = 0, matsUnicos = {};
+  /* encabezado — SOLO la abreviatura; fecha a la IZQUIERDA con sus vecinos */
+  var y = 48;
+  doc.setFont(undefined, 'bold'); doc.setFontSize(24); doc.setTextColor(28, 25, 23);
+  doc.text('INVENTARIO', W - M, y, { align: 'right' });
+  doc.setFontSize(8); doc.setTextColor(120, 113, 108);
+  doc.text('TOMA DE INVENTARIO VALORIZADA', W - M, y + 13, { align: 'right' });
+  doc.setFillColor(198, 40, 40); doc.rect(M, y + 22, W - M * 2, 3, 'F');
+  y += 42;
+  doc.setFontSize(8); doc.setTextColor(120, 113, 108);
+  doc.text('PROYECTO', M, y); doc.text('FECHA DE CIERRE', W / 2, y);
+  doc.setFontSize(12); doc.setTextColor(28, 25, 23);
+  doc.text(_projSiglas((p && p.name) || ''), M, y + 14);
+  doc.text(_invFmtFecha(toma.fechaCierre), W / 2, y + 14);
+  doc.setFontSize(8); doc.setTextColor(120, 113, 108);
+  doc.text('TOMA REALIZADA POR', M, y + 30);
+  doc.setFontSize(10); doc.setTextColor(28, 25, 23);
+  doc.text(String(toma.byNombre || toma.by || '—').toUpperCase(), M, y + 43);
+  y += 60;
+  /* BODEGA: sección simple MATERIAL | CANT | P.U. | VALOR */
+  if (g.bodega.orden.length) {
+    var subB = 0;
+    var filasB = g.bodega.orden.map(function(mk){
+      var m = g.bodega.mats[mk];
+      var pr = precioDe(m.material);
+      var val = pr ? (m.cantidad / pr.rend) * pr.pu : 0;
+      subB += val; totalUnidades += m.cantidad; matsUnicos[m.material] = true;
+      return [m.material, String(m.cantidad), pr ? money(pr.pu) : '—', pr ? money(val) : '—'];
+    });
+    totalGeneral += subB;
+    doc.autoTable({ startY: y, margin: { left: M, right: M },
+      head: [[{ content: 'BODEGA', styles: { halign: 'left' } }, { content: 'CANT.', styles: { halign: 'center' } }, { content: 'P.U.', styles: { halign: 'center' } }, { content: money(subB), styles: { halign: 'center' } }]],
+      body: filasB,
+      headStyles: { fillColor: [28, 25, 23], textColor: 255, fontSize: 8.5 },
+      styles: { fontSize: 8.5, cellPadding: 4 },
+      columnStyles: { 1: { halign: 'center', cellWidth: 60 }, 2: { halign: 'center', cellWidth: 80 }, 3: { halign: 'center', cellWidth: 95 } },
+      theme: 'striped' });
+    y = doc.lastAutoTable.finalY + 14;
+  }
+  /* POR TORRE: matriz materiales × NIVELES (solo el total de cada nivel) + TOTAL + VALOR */
+  g.ordenTorres.forEach(function(tk){
+    var T = g.torres[tk];
+    var totNivel = {}, subT = 0;
+    var filas = T.ordenMats.map(function(mk){
+      var m = T.mats[mk];
+      var pr = precioDe(m.material);
+      var val = pr ? (m.total / pr.rend) * pr.pu : 0;
+      subT += val; totalUnidades += m.total; matsUnicos[m.material] = true;
+      var celdas = T.niveles.map(function(nk){ var q = m.porNivel[nk] || 0; totNivel[nk] = (totNivel[nk] || 0) + q; return q ? String(q) : '—'; });
+      return [m.material].concat(celdas, [{ content: String(m.total), styles: { fontStyle: 'bold' } }, { content: pr ? money(val) : '—', styles: { fontStyle: 'bold' } }]);
+    });
+    totalGeneral += subT;
+    var totalFila = [{ content: 'TOTAL NIVEL', styles: { fontStyle: 'bold' } }]
+      .concat(T.niveles.map(function(nk){ return { content: String(totNivel[nk] || 0), styles: { fontStyle: 'bold', fillColor: [247, 246, 244] } }; }),
+        [{ content: '', styles: { fillColor: [247, 246, 244] } }, { content: money(subT), styles: { fontStyle: 'bold', textColor: [22, 101, 52], fillColor: [247, 246, 244] } }]);
+    var colStyles = { 0: { cellWidth: 'auto' } };
+    for (var ci = 1; ci <= T.niveles.length + 2; ci++) colStyles[ci] = { halign: 'center' };
+    doc.autoTable({ startY: y, margin: { left: M, right: M },
+      head: [[{ content: T.nombre, styles: { halign: 'left' } }].concat(T.niveles.map(function(nk){ return { content: nk, styles: { halign: 'center' } }; }), [{ content: 'TOTAL', styles: { halign: 'center' } }, { content: money(subT), styles: { halign: 'center' } }])],
+      body: filas.concat([totalFila]),
+      headStyles: { fillColor: [28, 25, 23], textColor: 255, fontSize: 8 },
+      styles: { fontSize: 8, cellPadding: 3.5 },
+      columnStyles: colStyles,
+      theme: 'striped' });
+    y = doc.lastAutoTable.finalY + 14;
+  });
+  /* total general + pie */
+  doc.setDrawColor(28, 25, 23); doc.setLineWidth(2); doc.line(M, y, W - M, y);
+  doc.setFont(undefined, 'bold'); doc.setFontSize(11); doc.setTextColor(28, 25, 23);
+  doc.text('TOTAL GENERAL', M, y + 18);
+  doc.setFontSize(15); doc.setTextColor(22, 101, 52);
+  doc.text(money(totalGeneral), W - M, y + 18, { align: 'right' });
+  doc.setFont(undefined, 'normal'); doc.setFontSize(7); doc.setTextColor(156, 163, 175);
+  doc.text('MATERIALES: ' + Object.keys(matsUnicos).length + ' · UNIDADES: ' + totalUnidades + ' · Valorizado con el catálogo de precios vigente al día del cierre.', M, y + 32);
+  return doc;
+}
+window._invReporteDescargar = function(tomaId){
+  var p = activeProj(); if (!p) return;
+  var toma = (p.materiales.tomas || []).find(function(t){ return t && t.id === tomaId; });
+  if (!toma) return showToast('TOMA NO ENCONTRADA', 'red');
+  var doc = _invReporteDoc(p, toma); if (!doc) return;
+  _pdfDescargar(doc, _invReporteNombre(p, toma)); // router v782: save/anchor/visor según entorno
+};
+window._invReporteCompartir = function(tomaId){
+  var p = activeProj(); if (!p) return;
+  var toma = (p.materiales.tomas || []).find(function(t){ return t && t.id === tomaId; });
+  if (!toma) return showToast('TOMA NO ENCONTRADA', 'red');
+  var doc = _invReporteDoc(p, toma); if (!doc) return;
+  _pdfCompartir(doc, _invReporteNombre(p, toma)); // escalera v810: nativo → web → aviso
+};
 function _invFmtFecha(iso){
   try { var d=new Date(iso); if(isNaN(d.getTime())) return String(iso||''); return d.toLocaleDateString('es-GT',{day:'2-digit',month:'2-digit',year:'numeric'}); }
   catch(e){ return String(iso||''); }
@@ -17489,7 +17638,7 @@ function _invSugerir(q){
     var it = all[i]; if (!it || !it.name) continue;
     if (!s || String(it.name).toUpperCase().indexOf(s) >= 0 || String(it.alias || '').toUpperCase().indexOf(s) >= 0) out.push(it);
   }
-  var libre = '<div style="padding:7px 12px;font-size:10px;color:#92400E;background:#FFFBEB;border-top:1px solid #FCD34D">¿No está en el listado? Escribilo tal cual y tocá AGREGAR.</div>';
+  var libre = ''; // v1054: el avisito amarillo se fue — hay botón VISIBLE debajo del formulario
   if (!out.length){ box.innerHTML = libre; box.style.display = 'block'; return; }
   box.innerHTML = out.map(function(it){
     return '<div onmousedown="event.preventDefault();_invSugPick(this.dataset.nm)" data-nm="' + _invEscAttr(it.name) + '" style="display:flex;justify-content:space-between;gap:8px;padding:8px 12px;font-size:12px;cursor:pointer;border-bottom:1px solid #F1F5F9" onmouseover="this.style.background=\'#FFF4F4\'" onmouseout="this.style.background=\'\'"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _invEsc(it.name) + '</span><span style="color:#9CA3AF;font-size:10px;flex:0 0 auto">' + _invEsc(it.u || '') + '</span></div>';
@@ -17527,11 +17676,13 @@ function renderInventarios(){
   var root=document.getElementById('invRoot'); if(!root) return;
   var p=activeProj();
   if(!p || !p.materiales){ root.innerHTML=''; return; }
+  /* v1054: las sub-pestañas usan los BOTONES del panel (v1052) — cuadrícula pareja, activo
+     relleno. El inventario vive en COMPRAS, así que el CSS escopeado del panel aplica. */
   var tabBtn=function(key,label){
     var on=invUI.sub===key;
-    return '<button class="mat-tab'+(on?' active':'')+'" onclick="setInvSub(\''+key+'\')"'+(on?' style="color:var(--cafe);border-bottom-color:var(--cafe)"':'')+'>'+label+'</button>';
+    return '<button class="mat-tab'+(on?' active':'')+'" onclick="setInvSub(\''+key+'\')">'+label+'</button>';
   };
-  var subTabs='<div style="display:flex;gap:0;margin-bottom:16px;border-bottom:1px solid var(--line)">'+tabBtn('actual','TOMA ACTUAL')+tabBtn('historial','HISTORIAL')+'</div>';
+  var subTabs='<div class="mat-tabs ped-tabs-bar">'+tabBtn('actual','TOMA ACTUAL')+tabBtn('historial','HISTORIAL')+'</div>';
   var body=invUI.sub==='historial' ? _invRenderHistorial(p) : _invRenderActual(p);
   root.innerHTML='<div class="card"><div class="card-hd"><h3>TOMA DE INVENTARIO</h3></div><div style="padding:6px 4px 4px">'+subTabs+body+'</div></div>';
 }
@@ -17549,7 +17700,7 @@ function _invRenderActual(p){
   var esAdmin=(typeof can==='function')&&can('users.manage');
   var puedeCerrar=esAdmin || !toma.by || (email && toma.by===email);
   var n=(toma.lineas||[]).length;
-  var head='<div style="background:var(--cream);border-radius:8px;padding:10px 12px;margin-bottom:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+  var head='<div class="inv-head" style="background:var(--cream);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
     '<div style="flex:1;min-width:150px"><div style="font-weight:800;font-size:12px;letter-spacing:.5px">TOMA EN PROGRESO</div>'+
     '<div style="font-size:11px;color:var(--mute)">Iniciada '+_invEsc(_invFmtFecha(toma.fechaInicio))+' · '+_invEsc(toma.byNombre||toma.by||'')+' · '+n+' contado(s)</div></div>'+
     (puedeCerrar?'<button class="btn sm" style="background:var(--green-dark);color:#fff;border-color:var(--green-dark)" onclick="cerrarTomaInventario()">CERRAR TOMA</button>':'')+
@@ -17613,14 +17764,20 @@ function _invCapture(p,toma){
   var lblStyle='display:block;font-size:9px;letter-spacing:1px;color:var(--mute);font-weight:700;margin-bottom:3px';
   /* v982: fuera el datalist nativo (desplegaba un listado gigante y feo — foto de Antonio):
      panel de sugerencias MINIMALISTA + unidad AUTO al elegir/escribir el material. */
+  /* v1054 (Antonio, con fotos): MATERIAL a lo ancho arriba; UNIDAD, CANTIDAD y AGREGAR en
+     una cuadrícula de TRES CUADROS DEL MISMO TAMAÑO. Abajo, la opción VISIBLE para el
+     producto que no está en el listado (antes era un avisito amarillo escondido). */
   var form=''+
-    '<div style="background:var(--cream);border-radius:8px;padding:10px;margin:6px 0 14px"><div class="inv-form-row" style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end">'+
-      '<div style="flex:2;min-width:150px;position:relative"><label style="'+lblStyle+'">MATERIAL</label><input id="invMatInput" autocomplete="off" placeholder="Elegí o escribí…" style="'+inStyle+'" oninput="_invSugerir(this.value)" onfocus="_invSugerir(this.value)" onblur="setTimeout(_invSugCerrar,180)" onchange="var u=document.getElementById(\'invUnidadInput\'); if(u&&(!u.value||u.value===\'U\')) u.value=_invUnidadDe(this.value)">'+
+    '<div style="background:var(--cream);border:1px solid var(--line);border-radius:10px;padding:12px;margin:6px 0 14px">'+
+      '<div style="position:relative;margin-bottom:8px"><label style="'+lblStyle+'">MATERIAL</label><input id="invMatInput" autocomplete="off" placeholder="Elegí o escribí…" style="'+inStyle+'" oninput="_invSugerir(this.value)" onfocus="_invSugerir(this.value)" onblur="setTimeout(_invSugCerrar,180)" onchange="var u=document.getElementById(\'invUnidadInput\'); if(u&&(!u.value||u.value===\'U\')) u.value=_invUnidadDe(this.value)">'+
       '<div id="invSugPanel" style="display:none;position:absolute;left:0;right:0;top:100%;margin-top:4px;z-index:5000;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 14px 40px rgba(15,23,42,.15);max-height:240px;overflow-y:auto"></div></div>'+
-      '<div style="flex:0 0 66px"><label style="'+lblStyle+'">UNIDAD</label><input id="invUnidadInput" autocomplete="off" value="U" style="'+inStyle+';text-transform:uppercase"></div>'+
-      '<div style="flex:0 0 78px"><label style="'+lblStyle+'">CANTIDAD</label><input id="invCantInput" type="number" inputmode="decimal" min="0" step="any" placeholder="0" style="'+inStyle+'"></div>'+
-      '<button class="btn primary" style="flex:0 0 auto" onclick="invAgregarLinea()">AGREGAR</button>'+
-    '</div></div>';
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;align-items:end">'+
+        '<div><label style="'+lblStyle+'">UNIDAD</label><input id="invUnidadInput" autocomplete="off" value="U" style="'+inStyle+';text-transform:uppercase;text-align:center"></div>'+
+        '<div><label style="'+lblStyle+'">CANTIDAD</label><input id="invCantInput" type="number" inputmode="decimal" min="0" step="any" placeholder="0" style="'+inStyle+';text-align:center"></div>'+
+        '<button class="btn primary" style="height:41px" onclick="invAgregarLinea()">AGREGAR</button>'+
+      '</div>'+
+      '<div style="display:flex;justify-content:center;margin-top:10px"><button class="btn ghost sm" style="font-size:10px" onclick="_invAgregarComoNuevo()">¿NO ESTÁ EN EL LISTADO? AGREGARLO COMO PRODUCTO NUEVO</button></div>'+
+    '</div>';
   var lista;
   if(!lineas.length){ lista='<div style="padding:24px;text-align:center;color:var(--mute);font-size:12px">Todavía no contaste materiales en esta ubicación.</div>'; }
   else {
@@ -17664,6 +17821,10 @@ function _invHistDetalle(t){
   // DINERO de lo que hay en obra. P.U. del catálogo de proveedores (misma fórmula de la
   // receta: qty/rendimiento × precio). El dinero se gata como los precios de la receta.
   var verQ = (typeof can==='function') && (can('receta.verPrecios') || can('users.manage'));
+  /* v1054: el reporte para gerencia — mismo gate que la valorización (lleva montos) */
+  if (verQ) hd += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:-4px 0 12px">'
+    + '<button class="btn sm" onclick="_invReporteDescargar(\''+t.id+'\')">DESCARGAR PDF</button>'
+    + '<button class="btn sm" style="background:#166534;border-color:#166534;color:#fff" onclick="_invReporteCompartir(\''+t.id+'\')">COMPARTIR PDF</button></div>';
   var money = function(n){ return 'Q' + (Number(n)||0).toLocaleString('es-GT',{minimumFractionDigits:2, maximumFractionDigits:2}); };
   var granTotal = 0, sinPrecio = 0;
   var body=order.map(function(key){
@@ -17724,6 +17885,15 @@ async function unificarTomasAbiertas(){
   renderInventarios();
   showToast('TOMAS UNIFICADAS','green');
 }
+/* v1054: la vía VISIBLE para el producto que no está en el listado — cuenta la línea igual
+   que siempre (texto libre) y avisa que su precio se pedirá al cerrar (candado del catálogo) */
+window._invAgregarComoNuevo = function(){
+  var i = document.getElementById('invMatInput');
+  var v = ((i && i.value) || '').trim();
+  if (!v) { showToast('ESCRIBÍ EL NOMBRE DEL MATERIAL NUEVO ARRIBA', 'red'); if (i) i.focus(); return; }
+  invAgregarLinea();
+  showToast('CONTADO — SU PRECIO SE PEDIRÁ AL CERRAR LA TOMA', '');
+};
 function invAgregarLinea(){
   var p=activeProj(); var toma=_invActiveToma();
   if(!toma){ showToast('NO HAY TOMA ABIERTA','red'); return; }
@@ -17762,14 +17932,58 @@ function invEliminarLinea(id){
   saveState(); _invUpload();
   renderInventarios();
 }
+/* ═══ v1054 · EL CANDADO DEL CATÁLOGO (regla de Antonio): el inventario se VALORIZA con el
+   catálogo de precios, así que un producto contado que no está en el catálogo (o está con
+   precio 0 — agujero B8) NO puede llegar al resumen. Al cerrar la toma se OBLIGA a darlo de
+   alta. Mismo criterio que la valorización de _invHistDetalle: precioDeProductoReceta con
+   nombreCompra vacío, precio > 0. PURA. */
+function _invMaterialesSinPrecio(toma){
+  var provs = []; try { provs = _getProveedores(); } catch(e){}
+  var vistos = {}, out = [];
+  ((toma && toma.lineas) || []).forEach(function(l){
+    if (!l || !l.material) return;
+    var k = String(l.material).toUpperCase();
+    if (vistos[k]) return; vistos[k] = true;
+    var info = null; try { info = precioDeProductoReceta(provs, l.material, ''); } catch(e){}
+    if (!(info && info.precio > 0)) out.push({ material: k, unidad: l.unidad || '' });
+  });
+  return out;
+}
+/* El alta reusa ENTERO el circuito v998: se crea la solicitud de ALTA y, si quien cierra
+   puede autorizar precios, se autoriza ahí mismo (alta directa — autorizarSolicitudPrecio
+   crea el proveedor si no existe). Si solo puede proponer, la solicitud queda PENDIENTE. */
+async function _invAltaCatalogo(nombre, unidadSug){
+  var prov = await window.prPrompt({ title: 'PRODUCTO NUEVO AL CATÁLOGO', body: '"' + nombre + '" no está en el catálogo de precios. ¿A qué PROVEEDOR se le compra?', placeholder: 'NOMBRE DEL PROVEEDOR', required: true, okText: 'SIGUIENTE' });
+  if (!prov) return false;
+  var precioTxt = await window.prPrompt({ title: 'PRECIO UNITARIO (Q)', body: nombre + ' · ' + String(prov).toUpperCase(), placeholder: 'EJ: 55.00', required: true, okText: 'GUARDAR' });
+  var precio = Number(String(precioTxt || '').replace(',', '.'));
+  if (!(precio > 0)) { showToast('PRECIO INVÁLIDO', 'red'); return false; }
+  var unidad = unidadSug || ((typeof _bodegaUnidadDelNombre === 'function') ? _bodegaUnidadDelNombre(nombre) : 'U');
+  var s = _crearSolicitudPrecio('ALTA', '', String(nombre).toUpperCase(), unidad, null, precio, 'ALTA DESDE INVENTARIO (cierre de toma)', String(prov).toUpperCase());
+  if (can('precios.autorizar') || can('users.manage')) { autorizarSolicitudPrecio(s.id); return true; }
+  return false; // quedó como solicitud pendiente — el cierre esperará la autorización
+}
 async function cerrarTomaInventario(){
   var p=activeProj(); var toma=_invActiveToma(); if(!toma) return;
   var email=(window._getUserEmail&&window._getUserEmail())||'';
   var esAdmin=(typeof can==='function')&&can('users.manage');
   if(!esAdmin && toma.by && toma.by!==email){ showToast('SOLO QUIEN INICIÓ LA TOMA O UN ADMIN PUEDE CERRARLA','red'); return; }
+  /* v1054: EL CANDADO — nada sin precio pasa al resumen */
+  var _faltan = _invMaterialesSinPrecio(toma);
+  for (var _fi = 0; _fi < _faltan.length; _fi++) {
+    await _invAltaCatalogo(_faltan[_fi].material, _faltan[_fi].unidad);
+  }
+  /* re-leer del state vivo tras los awaits (regla v769/v940) y re-verificar */
+  toma = _invActiveToma(); if(!toma) return;
+  _faltan = _invMaterialesSinPrecio(toma);
+  if (_faltan.length) {
+    await window.prAlert({ title: 'LA TOMA QUEDA ABIERTA', bodyHTML: '<div style="font-size:12.5px;line-height:1.6"><strong>' + _faltan.length + '</strong> material(es) siguen SIN PRECIO en el catálogo:<br><b>' + _faltan.map(function(x){ return _invEsc(x.material); }).join('</b> · <b>') + '</b><br><br>El inventario se valoriza con el catálogo — la toma se podrá cerrar cuando compras los autorice (quedaron como solicitudes pendientes si diste el precio).</div>' });
+    return;
+  }
   var n=(toma.lineas||[]).length;
   var okc=await window.prConfirm({ title:'CERRAR TOMA', bodyHTML:'<div style="font-size:13px">¿Cerrar esta toma de inventario? Quedará guardada en el HISTORIAL y ya no se podrá editar.<br><br><strong>'+n+'</strong> material(es) contado(s).</div>', okText:'CERRAR TOMA', cancelText:'CANCELAR' });
   if(!okc) return;
+  toma = _invActiveToma(); if(!toma) return; // v769: otro await más arriba
   var idx=(p.materiales.tomas||[]).findIndex(function(t){return t.id===toma.id;});
   if(idx>=0) p.materiales.tomas[idx]=_invCerrarToma(p.materiales.tomas[idx], new Date().toISOString());
   saveState(); _invUpload();

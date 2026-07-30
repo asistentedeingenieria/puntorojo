@@ -26,8 +26,10 @@ ok('controles a lo ancho dentro de la fila', /\.oc-item-row\.multi button, \.oc-
 ok('el precio bloqueado se lee (no bloque gris vacío)', /\.oc-item-row\.multi input\[disabled\]/.test(z));
 
 // ── 3. toma de inventario ──
-ok('el form de la toma tiene clase inv-form-row', /class="inv-form-row"/.test(html));
-ok('MATERIAL a lo ancho en celular', /\.inv-form-row > div:first-child\{flex:1 1 100%/.test(z));
+/* v1054: el form se rediseñó — MATERIAL a lo ancho SIEMPRE (no solo en celular) y
+   UNIDAD/CANTIDAD/AGREGAR en cuadrícula de tres cuadros iguales */
+ok('el form de la toma tiene clase inv-form-row', /grid-template-columns:1fr 1fr 1fr/.test((function(){ let m=html.indexOf('function _invCapture('); let i=html.indexOf('{',m),d=0; for(;i<html.length;i++){ if(html[i]==='{')d++; else if(html[i]==='}'){ d--; if(d===0) return html.slice(m,i+1); } } return ''; })()));
+ok('MATERIAL a lo ancho en celular', /position:relative;margin-bottom:8px"><label[^>]*>MATERIAL/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

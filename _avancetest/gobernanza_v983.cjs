@@ -23,7 +23,8 @@ const zS = ex('function _invSugerir(');
 ok('las sugerencias salen del catálogo GENERAL de bodega central', /_bodegaProductosGlobal/.test(zS) && !/_nmGetAllMaterials/.test(zS));
 ok('busca también por el alias interno', /it\.alias/.test(zS));
 ok('muestra la unidad en la sugerencia', /it\.u \|\| ''/.test(zS));
-ok('SIEMPRE ofrece la vía de texto libre', /Escribilo tal cual y tocá AGREGAR/.test(zS));
+/* v1054: la vía de texto libre pasó de avisito amarillo a BOTÓN visible bajo el formulario */
+ok('SIEMPRE ofrece la vía de texto libre', /_invAgregarComoNuevo/.test(html) && /AGREGARLO COMO PRODUCTO NUEVO/.test(html));
 // unidad del catálogo primero (funcional)
 const zU = ex('function _invUnidadDe(');
 let fU = null;
