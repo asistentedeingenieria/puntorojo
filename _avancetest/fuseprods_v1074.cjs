@@ -57,8 +57,9 @@ ok('proveedoresGlobales respeta SOLO LECTURA', /_mProv\.changed && !\(typeof isR
 console.log('\n— 3. el catálogo ya no sube el state entero por cada tecla —');
 ok('nombre y unidad guardan al salir del campo (onchange), no en cada tecla', !/oninput="updateCatProvProducto\(\$\{origIdx\}, 'nombre'/.test(html) && !/oninput="updateCatProvProducto\(\$\{origIdx\}, 'unidad'/.test(html));
 const zU = ex('function updateCatProvProducto(');
-/* implementado como guard invertido: nombre/unidad salen ANTES del forceUploadNow */
-ok('la subida inmediata queda solo para el PRECIO', /field !== 'precio'\)[\s\S]{0,120}return;[\s\S]{0,400}forceUploadNow/.test(zU));
+/* implementado como guard invertido: nombre/unidad salen ANTES del forceUploadNow.
+   v1078: el segundo precio (si lo recogemos) también sube inmediato — es plata igual. */
+ok('la subida inmediata queda solo para los PRECIOS', /field !== 'precio' && field !== 'precioRecoge'\)[\s\S]{0,140}return;[\s\S]{0,400}forceUploadNow/.test(zU));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
