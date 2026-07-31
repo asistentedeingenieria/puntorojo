@@ -95,7 +95,11 @@ ok('hay un total en los KPIs de materiales', /GASTO/i.test(ex('function renderMa
 /* los montos son plata: mismo gate que el inventario valorizado y los precios de receta */
 ok('los montos están gateados por permiso', /receta\.verPrecios/.test(ex('function _puedeVerGastos(')));
 ok('la pantalla respeta el gate', /_puedeVerGastos\(\)/.test(ex('function renderGastos(')));
-ok('y el KPI de materiales también', /_puedeVerGastos\(\)/.test(ex('function renderMateriales(')));
+/* v1092 (Antonio): "en la selección de la obra ya no quiero que aparezca el gasto
+   acumulado" — el KPI se quitó de la pantalla de MATERIALES de la obra. El gasto sigue
+   gateado por _puedeVerGastos donde ahora vive: COMPRAS → GASTOS y el dashboard. */
+ok('el KPI de gasto ya no está en la pantalla de materiales', !/GASTO acumulado/.test(ex('function renderMateriales(')));
+ok('pero el gasto sigue protegido donde se muestra', (html.match(/_puedeVerGastos\(\)/g) || []).length >= 3);
 
 console.log('\n— 5. lo que no se rompe —');
 ok('no toca el contador de órdenes', !/ocCountLabel/.test(zG));
