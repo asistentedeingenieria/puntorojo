@@ -39,8 +39,10 @@ ok('y sigue guardando el nombre visible', /autorizadoPor:/.test(zT));
 ok('igual el que nace desde el pedido', /autorizadoPorUsername/.test(ex('async function generarOrdenCompra(')));
 
 console.log('\n— 3. el impreso pide la firma por username, nunca genérica —');
-const iP = html.indexOf('_miFirmaImg(oc.autorizadoPorUsername)');
-ok('el bloque de AUTORIZADO usa el username del firmante', iP > -1);
+/* v1089: pasa por _firmaUsernameAutoriza, que devuelve el username guardado y, en los
+   documentos viejos que no lo tienen, lo rescata del generador SOLO si es la misma persona */
+const iP = html.indexOf('_miFirmaImg(_firmaUsernameAutoriza(oc))');
+ok('el bloque de AUTORIZADO resuelve el username del firmante', iP > -1);
 ok('no queda ninguna llamada sin argumento dentro del impreso', !/_miFirmaImg\(\)\s*\?/.test(ex('function printOrdenCompra(')));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);

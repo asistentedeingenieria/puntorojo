@@ -50,7 +50,9 @@ ok('al generar ofrece registrar la firma si falta', /_pedirFirmaSiFalta\(\)/.tes
 const srcAut = extractFn('autorizarOrden');
 ok('al autorizar ofrece la firma y guarda el username', /_pedirFirmaSiFalta\(\)/.test(srcAut) && /autorizadoPorUsername/.test(srcAut));
 ok('el PDF estampa la firma dibujada del generador (con fallback)', /_miFirmaImg\(oc\.generadoPorUsername\)/.test(srcPrint) && /firma-script/.test(srcPrint));
-ok('el PDF estampa la firma dibujada del autorizador (con fallback)', /_miFirmaImg\(oc\.autorizadoPorUsername\)/.test(srcPrint));
+/* v1089: la resolución del username pasó a _firmaUsernameAutoriza (rescata los documentos
+   viejos sin autorizadoPorUsername, sin poner nunca la firma de otra persona) */
+ok('el PDF estampa la firma dibujada del autorizador (con fallback)', /_miFirmaImg\(_firmaUsernameAutoriza\(oc\)\)/.test(srcPrint));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
