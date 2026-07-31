@@ -31,7 +31,10 @@ const zV = ex('function _variantesDeCompra(');
 ok('existe _variantesDeCompra', !!zV);
 let fV = null;
 try {
-  fV = new Function('CATALOGO_COMPRAS', '_ocItemMemKey', 'return (' + zV + ')')(
+  /* v1095: _variantesDeCompra busca la fila con _internoKey (clave que conserva el paréntesis,
+     para que dos marcas del mismo material no colapsen) y cae a _ocItemMemKey de respaldo.
+     Se inyecta la implementación REAL. */
+  fV = new Function('CATALOGO_COMPRAS', '_ocItemMemKey', ex('function _internoKey(') + '\nreturn (' + zV + ')')(
     CC,
     n => String(n || '').toUpperCase().replace(/\s+/g, ' ').trim()
   );

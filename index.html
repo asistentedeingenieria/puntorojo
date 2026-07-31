@@ -3349,7 +3349,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1094</span>
+    <span style="opacity:.5;font-size:9px">v1095</span>
   </footer>
 
 </div>
@@ -20866,22 +20866,28 @@ function _variantesDeCompra(nombreInterno){
   if (typeof CATALOGO_COMPRAS === 'undefined') return [];
   const n = String(nombreInterno == null ? '' : nombreInterno).trim();
   if (!n) return [];
-  const k = _ocItemMemKey(n);
-  for (let i = 0; i < CATALOGO_COMPRAS.length; i++) {
-    const g = CATALOGO_COMPRAS[i];
-    if (_ocItemMemKey(g.interno) === k) {
-      const c = g.compras || [];
-      return c.length > 1 ? c.slice() : [];
-    }
-  }
-  return [];
+  /* v1095: misma cascada que _ncDeCompra (v1094). Sin esto la clave colapsada encontraba la
+     fila de la OTRA marca — para la plancha DUBAI pescaba la de la USG, que tiene UNA sola
+     presentación, y devolvía [] : compras nunca veía las dos presentaciones de la DUBAI y no
+     podía elegir. El respaldo por _ocItemMemKey se conserva a propósito, para los nombres de
+     receta que vienen SIN el paréntesis de marca. */
+  const kx = _internoKey(n);
+  let g = CATALOGO_COMPRAS.find(x => x && _internoKey(x.interno) === kx);
+  if (!g) { const k = _ocItemMemKey(n); g = CATALOGO_COMPRAS.find(x => x && _ocItemMemKey(x.interno) === k); }
+  if (!g) return [];
+  const c = g.compras || [];
+  return c.length > 1 ? c.slice() : [];
 }
 /* Memoria de la variante elegida (mismo patrón que ocProvPorItem, v916): la próxima OC del
    mismo material ya viene con la que compras usó la última vez. */
 function _varianteRecordada(p, nombreInterno){
   try {
     const m = (p && p.materiales && p.materiales.ocVariantePorItem) || {};
-    const v = m[_ocItemMemKey(nombreInterno)];
+    /* v1095: clave de IDENTIDAD, no de match. Con la clave colapsada, la presentación elegida
+       para una marca se le filtraba a la otra (la USG mandaba sobre la DUBAI). Acá NO hay
+       respaldo por _ocItemMemKey a propósito: caer a la clave vieja reintroduce ese cruce.
+       El costo es que compras elija la presentación una vez más; barato y correcto. */
+    const v = m[_internoKey(nombreInterno)];
     return v ? String(v) : '';
   } catch (e) { return ''; }
 }
@@ -21231,8 +21237,10 @@ window._limpiaFiltrar = function(txt){
     el.style.display = (!q || String(el.dataset.lname || '').includes(q)) ? '' : 'none';
   });
 };
-/* Asignar SÍ escribe state.proveedoresGlobales, que viaja por LAST-WRITE-WINS sin
-   union-merge: se sube de inmediato para achicar la ventana en que otro dispositivo lo pise. */
+/* v1095: acá vivía una nota que describía a proveedoresGlobales con el modelo de sync viejo.
+   Desde v1070 ese contenedor va UNION-MERGED (_mergeById + _fuseProds), y con union-merge la
+   regla es otra: quien muta SELLA ._ts, o el merge resuelve a favor de la copia del otro
+   dispositivo y la asignación se deshace sola, sin error visible. Se sube igual de inmediato. */
 window._limpiaAsignar = function(i){
   if (!_puedeLimpiarCatalogo()) return showToast('SOLO EL ADMINISTRADOR', 'red');
   const x = (window._limpiaFilas || [])[i]; if (!x) return;
@@ -21246,7 +21254,10 @@ window._limpiaAsignar = function(i){
   if (!prv) return showToast('PROVEEDOR NO ENCONTRADO', 'red');
   if (!Array.isArray(prv.productos)) prv.productos = [];
   const yaEsta = prv.productos.find(pr => pr && normOcName(pr.nombre) === normOcName(x.name));
-  if (yaEsta) yaEsta.precio = precio; else prv.productos.push({ nombre: x.name, unidad: x.u || '', precio: precio, rendimiento: '' });
+  const _t = Date.now();
+  if (yaEsta) { yaEsta.precio = precio; yaEsta._ts = _t; }
+  else prv.productos.push({ nombre: x.name, unidad: x.u || '', precio: precio, rendimiento: '', _ts: _t });
+  prv._ts = _t;   /* v1095: el producto Y el proveedor — _mergeById gana por objeto entero */
   saveState();
   try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
   _precioIndexReset(); _catUnidadIndexReset();
@@ -23956,7 +23967,11 @@ async function _importarPreciosExcel(event){
     const provs=_getProveedores();
     const findProv=nom=>{ const k=normOcName(nom); return provs.find(p=>normOcName(p.nombre)===k); };
     let creados=0, prodNuevos=0, prodUpd=0;
-    const ensureProv=nom=>{ let pr=findProv(nom); if(!pr){ pr={id:'prv-'+uid(),nombre:String(nom).toUpperCase(),contacto:'',telefono:'',productos:[]}; provs.push(pr); creados++; } if(!pr.productos)pr.productos=[]; return pr; };
+    /* v1095: UN solo sello para todo el import (proveedoresGlobales viaja union-merged desde
+       v1070; sin sellar, el Excel entero puede deshacerse contra la copia de otro dispositivo).
+       Un timestamp único y no uno por fila: así el import es un solo hecho, no 600. */
+    const tImp=Date.now();
+    const ensureProv=nom=>{ let pr=findProv(nom); if(!pr){ pr={id:'prv-'+uid(),nombre:String(nom).toUpperCase(),contacto:'',telefono:'',productos:[],_ts:tImp}; provs.push(pr); creados++; } if(!pr.productos)pr.productos=[]; return pr; };
     const REF='SIN PROVEEDOR FIJO / REFERENCIA';
     _catUnidadIndexReset(); _precioIndexReset(); const _uIdxImp=_catUnidadIndex(); // v994: índice de unidades UNA vez para todo el import
     parsed.items.forEach(it=>{
@@ -23964,11 +23979,12 @@ async function _importarPreciosExcel(event){
       const k=matchKeyProducto(it.material);
       const ex=pr.productos.find(q=>matchKeyProducto(q.nombre)===k);
       // v994: la unidad se clasifica sola al importar (el Excel no trae columna de unidad)
-      if(ex){ ex.precio=it.precio; if(!String(ex.unidad||'').trim()) ex.unidad=_catUnidadAuto(ex.nombre,_uIdxImp); prodUpd++; }
-      else { pr.productos.push({nombre:it.material.toUpperCase(),unidad:_catUnidadAuto(it.material,_uIdxImp),precio:it.precio,rendimiento:1}); prodNuevos++; }
+      if(ex){ ex.precio=it.precio; if(!String(ex.unidad||'').trim()) ex.unidad=_catUnidadAuto(ex.nombre,_uIdxImp); ex._ts=tImp; prodUpd++; }
+      else { pr.productos.push({nombre:it.material.toUpperCase(),unidad:_catUnidadAuto(it.material,_uIdxImp),precio:it.precio,rendimiento:1,_ts:tImp}); prodNuevos++; }
+      pr._ts=tImp;   /* v1095: el producto Y su proveedor */
     });
     let pagoSet=0;
-    pagos.forEach(pg=>{ const pr=findProv(pg.nombre); if(pr){ pr.pago=Object.assign({},pr.pago,{numeroCuenta:pg.numeroCuenta,tipoCuenta:pg.tipoCuenta,banco:pg.banco}); pagoSet++; } });
+    pagos.forEach(pg=>{ const pr=findProv(pg.nombre); if(pr){ pr.pago=Object.assign({},pr.pago,{numeroCuenta:pg.numeroCuenta,tipoCuenta:pg.tipoCuenta,banco:pg.banco}); pr._ts=tImp; pagoSet++; } });
     saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) await CloudSync.uploadCurrent(); }catch(e){}
     window._prUploadHide&&window._prUploadHide();
     if(typeof renderCatProvList==='function') renderCatProvList();
@@ -24424,7 +24440,9 @@ async function generarOrdenCompra(){
     const _mp = activeProj();
     if (!_mp || !_mp.materiales) return;
     if (!_mp.materiales.ocVariantePorItem) _mp.materiales.ocVariantePorItem = {};
-    _mp.materiales.ocVariantePorItem[_ocItemMemKey(it.varianteBase)] = it.variante;
+    /* v1095: misma clave que la lectura de _varianteRecordada — _internoKey, para que la
+       presentación elegida quede pegada a ESA marca y no a la del paréntesis colapsado. */
+    _mp.materiales.ocVariantePorItem[_internoKey(it.varianteBase)] = it.variante;
   });
 
   // v919: avisar al REVISOR que hay OC(s) pendientes de visto bueno y firma
@@ -29827,8 +29845,12 @@ async function importarPersonalExcel(event){
     arr.forEach(p=>{ if(p.dpi) byDpi[_persNorm(p.dpi)]=p; byName[_persNorm(p.nombre)]=p; });
     let add=0,upd=0;
     res.personas.forEach(per=>{ const k=per.dpi?_persNorm(per.dpi):null; let ex=(k&&byDpi[k])||byName[_persNorm(per.nombre)];
-      if(ex){ if(per.nombre)ex.nombre=per.nombre; if(per.cargo)ex.cargo=per.cargo; if(per.empresa)ex.empresa=per.empresa; if(per.dpi)ex.dpi=per.dpi; if(per.telefono)ex.telefono=per.telefono; if(per.facturadoPor)ex.facturadoPor=per.facturadoPor; upd++; }
-      else { const np=Object.assign({id:'pg-'+uid(),activo:true,ts:Date.now()},per); arr.push(np); if(np.dpi)byDpi[_persNorm(np.dpi)]=np; byName[_persNorm(np.nombre)]=np; add++; } });
+      /* v1095: la persona actualizada tiene que quedar SELLADA. _mergePersonal compara por
+         _ts y NO cae a .ts como _mergeById, así que el ts: que ya traía la persona nueva no
+         sirve de sello: sin _ts, el Excel se deshacía contra la copia de otro dispositivo. */
+      const tPer=Date.now();
+      if(ex){ if(per.nombre)ex.nombre=per.nombre; if(per.cargo)ex.cargo=per.cargo; if(per.empresa)ex.empresa=per.empresa; if(per.dpi)ex.dpi=per.dpi; if(per.telefono)ex.telefono=per.telefono; if(per.facturadoPor)ex.facturadoPor=per.facturadoPor; ex._ts=tPer; upd++; }
+      else { const np=Object.assign({id:'pg-'+uid(),activo:true,ts:tPer,_ts:tPer},per); arr.push(np); if(np.dpi)byDpi[_persNorm(np.dpi)]=np; byName[_persNorm(np.nombre)]=np; add++; } });
     saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) await CloudSync.uploadCurrent(); }catch(e){}
     window._prUploadHide&&window._prUploadHide();
     showToast(`PERSONAL ACTUALIZADO · ${add} nuevos · ${upd} actualizados`,'green'); renderPersonal();
