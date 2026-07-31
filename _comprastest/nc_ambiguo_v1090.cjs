@@ -15,27 +15,49 @@ function ex(marker){ let m=html.indexOf(marker); if(m<0) return ''; let i=html.i
 let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
 const zN = ex('function _ncDeCompra(');
+const zI = ex('function _internoKey(');
 let f = null;
-try { f = new Function('CATALOGO_COMPRAS','_ocItemMemKey','_provsDelProducto', 'return (' + zN + ')'); } catch(e){}
+/* v1094: _ncDeCompra ahora casa el material con _internoKey (exacta, respeta el paréntesis).
+   Se inyecta la implementación REAL — si se rompe, este test lo canta. */
+try { f = new Function('CATALOGO_COMPRAS','_ocItemMemKey','_provsDelProducto', zI + '\nreturn (' + zN + ')'); } catch(e){}
 ok('existe _ncDeCompra y es aislable', !!f && zN.length > 200);
+ok('existe _internoKey (la clave que NO borra el paréntesis)', zI.length > 80);
 
 if (f) {
-  const key = s => String(s == null ? '' : s).toUpperCase().replace(/[”“]/g, '"').replace(/[’‘]/g, "'").replace(/\s+/g, ' ').trim();
+  const key = s => String(s == null ? '' : s).toUpperCase().replace(/[”“]/g, '"').replace(/[’‘]/g, "'")
+    .replace(/\(.*?\)/g, '')   /* ← el colapso REAL de normOcName: se come la marca */
+    .replace(/\s+/g, ' ').trim();
   const CAT = [
+    /* el orden es el de la app: la plancha USG está declarada ANTES que la DUBAI */
+    { interno: 'PLANCHA ULTRALIGHT ½" X 4\' X 8\' (USG)', compras: ['TABLA ULTRALIGHT ½" X 4\' X 8\''] },
     { interno: 'PLANCHA ULTRALIGHT ½" X 4\' X 8\' (DUBAI NACIONAL)', compras: ['TABLA YESO LIGHT SAINTGOBAIN ½" X 4\' X 8\'', 'TABLAYESO 12.7mm X 1.22m X 2.4m'] },
     { interno: 'CLAVO CON ESCUADRA 1"', compras: ['CLAVO C/ESCUADRA 1"'] },
     { interno: 'MATERIAL RARO', compras: ['NO ESTA EN NINGUN LADO', 'TAMPOCO ESTA'] },
     { interno: 'IGUAL', compras: ['IGUAL'] }
   ];
-  /* en el catálogo de precios SOLO existe el nombre de PANEL PERFECTO */
+  /* el catálogo real: PANEL PERFECTO tiene el TABLAYESO y SISTEGUA la TABLA ULTRALIGHT */
   const enCatalogo = { 'TABLAYESO 12.7MM X 1.22M X 2.4M': [{ id: 'pp', nombre: 'PANEL PERFECTO, S.A.', precio: 58 }],
+                       'TABLA ULTRALIGHT ½" X 4\' X 8\'': [{ id: 'ss', nombre: 'SISTEGUA, S.A.', precio: 65 }],
                        'CLAVO C/ESCUADRA 1"': [{ id: 'x', nombre: 'OTRO', precio: 1 }] };
   const provs = n => enCatalogo[key(n)] || [];
   const nc = f(CAT, key, provs);
 
   console.log('\n— EL CASO DE ANTONIO —');
-  ok('la plancha DUBAI resuelve al nombre que SÍ está en el catálogo',
+  /* v1094 — LA CAUSA RAÍZ (diagnóstico en vivo, 31-jul): _ocItemMemKey termina en normOcName,
+     que BORRA todo lo que va entre paréntesis. Así '(DUBAI NACIONAL)' y '(USG)' colapsaban en
+     la MISMA clave y la búsqueda del material se quedaba con la PRIMERA fila de la tabla — la
+     del USG — que traduce a TABLA ULTRALIGHT (SISTEGUA, Q65). Por eso la orden salía al
+     proveedor equivocado por más que se afinara el desempate entre variantes: la fila leída ya
+     era la que no era. La app devolvía literalmente 'TABLA ULTRALIGHT ½" X 4' X 8''.
+     El borrado de paréntesis NO se toca: es lo que hace casar el nombre de la receta con el del
+     Excel del proveedor (que no trae la marca). Lo que cambia es que la TRADUCCIÓN casa el
+     material de forma exacta con _internoKey, que sí respeta el paréntesis. */
+  ok('la plancha DUBAI resuelve al nombre de PANEL PERFECTO (no agarra la fila del USG)',
     nc('PLANCHA ULTRALIGHT ½" X 4\' X 8\' (DUBAI NACIONAL)') === 'TABLAYESO 12.7mm X 1.22m X 2.4m');
+  ok('y la plancha USG sigue resolviendo a LA SUYA',
+    nc('PLANCHA ULTRALIGHT ½" X 4\' X 8\' (USG)') === 'TABLA ULTRALIGHT ½" X 4\' X 8\'');
+  ok('dos materiales que solo se distinguen por el paréntesis NO se traducen igual',
+    nc('PLANCHA ULTRALIGHT ½" X 4\' X 8\' (DUBAI NACIONAL)') !== nc('PLANCHA ULTRALIGHT ½" X 4\' X 8\' (USG)'));
 
   console.log('\n— lo que ya funcionaba, sigue igual —');
   ok('un solo nombre de compra: se traduce como siempre', nc('CLAVO CON ESCUADRA 1"') === 'CLAVO C/ESCUADRA 1"');
@@ -50,14 +72,27 @@ if (f) {
   ok('sin catálogo cargado, el ambiguo devuelve null', f(CAT, key, provsVacio)('PLANCHA ULTRALIGHT ½" X 4\' X 8\' (DUBAI NACIONAL)') === null);
   ok('no revienta con nombre vacío', nc('') === null && nc(null) === null);
   /* si DOS variantes están en el catálogo, manda el orden de la tabla (la preferencia) */
+  /* v1093 (lo que destapó el diagnóstico en vivo): con DOS variantes en el catálogo NO gana
+     la primera declarada sino la MÁS BARATA — el mismo criterio con que la app elige
+     proveedor. El caso real tenía el nombre caro (Q65) declarado antes que el barato (Q58). */
   const enCat2 = Object.assign({}, enCatalogo, { 'TABLA YESO LIGHT SAINTGOBAIN ½" X 4\' X 8\'': [{ id: 's', nombre: 'SISTEGUA', precio: 65 }] });
-  ok('dos variantes en el catálogo: gana la primera declarada',
-    f(CAT, key, n => enCat2[key(n)] || [])('PLANCHA ULTRALIGHT ½" X 4\' X 8\' (DUBAI NACIONAL)') === 'TABLA YESO LIGHT SAINTGOBAIN ½" X 4\' X 8\'');
+  ok('dos variantes en el catálogo: gana la MÁS BARATA, no la primera',
+    f(CAT, key, n => enCat2[key(n)] || [])('PLANCHA ULTRALIGHT ½" X 4\' X 8\' (DUBAI NACIONAL)') === 'TABLAYESO 12.7mm X 1.22m X 2.4m');
+  /* el caso EXACTO de la app: TRES nombres de compra, el caro declarado en medio */
+  const CAT3 = [{ interno: 'PLANCHA X', compras: ['NO ESTA', 'CARO', 'BARATO'] }];
+  const cat3 = { 'CARO': [{ id: 'c', nombre: 'CARO SA', precio: 65 }], 'BARATO': [{ id: 'b', nombre: 'BARATO SA', precio: 58 }] };
+  ok('con tres variantes también gana la más barata',
+    f(CAT3, key, n => cat3[key(n)] || [])('PLANCHA X') === 'BARATO');
+  ok('un precio en 0 no se toma por "más barato"',
+    f(CAT3, key, n => (key(n) === 'BARATO' ? [{ id: 'b', nombre: 'B', precio: 0 }] : cat3[key(n)] || []))('PLANCHA X') === 'CARO');
 }
 
 console.log('\n— la tabla de materiales quedó intacta —');
 ok('el material DUBAI sigue con sus dos nombres de compra', /PLANCHA ULTRALIGHT[^}]*TABLAYESO 12\.7mm X 1\.22m X 2\.4m/.test(html));
-ok('no se hardcodeó DUBAI en la lógica', !/DUBAI/.test(zN));
+/* la regla es que la LÓGICA no nombre a un material concreto; los comentarios sí documentan
+   el caso real que la originó (v1094), así que se miran las líneas de código, no las notas */
+const zNsinNotas = zN.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+ok('no se hardcodeó ningún material en la lógica', !/DUBAI|ULTRALIGHT|PANEL PERFECTO|SISTEGUA/.test(zNsinNotas));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

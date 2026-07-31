@@ -117,7 +117,11 @@ ok('ABASTECER ganó buscador', /pr-buscador/.test(zAb) && /_bodegaAbFiltrar|data
 const nSrc = extractFrom('function _ncDeCompra(');
 ok('_ncDeCompra existe', !!nSrc);
 let nFn = null;
-try { nFn = new Function('CATALOGO_COMPRAS', normSrc + '\n' + memSrc + '\nreturn (' + nSrc + ')')(CC || []); } catch(e){}
+/* v1094: _ncDeCompra casa el material con _internoKey (clave exacta que NO borra el paréntesis,
+   para que (USG) y (DUBAI NACIONAL) no colapsen). Se inyecta la implementación real. */
+const intSrc = extractFrom('function _internoKey(');
+ok('_internoKey existe', intSrc.length > 80);
+try { nFn = new Function('CATALOGO_COMPRAS', normSrc + '\n' + memSrc + '\n' + intSrc + '\nreturn (' + nSrc + ')')(CC || []); } catch(e){}
 if (typeof nFn === 'function') {
   ok('match único devuelve el nombre de compra', /\(0\.35\)/.test(nFn('ANGULAR DE LÁMINA 1" X 8\'') || ''));
   ok('con variantes (TODOS) devuelve null — se elige al pedir', nFn('PEGAMENTO') == null);

@@ -3349,7 +3349,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1092</span>
+    <span style="opacity:.5;font-size:9px">v1094</span>
   </footer>
 
 </div>
@@ -20777,15 +20777,44 @@ function _provHistoricoPorItem(p, memKey){
   return '';
 }
 
+/* v1094: clave EXACTA de un material del catálogo interno. A diferencia de _ocItemMemKey
+   (que termina en normOcName y borra los paréntesis para poder casar contra el Excel del
+   proveedor), esta CONSERVA lo que va entre paréntesis: es lo único que distingue dos
+   materiales que solo se diferencian por la marca — (USG) vs (DUBAI NACIONAL). Normaliza
+   lo mismo que el resto de la app: mayúsculas, acentos, comillas tipográficas y '2 ½'. */
+function _internoKey(nombre){
+  return String(nombre == null ? '' : nombre)
+    .toUpperCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[“”″]/g, '"').replace(/[‘’′´]/g, "'")
+    .replace(/(\d)\s+([½¼¾])/g, '$1$2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /* v968: nombre de COMPRA de un material interno — SOLO cuando el match aprobado por
    Antonio es ÚNICO (los "TODOS" quedan con el interno: la variante se elige a mano).
    Con esto las OC de obra salen con el nombre exacto del Excel de compras. */
 function _ncDeCompra(nombreInterno){
   if (typeof CATALOGO_COMPRAS === 'undefined') return null;
   const k = _ocItemMemKey(nombreInterno);
-  for (let i = 0; i < CATALOGO_COMPRAS.length; i++) {
-    const g = CATALOGO_COMPRAS[i];
-    if (_ocItemMemKey(g.interno) === k) {
+  /* v1094 — LA CAUSA RAÍZ del "no me está actualizando" (diagnóstico en vivo con Antonio):
+     _ocItemMemKey termina en normOcName, que BORRA todo lo que va entre paréntesis. Así
+     'PLANCHA ULTRALIGHT ½" X 4' X 8' (DUBAI NACIONAL)' y la misma plancha '(USG)' colapsaban
+     en una sola clave, y esta búsqueda se quedaba con la PRIMERA fila de la tabla — la del
+     USG — que traduce a TABLA ULTRALIGHT (SISTEGUA, Q65). Por eso la orden salía al proveedor
+     equivocado por más que se afinara el desempate entre variantes: la fila leída ya era la
+     que no era.
+     El borrado de paréntesis NO se toca — es lo que hace casar el nombre de la receta con el
+     del Excel del proveedor, que no trae la marca. Lo que cambia es que la TRADUCCIÓN busca
+     primero por _internoKey, que respeta el paréntesis; el match viejo queda de respaldo para
+     los materiales cuyo nombre difiere en algo más que la marca. */
+  const kx = _internoKey(nombreInterno);
+  let _cands = CATALOGO_COMPRAS.filter(x => x && _internoKey(x.interno) === kx);
+  if (!_cands.length) _cands = CATALOGO_COMPRAS.filter(x => x && _ocItemMemKey(x.interno) === k);
+  for (let i = 0; i < _cands.length; i++) {
+    const g = _cands[i];
+    if (g) {
       const _cs = g.compras || [];
       if (_cs.length === 1 && _cs[0] !== g.interno) return _cs[0];
       /* v1090 (Antonio: "que automáticamente cuando se pida esa plancha seleccione la de ese
@@ -20794,11 +20823,25 @@ function _ncDeCompra(nombreInterno){
          en el catálogo de precios; si ninguna está, se sigue devolviendo null (no se elige a
          ciegas — la regla v968 de "ante la duda, no elegir" solo se relaja cuando el propio
          catálogo desempata). Con varias en el catálogo manda el orden de la tabla. */
+      /* v1093 (diagnóstico en vivo con Antonio): con VARIAS variantes en el catálogo gana la
+         MÁS BARATA, no la primera declarada. El caso real que lo destapó: una plancha con
+         TRES nombres de compra, donde el de Q65 venía antes que el de Q58 y la orden salía
+         al proveedor caro. El criterio de precio es el mismo que ya usa
+         findBestProviderForItem para elegir proveedor. */
       if (_cs.length > 1) {
+        var _mejor = null;
         for (let j = 0; j < _cs.length; j++) {
           if (_cs[j] === g.interno) continue;
-          try { if ((_provsDelProducto(_cs[j]) || []).length) return _cs[j]; } catch(e){}
+          try {
+            var _ps = _provsDelProducto(_cs[j]) || [];
+            for (var q = 0; q < _ps.length; q++) {
+              var _pr = Number(_ps[q] && _ps[q].precio) || 0;
+              if (!(_pr > 0)) continue;
+              if (!_mejor || _pr < _mejor.precio) _mejor = { nc: _cs[j], precio: _pr };
+            }
+          } catch(e){}
         }
+        if (_mejor) return _mejor.nc;
       }
       return null;
     }
