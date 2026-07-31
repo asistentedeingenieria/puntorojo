@@ -3349,7 +3349,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1087</span>
+    <span style="opacity:.5;font-size:9px">v1088</span>
   </footer>
 
 </div>
@@ -17997,7 +17997,12 @@ function _invLocInfo(sel){
     aptoId: String((sel&&sel.aptoId)||'')
   };
 }
-function _invUpsertLinea(lineas, linea){
+/* v1088 (Antonio): "puse 10 unidades, después pongo 20 y al dar agregar NO suma".
+   Contar un inventario es ACUMULAR: se cuenta una tarima, después otra. Por eso el botón
+   AGREGAR pasa sumar=true. El merge del sync NO lo hace: ahí el conteo más nuevo debe
+   ganar, o cada sincronización inflaría las cantidades (v1058). Para corregir un conteo mal
+   digitado está el campo editable de la fila. */
+function _invUpsertLinea(lineas, linea, sumar){
   var k = _invNorm(linea.locKey)+'||'+_invNorm(linea.material);
   var arr = Array.isArray(lineas) ? lineas.slice() : [];
   var idx = -1;
@@ -18005,7 +18010,8 @@ function _invUpsertLinea(lineas, linea){
     if ((_invNorm(arr[i].locKey)+'||'+_invNorm(arr[i].material)) === k){ idx=i; break; }
   }
   if (idx >= 0){
-    arr[idx] = Object.assign({}, arr[idx], { unidad: linea.unidad, cantidad: linea.cantidad, ts: linea.ts, by: linea.by });
+    var _cant = sumar ? ((Number(arr[idx].cantidad) || 0) + (Number(linea.cantidad) || 0)) : linea.cantidad;
+    arr[idx] = Object.assign({}, arr[idx], { unidad: linea.unidad, cantidad: _cant, ts: linea.ts, by: linea.by });
   } else {
     arr.push(linea);
   }
@@ -18206,6 +18212,16 @@ function _invReporteNombre(p, toma){
    catálogo de compras (_ocItemMemKey) para que las variantes de escritura del MISMO
    material — comillas tipográficas, '2 ½' vs '2½', espacios de más — caigan en un solo
    renglón y se sumen. Si no estuviera disponible, cae a mayúsculas (comportamiento viejo). */
+/* v1088 (Antonio): "la primera hoja siempre tenga el titulo y ahi mismo comienza el
+   inventario... pero no el comienzo y la hoja en blanco". El pageBreak:'avoid' de v1075
+   manda la tabla ENTERA a la hoja siguiente — perfecto para una tabla corta (evita el
+   titulo huerfano), pero con una tabla larga que NUNCA cabe completa deja la hoja anterior
+   vacia. Se decide por el alto REAL: si no entra en una hoja, fluye; si entra, salta junta. */
+function _invSaltoTabla(nFilas, fontSize, cellPadding, altoUtil){
+  var altoFila = (Number(fontSize) || 8) + 2 * (Number(cellPadding) || 3.5) + 2;
+  var alto = (Number(nFilas) + 1) * altoFila; // +1 por el encabezado
+  return alto > (Number(altoUtil) || 700) ? 'auto' : 'avoid';
+}
 function _invMatKey(nombre){
   var s = String(nombre == null ? '' : nombre);
   if (!s) return '';
@@ -18303,7 +18319,7 @@ function _invReporteDoc(p, toma){
       columnStyles: { 1: { halign: 'center', cellWidth: 60 }, 2: { halign: 'center', cellWidth: 80 }, 3: { halign: 'center', cellWidth: 95 } },
       /* v1075 (Antonio): si no cabe, la tabla ENTERA arranca en la hoja siguiente — antes
          el encabezado quedaba al final de una hoja y se repetía al principio de la otra */
-      pageBreak: 'avoid', rowPageBreak: 'avoid',
+      pageBreak: _invSaltoTabla(filasB.length, 8.5, 4, doc.internal.pageSize.getHeight() - 2 * M), rowPageBreak: 'avoid',
       theme: 'striped' });
     y = doc.lastAutoTable.finalY + 14;
   }
@@ -18341,7 +18357,7 @@ function _invReporteDoc(p, toma){
       alternateRowStyles: { fillColor: [250, 250, 249] }, // v1056: zebra gris suave, no café
       styles: { fontSize: _tAnchos.fontSize, cellPadding: 3.5 },
       columnStyles: colStyles,
-      pageBreak: 'avoid', rowPageBreak: 'avoid', // v1075: la tabla no se parte con el título huérfano
+      pageBreak: _invSaltoTabla(filas.length, _tAnchos.fontSize, 3.5, doc.internal.pageSize.getHeight() - 2 * M), rowPageBreak: 'avoid', // v1075/v1088
       theme: 'striped' });
     y = doc.lastAutoTable.finalY + 14;
   });
@@ -18380,7 +18396,7 @@ function _invReporteDoc(p, toma){
       alternateRowStyles: { fillColor: [250, 250, 249] },
       styles: { fontSize: _cAnchos.fontSize, cellPadding: 3.5 }, // v1080
       columnStyles: _cStyles,
-      pageBreak: 'avoid', rowPageBreak: 'avoid', // v1075
+      pageBreak: _invSaltoTabla(_cFilas.length, _cAnchos.fontSize, 3.5, doc.internal.pageSize.getHeight() - 2 * M), rowPageBreak: 'avoid', // v1075/v1088
       theme: 'striped' });
     y = doc.lastAutoTable.finalY + 14;
   }
@@ -18771,10 +18787,12 @@ function invAgregarLinea(){
   var loc=invUI.loc;
   var linea={ id:'inv-'+uid(), locKey:loc.locKey, locLabel:loc.locLabel, torreId:loc.torreId||'', nivelId:loc.nivelId||'', aptoId:loc.aptoId||'', bodega:!!loc.bodega,
     material:material.toUpperCase(), unidad:unidad, cantidad:cant, ts:Date.now(), by:(window._getUserEmail&&window._getUserEmail())||'' };
-  toma.lineas=_invUpsertLinea(toma.lineas, linea);
+  toma.lineas=_invUpsertLinea(toma.lineas, linea, true); // v1088: AGREGAR suma, no reemplaza
   saveState(); _invUpload();
   renderInventarios();
-  showToast('AGREGADO','green');
+  /* se muestra el TOTAL acumulado para que se vea que sumó (10 + 20 = 30) */
+  var _tot = (toma.lineas.find(function(x){ return _invNorm(x.locKey)+'||'+_invNorm(x.material) === _invNorm(linea.locKey)+'||'+_invNorm(linea.material); }) || {}).cantidad;
+  showToast('AGREGADO · TOTAL ' + (_tot != null ? _tot : cant) + ' ' + unidad,'green');
 }
 function invSetCantidad(id,val){
   var toma=_invActiveToma(); if(!toma) return;
@@ -35085,9 +35103,11 @@ function _trasiegosHTML(){
     return '<div class="card" style="padding:12px 18px 14px;margin-bottom:14px;border-left:3px solid #7C3AED">'
       + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding-bottom:6px">'
       + '<div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700">TRASIEGOS · MATERIAL DE OBRA A OBRA</div>'
-      + (puede ? '<button class="btn sm" style="font-size:9.5px" onclick="window._trasRegistrar()">+ REGISTRAR TRASIEGO</button>' : '')
+      /* v1088 (Antonio): fuera el alta manual — el trasiego se registra al generar la OC del
+           pedido, eligiendo TRASIEGO en el proveedor del material (v1068) */
+      + ''
       + '</div>'
-      + (filas || '<div style="font-size:11px;color:#9CA3AF;padding:6px 0">Sin trasiegos todavía. Al registrar uno, el material y su gasto pasan de la obra origen a la destino y queda el documento.</div>')
+      + (filas || '<div style="font-size:11px;color:#9CA3AF;padding:6px 0">Sin trasiegos todavía. Se registran al generar la orden del pedido: en el material elegí TRASIEGO y la obra de donde sale.</div>')
       + '</div>';
   } catch(e){ console.warn('[v1066] trasiegos', e); return ''; }
 }

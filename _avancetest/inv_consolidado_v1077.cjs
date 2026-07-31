@@ -47,7 +47,9 @@ ok('el título dice qué es', /TOTAL GLOBAL POR PRODUCTO/.test(z));
 /* se compara contra el DIBUJO del total general, no contra la frase (aparece en comentarios) */
 ok('va después del detalle y antes del TOTAL GENERAL', z.indexOf('_invConsolidado(g)') > z.indexOf('g.ordenTorres.forEach') && z.indexOf('_invConsolidado(g)') < z.indexOf("doc.text('TOTAL GENERAL'"));
 /* v1080: entre el cálculo y el dibujo ahora va la medición de anchos — la ventana crece */
-ok('respeta el salto de página limpio de v1075', /_invConsolidado\(g\)[\s\S]{0,3000}pageBreak: 'avoid'/.test(z));
+/* v1088: el salto es CONDICIONAL al alto real — una tabla larga fluye para no dejar la
+   hoja anterior en blanco; una corta salta junta. */
+ok('respeta el salto de página (condicional, v1075/v1088)', /_invConsolidado\(g\)[\s\S]{0,2200}pageBreak: _invSaltoTabla\(/.test(z));
 ok('lleva su columna TOTAL y el valor en dinero', /TOTAL GLOBAL POR PRODUCTO[\s\S]{0,900}'TOTAL'/.test(z) && /_cFilas|cons\.filas/.test(z));
 ok('no altera el TOTAL GENERAL (es un resumen, no suma de nuevo)', !/totalGeneral \+= (subC|cons)/.test(z));
 

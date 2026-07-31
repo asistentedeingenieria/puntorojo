@@ -57,7 +57,9 @@ console.log('\n— 5. la tarjeta en BODEGA CENTRAL —');
 const zT = ex('function _trasiegosHTML(');
 ok('existe la vista', zT.length > 500);
 ok('lista los trasiegos con su documento', /printOrdenCompra/.test(zT) && /esTrasiego/.test(zT));
-ok('botón de registrar gateado', /_trasRegistrar/.test(zT) && /compras\.autorizar/.test(zT));
+/* v1088 (Antonio): 'el registro de trasiego eliminalo porque ahora se registra a la hora de
+   crear la oc' — el alta manual se fue; el trasiego nace del pedido (v1068). */
+ok('ya NO hay botón de alta manual: el trasiego nace de la OC', !/onclick="window\._trasRegistrar\(\)"/.test(html) && /TRASIEGO/.test(html));
 ok('el contenedor vive en la sección bodega, junto al pre-pago', /_bodegaPrepagoWrap"><\/div>[\s\S]{0,200}_trasiegosWrap/.test(html));
 ok('y el panel lo pinta', /_trasiegosWrap'\)[\s\S]{0,80}_trasiegosHTML\(\)/.test(html));
 
