@@ -16,7 +16,8 @@ const zSin = ex('function _invMaterialesSinPrecio(');
 /* la llamada va DENTRO del try: si la función aún no existe, esto REPRUEBA en vez de tumbar */
 const sinPrecio = (toma, precios) => {
   try {
-    return new Function('_getProveedores', 'precioDeProductoReceta',
+    /* v1087: la matriz agrupa con _invMatKey (normalizador del catalogo) */
+return new Function('_getProveedores', 'precioDeProductoReceta', '_invMatKey',
       'return (' + zSin + ')')(() => [], (provs, nom) => precios[nom] === undefined ? null : { precio: precios[nom], rendimiento: 1 })(toma);
   } catch(e){ return null; }
 };
@@ -54,7 +55,9 @@ ok('una sola palabra usa el nombre entero', nombre({ name:'TORELO' }, { fechaCie
    filas × NIVELES en columnas (los aptos de cada nivel se SUMAN), TOTAL y VALOR por material,
    fila TOTAL NIVEL, números centrados, solo la abreviatura. */
 const zMx = ex('function _invReporteMatriz(');
-const matriz = (p, toma) => { try { return new Function('return (' + zMx + ')')()(p, toma); } catch(e){ return null; } };
+/* v1087: la matriz agrupa con _invMatKey (normalizador del catálogo), así que "tablayeso" y
+   "TABLAYESO" caen en la MISMA fila y se suman en vez de duplicarse */
+const matriz = (p, toma) => { try { return new Function('_invMatKey', 'return (' + zMx + ')')(n => String(n == null ? '' : n).toUpperCase().replace(/\s+/g, ' ').trim())(p, toma); } catch(e){ return null; } };
 const pM = { towers: [ { name:'TORRE 3', levels: [ { name:'N01', aptos:[{id:'a1'},{id:'a2'}] }, { name:'N02', aptos:[{id:'a3'}] } ] } ] };
 const tomaM = { lineas: [
   { material:'tablayeso', unidad:'U', cantidad:5, locKey:'a1' },

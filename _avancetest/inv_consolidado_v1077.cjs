@@ -11,7 +11,8 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 console.log('\n— 1. el consolidado se calcula aparte y es puro —');
 const zC = ex('function _invConsolidado(');
 let f = null;
-try { f = new Function('return (' + zC + ')')(); } catch(e){}
+try { /* v1087: agrupa con _invMatKey, igual que la matriz */
+  f = new Function('_invMatKey','return (' + zC + ')')(n => String(n==null?'':n).toUpperCase().replace(/s+/g,' ').trim()); } catch(e){}
 ok('existe _invConsolidado', !!f && zC.length > 250);
 if (f) {
   /* EL EJEMPLO DE ANTONIO: 35 en bodega + 40 en torre 1 + 2 en torre 2 = 77 */
