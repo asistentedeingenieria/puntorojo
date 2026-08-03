@@ -3283,10 +3283,15 @@ select.pr-filtro{padding:5px 30px 5px 12px}
         <!-- v1065 (Antonio): "lo ÚNICO que quiero que tenga es poder hacer la solicitud de
              un anticipo para alguien" — el flujo v777 (cotizar/autorizar/entregar) y el
              seguimiento completo viven en ADMINISTRACIÓN -->
-        <div class="card" style="padding:22px 18px;max-width:560px">
+        <!-- v1104 (Antonio): "el diseño de esto quiero que salga a todo lo largo" — el bloque
+             tenía max-width:560px y dejaba media pantalla vacía. -->
+        <div class="card" style="padding:22px 18px">
           <div class="card-hd"><h3>SOLICITAR ANTICIPO</h3></div>
           <div style="font-size:12px;color:var(--mute);line-height:1.6;margin-bottom:14px">Pedí un anticipo (préstamo, equipo o herramienta) para alguien del equipo. Compras lo cotiza y finanzas lo autoriza — los avisos llegan por la campanita.</div>
           <button class="btn primary" data-perm="anticipos.solicitar|users.manage" onclick="window._antAbrirSolicitar()">+ SOLICITAR ANTICIPO</button>
+          <!-- v1104 (Antonio): "necesito que la persona que lo pidió de obra pueda ver en qué
+               status está su pedido" — antes el seguimiento solo existía en ADMINISTRACIÓN. -->
+          <div id="_antMisSolic" style="margin-top:18px"></div>
         </div>
       </div>
       <div id="planilla-anticipos" style="display:none"></div>
@@ -3349,7 +3354,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1103</span>
+    <span style="opacity:.5;font-size:9px">v1104</span>
   </footer>
 
 </div>
@@ -47974,6 +47979,8 @@ window.addEventListener('load', () => {
     renderPlanilla();
     // v384: triggerea renders de los catalogos (si no se llaman, los containers quedan vacios al cambiar de tab)
     if (tab === 'anticipos' && typeof window.renderPlanillaAnticipos === 'function') { try { window.renderPlanillaAnticipos(); } catch(e){} }
+    /* v1104: al entrar a ANTICIPOS desde la obra, pintar el seguimiento de lo que YO pedí */
+    if (tab === 'antsolic' && typeof window._antRenderMisSolicitudes === 'function') { try { window._antRenderMisSolicitudes(); } catch(e){} }
     if (tab === 'ocs' && typeof window.renderPlanillaOCs === 'function') { try { window.renderPlanillaOCs(); } catch(e){} }
   };
 
@@ -49705,6 +49712,55 @@ window.addEventListener('load', () => {
      sale una solicitud de ESSENZA". La lista es global; el filtro por obra faltaba. Va por
      projectId y NUNCA por nombre (renombrar una obra ya nos hizo perder datos antes).
      Sin argumento devuelve todas: así lo necesita el contador global de la campanita. */
+  /* ═══════════ v1104 · SEGUIMIENTO DE MIS SOLICITUDES DESDE LA OBRA ═══════════
+     Antonio: "aquí en el proyecto sí quiero que se pueda ver cómo va el proceso de compra y de
+     solicitud, ya que necesito que la persona que lo pidió de obra pueda ver en qué status está
+     su pedido."
+     Antes el seguimiento vivía solo en ADMINISTRACIÓN, donde el supervisor no entra: pedía el
+     anticipo y quedaba a ciegas hasta que alguien le avisaba. Acá se muestran SOLO las que pidió
+     esa persona (por su correo), con el estado en palabras y el comentario de compras si lo hay
+     — que es la información que estaba preguntando por WhatsApp. */
+  window._antEstadoLegible = function(s){
+    if (!s) return { txt:'—', bg:'#F1F5F9', fg:'#475569' };
+    if (s.estado === 'cancelada')  return { txt:'CANCELADA',           bg:'#FEE2E2', fg:'#991B1B' };
+    if (s.estado === 'entregada')  return { txt:'ENTREGADA',           bg:'#DCFCE7', fg:'#15803D' };
+    if (s.pausada)                 return { txt:'EN PAUSA · SIN EXISTENCIAS', bg:'#E0E7FF', fg:'#3730A3' };
+    if (s.estado === 'pendiente_cotizacion')   return { txt:'ESPERANDO COTIZACIÓN DE COMPRAS', bg:'#FEF3C7', fg:'#92400E' };
+    if (s.estado === 'pendiente_autorizacion') return { txt:'ESPERANDO AUTORIZACIÓN',          bg:'#FEF3C7', fg:'#92400E' };
+    return { txt:String(s.estado||'EN PROCESO').toUpperCase().replace(/_/g,' '), bg:'#F1F5F9', fg:'#475569' };
+  };
+  window._antRenderMisSolicitudes = function(){
+    const cont = document.getElementById('_antMisSolic');
+    if (!cont) return;
+    const _e = s => String(s==null?'':s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+    let mias = [];
+    try {
+      const todas = (state && state.solicitudesAnticipo) || [];
+      const yo = (typeof window._getUserEmail==='function' ? (window._getUserEmail()||'') : '').toLowerCase();
+      const esAdmin = (typeof can==='function') && (can('users.manage') || can('anticipos.cotizar'));
+      mias = todas.filter(s => s && (esAdmin || String(s.solicitadoPor||'').toLowerCase() === yo));
+      mias = mias.slice().sort((a,b) => (b.ts||0) - (a.ts||0)).slice(0, 12);
+    } catch(e){ mias = []; }
+    if (!mias.length){ cont.innerHTML = '<div style="font-size:11px;color:#94A3B8;border-top:1px solid var(--line);padding-top:12px">TODAVÍA NO HAS PEDIDO NINGÚN ANTICIPO.</div>'; return; }
+    let h = '<div style="border-top:1px solid var(--line);padding-top:12px"><div style="font-size:9px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:8px">EN QUÉ VAN MIS SOLICITUDES</div>';
+    mias.forEach(s => {
+      const st = window._antEstadoLegible(s);
+      const monto = Number(s.cotMonto)||0;
+      h += '<div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff">'
+        + '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">'
+        + '<div style="font-size:12px;font-weight:700;color:#0F172A">' + _e(s.colaboradorNombre||'—') + '</div>'
+        + '<span style="font-size:9px;font-weight:800;letter-spacing:.4px;padding:3px 9px;border-radius:10px;background:' + st.bg + ';color:' + st.fg + '">' + _e(st.txt) + '</span></div>'
+        + '<div style="font-size:11px;color:#475569;margin-top:3px">' + _e(String(s.cotItem||s.descripcion||'').slice(0,140)) + '</div>'
+        + (monto>0 ? ('<div style="font-size:11px;color:#15803D;font-weight:700;margin-top:2px">COTIZADO: Q' + monto.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) + (s.cotProveedor?(' · '+_e(s.cotProveedor)):'') + '</div>') : '')
+        /* los comentarios de compras son un ARRAY {texto,por,cuando} (mismo formato que en
+           ADMINISTRACIÓN); se muestra el último, que es el que explica la demora */
+        + ((Array.isArray(s.comentarios) && s.comentarios.length)
+            ? (function(c){ return '<div style="font-size:10.5px;color:#92400E;background:#FFFBEB;border-left:3px solid #F4D040;padding:5px 9px;margin-top:6px;border-radius:0 6px 6px 0">COMPRAS: ' + _e(c.texto||'') + ' <span style="color:#B45309;font-size:9.5px">· ' + _e(c.por||'') + ' · ' + _e(c.cuando||'') + '</span></div>'; })(s.comentarios[s.comentarios.length-1])
+            : '')
+        + '</div>';
+    });
+    cont.innerHTML = h + '</div>';
+  };
   window._solPagoEtapaPendientes = function(pid){ return (state.solicitudesPagoEtapa||[]).filter(s=>s && s.estado==='pendiente' && (!pid || s.projectId===pid)); };
   window.autorizarSolicitudPagoEtapa = function(solId){
     if(!(can('planilla.authorize') || can('users.manage'))){ showToast('SOLO GERENTE/ADMIN AUTORIZA','red'); return; }
