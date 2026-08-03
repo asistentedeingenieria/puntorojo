@@ -56,7 +56,13 @@ ok('guarda por el canal liviano de asistencia', /saveAsistencia\(\)/.test(zM));
 
 console.log('\n— 4. la fila: chip con la obra de HOY y botón solo en el panel —');
 ok('el chip existe', /_peqChip/.test(html) && /Marcado hoy en esta obra pequeña/.test(html));
-ok('el botón llama al marcado', /_marcarObraPequena\(\\'/.test(html) || /_marcarObraPequena\('/.test(html));
+/* v1098 — ESTA ASERCIÓN SE DIO VUELTA A PROPÓSITO. Antonio: "elimina la opción que agregaste
+   de obra pequeña, no tiene sentido eso". El BOTÓN de marcar sale de la fila del colaborador;
+   el chip de quien ya quedó marcado se queda (se quita la opción, no el historial). La función
+   _marcarObraPequena sigue en el código y no se borró: si algún día vuelve a hacer falta, se
+   re-expone con una línea. */
+ok('YA NO se ofrece marcar obra pequeña desde la fila del colaborador', !/>OBRA PEQUEÑA<\/button>/.test(html));
+ok('el chip informativo del que ya está marcado sigue', /_peqChip/.test(html));
 ok('y solo se ve dentro de ADMINISTRACIÓN', /\.pr-btn-peq\{display:none\}/.test(html) && /#_adminPanelModal \.pr-btn-peq\{display:inline-block\}/.test(html));
 
 console.log('\n— 5. los agrupadores del día ya no funden las obras pequeñas —');
