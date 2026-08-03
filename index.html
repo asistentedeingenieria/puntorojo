@@ -3357,7 +3357,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1110</span>
+    <span style="opacity:.5;font-size:9px">v1111</span>
   </footer>
 
 </div>
@@ -58211,7 +58211,12 @@ async function _anulAnularReal(){
   window._antColabLimpiar = function(){ var inp=document.getElementById('antColabInput'), hid=document.getElementById('antSolColab'), c=document.getElementById('antColabCombo'); if(inp){ inp.value=''; inp.focus(); } if(hid) hid.value=''; if(c) c.classList.remove('has-value'); window._antColabRender(''); };
   window._antColabKey = function(e){ try{ if(e.key==='Enter'){ e.preventDefault(); var arr=_antColabFilter(_antColabNombres(), (document.getElementById('antColabInput')||{}).value); if(arr.length) window._antColabPick(arr[0]); } else if(e.key==='Escape'){ var c=document.getElementById('antColabCombo'); if(c) c.classList.remove('open'); } }catch(_e){} };
   window._antColabCerrar = function(){ var c=document.getElementById('antColabCombo'); if(c) c.classList.remove('open'); var inp=document.getElementById('antColabInput'), hid=document.getElementById('antSolColab'); if(inp && hid && !hid.value){ var t=String(inp.value||'').trim().toUpperCase(); var m=_antColabNombres().filter(function(n){ return n.toUpperCase()===t; })[0]; if(m){ hid.value=m; inp.value=m; if(c) c.classList.add('has-value'); } } try{ window._antSolObraAuto && window._antSolObraAuto(); }catch(e){} }; // v845: al confirmar persona (blur), auto-rellena la obra
-  function _antSolicEstadoMeta(e){ return ({ pendiente_cotizacion:{t:'PENDIENTE DE COTIZACIÓN',c:'#B45309',bg:'#FEF3C7'}, pendiente_autorizacion:{t:'PENDIENTE DE AUTORIZACIÓN',c:'#1D4ED8',bg:'#DBEAFE'}, autorizada:{t:'AUTORIZADA · POR ENTREGAR',c:'#9A3412',bg:'#FFEDD5'}, entregada:{t:'ENTREGADA',c:'#15803D',bg:'#DCFCE7'}, rechazada:{t:'RECHAZADA',c:'#B91C1C',bg:'#FEE2E2'}, cancelada:{t:'CANCELADA',c:'#6B7280',bg:'#F3F4F6'} }[e] || {t:String(e||'').toUpperCase(),c:'#6B7280',bg:'#F3F4F6'}); }
+  function _antSolicEstadoMeta(e, sol){
+    /* v1111: la autorizada EN EFECTIVO dice REALIZAR TRANSFERENCIA — quien paga tiene que ver
+       de un vistazo que ahí no se entrega un producto, se manda plata. */
+    if (e === 'autorizada' && sol && sol.efectivo) return { t:'AUTORIZADO · REALIZAR TRANSFERENCIA', c:'#1D4ED8', bg:'#DBEAFE' };
+    return ({ pendiente_cotizacion:{t:'PENDIENTE DE COTIZACIÓN',c:'#B45309',bg:'#FEF3C7'}, pendiente_autorizacion:{t:'PENDIENTE DE AUTORIZACIÓN',c:'#1D4ED8',bg:'#DBEAFE'}, autorizada:{t:'AUTORIZADA · POR ENTREGAR',c:'#9A3412',bg:'#FFEDD5'}, entregada:{t:'ENTREGADA',c:'#15803D',bg:'#DCFCE7'}, rechazada:{t:'RECHAZADA',c:'#B91C1C',bg:'#FEE2E2'}, cancelada:{t:'CANCELADA',c:'#6B7280',bg:'#F3F4F6'} }[e] || {t:String(e||'').toUpperCase(),c:'#6B7280',bg:'#F3F4F6'});
+  }
   window._antSolicPendientesParaMi = function(){
     return _antSolics().filter(s => {
       if(!s) return false;
@@ -58415,6 +58420,51 @@ async function _anulAnularReal(){
     showT((tipo==='carta'?'CARTA FIRMADA SUBIDA':'FACTURA SUBIDA')+(yaExiste?' · REEMPLAZADA':''),'green');
   };
   // AUTORIZAR (gerente) → crea el anticipo automáticamente
+  /* ═══════════ v1111 · AUTORIZAR EN EFECTIVO, SIN COTIZACIÓN (pedido de Antonio) ═══════════
+     "Se le va a dar efectivo para que él compre la herramienta. Para esto NO necesito que nadie
+     me pase la cotización. Esto lo apruebo yo y quiero que en algún lado diga AUTORIZADO
+     REALIZAR LA TRANSFERENCIA."
+     Caso real: José Miguel pide Q3,600 en efectivo para una pistola Hilti de segunda. No hay
+     proveedor que cotice, así que la solicitud se quedaba trabada en PENDIENTE DE COTIZACIÓN.
+     REGLA (Antonio): "la misma regla del monto que ya tenemos para las cuotas, pero el monto se
+     desembolsa al 100%" ⇒ se descuenta lo autorizado, las cuotas salen de _v416CuotasPorMonto
+     y NO hay que esperar factura: cierra en un solo paso.
+     Es un ATAJO del flujo normal, no un flujo nuevo: la solicitud queda 'autorizada' igual que
+     siempre y sigue por ENTREGAR. Solo se salta la cotización, y solo lo hace el admin. */
+  window._antAutorizarEfectivo = async function(solId){
+    if(!_antEsAdmin()){ showT('SOLO EL ADMINISTRADOR AUTORIZA EFECTIVO','red'); return; }
+    var sol = _antSolics().find(function(s){ return s.id===solId; });
+    if(!sol || (sol.estado!=='pendiente_cotizacion' && sol.estado!=='pendiente_autorizacion')){ showT('SOLICITUD NO DISPONIBLE','red'); return; }
+    window._antEfMonto = '';
+    var _esc2 = function(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[m]; }); };
+    var body = '<div style="text-align:left;display:grid;gap:10px">'
+      + '<div style="font-size:12px;color:#1F2937;line-height:1.5"><strong>' + _esc2(sol.colaboradorNombre||'') + '</strong><br>'
+      + _esc2(String(sol.descripcion||sol.cotItem||'').slice(0,160)) + '</div>'
+      + '<label style="font-size:10px;letter-spacing:1px;color:#64748B;font-weight:700">MONTO EN EFECTIVO A ENTREGAR (Q)'
+      + '<input id="_antEfInp" type="number" min="0" step="0.01" class="pr-buscador" style="width:100%;margin-top:4px" placeholder="3600.00" oninput="window._antEfMonto=this.value"></label>'
+      + '<div style="font-size:11px;color:#7C5800;background:#FFFBEB;border-left:3px solid #F4D040;padding:8px 10px;border-radius:0 6px 6px 0">'
+      + 'SIN COTIZACIÓN: se desembolsa el 100% del monto y se descuenta ese mismo monto. Las cuotas se calculan solas con la regla de siempre.</div>'
+      + '</div>';
+    var ok = await window.prConfirm({ title:'AUTORIZAR EN EFECTIVO', bodyHTML:body, okText:'AUTORIZAR Y PEDIR TRANSFERENCIA', cancelText:'CANCELAR' });
+    if(!ok) return;
+    var monto = Number(window._antEfMonto);
+    if(!(monto > 0)){ showT('ESCRIBÍ EL MONTO','red'); return; }
+    var sol2 = _antSolics().find(function(s){ return s.id===solId; });   /* re-leer tras el await (v769/v770) */
+    if(!sol2 || sol2.estado==='cancelada' || sol2.estado==='entregada'){ showT('LA SOLICITUD YA CAMBIÓ DE ESTADO','red'); return; }
+    var cuotas = window._v416CuotasPorMonto(monto);
+    sol2.cotMonto = monto;                       /* el monto autorizado ES el que se descuenta */
+    sol2.cotProveedor = 'EFECTIVO · SIN COTIZACIÓN';
+    sol2.efectivo = true;
+    sol2.estado = 'autorizada'; sol2.cuotas = cuotas; sol2._ts = Date.now();
+    sol2.autorizadoPor = (typeof window._getUserEmail==='function'?(window._getUserEmail()||''):'');
+    sol2.autorizadoEn = (typeof nowStr==='function'?nowStr():'');
+    sol2.decididoPor = sol2.autorizadoPor; sol2.decididoEn = sol2.autorizadoEn;
+    _antSolicNotif(['anticipos.cotizar'], [sol2.solicitadoPor], 'AUTORIZADO · REALIZAR TRANSFERENCIA',
+      sol2.colaboradorNombre + ' · ' + _money(monto) + ' EN EFECTIVO en ' + cuotas + ' cuotas. Hacer la transferencia y marcar ENTREGADO.');
+    _antSolicSave();
+    try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); } catch(e){}
+    showT('AUTORIZADO · REALIZAR TRANSFERENCIA DE ' + _money(monto), 'green');
+  };
   window.autorizarSolicitudAnticipoFlujo = function(solId){
     if(!_antEsGerente()){ showT('SOLO GERENTE/ADMIN AUTORIZA','red'); return; }
     const sol = _antSolics().find(s=>s.id===solId);
@@ -58753,10 +58803,12 @@ async function _anulAnularReal(){
           + '<span style="font-size:11px;color:#666;font-weight:600">'+_entregadas.length+' · ▼ OCULTAR</span></div>'
           + '<div style="display:grid;gap:10px;padding:4px 10px 12px">';
       }
-      const meta = s.pausada ? {t:'EN PAUSA · SIN EXISTENCIAS',c:'#475569',bg:'#E2E8F0'} : _antSolicEstadoMeta(s.estado); // v976: la pausa manda sobre el estado en el chip
+      const meta = s.pausada ? {t:'EN PAUSA · SIN EXISTENCIAS',c:'#475569',bg:'#E2E8F0'} : _antSolicEstadoMeta(s.estado, s); // v976: la pausa manda sobre el estado en el chip · v1111: se pasa la solicitud para distinguir el efectivo
       const esCreador = (String(s.solicitadoPor||'').toLowerCase()===my);
       let acciones='', gateHTML='', docsVer='';
       if(!s.pausada && s.estado==='pendiente_cotizacion' && puedeCotizar) acciones += '<button class="btn sm" onclick="window._antAbrirCotizar(\''+esc(s.id)+'\')" style="background:#1565C0;border-color:#1565C0;color:#fff;padding:6px 14px;font-size:11px">SUBIR COTIZACIÓN</button>';
+      /* v1111: atajo del admin — se entrega EFECTIVO y no hay cotización que esperar */
+      if(!s.pausada && (s.estado==='pendiente_cotizacion'||s.estado==='pendiente_autorizacion') && _antEsAdmin()) acciones += '<button class="btn sm" onclick="window._antAutorizarEfectivo(\''+esc(s.id)+'\')" style="background:#15803D;border-color:#15803D;color:#fff;padding:6px 14px;font-size:11px">AUTORIZAR EN EFECTIVO</button>';
       if(!s.pausada && s.estado==='pendiente_autorizacion' && esGer) acciones += '<button class="btn sm" onclick="window._antAbrirAutorizar(\''+esc(s.id)+'\')" style="background:#2E7D32;border-color:#2E7D32;color:#fff;padding:6px 14px;font-size:11px">REVISAR / AUTORIZAR</button>';
       // v976: PAUSAR (con permiso, en estados activos) / REANUDAR (cuando está pausada)
       if(!s.pausada && puedePausar && (s.estado==='pendiente_cotizacion'||s.estado==='pendiente_autorizacion'||s.estado==='autorizada')) acciones += '<button class="btn ghost sm" onclick="window.pausarSolicitudAnticipo(\''+esc(s.id)+'\')" style="border-color:#475569;color:#475569;padding:6px 14px;font-size:11px">PAUSAR</button>';
