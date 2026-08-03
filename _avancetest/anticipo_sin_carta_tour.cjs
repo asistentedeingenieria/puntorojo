@@ -21,7 +21,13 @@ if (src) {
 ok('sin botón SUBIR CARTA', html.indexOf('>SUBIR CARTA</button>') < 0);
 ok('sin PASO 2 · CARTA FIRMADA', html.indexOf('PASO 2 · CARTA FIRMADA') < 0);
 ok('sin link CARTA: ver en entregadas', html.indexOf("_b.push('CARTA:") < 0);
-ok('el paso de factura es el último', html.indexOf('ÚLTIMO PASO · FACTURA DEL PRODUCTO') >= 0);
+/* v1115: el rótulo se volvió condicional — en un anticipo EN EFECTIVO no hay factura de
+   proveedor, se pide el COMPROBANTE DE LA TRANSFERENCIA. El paso sigue siendo el último y
+   sigue usando el mismo campo de archivo; lo único que cambia es qué se le pide a la persona. */
+ok('el paso de factura/comprobante es el último',
+  html.indexOf('ÚLTIMO PASO · ') >= 0
+  && html.indexOf('FACTURA DEL PRODUCTO') >= 0
+  && html.indexOf('COMPROBANTE DE LA TRANSFERENCIA') >= 0);
 ok('MARCAR ENTREGADO sigue existiendo', html.indexOf('MARCAR ENTREGADO') >= 0);
 ok('deshabilitado pide solo la factura', html.indexOf('SUBÍ LA FACTURA PARA HABILITAR') >= 0);
 ok('toast pide solo factura', html.indexOf('FALTA LA FACTURA') >= 0 && html.indexOf('SUBÍ FACTURA Y CARTA FIRMADA') < 0);
