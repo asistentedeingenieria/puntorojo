@@ -3357,7 +3357,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1107</span>
+    <span style="opacity:.5;font-size:9px">v1108</span>
   </footer>
 
 </div>
@@ -11707,6 +11707,80 @@ function evalCobroStatus(fp, sc){
   }
   return sc === 'EN AUTORIZACIÓN' ? 'EN AUTORIZACIÓN' : 'PENDIENTE';
 }
+
+/* ═══════════ v1108 · MOTOR DEL REPORTE SEMANAL FOTOGRÁFICO (pedido de Antonio) ═══════════
+   "Quiero que este reporte se pueda hacer solito con las fotos que se subieron en el avance
+   físico y que se genere igual al que entregamos al cliente."
+   Hoy mandan a una persona a tomar fotos y arma el PDF a mano (semana 35: 50 páginas, 110
+   fotos). Desde la v1076 cada foto tiene fecha, que es lo que hace posible automatizarlo.
+
+   REGLAS, todas definidas por Antonio:
+   - Semana de LUNES a VIERNES. La próxima es la 36 = 3 al 7 de agosto de 2026, y suma sola.
+   - DOS fotos por unidad: las dos MÁS RECIENTES de la semana, de cualquier etapa.
+   - Sin fotos esa semana ⇒ se repite lo del reporte anterior. Acá se devuelve vacío para que
+     quien arma el PDF sepa que tiene que copiar del reporte previo.
+   - Una unidad ENTREGADA no vuelve a salir NUNCA MÁS ("nunca más, definitivo"). Queda dicho:
+     si algún día hay un retrabajo en un apto entregado, hoy no habría forma de reportarlo.
+   - La X sale del estado que la app YA lleva con las fotos (a.stages), y la tabla lleva las
+     SEIS etapas de la app, no las cuatro del reporte viejo.
+   - Los PASILLOS ya existen como unidad (24 en ESSENZA) y entran como una más.
+   Todo esto es PURO: decide QUÉ entra al reporte. El PDF y la persistencia van aparte. */
+const REP_SEMANA_ANCLA = { n: 36, lunes: '2026-08-03' };
+function _repSemanaRango(nSemana){
+  var n = Number(nSemana); if (!isFinite(n)) n = REP_SEMANA_ANCLA.n;
+  var base = new Date(REP_SEMANA_ANCLA.lunes + 'T12:00:00');
+  var d = new Date(base.getTime());
+  d.setDate(base.getDate() + (n - REP_SEMANA_ANCLA.n) * 7);
+  var h = new Date(d.getTime()); h.setDate(d.getDate() + 4);          /* lunes → viernes */
+  var iso = function(x){ return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0'); };
+  var MES = ['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
+  var mesTxt = MES[h.getMonth()].charAt(0) + MES[h.getMonth()].slice(1).toLowerCase();
+  return { semana:n, desde: iso(d)+'T00:00:00', hasta: iso(h)+'T23:59:59',
+           label: 'Del ' + d.getDate() + ' Al ' + h.getDate() + ' ' + mesTxt,
+           mes: MES[h.getMonth()], anio: h.getFullYear() };
+}
+function _repFotosSemana(apto, desdeTs, hastaTs){
+  if (!apto) return [];
+  var d = Number(desdeTs)||0, h = Number(hastaTs)||0;
+  var todas = [];
+  var ph = apto.photos || [], ts = apto.photoTs || [];
+  for (var e = 0; e < ph.length; e++){
+    var arr = ph[e] || [], tarr = (ts[e] || []);
+    for (var i = 0; i < arr.length; i++){
+      var t = Number(tarr[i]) || 0;
+      if (arr[i] && t >= d && t <= h) todas.push({ url: arr[i], ts: t, etapa: e });
+    }
+  }
+  todas.sort(function(a,b){ return b.ts - a.ts; });                    /* más reciente primero */
+  return todas.slice(0, 2).map(function(x){ return x.url; });
+}
+function _repEtapasUnidad(apto){
+  var st = (apto && Array.isArray(apto.stages)) ? apto.stages : [];
+  var marcas = [];
+  for (var i = 0; i < 6; i++) marcas.push(!!st[i]);
+  return { marcas: marcas, entregado: marcas.every(function(x){ return x === true; }) };
+}
+function _repUnidadesDelReporte(p, reportesPrevios){
+  if (!p) return [];
+  /* "entregado = nunca más": basta que UN reporte anterior la haya dado por entregada */
+  var fuera = {};
+  (reportesPrevios || []).forEach(function(r){
+    var u = (r && r.unidades) || {};
+    Object.keys(u).forEach(function(id){ if (u[id] && u[id].entregado) fuera[id] = true; });
+  });
+  var out = [];
+  (p.towers || []).forEach(function(t){
+    ((t && t.levels) || []).forEach(function(l){
+      ((l && l.aptos) || []).forEach(function(a){
+        if (!a || fuera[a.id]) return;
+        out.push({ t:t, l:l, a:a });
+      });
+    });
+  });
+  return out;
+}
+try { window._repSemanaRango = _repSemanaRango; window._repFotosSemana = _repFotosSemana;
+      window._repEtapasUnidad = _repEtapasUnidad; window._repUnidadesDelReporte = _repUnidadesDelReporte; } catch(e){}
 
 /* Etapas de avance físico: 6 etapas con umbrales no uniformes */
 const ETAPAS = [
