@@ -2925,6 +2925,9 @@ select.pr-filtro{padding:5px 30px 5px 12px}
         <button class="mat-tab active" data-avancetab="etapas" onclick="setAvanceSubTab('etapas')">AVANCE POR ETAPAS</button>
         <button class="mat-tab" data-avancetab="acuses" onclick="setAvanceSubTab('acuses')">ACUSES DE RECEPCIÓN</button>
         <button class="mat-tab" data-avancetab="cuadritos" onclick="setAvanceSubTab('cuadritos')">AVANCE POR APARTAMENTO</button>
+        <!-- v1112: el reporte fotográfico semanal que se le manda al cliente. Sale de las fotos
+             que ya se suben acá, así que vive junto al avance y no en otra pantalla. -->
+        <button class="btn ghost sm" style="margin-left:auto;font-size:10px;color:#1D4ED8;border-color:#93C5FD;background:#EFF6FF" onclick="window._repAbrir()">REPORTE SEMANAL</button>
       </div>
 
       <div id="avance-etapas-panel">
@@ -3357,7 +3360,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1111</span>
+    <span style="opacity:.5;font-size:9px">v1112</span>
   </footer>
 
 </div>
@@ -11838,6 +11841,167 @@ function _repArmar(p, nSemana, reportesPrevios){
   return { semana:rango.semana, desde:rango.desde, hasta:rango.hasta, label:rango.label,
            mes:rango.mes, anio:rango.anio, filas:filas, unidades:unidades };
 }
+/* ═══════════ v1112 · VISTA PREVIA Y PDF DEL REPORTE SEMANAL ═══════════
+   La parte que Antonio ve. El motor (v1108/v1109) y la memoria (v1110) ya estaban.
+   La vista previa NO es adorno: automatizar el reporte quita el filtro humano que hoy hace la
+   persona que lo arma, así que antes de mandárselo al cliente hay que poder mirarlo. */
+window._repSemanaSugerida = function(p){
+  /* la siguiente a la última emitida; si no hay ninguna, la del ancla */
+  var reps = (p && p.reportesSemanales) || [];
+  var max = 0;
+  reps.forEach(function(r){ var n = Number(r && r.semana) || 0; if (n > max) max = n; });
+  return max ? (max + 1) : REP_SEMANA_ANCLA.n;
+};
+window._repAbrir = async function(){
+  var p = (typeof activeProj === 'function') ? activeProj() : null;
+  if (!p) return showToast('SIN PROYECTO ACTIVO','red');
+  window._repSemanaSel = window._repSemanaSugerida(p);
+  window._repRender();
+};
+window._repRender = function(){
+  var p = (typeof activeProj === 'function') ? activeProj() : null;
+  if (!p) return;
+  var _e = function(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[m]; }); };
+  var n = Number(window._repSemanaSel) || REP_SEMANA_ANCLA.n;
+  var rep = _repArmar(p, n, (p.reportesSemanales || []));
+  window._repActual = rep;
+  var yaEmitida = (p.reportesSemanales || []).some(function(r){ return Number(r.semana) === n; });
+  var nuevas = rep.filas.filter(function(f){ return !f.repetido && f.fotos.length; }).length;
+  var sinFoto = rep.filas.filter(function(f){ return !f.fotos.length; }).length;
+  var h = '<div style="text-align:left">'
+    + '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
+    + '<label style="font-size:10px;letter-spacing:1px;color:#64748B;font-weight:700">SEMANA '
+    + '<input type="number" min="1" value="' + n + '" class="pr-buscador" style="width:90px;margin-left:6px" onchange="window._repSemanaSel=this.value; window._repRender();"></label>'
+    + '<div style="font-size:12px;color:#0F172A;font-weight:700">' + _e(rep.label) + '</div>'
+    + (yaEmitida ? '<span style="font-size:9px;font-weight:800;padding:3px 9px;border-radius:10px;background:#FEF3C7;color:#92400E">YA EMITIDA · SE REEMPLAZA</span>' : '')
+    + '</div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">'
+    + '<span style="font-size:10px;background:#F1F5F9;border-radius:8px;padding:4px 10px"><b>' + rep.filas.length + '</b> UNIDADES</span>'
+    + '<span style="font-size:10px;background:#DCFCE7;color:#15803D;border-radius:8px;padding:4px 10px"><b>' + nuevas + '</b> CON AVANCE NUEVO</span>'
+    + '<span style="font-size:10px;background:#E0E7FF;color:#3730A3;border-radius:8px;padding:4px 10px"><b>' + (rep.filas.length - nuevas - sinFoto) + '</b> REPETIDAS</span>'
+    + (sinFoto ? ('<span style="font-size:10px;background:#FEE2E2;color:#991B1B;border-radius:8px;padding:4px 10px"><b>' + sinFoto + '</b> SIN FOTO</span>') : '')
+    + '</div>';
+  if (!rep.filas.length) {
+    h += '<div style="padding:18px;text-align:center;background:#FEF3C7;border:1px solid #FCD34D;border-radius:8px;color:#92400E;font-weight:700">NO HAY UNIDADES CON AVANCE PARA REPORTAR EN ESTA SEMANA.</div>';
+  } else {
+    h += '<div style="max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:8px">';
+    var torreAct = '', nivelAct = '';
+    rep.filas.forEach(function(f){
+      if (f.torre !== torreAct) { torreAct = f.torre; nivelAct = '';
+        h += '<div style="background:#0F172A;color:#fff;font-size:10px;font-weight:800;letter-spacing:1.5px;padding:5px 12px">' + _e(f.torre) + '</div>'; }
+      if (f.nivel !== nivelAct) { nivelAct = f.nivel;
+        h += '<div style="background:#F1F5F9;font-size:9.5px;font-weight:700;letter-spacing:1px;color:#475569;padding:4px 12px">' + _e(f.nivel) + '</div>'; }
+      h += '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--line)">'
+        + '<div style="font-size:11.5px;font-weight:700;color:#0F172A;min-width:90px">' + _e(f.apto) + '</div>'
+        + '<div style="font-size:9.5px;color:#64748B;flex:1">' + ETAPAS.map(function(et, i){ return f.marcas[i] ? _e(et.short) : ''; }).filter(Boolean).join(' · ') + '</div>'
+        + '<div style="font-size:9px;font-weight:800;padding:2px 8px;border-radius:9px;'
+        + (f.entregado ? 'background:#DCFCE7;color:#15803D' : (f.repetido ? 'background:#E0E7FF;color:#3730A3' : (f.fotos.length ? 'background:#FEF3C7;color:#92400E' : 'background:#FEE2E2;color:#991B1B')))
+        + '">' + (f.entregado ? 'ENTREGADO' : (f.repetido ? 'REPETIDA' : (f.fotos.length ? (f.fotos.length + ' FOTO' + (f.fotos.length!==1?'S':'')) : 'SIN FOTO'))) + '</div>'
+        + '</div>';
+    });
+    h += '</div>';
+  }
+  h += '</div>';
+  var cont = document.getElementById('_repModalBody');
+  if (cont) { cont.innerHTML = h; return; }
+  var wrap = document.createElement('div');
+  wrap.id = '_repModal';
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:99000;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+  wrap.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:840px;width:100%;max-height:92vh;overflow:auto;padding:20px">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+    + '<div style="font-size:16px;font-weight:800;letter-spacing:-.3px">REPORTE SEMANAL FOTOGRÁFICO</div>'
+    + '<button class="btn ghost sm" onclick="document.getElementById(\'_repModal\').remove()" style="font-size:11px">CERRAR</button></div>'
+    + '<div id="_repModalBody"></div>'
+    + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'
+    + '<button class="btn primary" onclick="window._repGenerarPDF()">GENERAR PDF</button></div></div>';
+  document.body.appendChild(wrap);
+  document.getElementById('_repModalBody').innerHTML = h;
+};
+window._repGenerarPDF = async function(){
+  var p = (typeof activeProj === 'function') ? activeProj() : null;
+  var rep = window._repActual;
+  if (!p || !rep) return showToast('ABRÍ EL REPORTE PRIMERO','red');
+  if (!rep.filas.length) return showToast('NO HAY NADA QUE REPORTAR','red');
+  var jsPDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
+  if (!jsPDFCtor) return showToast('NO CARGÓ EL GENERADOR DE PDF','red');
+  var doc = new jsPDFCtor({ unit:'pt', format:'a4', orientation:'portrait' });
+  var W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 40;
+
+  /* ── portada, igual que el reporte que Antonio manda hoy ── */
+  doc.setFillColor(15,23,42); doc.rect(0,0,W,H,'F');
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(34); doc.text('REPORTE', W/2, H/2 - 60, { align:'center' });
+  doc.setFontSize(34); doc.text('FOTOGRÁFICO', W/2, H/2 - 20, { align:'center' });
+  doc.setFontSize(14); doc.text(String(rep.label||''), W/2, H/2 + 20, { align:'center' });
+  doc.setFontSize(20); doc.text('SEMANA ' + rep.semana, W/2, H/2 + 52, { align:'center' });
+  doc.setFontSize(11); doc.setTextColor(148,163,184);
+  doc.text(String(p.name||'').toUpperCase(), W/2, H - 60, { align:'center' });
+
+  var total = rep.filas.length, hechas = 0;
+  try { window._prUploadShow && window._prUploadShow('ARMANDO REPORTE · 0/' + total); } catch(e){}
+  for (var i = 0; i < rep.filas.length; i++) {
+    var f = rep.filas[i];
+    doc.addPage();
+    doc.setTextColor(15,23,42);
+    doc.setFontSize(9);  doc.text(String(f.torre||'').toUpperCase() + '  ·  ' + String(f.nivel||'').toUpperCase(), M, M);
+    doc.setFontSize(20); doc.text(String(f.apto||'').toUpperCase(), M, M + 26);
+    /* las dos fotos, una al lado de la otra */
+    var imgW = (W - M*2 - 12) / 2, imgH = 200, y0 = M + 44;
+    for (var k = 0; k < 2; k++) {
+      var x = M + k * (imgW + 12);
+      doc.setDrawColor(226,232,240); doc.roundedRect(x, y0, imgW, imgH, 6, 6, 'S');
+      var url = f.fotos[k];
+      if (url) {
+        try {
+          var im = await _amCargarImagen(url);
+          if (im && im.dataUrl) {
+            var r = Math.min(imgW / (im.w||1), imgH / (im.h||1));
+            var dw = (im.w||1) * r, dh = (im.h||1) * r;
+            doc.addImage(im.dataUrl, 'JPEG', x + (imgW-dw)/2, y0 + (imgH-dh)/2, dw, dh);
+          }
+        } catch(e){ console.warn('[reporte] foto no cargó', e); }
+      } else {
+        doc.setFontSize(9); doc.setTextColor(148,163,184);
+        doc.text('SIN FOTO', x + imgW/2, y0 + imgH/2, { align:'center' });
+        doc.setTextColor(15,23,42);
+      }
+    }
+    /* la tabla de actividades: las SEIS etapas, con X en las marcadas */
+    var ty = y0 + imgH + 26, rowH = 22, colW = W - M*2;
+    doc.setFillColor(15,23,42); doc.rect(M, ty, colW, rowH, 'F');
+    doc.setTextColor(255,255,255); doc.setFontSize(9);
+    doc.text('ACTIVIDAD', M + 10, ty + 15);
+    doc.text('AVANCE', M + colW - 60, ty + 15);
+    doc.setTextColor(15,23,42);
+    ETAPAS.forEach(function(et, idx){
+      var ry = ty + rowH * (idx + 1);
+      doc.setDrawColor(226,232,240); doc.line(M, ry + rowH, M + colW, ry + rowH);
+      doc.setFontSize(9.5);
+      doc.text(String(et.name||''), M + 10, ry + 15);
+      if (f.marcas[idx]) { doc.setFontSize(12); doc.text('X', M + colW - 55, ry + 15); }
+    });
+    var ey = ty + rowH * (ETAPAS.length + 1);
+    doc.setFillColor(f.entregado ? 220 : 241, f.entregado ? 252 : 245, f.entregado ? 231 : 249);
+    doc.rect(M, ey, colW, rowH, 'F');
+    doc.setFontSize(9.5);
+    doc.text('ENTREGADO', M + 10, ey + 15);
+    if (f.entregado) { doc.setFontSize(12); doc.text('X', M + colW - 55, ey + 15); }
+    if (f.repetido) {
+      doc.setFontSize(8); doc.setTextColor(100,116,139);
+      doc.text('SIN AVANCE ESTA SEMANA · SE MANTIENE EL ÚLTIMO REPORTE', M, H - 30);
+      doc.setTextColor(15,23,42);
+    }
+    hechas++;
+    try { window._prUploadShow && window._prUploadShow('ARMANDO REPORTE · ' + hechas + '/' + total); } catch(e){}
+  }
+  try { window._prUploadHide && window._prUploadHide(); } catch(e){}
+  /* el reporte se GUARDA recién cuando de verdad se generó */
+  try { window._repGuardar(p, rep); } catch(e){ console.warn('[reporte] no se pudo guardar', e); }
+  var nombre = 'Reporte Semana ' + rep.semana + ' - ' + String(p.name||'').replace(/[^\w\s-]/g,'') + '.pdf';
+  try { doc.save(nombre); } catch(e){ showToast('NO SE PUDO DESCARGAR','red'); return; }
+  showToast('REPORTE SEMANA ' + rep.semana + ' GENERADO · ' + total + ' UNIDADES','green');
+  var m = document.getElementById('_repModal'); if (m) m.remove();
+};
 window._repGuardar = function(p, rep){
   if (!p || !rep) return null;
   if (!Array.isArray(p.reportesSemanales)) p.reportesSemanales = [];
