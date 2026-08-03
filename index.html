@@ -3368,7 +3368,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1113</span>
+    <span style="opacity:.5;font-size:9px">v1114</span>
   </footer>
 
 </div>
@@ -58699,14 +58699,30 @@ async function _anulAnularReal(){
        entra en 5 semanas). Ahora: solo admin, y en cualquier estado vivo. */
     if(!sol || sol.estado==='cancelada' || sol.estado==='entregada'){ showT('NO SE PUEDE CANCELAR','red'); return; }
     if(!_antEsAdmin()){ showT('SOLO EL ADMINISTRADOR PUEDE CANCELAR','red'); return; }
-    const ok = await window.prConfirm({ title:'Cancelar solicitud', body:'¿Cancelar tu solicitud de anticipo de '+sol.colaboradorNombre+'?', okText:'CANCELAR SOLICITUD', cancelText:'NO', danger:true });
+    const ok = await window.prConfirm({ title:'Cancelar solicitud', body:'¿Cancelar la solicitud de anticipo de '+(sol.colaboradorNombre||'—')+'? Se quita de la lista definitivamente.', okText:'CANCELAR Y QUITAR', cancelText:'NO', danger:true });
     if(!ok) return;
     // v777: re-leer y re-validar tras el modal (otro equipo pudo autorizarla durante el await — patrón v769/v770).
+    /* v1114 (BUG que reportó Antonio: "cuando le doy cancelar no se elimina, solo me sale LA
+       SOLICITUD YA CAMBIÓ DE ESTADO"). En v1098 amplié el guard de ENTRADA a "cualquier estado
+       vivo" pero dejé ESTE con el criterio viejo (solo las dos etapas iniciales): la solicitud
+       pasaba el primer control y rebotaba en el segundo, así que nunca se cancelaba.
+       Los dos guards tienen que decir lo MISMO. */
     const sol2 = _antSolics().find(s=>s.id===solId);
-    if(!sol2 || (sol2.estado!=='pendiente_cotizacion' && sol2.estado!=='pendiente_autorizacion')){ showT('LA SOLICITUD YA CAMBIÓ DE ESTADO','red'); try{ window.renderPlanillaAnticipos(); }catch(e){} return; }
+    if(!sol2 || sol2.estado==='cancelada' || sol2.estado==='entregada'){ showT('LA SOLICITUD YA CAMBIÓ DE ESTADO','red'); try{ window.renderPlanillaAnticipos(); }catch(e){} return; }
     sol2.estado='cancelada'; sol2._ts=Date.now();
+    /* v1114: Antonio: "necesito que se elimine". Cancelar y que igual siga ocupando lugar en la
+       lista no le sirve de nada. Se escribe el tombstone en el mismo paso — sin él, el union-merge
+       la revive desde otro dispositivo (v844). */
+    try {
+      if(!state.solicitudesAnticipoEliminadas || typeof state.solicitudesAnticipoEliminadas!=='object' || Array.isArray(state.solicitudesAnticipoEliminadas)) state.solicitudesAnticipoEliminadas={};
+      state.solicitudesAnticipoEliminadas[solId]=Date.now();
+    } catch(e){}
+    var _arr = _antSolics();
+    var _i = _arr.findIndex(function(s){ return s && s.id===solId; });
+    if(_i>=0) _arr.splice(_i,1);
     _antSolicSave();
-    showT('SOLICITUD CANCELADA','info');
+    try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); } catch(e){}
+    showT('SOLICITUD CANCELADA Y QUITADA','info');
   };
   // v976: PAUSAR una solicitud (ej. no hay existencias para comprar) — deja de contar como
   // pendiente/mensaje (badge) hasta REANUDAR. Es un FLAG (s.pausada), no un estado nuevo:
