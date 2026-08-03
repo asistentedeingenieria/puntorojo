@@ -8,9 +8,15 @@ function ex(marker){ let m=html.indexOf(marker); if(m<0) return ''; let i=html.i
 let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
 console.log('\n— 1. la puerta de entrada —');
-ok('hay botón REPORTE SEMANAL en AVANCE FÍSICO', /_repAbrir\(\)/.test(html) && />REPORTE SEMANAL</.test(html));
-/* el comentario que explica el botón va en medio, por eso la ventana es amplia */
-ok('vive junto a las sub-pestañas de avance', /data-avancetab="cuadritos"[\s\S]{0,900}_repAbrir/.test(html));
+/* v1113: el rótulo va después del icono, así que puede llevar espacios en medio */
+ok('hay botón REPORTE SEMANAL en AVANCE FÍSICO', /_repAbrir\(\)/.test(html) && /REPORTE SEMANAL\s*<\/button>/.test(html));
+/* v1113: el botón sale de .mat-tabs — esa barra tiene overflow-x:auto y una máscara que
+   desvanece los bordes, y lo recortaba. Va en su PROPIA fila, después de cerrar la barra. */
+ok('el botón quedó FUERA de la barra de pestañas',
+  /data-avancetab="cuadritos"[\s\S]{0,120}<\/div>[\s\S]{0,700}_repAbrir/.test(html));
+ok('no lleva margin-left:auto dentro del flex de tabs',
+  !/margin-left:auto[^>]*_repAbrir|_repAbrir[^>]*margin-left:auto/.test(html));
+ok('está en una fila alineada a la derecha', /justify-content:flex-end[\s\S]{0,400}_repAbrir/.test(html));
 
 console.log('\n— 2. propone la semana correcta —');
 const zS = ex('window._repSemanaSugerida = function(');
