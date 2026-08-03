@@ -3368,7 +3368,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1119</span>
+    <span style="opacity:.5;font-size:9px">v1120</span>
   </footer>
 
 </div>
@@ -11909,7 +11909,13 @@ window._repRender = function(){
     + '<input type="number" min="1" value="' + n + '" class="pr-buscador" style="width:90px;margin-left:6px" onchange="window._repSemanaSel=this.value; window._repRender();"></label>'
     + '<div style="font-size:12px;color:#0F172A;font-weight:700">' + _e(rep.label) + '</div>'
     + (yaEmitida ? '<span style="font-size:9px;font-weight:800;padding:3px 9px;border-radius:10px;background:#FEF3C7;color:#92400E">YA EMITIDA · SE REEMPLAZA</span>' : '')
+    /* v1120: la foto del PROYECTO (el render) va en la portada y en las hojas de torre */
+    + '<button class="btn ghost sm" style="margin-left:auto;font-size:10px" onclick="window._repSubirPortada()">'
+    + (p.repFotoPortada ? 'CAMBIAR FOTO DEL PROYECTO' : 'CARGAR FOTO DEL PROYECTO') + '</button>'
     + '</div>'
+    + (p.repFotoPortada
+        ? '<div style="display:flex;gap:10px;align-items:center;margin-bottom:10px"><img src="' + p.repFotoPortada + '" style="height:54px;border-radius:6px;border:1px solid var(--line)"><span style="font-size:10.5px;color:#15803D;font-weight:700">ESTA FOTO VA EN LA PORTADA Y EN CADA HOJA DE TORRE</span></div>'
+        : '<div style="font-size:11px;color:#92400E;background:#FFFBEB;border-left:3px solid #F4D040;padding:8px 10px;margin-bottom:10px;border-radius:0 6px 6px 0">FALTA LA FOTO DEL PROYECTO (el render del edificio). Sin ella, la portada usa una foto de avance.</div>')
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">'
     + '<span style="font-size:10px;background:#F1F5F9;border-radius:8px;padding:4px 10px"><b>' + rep.filas.length + '</b> UNIDADES</span>'
     + '<span style="font-size:10px;background:#DCFCE7;color:#15803D;border-radius:8px;padding:4px 10px"><b>' + nuevas + '</b> CON AVANCE NUEVO</span>'
@@ -11952,6 +11958,33 @@ window._repRender = function(){
   document.body.appendChild(wrap);
   document.getElementById('_repModalBody').innerHTML = h;
 };
+/* v1120 (Antonio): "la primera slide Y SEGUNDA debe de tener la foto del proyecto y no una foto
+   random de avance". La portada y las hojas de torre del reporte real llevan el RENDER del
+   edificio, que es una imagen fija de la obra — no sale del avance físico.
+   Se guarda una por proyecto (p.repFotoPortada) como dataURL comprimido: es UNA sola imagen por
+   obra, no justifica subirla a Storage ni un contenedor nuevo. */
+window._repSubirPortada = function(){
+  var p = (typeof activeProj === 'function') ? activeProj() : null;
+  if (!p) return showToast('SIN PROYECTO ACTIVO','red');
+  var inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = 'image/*';
+  inp.onchange = async function(){
+    var file = inp.files && inp.files[0];
+    if (!file) return;
+    try {
+      var data = await compressImage(file, 1400, 0.82);
+      var p2 = (typeof activeProj === 'function') ? activeProj() : null;   /* re-leer tras el await */
+      if (!p2) return;
+      p2.repFotoPortada = data;
+      p2._ts = Date.now();
+      saveState();
+      try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); } catch(e){}
+      showToast('FOTO DEL PROYECTO GUARDADA','green');
+      try { window._repRender(); } catch(e){}
+    } catch(e){ console.warn('[reporte] portada', e); showToast('NO SE PUDO CARGAR LA IMAGEN','red'); }
+  };
+  inp.click();
+};
 window._repGenerarPDF = async function(){
   var p = (typeof activeProj === 'function') ? activeProj() : null;
   var rep = window._repActual;
@@ -11990,11 +12023,17 @@ window._repGenerarPDF = async function(){
     doc.text(PIE, 480, 524, { align:'center' });
   }
 
-  /* ── PORTADA ── */
+  /* ── PORTADA ──
+     v1120: la imagen de la portada y de las hojas de torre es el RENDER DEL PROYECTO
+     (p.repFotoPortada), no una foto de avance. Antonio: "debe de tener la foto del proyecto y
+     no una foto random". Si todavía no se cargó, se cae a la primera foto disponible para no
+     dejar la hoja vacía, pero la vista previa avisa que falta. */
+  var portada = p.repFotoPortada || null;
   var primeraFoto = null;
   for (var q = 0; q < rep.filas.length && !primeraFoto; q++) if (rep.filas[q].fotos[0]) primeraFoto = rep.filas[q].fotos[0];
-  if (primeraFoto) {
-    var pf = await _foto(primeraFoto, 523, 540);
+  var imgPortada = portada || primeraFoto;
+  if (imgPortada) {
+    var pf = await _foto(imgPortada, 523, 540);
     if (pf) doc.addImage(pf.data, 'JPEG', (523 - pf.w)/2, (540 - pf.h)/2, pf.w, pf.h);
   }
   doc.setTextColor(TXT[0],TXT[1],TXT[2]);
@@ -12025,7 +12064,8 @@ window._repGenerarPDF = async function(){
     if (f.torre !== torreImpresa) {
       torreImpresa = f.torre;
       doc.addPage([960,540],'landscape');
-      var ft = f.fotos[0] || primeraFoto;
+      /* v1120: la hoja de torre lleva el RENDER del proyecto, igual que la portada */
+      var ft = portada || f.fotos[0] || primeraFoto;
       if (ft) {
         var tf = await _foto(ft, 960, 494);
         if (tf) doc.addImage(tf.data, 'JPEG', (960 - tf.w)/2, (494 - tf.h)/2, tf.w, tf.h);
