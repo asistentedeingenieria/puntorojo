@@ -3354,7 +3354,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1104</span>
+    <span style="opacity:.5;font-size:9px">v1105</span>
   </footer>
 
 </div>
@@ -49729,6 +49729,9 @@ window.addEventListener('load', () => {
     if (s.estado === 'pendiente_autorizacion') return { txt:'ESPERANDO AUTORIZACIÓN',          bg:'#FEF3C7', fg:'#92400E' };
     return { txt:String(s.estado||'EN PROCESO').toUpperCase().replace(/_/g,' '), bg:'#F1F5F9', fg:'#475569' };
   };
+  /* v1105: el historial de entregadas arranca cerrado y se abre con un clic */
+  window._antHistOpen = false;
+  window._antToggleHist = function(){ window._antHistOpen = !window._antHistOpen; try { window._antRenderMisSolicitudes(); } catch(e){} };
   window._antRenderMisSolicitudes = function(){
     const cont = document.getElementById('_antMisSolic');
     if (!cont) return;
@@ -49742,11 +49745,16 @@ window.addEventListener('load', () => {
       mias = mias.slice().sort((a,b) => (b.ts||0) - (a.ts||0)).slice(0, 12);
     } catch(e){ mias = []; }
     if (!mias.length){ cont.innerHTML = '<div style="font-size:11px;color:#94A3B8;border-top:1px solid var(--line);padding-top:12px">TODAVÍA NO HAS PEDIDO NINGÚN ANTICIPO.</div>'; return; }
-    let h = '<div style="border-top:1px solid var(--line);padding-top:12px"><div style="font-size:9px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:8px">EN QUÉ VAN MIS SOLICITUDES</div>';
-    mias.forEach(s => {
+    /* v1105 (Antonio): "las entregadas deben de estar en un historial colapsable". Lo que ya se
+       entregó (o se canceló) no es seguimiento: es archivo, y tapaba lo único que la persona
+       viene a mirar — lo que todavía está en proceso. */
+    const _cerrada = s => s && (s.estado === 'entregada' || s.estado === 'cancelada');
+    const activas = mias.filter(s => !_cerrada(s));
+    const cerradas = mias.filter(_cerrada);
+    const tarjeta = s => {
       const st = window._antEstadoLegible(s);
       const monto = Number(s.cotMonto)||0;
-      h += '<div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff">'
+      return '<div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff">'
         + '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">'
         + '<div style="font-size:12px;font-weight:700;color:#0F172A">' + _e(s.colaboradorNombre||'—') + '</div>'
         + '<span style="font-size:9px;font-weight:800;letter-spacing:.4px;padding:3px 9px;border-radius:10px;background:' + st.bg + ';color:' + st.fg + '">' + _e(st.txt) + '</span></div>'
@@ -49758,7 +49766,17 @@ window.addEventListener('load', () => {
             ? (function(c){ return '<div style="font-size:10.5px;color:#92400E;background:#FFFBEB;border-left:3px solid #F4D040;padding:5px 9px;margin-top:6px;border-radius:0 6px 6px 0">COMPRAS: ' + _e(c.texto||'') + ' <span style="color:#B45309;font-size:9.5px">· ' + _e(c.por||'') + ' · ' + _e(c.cuando||'') + '</span></div>'; })(s.comentarios[s.comentarios.length-1])
             : '')
         + '</div>';
-    });
+    };
+    let h = '<div style="border-top:1px solid var(--line);padding-top:12px">';
+    h += '<div style="font-size:9px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:8px">EN QUÉ VAN MIS SOLICITUDES</div>';
+    h += activas.length ? activas.map(tarjeta).join('')
+       : '<div style="font-size:11px;color:#94A3B8;padding:2px 0 6px">NADA EN PROCESO — TODO LO PEDIDO YA SE ENTREGÓ.</div>';
+    if (cerradas.length){
+      h += '<div onclick="window._antToggleHist()" style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px;margin-top:10px;font-size:9px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700">'
+        + '<span style="display:inline-block;transform:rotate(' + (window._antHistOpen?'90':'0') + 'deg)">▶</span>'
+        + 'HISTORIAL · ' + cerradas.length + ' ENTREGADA' + (cerradas.length!==1?'S':'') + '</div>';
+      if (window._antHistOpen) h += '<div style="margin-top:8px">' + cerradas.map(tarjeta).join('') + '</div>';
+    }
     cont.innerHTML = h + '</div>';
   };
   window._solPagoEtapaPendientes = function(pid){ return (state.solicitudesPagoEtapa||[]).filter(s=>s && s.estado==='pendiente' && (!pid || s.projectId===pid)); };
@@ -57732,8 +57750,12 @@ async function _anulAnularReal(){
   window._cntPagoEtapaPend = function(){
     var n=0;
     try{ if(_prGerAuth() || (typeof isReadOnly==='function' && isReadOnly())){
-      if(typeof window._solPagoEtapaPendientes==='function') n+=window._solPagoEtapaPendientes().length;
       var p=(typeof activeProj==='function')?activeProj():null;
+      /* v1105: este badge vive en la pestaña de UNA obra (las dos líneas de abajo ya usan
+         activeProj), así que cuenta solo lo de esa obra. En v1103 lo dejé sin filtrar creyendo
+         que era el contador global de la campanita — no lo es, y por eso a Antonio le seguía
+         saliendo el "1" de una solicitud de ESSENZA estando parado en VLA. */
+      if(typeof window._solPagoEtapaPendientes==='function') n+=window._solPagoEtapaPendientes((p||{}).id).length;
       if(p && Array.isArray(p.desmarcarSolicitudes)) n+=p.desmarcarSolicitudes.filter(function(s){ return s && s.estado==='pendiente'; }).length;
     } }catch(e){}
     return n;

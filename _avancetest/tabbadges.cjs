@@ -25,7 +25,15 @@ ok('_cntOCsPend gateado por compras.autorizar + status', /_cntOCsPend[\s\S]{0,26
    LIQUIDACIÓN de la obra cuenta solo lo que se atiende ahí */
 ok('planilla suma anticipo+pagoetapa+admin358', /_cntPlanillaPend\s*=\s*function\(\)\{ return window\._cntPagoEtapaPend\(\) \+ window\._cntAdmin358Pend\(\); \}/.test(html) && !/_cntPlanillaPend\s*=\s*function\(\)\{[^}]*_cntAnticipoPend/.test(html));
 ok('anticipo usa _antSolicPendientesParaMi', /_cntAnticipoPend[\s\S]{0,500}_antSolicPendientesParaMi/.test(html)); // v878: la rama solo-lectura corrió el offset
-ok('pago etapa gateado por gerente + suma desmarcar', /_cntPagoEtapaPend[\s\S]{0,400}_solPagoEtapaPendientes[\s\S]{0,200}desmarcarSolicitudes/.test(html));
+/* v1105: se invirtió el orden de las dos líneas — `var p = activeProj()` subió porque ahora
+   _solPagoEtapaPendientes recibe la obra activa (antes contaba las solicitudes de TODAS las
+   obras y a Antonio le salía el badge de una de ESSENZA parado en VLA). La aserción mira que
+   estén las dos piezas y el gate, sin atarse al orden. */
+ok('pago etapa gateado por gerente + suma desmarcar',
+  /_cntPagoEtapaPend[\s\S]{0,700}_solPagoEtapaPendientes[\s\S]{0,400}desmarcarSolicitudes/.test(html)
+  || /_cntPagoEtapaPend[\s\S]{0,700}desmarcarSolicitudes[\s\S]{0,400}_solPagoEtapaPendientes/.test(html));
+ok('el badge de pago por etapa cuenta solo la obra activa',
+  /_cntPagoEtapaPend[\s\S]{0,1400}_solPagoEtapaPendientes\(\(p\|\|\{\}\)\.id\)/.test(html));
 ok('admin358 gateado por users.manage + estado PENDIENTE', /_cntAdmin358Pend[\s\S]{0,200}users\.manage[\s\S]{0,300}PENDIENTE/.test(html)); // v878: +isReadOnly corrió el offset
 // se refresca en cada render (hook applyPermissions)
 ok('updateTabBadges se llama en el pase de permisos', /updateTabBadges\(\)/.test(html) && /data-perm[\s\S]{0,2000}updateTabBadges\(\)/.test(html));

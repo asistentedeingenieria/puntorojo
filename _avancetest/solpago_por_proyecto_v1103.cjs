@@ -45,8 +45,14 @@ console.log('\n— los tres lugares donde se usa —');
 ok('el banner de la obra pasa el proyecto activo',
   /_solPagoEtapaPendientes\((?:\(?activeProj\(\)|_p|p)/.test(html) || /_solPagoEtapaPendientes\(\s*\(activeProj\(\)\|\|\{\}\)\.id/.test(html));
 ok('el modal también filtra', /const pend = window\._solPagoEtapaPendientes\([^)]+\)/.test(html));
-ok('el contador global de la campanita NO filtra (es de toda la empresa)',
-  /n\+=window\._solPagoEtapaPendientes\(\)\.length/.test(html));
+/* v1105 — CORRECCIÓN DE v1103: acá asumí que este contador era "la campanita global" y lo dejé
+   sin filtrar. NO lo era: es el badge de _cntPagoEtapaPend, que vive en la pestaña de UNA obra
+   (sus otras dos líneas ya usan activeProj). Por eso a Antonio le seguía saliendo el "1" de una
+   solicitud de ESSENZA parado en VLA. Lección: antes de dejar algo sin filtrar "porque es
+   global", verificar dónde se PINTA. */
+ok('el badge de la pestaña también filtra por la obra activa',
+  /n\+=window\._solPagoEtapaPendientes\(\(p\|\|\{\}\)\.id\)\.length/.test(html));
+ok('y ya no queda ninguna llamada sin filtrar', !/_solPagoEtapaPendientes\(\)\.length/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

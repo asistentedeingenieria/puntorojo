@@ -50,5 +50,17 @@ ok('usa el array real de comentarios {texto,por,cuando}', /comentarios\[s\.comen
 ok('escapa lo que pinta', /_e\(/.test(zR));
 ok('no escribe nada (es solo lectura)', !/saveState|forceUploadNow/.test(zR));
 
+/* v1105 (Antonio): "las entregadas deben de estar en un historial colapsable" — con 6 entregadas
+   arriba, lo único en proceso (el nivel láser pausado) quedaba enterrado al final. */
+console.log('\n— v1105: las entregadas van a un historial colapsable —');
+ok('separa lo cerrado de lo activo', /_cerrada/.test(zR) && /'entregada'/.test(zR));
+ok('arriba solo lo que sigue en proceso', /activas\.map\(tarjeta\)/.test(zR));
+ok('las entregadas van al historial', /cerradas\.map\(tarjeta\)/.test(zR));
+ok('el historial arranca CERRADO', /window\._antHistOpen = false/.test(html));
+ok('se abre con un clic', /window\._antToggleHist = function/.test(html) && /_antToggleHist\(\)/.test(zR));
+ok('dice cuántas hay', /cerradas\.length/.test(zR) && /ENTREGADA/.test(zR));
+ok('si no queda nada en proceso lo dice', /TODO LO PEDIDO YA SE ENTREGÓ/.test(zR));
+ok('cancelada también cuenta como cerrada', /'cancelada'/.test(zR));
+
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
