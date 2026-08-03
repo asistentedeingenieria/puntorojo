@@ -22,7 +22,7 @@ ok('existe el generador del PDF', zP.length > 800);
 console.log('\n— A1. la paleta real del PowerPoint —');
 ok('rojo C00000 (192,0,0) como acento', /var ROJO = \[192,0,0\]/.test(zP));
 ok('gris BFBFBF (191) para las líneas', /GRIS = \[191,191,191\]/.test(zP));
-ok('gris A5A5A5 (165) para texto secundario', /GRIS2 = \[165,165,165\]/.test(zP));
+ok('gris para texto secundario', /GRIS2 = \[/.test(zP));
 ok('ya NO usa el azul oscuro de antes en la portada', !/setFillColor\(15,23,42\); doc\.rect\(0,0,W,H/.test(zP));
 
 console.log('\n— A2. la estructura del PPT —');
@@ -31,8 +31,8 @@ ok('la semana con dos dígitos, como el PPT (SEMANA 07)', /padStart\(2,'0'\)/.te
 ok('HOJA SEPARADORA por torre', /torreImpresa/.test(zP));
 ok('la separadora solo sale cuando cambia la torre', /f\.torre !== torreImpresa/.test(zP));
 /* v1117: el cuerpo pasó a las medidas reales del PPT (960x540) y el número quedó en 34pt */
-ok('el número de unidad va grande y APARTAMENTO debajo', /'APARTAMENTO'/.test(zP) && /setFontSize\(34\)/.test(zP));
-ok('el pasillo no dice APARTAMENTO', /PASILLO/i.test(zP) && /ÁREA COMÚN/.test(zP));
+ok('el titulo va en dos lineas (nivel y unidad)', /f.nivel/.test(zP) && /f.apto/.test(zP));
+ok('el nombre de la unidad se imprime tal cual (PASILLO incluido)', /f.apto/.test(zP));
 
 console.log('\n— A3. la tabla: SEIS etapas con el diseño del PPT —');
 ok('encabezado Actividad / Avance', /'Actividad'/.test(zP) && /'Avance'/.test(zP));

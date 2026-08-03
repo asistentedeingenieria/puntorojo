@@ -3368,7 +3368,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1118</span>
+    <span style="opacity:.5;font-size:9px">v1119</span>
   </footer>
 
 </div>
@@ -11959,122 +11959,135 @@ window._repGenerarPDF = async function(){
   if (!rep.filas.length) return showToast('NO HAY NADA QUE REPORTAR','red');
   var jsPDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
   if (!jsPDFCtor) return showToast('NO CARGÓ EL GENERADOR DE PDF','red');
-  /* v1117: MEDIDAS REALES del PowerPoint de Antonio (Semana 07), convertidas de EMU a puntos.
-     La diapositiva es 16:9 → 960 x 540 pt. Antes lo hacía A4 vertical con las fotos metidas en
-     recuadros chicos; el original tiene las FOTOS A SANGRE (de borde a borde en altura) y el
-     texto en una franja blanca a la izquierda. Eso es lo que Antonio pedía con "fotos de fondo".
-     Geometría medida del archivo:
-       portada  → foto x=0 w=523 h=540 · títulos a la derecha
-       torre    → foto x=0 w=960 h=494 · nombre encima
-       unidad   → texto x=0..312 · foto1 x=276 w=304 h=540 · foto2 x=585 w=304 h=540 */
+  /* v1119 — REHECHO comparando lado a lado contra el reporte real de Antonio. Lo anterior tenía
+     mal casi todo el layout de la hoja de unidad:
+       · las fotos iban A SANGRE y pegadas → en el original van con MÁRGENES y separadas, con su
+         proporción natural (por eso se veían recortadas y "espantosas")
+       · el título quedaba DEBAJO de la tabla → en el original va ARRIBA: NIVEL X grande y
+         PASILLO/APARTAMENTO debajo, los dos en rojo
+       · la tabla no tenía encabezado → en el original ACTIVIDAD/AVANCE va en una barra ROJA
+         SÓLIDA con texto blanco
+       · faltaba el pie con el correo y la web, que el original lleva en todas las hojas
+     La hoja sigue siendo 960x540 (16:9), que eso sí estaba bien medido. */
   var doc = new jsPDFCtor({ unit:'pt', format:[960,540], orientation:'landscape' });
-  var ROJO = [192,0,0], GRIS = [191,191,191], GRIS2 = [165,165,165], TXT = [64,64,64];
+  var ROJO = [192,0,0], GRIS = [191,191,191], GRIS2 = [140,140,140], TXT = [64,64,64];
+  var PIE = 'ingenieria@puntorojosa.com    ·    www.puntorojo.com.gt';
 
   function _repImgEl(src){ return new Promise(function(res, rej){ var i = new Image(); i.onload = function(){ res(i); }; i.onerror = rej; i.src = src; }); }
-  /* recorta la imagen para LLENAR el recuadro sin deformarla (efecto "cover"): en el PPT las
-     fotos llenan su columna completa, no quedan encajadas con bandas blancas */
-  async function _cover(url, wPt, hPt){
+  /* "contain": la foto entra COMPLETA en su recuadro, centrada, sin recortarse ni deformarse.
+     El intento anterior usaba "cover" y con fotos horizontales dejaba un zoom brutal. */
+  async function _foto(url, maxW, maxH){
     try {
       var im = await _amCargarImagen(url);
       if (!im || !im.dataUrl) return null;
       var iw = im.w || 1, ih = im.h || 1;
-      var esc = Math.max(wPt / iw, hPt / ih);
-      var cw = Math.round(wPt * 2), ch = Math.round(hPt * 2);   /* x2 para que no se pixele */
-      var cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
-      var cx = cv.getContext('2d');
-      cx.fillStyle = '#fff'; cx.fillRect(0, 0, cw, ch);
-      var el = await _repImgEl(im.dataUrl);
-      var dw = iw * esc * 2, dh = ih * esc * 2;
-      cx.drawImage(el, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
-      return cv.toDataURL('image/jpeg', 0.82);
-    } catch(e){ console.warn('[reporte] no se pudo recortar la foto', e); return null; }
+      var esc = Math.min(maxW / iw, maxH / ih);
+      return { data: im.dataUrl, w: iw * esc, h: ih * esc };
+    } catch(e){ console.warn('[reporte] foto no cargó', e); return null; }
+  }
+  function _pie(){
+    doc.setFontSize(7); doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]);
+    doc.text(PIE, 480, 524, { align:'center' });
   }
 
   /* ── PORTADA ── */
   var primeraFoto = null;
   for (var q = 0; q < rep.filas.length && !primeraFoto; q++) if (rep.filas[q].fotos[0]) primeraFoto = rep.filas[q].fotos[0];
-  if (primeraFoto) { var pc = await _cover(primeraFoto, 523, 540); if (pc) doc.addImage(pc, 'JPEG', 0, 0, 523, 540); }
-  else { doc.setFillColor(245,245,245); doc.rect(0, 0, 523, 540, 'F'); }
-  doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
-  doc.setFontSize(40);
-  doc.text('REPORTE', 553, 150);
-  doc.text('FOTOGRÁFICO', 553, 196);
-  doc.setTextColor(TXT[0],TXT[1],TXT[2]); doc.setFontSize(26);
-  doc.text('SEMANA ' + String(rep.semana).padStart(2,'0'), 553, 250);
-  doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]); doc.setLineWidth(1);
-  doc.line(553, 268, 773, 268);
-  doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]); doc.setFontSize(16);
-  doc.text(String(rep.label||''), 553, 296);
-  doc.setFontSize(11);
-  doc.text(String(p.name||'').toUpperCase(), 553, 460);
+  if (primeraFoto) {
+    var pf = await _foto(primeraFoto, 523, 540);
+    if (pf) doc.addImage(pf.data, 'JPEG', (523 - pf.w)/2, (540 - pf.h)/2, pf.w, pf.h);
+  }
+  doc.setTextColor(TXT[0],TXT[1],TXT[2]);
+  doc.setFontSize(38);
+  doc.text('REPORTE', 560, 190);
+  doc.text('FOTOGRÁFICO', 560, 234);
+  doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]); doc.setFontSize(30);
+  doc.text('SEMANA ' + String(rep.semana).padStart(2,'0'), 560, 290);
+  /* la franja de fechas del original: recuadros con Del / día / Al / día / mes */
+  var celdas = ['Del', String(new Date(rep.desde).getDate()), 'Al', String(new Date(rep.hasta).getDate()), (rep.mes||'').charAt(0) + (rep.mes||'').slice(1).toLowerCase()];
+  var cx = 560, cy = 312, cw = [46, 46, 40, 46, 92], ch = 26;
+  doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]); doc.setLineWidth(0.7);
+  doc.setTextColor(TXT[0],TXT[1],TXT[2]); doc.setFontSize(12);
+  for (var c = 0; c < celdas.length; c++) {
+    doc.rect(cx, cy, cw[c], ch, 'S');
+    doc.text(String(celdas[c]), cx + cw[c]/2, cy + 17, { align:'center' });
+    cx += cw[c];
+  }
+  doc.setFontSize(13); doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]);
+  doc.text(String(p.name||'').toUpperCase(), 560, 400);
+  _pie();
 
   var total = rep.filas.length, hechas = 0, torreImpresa = '';
   try { window._prUploadShow && window._prUploadShow('ARMANDO REPORTE · 0/' + total); } catch(e){}
   for (var i = 0; i < rep.filas.length; i++) {
     var f = rep.filas[i];
-    /* ── HOJA SEPARADORA DE TORRE ── */
+    /* ── HOJA DE TORRE: foto a lo ancho y el nombre en BLANCO encima (sin recuadro) ── */
     if (f.torre !== torreImpresa) {
       torreImpresa = f.torre;
       doc.addPage([960,540],'landscape');
       var ft = f.fotos[0] || primeraFoto;
-      if (ft) { var tc = await _cover(ft, 960, 494); if (tc) doc.addImage(tc, 'JPEG', 0, 0, 960, 494); }
-      else { doc.setFillColor(245,245,245); doc.rect(0, 0, 960, 494, 'F'); }
-      doc.setFillColor(255,255,255); doc.rect(0, 494, 960, 46, 'F');
-      doc.setFillColor(255,255,255); doc.rect(596, 292, 348, 58, 'F');
-      doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]); doc.setFontSize(40);
-      doc.text(String(f.torre||'').toUpperCase(), 608, 332);
+      if (ft) {
+        var tf = await _foto(ft, 960, 494);
+        if (tf) doc.addImage(tf.data, 'JPEG', (960 - tf.w)/2, (494 - tf.h)/2, tf.w, tf.h);
+      }
+      doc.setTextColor(255,255,255); doc.setFontSize(40);
+      doc.text(String(f.torre||'').toUpperCase(), 700, 340, { align:'center' });
+      _pie();
     }
     /* ── HOJA DE LA UNIDAD ── */
     doc.addPage([960,540],'landscape');
-    for (var k = 0; k < 2; k++) {
-      var fx = (k === 0) ? 276 : 585;
-      var url = f.fotos[k];
-      if (url) { var cc = await _cover(url, 304, 540); if (cc) doc.addImage(cc, 'JPEG', fx, 0, 304, 540); }
-      else {
-        doc.setFillColor(245,245,245); doc.rect(fx, 0, 304, 540, 'F');
-        doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]); doc.setFontSize(11);
-        doc.text('SIN FOTO', fx + 152, 270, { align:'center' });
-      }
-    }
-    doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]); doc.setFontSize(34);
-    doc.text(String(f.apto||'').toUpperCase(), 24, 252);
-    doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]); doc.setFontSize(12);
-    doc.text(/PASILLO/i.test(f.apto||'') ? 'ÁREA COMÚN' : 'APARTAMENTO', 24, 272);
-    doc.setFontSize(10);
-    doc.text(String(f.torre||'').toUpperCase() + ' · ' + String(f.nivel||'').toUpperCase(), 24, 290);
-    /* tabla de actividades arriba a la izquierda */
-    var ty = 40, rowH = 21, colW = 228, xCol = 24 + colW - 26;
-    doc.setTextColor(TXT[0],TXT[1],TXT[2]); doc.setFontSize(10);
-    doc.text('Actividad', 24, ty + 14);
-    doc.text('Avance', xCol, ty + 14);
-    doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]); doc.setLineWidth(1);
-    doc.line(24, ty + rowH, 24 + colW, ty + rowH);
+    /* título arriba: NIVEL X grande y debajo APARTAMENTO/PASILLO — los dos en rojo, centrados
+       en la franja izquierda, igual que el original */
+    var cxi = 150;
+    doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
+    doc.setFontSize(28); doc.text(String(f.nivel||'').toUpperCase(), cxi, 150, { align:'center' });
+    doc.setFontSize(22); doc.text(String(f.apto||'').toUpperCase(), cxi, 180, { align:'center' });
+    /* tabla debajo del título, con encabezado ROJO SÓLIDO y texto blanco */
+    var tx = 46, tw = 208, ty = 230, rowH = 20, xc = tx + tw - 34;
+    doc.setFillColor(ROJO[0],ROJO[1],ROJO[2]);
+    doc.rect(tx, ty, tw, rowH, 'F');
+    doc.setTextColor(255,255,255); doc.setFontSize(9);
+    doc.text('Actividad', tx + 8, ty + 13.5);
+    doc.text('Avance', xc, ty + 13.5, { align:'center' });
+    doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]); doc.setLineWidth(0.5);
     ETAPAS.forEach(function(et, idx){
       var ry = ty + rowH * (idx + 1);
-      doc.setLineWidth(0.5); doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]);
-      doc.line(24, ry + rowH, 24 + colW, ry + rowH);
-      doc.setFontSize(8.5); doc.setTextColor(TXT[0],TXT[1],TXT[2]);
-      doc.text(String(et.name||''), 24, ry + 14);
+      doc.rect(tx, ry, tw, rowH, 'S');
+      doc.setFontSize(8); doc.setTextColor(TXT[0],TXT[1],TXT[2]);
+      doc.text(String(et.name||''), tx + 8, ry + 13.5);
       if (f.marcas[idx]) {
-        doc.setFontSize(12); doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
-        doc.text('X', xCol, ry + 14);
-        doc.setTextColor(TXT[0],TXT[1],TXT[2]);
+        doc.setFontSize(10); doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
+        doc.text('X', xc, ry + 13.5, { align:'center' });
       }
     });
     var ey = ty + rowH * (ETAPAS.length + 1);
-    doc.setLineWidth(1); doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]);
-    doc.line(24, ey + rowH, 24 + colW, ey + rowH);
+    doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]); doc.rect(tx, ey, tw, rowH, 'S');
     doc.setFontSize(8.5); doc.setTextColor(TXT[0],TXT[1],TXT[2]);
-    doc.text('Entregado', 24, ey + 14);
+    doc.text('Entregado', tx + 8, ey + 13.5);
     if (f.entregado) {
-      doc.setFontSize(12); doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
-      doc.text('X', xCol, ey + 14);
-      doc.setTextColor(TXT[0],TXT[1],TXT[2]);
+      doc.setFontSize(10); doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
+      doc.text('X', xc, ey + 13.5, { align:'center' });
+    }
+    /* DOS FOTOS con márgenes y separadas, cada una dentro de su caja, centradas y completas */
+    var boxW = 300, boxH = 380, boxY = 80, gap = 24, x0 = 320;
+    for (var k = 0; k < 2; k++) {
+      var bx = x0 + k * (boxW + gap);
+      var url = f.fotos[k];
+      if (url) {
+        var im2 = await _foto(url, boxW, boxH);
+        if (im2) doc.addImage(im2.data, 'JPEG', bx + (boxW - im2.w)/2, boxY + (boxH - im2.h)/2, im2.w, im2.h);
+      } else {
+        doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]); doc.setLineWidth(0.7);
+        doc.rect(bx, boxY, boxW, boxH, 'S');
+        doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]); doc.setFontSize(10);
+        doc.text('SIN FOTO', bx + boxW/2, boxY + boxH/2, { align:'center' });
+      }
     }
     if (f.repetido) {
-      doc.setFontSize(7.5); doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]);
-      doc.text('SIN AVANCE ESTA SEMANA', 24, 512);
+      doc.setFontSize(7); doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]);
+      doc.text('SIN AVANCE ESTA SEMANA', tx, 500);
     }
+    _pie();
     hechas++;
     try { window._prUploadShow && window._prUploadShow('ARMANDO REPORTE · ' + hechas + '/' + total); } catch(e){}
   }

@@ -49,9 +49,10 @@ ok('portada con REPORTE FOTOGRÁFICO y la semana', /REPORTE/.test(zP) && /FOTOGR
 ok('una página por unidad', /addPage\(\[960,540\],'landscape'\)/.test(zP));
 ok('mete las DOS fotos', /f\.fotos\[k\]/.test(zP) && /k < 2/.test(zP));
 ok('reusa el cargador con fallback de CORS de Storage', /_amCargarImagen\(/.test(zP));
-/* v1117: la foto ya no se "encaja" con Math.min (dejaba bandas blancas) — ahora LLENA el
-   recuadro con Math.max y se recorta centrada, como en el PowerPoint original */
-ok('respeta la proporción de la foto (no la deforma)', /Math\.max\(wPt \/ iw, hPt \/ ih\)/.test(zP));
+/* v1119: la foto entra COMPLETA en su caja (Math.min = contain). El intento de v1117 la
+   recortaba para llenar (Math.max = cover) y con fotos horizontales quedaba un zoom brutal:
+   eso fue lo que Antonio describió como "espantoso". */
+ok('la foto entra completa, sin recortarse', /Math\.min\(maxW \/ iw, maxH \/ ih\)/.test(zP));
 ok('la tabla lleva las SEIS etapas', /ETAPAS\.forEach/.test(zP));
 ok('la X sale de las marcas', /f\.marcas\[idx\]/.test(zP));
 /* v1116: el rótulo pasó a "Entregado" (capitalizado) para calcar el PowerPoint de Antonio */

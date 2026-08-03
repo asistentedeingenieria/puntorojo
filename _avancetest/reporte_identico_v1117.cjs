@@ -1,15 +1,16 @@
-/* v1117 — EL PDF CON LAS MEDIDAS REALES DEL POWERPOINT (Antonio: "CREO QUE NO ME ENTIENDES.
-   Necesito que el reporte sea TOTALMENTE IGUAL al que yo te compartí. Debe tener todo igual,
-   con el mismo estilo y FOTOS DE FONDO").
+/* v1119 — EL LAYOUT DEL REPORTE, CORREGIDO CONTRA EL ORIGINAL REAL.
 
-   Tenía razón: yo venía aproximando en A4 vertical con las fotos metidas en recuadros chicos.
-   Se midió la geometría REAL del archivo (Semana 07), convirtiendo EMU a puntos (1 pt = 12700):
-     diapositiva  → 12192000 x 6858000 EMU = 960 x 540 pt (16:9 apaisado, NO A4 vertical)
-     portada      → foto x=0 y=0 w=523 h=540  (a sangre, media hoja) + títulos a la derecha
-     hoja torre   → foto x=0 y=0 w=960 h=494  (a sangre casi completa) + nombre encima
-     hoja unidad  → texto x=0..312 · foto1 x=276 w=304 h=540 · foto2 x=585 w=304 h=540
-   O sea: las fotos van DE BORDE A BORDE en altura y el texto vive en una franja blanca. Eso es
-   lo que Antonio llamaba "fotos de fondo". */
+   Historia de este archivo: en v1117 lo escribí fijando que las fotos iban A SANGRE (recorte
+   "cover", 304x540, pegadas al borde). Estaba MAL. Antonio mandó capturas lado a lado de su
+   reporte contra el generado y la diferencia era evidente:
+     · sus fotos van CON MÁRGENES y separadas, completas y sin recortar
+     · el título va ARRIBA (NIVEL X grande, y debajo PASILLO/APARTAMENTO), los dos en rojo
+     · la tabla va DEBAJO del título y su encabezado es una barra ROJA SÓLIDA con texto blanco
+     · todas las hojas llevan un pie con el correo y la web
+   Las medidas EMU que extraje del PPTX correspondían a otro slide del archivo, no al de los
+   apartamentos; por eso "medir" tampoco alcanzó: había que comparar el resultado.
+
+   Este test fija el layout CORRECTO para que no se vuelva atrás. */
 const fs = require('fs'), path = require('path');
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 function ex(marker){ let m=html.indexOf(marker); if(m<0) return ''; let i=html.indexOf('{',m),d=0; for(;i<html.length;i++){ if(html[i]==='{')d++; else if(html[i]==='}'){ d--; if(d===0) return html.slice(m,i+1); } } return ''; }
@@ -18,35 +19,49 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 const z = ex('window._repGenerarPDF = async function(');
 ok('existe el generador', z.length > 1000);
 
-console.log('\n— 1. el formato es el de la diapositiva, no A4 —');
+console.log('\n— 1. la hoja sigue siendo 16:9 (esto sí estaba bien) —');
 ok('960 x 540 puntos', /format:\[960,540\]/.test(z));
 ok('apaisado', /orientation:'landscape'/.test(z));
-ok('cada página nueva mantiene el formato', /addPage\(\[960,540\],'landscape'\)/.test(z));
-ok('ya NO es A4', !/format:'a4'/.test(z));
+ok('cada página mantiene el formato', /addPage\(\[960,540\],'landscape'\)/.test(z));
 
-console.log('\n— 2. FOTOS DE FONDO, no recuadros —');
-ok('la portada lleva foto a sangre de 523 de ancho por 540 de alto', /_cover\(primeraFoto, 523, 540\)/.test(z));
-ok('la hoja de torre lleva foto a sangre 960x494', /_cover\(ft, 960, 494\)/.test(z));
-ok('cada unidad lleva DOS fotos de 304 x 540 (altura completa)', /_cover\(url, 304, 540\)/.test(z));
-ok('en las posiciones del PPT (276 y 585)', /\(k === 0\) \? 276 : 585/.test(z));
-ok('las fotos se dibujan desde y=0 (borde superior)', /addImage\(cc, 'JPEG', fx, 0, 304, 540\)/.test(z));
-ok('ya no hay recuadros con borde alrededor de la foto', !/roundedRect\(x, y0/.test(z) && !/rect\(x, y0, imgW, imgH, 'S'\)/.test(z));
+console.log('\n— 2. LAS FOTOS: completas y con márgenes, NO a sangre —');
+ok('la foto entra COMPLETA (contain), no recortada', /Math\.min\(maxW \/ iw, maxH \/ ih\)/.test(z));
+ok('ya NO se usa el recorte cover que las destrozaba', !/Math\.max\(wPt \/ iw, hPt \/ ih\)/.test(z));
+ok('cada foto vive en una caja con margen', /boxW = 300, boxH = 380, boxY = 80/.test(z));
+ok('hay separación entre las dos fotos', /gap = 24/.test(z));
+ok('la foto se centra dentro de su caja', /\(boxW - im2\.w\)\/2/.test(z) && /\(boxH - im2\.h\)\/2/.test(z));
+ok('no arrancan pegadas al borde izquierdo', /x0 = 320/.test(z));
 
-console.log('\n— 3. la foto LLENA sin deformarse —');
-ok('existe el recorte tipo cover', /function _cover\(/.test(z) || /async function _cover/.test(z));
-ok('escala por el MAYOR de los dos lados (llena, no encaja)', /Math\.max\(wPt \/ iw, hPt \/ ih\)/.test(z));
-ok('centra el recorte', /\(cw - dw\) \/ 2, \(ch - dh\) \/ 2/.test(z));
-ok('renderiza al doble para que no se pixele', /wPt \* 2/.test(z) && /hPt \* 2/.test(z));
-ok('exporta como JPEG comprimido (el PDF pesa menos)', /toDataURL\('image\/jpeg', 0\.82\)/.test(z));
-ok('si una foto falla no rompe el reporte', /catch\(e\)\{ console\.warn\('\[reporte\] no se pudo recortar/.test(z));
+console.log('\n— 3. EL TÍTULO va arriba, en dos líneas y en rojo —');
+ok('NIVEL arriba', /f\.nivel[\s\S]{0,60}150/.test(z));
+ok('la unidad debajo', /f\.apto[\s\S]{0,60}180/.test(z));
+ok('los dos en rojo', /setTextColor\(ROJO\[0\],ROJO\[1\],ROJO\[2\]\);[\s\S]{0,120}f\.nivel/.test(z));
+ok('centrados en la franja izquierda', /cxi = 150/.test(z) && /align:'center'/.test(z));
 
-console.log('\n— 4. lo que ya estaba bien se conserva —');
+console.log('\n— 4. LA TABLA con encabezado rojo sólido —');
+ok('el encabezado es una barra roja rellena', /setFillColor\(ROJO\[0\],ROJO\[1\],ROJO\[2\]\);[\s\S]{0,60}rect\(tx, ty, tw, rowH, 'F'\)/.test(z));
+ok('con el texto en blanco', /setTextColor\(255,255,255\);[\s\S]{0,80}'Actividad'/.test(z));
+ok('va DEBAJO del título', /ty = 230/.test(z));
+ok('cada fila tiene su recuadro', /rect\(tx, ry, tw, rowH, 'S'\)/.test(z));
 ok('las SEIS etapas', /ETAPAS\.forEach/.test(z));
-ok('la X en rojo del PPT', /ROJO\[0\],ROJO\[1\],ROJO\[2\]\);[\s\S]{0,60}text\('X'/.test(z));
-ok('hoja separadora por torre', /torreImpresa/.test(z));
-ok('el pasillo dice ÁREA COMÚN', /ÁREA COMÚN/.test(z));
+ok('la X en rojo', /ROJO\[0\],ROJO\[1\],ROJO\[2\]\);[\s\S]{0,60}text\('X'/.test(z));
+ok('fila Entregado', /'Entregado'/.test(z));
+
+console.log('\n— 5. el pie en todas las hojas —');
+ok('existe el pie', /function _pie\(\)/.test(z));
+ok('lleva correo y web', /puntorojosa\.com/.test(z) && /puntorojo\.com\.gt/.test(z));
+ok('se pinta en la portada, en la torre y en cada unidad', (z.match(/_pie\(\);/g) || []).length >= 3);
+
+console.log('\n— 6. la portada y la hoja de torre —');
+ok('la portada lleva la franja de fechas en recuadros', /celdas = \['Del'/.test(z));
+ok('SEMANA en rojo con dos dígitos', /padStart\(2,'0'\)/.test(z));
+ok('el nombre de la torre va en BLANCO sobre la foto', /setTextColor\(255,255,255\); doc\.setFontSize\(40\)/.test(z));
+ok('sin el recuadro blanco que le puse antes', !/rect\(596, 292, 348, 58, 'F'\)/.test(z));
+
+console.log('\n— 7. lo que no cambia —');
 ok('barra de progreso', /_prUploadShow/.test(z));
 ok('guarda el reporte al final', /_repGuardar\(p, rep\)/.test(z));
+ok('avisa cuando la foto es repetida', /SIN AVANCE ESTA SEMANA/.test(z));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
