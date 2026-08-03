@@ -3349,7 +3349,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1099</span>
+    <span style="opacity:.5;font-size:9px">v1100</span>
   </footer>
 
 </div>
@@ -34495,10 +34495,86 @@ function _bloqueEmpresaHTML(){
   return `<div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:8px">TODA LA EMPRESA</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">${ops.join('')}</div>`;
 }
+/* ═══════════ v1100 · OBRAS TERMINADAS (pedido de Antonio) ═══════════
+   "Agregame una opción de obras terminadas. Esto SOLO YO lo puedo marcar cuando ya se
+   terminaron. Que esté hasta abajo en una línea de despliegue donde esté escondido, y si se
+   apacha ya muestra las obras."
+   El selector se iba llenando de obras muertas y la que importa quedaba perdida. Es un FLAG
+   (p.terminada), NO un borrado: la obra queda completa y se puede entrar igual — hay que poder
+   consultar planillas, cobros y avance de una obra cerrada. Reversible con REABRIR. Solo el
+   admin marca; los demás solo ven el bloque. */
+let _termOpen = false;
+window._toggleObraTerminada = async function(id, val){
+  try { if (!can('users.manage')) { showToast('SOLO EL ADMINISTRADOR','red'); return; } } catch(e){ return; }
+  const p = ((state && state.projects) || []).find(x => x && x.id === id);
+  if (!p) return showToast('OBRA NO ENCONTRADA','red');
+  const term = !!val;
+  const ok = await window.prConfirm({
+    title: term ? 'Marcar obra terminada' : 'Reabrir obra',
+    body: term ? ('¿Marcar "' + (p.name||'') + '" como TERMINADA? Se va al bloque de abajo. Todo se conserva y podés entrar igual.')
+               : ('¿Reabrir "' + (p.name||'') + '"? Vuelve al listado de arriba.'),
+    okText: term ? 'MARCAR TERMINADA' : 'REABRIR', cancelText: 'NO' });
+  if (!ok) return;
+  const p2 = ((state && state.projects) || []).find(x => x && x.id === id);   /* re-leer tras el await (v769/v770) */
+  if (!p2) return;
+  p2.terminada = term;
+  p2.terminadaTs = term ? Date.now() : 0;
+  p2._ts = Date.now();
+  saveState();
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+  showToast(term ? 'OBRA MARCADA COMO TERMINADA' : 'OBRA REABIERTA','green');
+  _termOpen = true;
+  try { const w = document.getElementById('_pantallaObra'); if (w) w.remove(); window._abrirPantallaObra(true); } catch(e){}
+};
+window._toggleTermPanel = function(){
+  _termOpen = !_termOpen;
+  try { const w = document.getElementById('_pantallaObra'); if (w) w.remove(); window._abrirPantallaObra(true); } catch(e){}
+};
+function _bloqueTerminadasHTML(terms, activas){
+  const _e = s => String(s==null?'':s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  let esAdmin = false; try { esAdmin = !!can('users.manage'); } catch(e){}
+  if (!terms.length && !esAdmin) return '';
+  let h = '<div style="margin-top:26px;border-top:1px solid var(--line);padding-top:12px">';
+  h += '<div onclick="window._toggleTermPanel()" style="cursor:pointer;display:flex;align-items:center;gap:8px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;user-select:none">'
+    + '<span style="display:inline-block;transform:rotate(' + (_termOpen?'90':'0') + 'deg)">▶</span>'
+    + 'OBRAS TERMINADAS · ' + terms.length + '</div>';
+  if (_termOpen) {
+    h += '<div style="margin-top:10px">';
+    if (terms.length) {
+      h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">';
+      terms.forEach(p => {
+        h += '<div style="border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:#F8FAFC">'
+          + '<div style="font-size:14px;font-weight:600;color:#64748B;letter-spacing:-.2px">' + _e(p.name) + '</div>'
+          + '<div style="font-size:10px;color:#94A3B8;margin-top:2px">TERMINADA</div>'
+          + '<div style="display:flex;gap:6px;margin-top:8px">'
+          + '<button class="btn ghost sm" style="font-size:9.5px" onclick="window._elegirObraYEntrar(\'' + _e(p.id) + '\')">ENTRAR</button>'
+          + (esAdmin ? '<button class="btn ghost sm" style="font-size:9.5px;color:#15803D;border-color:#86EFAC" onclick="window._toggleObraTerminada(\'' + _e(p.id) + '\',false)">REABRIR</button>' : '')
+          + '</div></div>';
+      });
+      h += '</div>';
+    } else {
+      h += '<div style="font-size:11px;color:#94A3B8;padding:6px 0">NINGUNA OBRA TERMINADA TODAVÍA.</div>';
+    }
+    if (esAdmin && activas.length) {
+      h += '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+        + '<select id="_termSel" class="pr-filtro" style="max-width:280px"><option value="">— MARCAR UNA OBRA COMO TERMINADA —</option>'
+        + activas.map(p => '<option value="' + _e(p.id) + '">' + _e(p.name) + '</option>').join('')
+        + '</select>'
+        + '<button class="btn ghost sm" style="font-size:9.5px" onclick="var v=document.getElementById(\'_termSel\').value; if(v) window._toggleObraTerminada(v,true);">MARCAR</button>'
+        + '</div>';
+    }
+    h += '</div>';
+  }
+  return h + '</div>';
+}
 window._abrirPantallaObra = function(forzar){
   if (!forzar && _yaEligioObra()) return;
   if (document.getElementById('_pantallaObra')) return;
-  const proys = ((state && state.projects) || []).filter(p => p && p.id);
+  const _todasProys = ((state && state.projects) || []).filter(p => p && p.id);
+  /* v1100: la grilla de arriba muestra solo las ACTIVAS; las terminadas viven en el bloque
+     colapsable del final (no se ocultan, se ordenan). */
+  const _obrasTerm = _todasProys.filter(p => p.terminada);
+  const proys = _todasProys.filter(p => !p.terminada);
   /* ⚠️ v1025 — ACÁ ESTABA EL BUG de "recargo y no me sale el menú". El primer renderAll corre
      ANTES de que lleguen los proyectos de la nube, así que la lista está vacía; la versión
      anterior marcaba "ya eligió" y se rendía PARA SIEMPRE. Cuando después llegaban los datos,
@@ -34534,6 +34610,7 @@ window._abrirPantallaObra = function(forzar){
     <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:8px">OBRAS</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:22px">${proys.map(tarjeta).join('')}${_cuadroVariosHTML()}</div>
     ${_bloqueEmpresaHTML()}
+    ${_bloqueTerminadasHTML(_obrasTerm, proys)}
   </div>`;
   document.body.appendChild(wrap);
 };
