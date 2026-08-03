@@ -3368,7 +3368,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1115</span>
+    <span style="opacity:.5;font-size:9px">v1116</span>
   </footer>
 
 </div>
@@ -5241,6 +5241,11 @@ const PERMS_DISPONIBLES = [
   { key: 'polizas.agregar',  label: 'Agregar pólizas NUEVAS', group: 'EDICIÓN PERSONAL' },
   { key: 'anticipos.solicitar', label: 'Solicitar anticipos (supervisor)', group: 'EDICIÓN PERSONAL' }, // v777
   { key: 'anticipos.cotizar',   label: 'Cotizar anticipos (Compras)',      group: 'EDICIÓN PERSONAL' }, // v777
+  /* v1116 (Antonio): "quiero poder seleccionar a la persona que va a poder subir comprobantes
+     de transferencias, porque esto no lo puede hacer la de compras". El anticipo EN EFECTIVO
+     se respalda con el comprobante del banco, y eso lo sube quien maneja la plata — no compras.
+     Permiso propio para poder dárselo solo a esa persona. */
+  { key: 'anticipos.transferir', label: 'Subir comprobantes de transferencia (anticipos en efectivo)', group: 'EDICIÓN PERSONAL' }, // v1116
   { key: 'anticipos.pausar',    label: 'Pausar/reanudar solicitudes de anticipo (sin existencias)', group: 'EDICIÓN PERSONAL' }, // v976
   { key: 'anticipos.verEstado', label: 'Ver estado de anticipos (solo lectura)', group: 'EDICIÓN PERSONAL' }, // v822: solo VER el status de los pedidos (sin pedir/cotizar/autorizar/entregar)
   { key: 'personal.pagoObra', label: 'Marcar "COBRA EN LIQUIDACIÓN DE OBRA"', group: 'EDICIÓN PERSONAL' }, // v831: elegir QUIÉN puede marcar el opt-in de pago en planilla de obra
@@ -11944,29 +11949,53 @@ window._repGenerarPDF = async function(){
   var doc = new jsPDFCtor({ unit:'pt', format:'a4', orientation:'portrait' });
   var W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 40;
 
-  /* ── portada, igual que el reporte que Antonio manda hoy ── */
-  doc.setFillColor(15,23,42); doc.rect(0,0,W,H,'F');
-  doc.setTextColor(255,255,255);
-  doc.setFontSize(34); doc.text('REPORTE', W/2, H/2 - 60, { align:'center' });
-  doc.setFontSize(34); doc.text('FOTOGRÁFICO', W/2, H/2 - 20, { align:'center' });
-  doc.setFontSize(14); doc.text(String(rep.label||''), W/2, H/2 + 20, { align:'center' });
-  doc.setFontSize(20); doc.text('SEMANA ' + rep.semana, W/2, H/2 + 52, { align:'center' });
-  doc.setFontSize(11); doc.setTextColor(148,163,184);
-  doc.text(String(p.name||'').toUpperCase(), W/2, H - 60, { align:'center' });
+  /* v1116: el diseño sale del PowerPoint que usa Antonio (Semana 07). Paleta real medida en el
+     archivo: rojo C00000 de acento, BFBFBF para líneas, A5A5A5 para texto secundario, sobre
+     fondo BLANCO. Antes lo había hecho azul oscuro, que no es lo que manda al cliente. */
+  var ROJO = [192,0,0], GRIS = [191,191,191], GRIS2 = [165,165,165];
+  doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
+  doc.setFontSize(40);
+  doc.text('REPORTE', W/2, H/2 - 70, { align:'center' });
+  doc.text('FOTOGRÁFICO', W/2, H/2 - 24, { align:'center' });
+  doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]); doc.setLineWidth(1);
+  doc.line(W/2 - 90, H/2 - 4, W/2 + 90, H/2 - 4);
+  doc.setFontSize(28); doc.setTextColor(64,64,64);
+  doc.text('SEMANA ' + String(rep.semana).padStart(2,'0'), W/2, H/2 + 34, { align:'center' });
+  doc.setFontSize(16); doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]);
+  doc.text(String(rep.label||''), W/2, H/2 + 62, { align:'center' });
+  doc.setFontSize(11);
+  doc.text(String(p.name||'').toUpperCase(), W/2, H - 56, { align:'center' });
 
   var total = rep.filas.length, hechas = 0;
   try { window._prUploadShow && window._prUploadShow('ARMANDO REPORTE · 0/' + total); } catch(e){}
+  var torreImpresa = '';
   for (var i = 0; i < rep.filas.length; i++) {
     var f = rep.filas[i];
+    /* v1116: hoja separadora por TORRE — el PowerPoint tiene una slide con el nombre de la
+       torre antes de sus apartamentos, y así se lee mucho mejor con 200 páginas. */
+    if (f.torre !== torreImpresa) {
+      torreImpresa = f.torre;
+      doc.addPage();
+      doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
+      doc.setFontSize(40);
+      doc.text(String(f.torre||'').toUpperCase(), W/2, H/2, { align:'center' });
+      doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]); doc.setLineWidth(1);
+      doc.line(W/2 - 70, H/2 + 18, W/2 + 70, H/2 + 18);
+    }
     doc.addPage();
-    doc.setTextColor(15,23,42);
-    doc.setFontSize(9);  doc.text(String(f.torre||'').toUpperCase() + '  ·  ' + String(f.nivel||'').toUpperCase(), M, M);
-    doc.setFontSize(20); doc.text(String(f.apto||'').toUpperCase(), M, M + 26);
+    /* encabezado como el PPT: el número GRANDE y debajo la palabra APARTAMENTO */
+    doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]);
+    doc.setFontSize(11); doc.text(String(f.nivel||'').toUpperCase(), M, M);
+    doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
+    doc.setFontSize(32); doc.text(String(f.apto||'').toUpperCase(), M, M + 32);
+    doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]);
+    doc.setFontSize(11); doc.text(/PASILLO/i.test(f.apto||'') ? 'ÁREA COMÚN' : 'APARTAMENTO', M, M + 48);
+    doc.setTextColor(64,64,64);
     /* las dos fotos, una al lado de la otra */
-    var imgW = (W - M*2 - 12) / 2, imgH = 200, y0 = M + 44;
+    var imgW = (W - M*2 - 12) / 2, imgH = 200, y0 = M + 66;
     for (var k = 0; k < 2; k++) {
       var x = M + k * (imgW + 12);
-      doc.setDrawColor(226,232,240); doc.roundedRect(x, y0, imgW, imgH, 6, 6, 'S');
+      doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]); doc.setLineWidth(0.8); doc.rect(x, y0, imgW, imgH, 'S');
       var url = f.fotos[k];
       if (url) {
         try {
@@ -11983,30 +12012,41 @@ window._repGenerarPDF = async function(){
         doc.setTextColor(15,23,42);
       }
     }
-    /* la tabla de actividades: las SEIS etapas, con X en las marcadas */
-    var ty = y0 + imgH + 26, rowH = 22, colW = W - M*2;
-    doc.setFillColor(15,23,42); doc.rect(M, ty, colW, rowH, 'F');
-    doc.setTextColor(255,255,255); doc.setFontSize(9);
-    doc.text('ACTIVIDAD', M + 10, ty + 15);
-    doc.text('AVANCE', M + colW - 60, ty + 15);
-    doc.setTextColor(15,23,42);
+    /* v1116: la tabla como la del PowerPoint — encabezado Actividad/Avance, filas con línea
+       gris fina y la X en rojo. Van las SEIS etapas (decisión de Antonio: "que vea las 6 pero
+       con el mismo diseño que manejamos"), no las cuatro del PPT original. */
+    var ty = y0 + imgH + 30, rowH = 24, colW = W - M*2, xCol = M + colW - 70;
+    doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]); doc.setLineWidth(1);
+    doc.setTextColor(64,64,64); doc.setFontSize(11);
+    doc.text('Actividad', M + 8, ty + 16);
+    doc.text('Avance', xCol, ty + 16);
+    doc.line(M, ty + rowH, M + colW, ty + rowH);
     ETAPAS.forEach(function(et, idx){
       var ry = ty + rowH * (idx + 1);
-      doc.setDrawColor(226,232,240); doc.line(M, ry + rowH, M + colW, ry + rowH);
-      doc.setFontSize(9.5);
-      doc.text(String(et.name||''), M + 10, ry + 15);
-      if (f.marcas[idx]) { doc.setFontSize(12); doc.text('X', M + colW - 55, ry + 15); }
+      doc.setLineWidth(0.5); doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]);
+      doc.line(M, ry + rowH, M + colW, ry + rowH);
+      doc.setFontSize(10); doc.setTextColor(64,64,64);
+      doc.text(String(et.name||''), M + 8, ry + 16);
+      if (f.marcas[idx]) {
+        doc.setFontSize(13); doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
+        doc.text('X', xCol, ry + 16);
+        doc.setTextColor(64,64,64);
+      }
     });
     var ey = ty + rowH * (ETAPAS.length + 1);
-    doc.setFillColor(f.entregado ? 220 : 241, f.entregado ? 252 : 245, f.entregado ? 231 : 249);
-    doc.rect(M, ey, colW, rowH, 'F');
-    doc.setFontSize(9.5);
-    doc.text('ENTREGADO', M + 10, ey + 15);
-    if (f.entregado) { doc.setFontSize(12); doc.text('X', M + colW - 55, ey + 15); }
+    doc.setLineWidth(1); doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]);
+    doc.line(M, ey + rowH, M + colW, ey + rowH);
+    doc.setFontSize(10); doc.setTextColor(64,64,64);
+    doc.text('Entregado', M + 8, ey + 16);
+    if (f.entregado) {
+      doc.setFontSize(13); doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
+      doc.text('X', xCol, ey + 16);
+      doc.setTextColor(64,64,64);
+    }
     if (f.repetido) {
-      doc.setFontSize(8); doc.setTextColor(100,116,139);
+      doc.setFontSize(8); doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]);
       doc.text('SIN AVANCE ESTA SEMANA · SE MANTIENE EL ÚLTIMO REPORTE', M, H - 30);
-      doc.setTextColor(15,23,42);
+      doc.setTextColor(64,64,64);
     }
     hechas++;
     try { window._prUploadShow && window._prUploadShow('ARMANDO REPORTE · ' + hechas + '/' + total); } catch(e){}
@@ -59023,10 +59063,17 @@ async function _anulAnularReal(){
         /* v1115 (Antonio): en un anticipo EN EFECTIVO no hay factura de proveedor — lo que se
            adjunta es el comprobante de la transferencia. El paso es el mismo, cambia el rotulo. */
         const _esEf = !!s.efectivo;
+        /* v1116 (Antonio): "quiero seleccionar a la persona que va a poder subir comprobantes de
+           transferencias, porque esto no lo puede hacer la de compras". El comprobante del banco
+           lo sube quien maneja la plata: permiso propio anticipos.transferir (el admin siempre).
+           Para la FACTURA normal no cambia nada: la sigue subiendo quien la subía. */
+        const _puedeSubirDoc = _esEf ? (_antSolicPerm('anticipos.transferir') || _antEsAdmin()) : true;
         let _p1 = '<div style="font-size:10px;font-weight:800;letter-spacing:.5px;color:#475569">ÚLTIMO PASO · ' + (_esEf ? 'COMPROBANTE DE LA TRANSFERENCIA' : 'FACTURA DEL PRODUCTO') + '</div>';
         _p1 += facOk
           ? ('<div style="font-size:11.5px;color:#15803D;font-weight:700;margin-top:3px">&#10003; ' + (_esEf ? 'COMPROBANTE SUBIDO' : 'FACTURA SUBIDA') + ' · '+_ver(s.facturaUrl,s.facturaNombre)+_reemp('factura')+'</div>')
-          : '<div style="margin-top:4px"><button class="btn sm" onclick="window._antAbrirSubirDoc(\''+esc(s.id)+'\',\'factura\')" style="background:#1565C0;border-color:#1565C0;color:#fff;padding:6px 14px;font-size:11px">' + (_esEf ? 'SUBIR COMPROBANTE' : 'SUBIR FACTURA') + '</button></div>';
+          : (_puedeSubirDoc
+              ? '<div style="margin-top:4px"><button class="btn sm" onclick="window._antAbrirSubirDoc(\''+esc(s.id)+'\',\'factura\')" style="background:#1565C0;border-color:#1565C0;color:#fff;padding:6px 14px;font-size:11px">' + (_esEf ? 'SUBIR COMPROBANTE' : 'SUBIR FACTURA') + '</button></div>'
+              : '<div style="margin-top:4px;font-size:11px;color:#92400E;font-weight:700">ESPERANDO EL COMPROBANTE DE LA TRANSFERENCIA</div>');
         const _listo = _antDocsListos(s);
         const _btnEnt = _listo
           ? '<button class="btn sm" onclick="window.entregarSolicitudAnticipo(\''+esc(s.id)+'\')" style="background:#15803D;border-color:#15803D;color:#fff;padding:8px 16px;font-size:11.5px;font-weight:700">MARCAR ENTREGADO</button>'

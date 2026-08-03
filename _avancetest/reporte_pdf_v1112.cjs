@@ -50,7 +50,8 @@ ok('reusa el cargador con fallback de CORS de Storage', /_amCargarImagen\(/.test
 ok('respeta la proporción de la foto (no la deforma)', /Math\.min\(imgW/.test(zP));
 ok('la tabla lleva las SEIS etapas', /ETAPAS\.forEach/.test(zP));
 ok('la X sale de las marcas', /f\.marcas\[idx\]/.test(zP));
-ok('tiene fila ENTREGADO', /ENTREGADO/.test(zP));
+/* v1116: el rótulo pasó a "Entregado" (capitalizado) para calcar el PowerPoint de Antonio */
+ok('tiene fila Entregado', /'Entregado'/.test(zP) || /ENTREGADO/.test(zP));
 ok('avisa cuando la foto es repetida de la semana pasada', /SIN AVANCE ESTA SEMANA/.test(zP));
 ok('muestra progreso (son más de cien imágenes)', /_prUploadShow/.test(zP));
 ok('y lo apaga al terminar', /_prUploadHide/.test(zP));
