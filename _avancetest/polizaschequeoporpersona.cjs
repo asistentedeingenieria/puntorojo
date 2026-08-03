@@ -13,7 +13,12 @@ ok('expuesta en window', html.indexOf('window._polizasChequeoPorPersona')>=0);
 const body=extract('_polizasChequeoPorPersona');
 ok('_polizasChequeoPorPersona extraída', !!body);
 if(body){
-  const fn=new Function(body+'\n return _polizasChequeoPorPersona;')();
+  /* v1102: el chequeo agrupa por PERÍODO quincenal real (_quincenaKeyDe), no por el sábado
+     suelto de cada planilla — una planilla de una semana corrida ya no inventa una quincena.
+     Se inyecta la implementación REAL. */
+  const qk = extract('_quincenaKeyDe');
+  ok('_quincenaKeyDe existe', !!qk);
+  const fn=new Function(qk+'\n'+body+'\n return _polizasChequeoPorPersona;')();
   const st={ polizasGlobales:[
     {id:'po1', aCargoDeNombre:'ANA LOPEZ', estatus:'ACTIVA'},
     {id:'po2', aCargoDeNombre:'ANA LOPEZ', estatus:'ACTIVA'},
