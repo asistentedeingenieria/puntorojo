@@ -85,11 +85,17 @@ if (etapas) {
 
 console.log('\n— 4. quién entra al reporte —');
 const zU = ex('function _repUnidadesDelReporte(');
-let unidades = null; try { unidades = new Function('return (' + zU + ')')(); } catch(e){}
+/* v1109: la selección usa _repEtapasUnidad para descartar las que no arrancaron — se inyecta */
+let unidades = null; try { unidades = new Function(ex('function _repEtapasUnidad(') + '\nreturn (' + zU + ')')(); } catch(e){}
 ok('existe _repUnidadesDelReporte', !!unidades);
 if (unidades) {
+  /* con avance: al menos una etapa marcada. Antonio: "poné las fotos de los aptos que YA
+     TIENEN UN AVANCE" — los que no arrancaron no tienen nada que mostrarle al cliente. */
+  const conAvance = { stages:[true,false,false,false,false,false] };
   const P = { towers:[{ id:'t1', name:'TORRE 3', levels:[{ id:'l1', name:'NIVEL 1', aptos:[
-    { id:'a1', name:'101' }, { id:'a2', name:'102' }, { id:'ap', name:'PASILLO' } ] }] }] };
+    Object.assign({ id:'a1', name:'101' }, conAvance),
+    Object.assign({ id:'a2', name:'102' }, conAvance),
+    Object.assign({ id:'ap', name:'PASILLO' }, conAvance) ] }] }] };
   const sinPrevios = unidades(P, []);
   ok('entran todas las unidades', sinPrevios.length === 3);
   ok('EL PASILLO ENTRA como una unidad más', sinPrevios.some(u => /PASILLO/i.test(u.a.name)));
@@ -101,6 +107,16 @@ if (unidades) {
   const variosRep = unidades(P, [{ unidades:{ a2:{ entregado:false } } }, { unidades:{ a2:{ entregado:true } } }]);
   ok('basta con que UN reporte la haya dado por entregada', !variosRep.some(u => u.a.id === 'a2'));
   ok('sin proyecto no revienta', unidades(null, []).length === 0 && unidades({}, null).length === 0);
+
+  console.log('\n— v1109: las que no arrancaron NO salen —');
+  const P2 = { towers:[{ id:'t1', name:'T', levels:[{ id:'l1', name:'N1', aptos:[
+    Object.assign({ id:'ok1', name:'201' }, conAvance),
+    { id:'no1', name:'202', stages:[false,false,false,false,false,false] },
+    { id:'no2', name:'203' } ] }] }] };
+  const r2 = unidades(P2, []);
+  ok('solo entra la que tiene avance', r2.length === 1 && r2[0].a.id === 'ok1');
+  ok('una unidad sin ninguna etapa marcada queda fuera', !r2.some(u => u.a.id === 'no1'));
+  ok('una unidad sin datos de etapas tampoco entra', !r2.some(u => u.a.id === 'no2'));
 }
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
