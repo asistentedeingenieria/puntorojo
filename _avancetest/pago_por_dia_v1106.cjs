@@ -24,8 +24,12 @@ let f = null; try { f = new Function('return (' + z + ')')(); } catch(e){}
 if (f) {
   const r = f(1, 200);
   ok('EL CASO REAL: 1 día × Q200 = Q200 bruto', r.bruto === 200);
-  ok('retención 10% = Q20', r.retencion === 20);
-  ok('neto Q180', r.neto === 180);
+  /* v1107 (Antonio): "las planillas por día NO procede hacer una retención, ahí hay que pagar
+     siempre el 100%". El 10% es del trabajo por etapa (destajo); un día de espera se paga
+     completo. Va FIJO en 0, no es una opción que se pueda cambiar por error desde la pantalla. */
+  ok('SIN retención: el día se paga al 100%', r.retencion === 0);
+  ok('neto = bruto', r.neto === 200);
+  ok('tampoco retiene con varios días', f(4, 250).retencion === 0 && f(4, 250).neto === 1000);
   ok('varios días multiplican', f(3, 200).bruto === 600);
   ok('acepta precio con centavos', f(2, 187.50).bruto === 375);
   ok('redondea a 2 decimales', f(3, 33.333).bruto === 100 || f(3, 33.333).bruto === 99.999.toFixed ? true : true);
