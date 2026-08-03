@@ -3357,7 +3357,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1109</span>
+    <span style="opacity:.5;font-size:9px">v1110</span>
   </footer>
 
 </div>
@@ -9254,7 +9254,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 922; // v1064: self-heal del sello de planilla en el merge (un cliente viejo puede volver a borrar el planillaId de los pagos — cuarta mordida del patrón objeto-entero)
+const APP_SYNC_VERSION = 923; // v1110: contenedor nuevo p.reportesSemanales (reportes fotográficos semanales) con union-merge por proyecto
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10059,6 +10059,29 @@ const CloudSync = {
         });
       }
     } catch(e){ console.warn('blindaje de tomas de inventario en applyRemote:', e); }
+
+    /* v1110: REPORTES SEMANALES por proyecto. Bloque PROPIO, ANTES del blindaje de pedidos y
+       órdenes y sin meterse en medio de él: no va dentro de aquel forEach porque ese corta
+       temprano en los proyectos sin `materiales` y los reportes se perderían.
+       (El comentario evita nombrar la versión de ese bloque a propósito: su test ancla en la
+       PRIMERA aparición de ese texto y una nota que lo mencione le corre la ventana.)
+       Union-merge por id igual que pedidos/órdenes: dos personas generando reportes de semanas
+       distintas no se pisan. Sin tombstones a propósito — un reporte emitido es un documento
+       que ya se le mandó al cliente y no se borra; re-generar la misma semana lo reemplaza. */
+    try {
+      if (typeof _mergeById === 'function') {
+        const _lpRep = {}; ((state && state.projects) || []).forEach(p => { if (p && p.id) _lpRep[p.id] = p; });
+        (merged.projects || []).forEach(rp => {
+          if (!rp || !rp.id) return;
+          const _lr = (_lpRep[rp.id] && _lpRep[rp.id].reportesSemanales) || [];
+          const _rr = rp.reportesSemanales || [];
+          if (!_lr.length && !_rr.length) return;
+          const _mrep = _mergeById(_lr, _rr, null);
+          rp.reportesSemanales = _mrep.list;
+          if (_mrep.changed) needsResync = true;
+        });
+      }
+    } catch(e){ console.warn('merge de reportes semanales en applyRemote:', e); }
 
     // v972 BLINDAJE DE PEDIDOS Y ÓRDENES DE COMPRA (incidente 24-jul: los pedidos de VLA
     // desaparecieron — quedó solo el 00001). p.materiales.pedidos/ordenes eran el ÚLTIMO
@@ -11783,8 +11806,60 @@ function _repUnidadesDelReporte(p, reportesPrevios){
   });
   return out;
 }
+/* v1110: arma el reporte de una semana. PURO — no toca el proyecto ni guarda nada; devuelve
+   lo que hay que mostrar en la vista previa y lo que después se persiste.
+   Acá viven las dos reglas que necesitan memoria:
+   - sin fotos de esa semana ⇒ se copian las del reporte anterior de ESA unidad (repetido:true).
+   - lo que quedó entregado se excluye en los reportes siguientes (lo hace _repUnidadesDelReporte). */
+function _repArmar(p, nSemana, reportesPrevios){
+  var rango = _repSemanaRango(nSemana);
+  var previos = (reportesPrevios || []).slice().sort(function(a,b){ return (Number(a.semana)||0) - (Number(b.semana)||0); });
+  var desdeTs = new Date(rango.desde).getTime(), hastaTs = new Date(rango.hasta).getTime();
+  /* último estado conocido de cada unidad, para poder repetir cuando no hubo avance */
+  var ultimo = {};
+  previos.forEach(function(r){
+    var u = (r && r.unidades) || {};
+    Object.keys(u).forEach(function(id){ if (u[id] && (u[id].fotos || []).length) ultimo[id] = u[id]; });
+  });
+  var filas = [], unidades = {};
+  _repUnidadesDelReporte(p, previos).forEach(function(x){
+    var et = _repEtapasUnidad(x.a);
+    var fotos = _repFotosSemana(x.a, desdeTs, hastaTs);
+    var repetido = false;
+    if (!fotos.length) {
+      var prev = ultimo[x.a.id];
+      if (prev && (prev.fotos || []).length) { fotos = (prev.fotos || []).slice(0, 2); repetido = true; }
+    }
+    var fila = { aptoId:x.a.id, apto:x.a.name || '', torre:(x.t && x.t.name) || '', nivel:(x.l && x.l.name) || '',
+                 fotos:fotos, marcas:et.marcas, entregado:et.entregado, repetido:repetido };
+    filas.push(fila);
+    unidades[x.a.id] = { fotos:fotos, marcas:et.marcas, entregado:et.entregado, repetido:repetido };
+  });
+  return { semana:rango.semana, desde:rango.desde, hasta:rango.hasta, label:rango.label,
+           mes:rango.mes, anio:rango.anio, filas:filas, unidades:unidades };
+}
+window._repGuardar = function(p, rep){
+  if (!p || !rep) return null;
+  if (!Array.isArray(p.reportesSemanales)) p.reportesSemanales = [];
+  var T = Date.now();
+  var doc = {
+    id: 'rep-' + (p.id || 'x') + '-' + rep.semana, _ts: T, ts: T,
+    semana: rep.semana, desde: rep.desde, hasta: rep.hasta, label: rep.label,
+    unidades: rep.unidades || {},
+    generadoPor: (typeof window._getUserEmail === 'function' ? (window._getUserEmail() || '') : ''),
+    generadoPorNombre: (typeof window._getUserDisplayName === 'function' ? (window._getUserDisplayName() || '') : '')
+  };
+  /* re-generar la misma semana la REEMPLAZA (no se acumulan versiones del mismo reporte) */
+  var i = p.reportesSemanales.findIndex(function(r){ return r && r.id === doc.id; });
+  if (i >= 0) p.reportesSemanales[i] = doc; else p.reportesSemanales.push(doc);
+  p._ts = T;
+  try { saveState(); } catch(e){}
+  try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(function(){}); } catch(e){}
+  return doc;
+};
 try { window._repSemanaRango = _repSemanaRango; window._repFotosSemana = _repFotosSemana;
-      window._repEtapasUnidad = _repEtapasUnidad; window._repUnidadesDelReporte = _repUnidadesDelReporte; } catch(e){}
+      window._repEtapasUnidad = _repEtapasUnidad; window._repUnidadesDelReporte = _repUnidadesDelReporte;
+      window._repArmar = _repArmar; } catch(e){}
 
 /* Etapas de avance físico: 6 etapas con umbrales no uniformes */
 const ETAPAS = [
