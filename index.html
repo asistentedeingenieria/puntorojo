@@ -3368,7 +3368,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1116</span>
+    <span style="opacity:.5;font-size:9px">v1117</span>
   </footer>
 
 </div>
@@ -11946,113 +11946,126 @@ window._repGenerarPDF = async function(){
   if (!rep.filas.length) return showToast('NO HAY NADA QUE REPORTAR','red');
   var jsPDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
   if (!jsPDFCtor) return showToast('NO CARGÓ EL GENERADOR DE PDF','red');
-  var doc = new jsPDFCtor({ unit:'pt', format:'a4', orientation:'portrait' });
-  var W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 40;
+  /* v1117: MEDIDAS REALES del PowerPoint de Antonio (Semana 07), convertidas de EMU a puntos.
+     La diapositiva es 16:9 → 960 x 540 pt. Antes lo hacía A4 vertical con las fotos metidas en
+     recuadros chicos; el original tiene las FOTOS A SANGRE (de borde a borde en altura) y el
+     texto en una franja blanca a la izquierda. Eso es lo que Antonio pedía con "fotos de fondo".
+     Geometría medida del archivo:
+       portada  → foto x=0 w=523 h=540 · títulos a la derecha
+       torre    → foto x=0 w=960 h=494 · nombre encima
+       unidad   → texto x=0..312 · foto1 x=276 w=304 h=540 · foto2 x=585 w=304 h=540 */
+  var doc = new jsPDFCtor({ unit:'pt', format:[960,540], orientation:'landscape' });
+  var ROJO = [192,0,0], GRIS = [191,191,191], GRIS2 = [165,165,165], TXT = [64,64,64];
 
-  /* v1116: el diseño sale del PowerPoint que usa Antonio (Semana 07). Paleta real medida en el
-     archivo: rojo C00000 de acento, BFBFBF para líneas, A5A5A5 para texto secundario, sobre
-     fondo BLANCO. Antes lo había hecho azul oscuro, que no es lo que manda al cliente. */
-  var ROJO = [192,0,0], GRIS = [191,191,191], GRIS2 = [165,165,165];
+  function _repImgEl(src){ return new Promise(function(res, rej){ var i = new Image(); i.onload = function(){ res(i); }; i.onerror = rej; i.src = src; }); }
+  /* recorta la imagen para LLENAR el recuadro sin deformarla (efecto "cover"): en el PPT las
+     fotos llenan su columna completa, no quedan encajadas con bandas blancas */
+  async function _cover(url, wPt, hPt){
+    try {
+      var im = await _amCargarImagen(url);
+      if (!im || !im.dataUrl) return null;
+      var iw = im.w || 1, ih = im.h || 1;
+      var esc = Math.max(wPt / iw, hPt / ih);
+      var cw = Math.round(wPt * 2), ch = Math.round(hPt * 2);   /* x2 para que no se pixele */
+      var cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
+      var cx = cv.getContext('2d');
+      cx.fillStyle = '#fff'; cx.fillRect(0, 0, cw, ch);
+      var el = await _repImgEl(im.dataUrl);
+      var dw = iw * esc * 2, dh = ih * esc * 2;
+      cx.drawImage(el, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+      return cv.toDataURL('image/jpeg', 0.82);
+    } catch(e){ console.warn('[reporte] no se pudo recortar la foto', e); return null; }
+  }
+
+  /* ── PORTADA ── */
+  var primeraFoto = null;
+  for (var q = 0; q < rep.filas.length && !primeraFoto; q++) if (rep.filas[q].fotos[0]) primeraFoto = rep.filas[q].fotos[0];
+  if (primeraFoto) { var pc = await _cover(primeraFoto, 523, 540); if (pc) doc.addImage(pc, 'JPEG', 0, 0, 523, 540); }
+  else { doc.setFillColor(245,245,245); doc.rect(0, 0, 523, 540, 'F'); }
   doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
   doc.setFontSize(40);
-  doc.text('REPORTE', W/2, H/2 - 70, { align:'center' });
-  doc.text('FOTOGRÁFICO', W/2, H/2 - 24, { align:'center' });
+  doc.text('REPORTE', 553, 150);
+  doc.text('FOTOGRÁFICO', 553, 196);
+  doc.setTextColor(TXT[0],TXT[1],TXT[2]); doc.setFontSize(26);
+  doc.text('SEMANA ' + String(rep.semana).padStart(2,'0'), 553, 250);
   doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]); doc.setLineWidth(1);
-  doc.line(W/2 - 90, H/2 - 4, W/2 + 90, H/2 - 4);
-  doc.setFontSize(28); doc.setTextColor(64,64,64);
-  doc.text('SEMANA ' + String(rep.semana).padStart(2,'0'), W/2, H/2 + 34, { align:'center' });
-  doc.setFontSize(16); doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]);
-  doc.text(String(rep.label||''), W/2, H/2 + 62, { align:'center' });
+  doc.line(553, 268, 773, 268);
+  doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]); doc.setFontSize(16);
+  doc.text(String(rep.label||''), 553, 296);
   doc.setFontSize(11);
-  doc.text(String(p.name||'').toUpperCase(), W/2, H - 56, { align:'center' });
+  doc.text(String(p.name||'').toUpperCase(), 553, 460);
 
-  var total = rep.filas.length, hechas = 0;
+  var total = rep.filas.length, hechas = 0, torreImpresa = '';
   try { window._prUploadShow && window._prUploadShow('ARMANDO REPORTE · 0/' + total); } catch(e){}
-  var torreImpresa = '';
   for (var i = 0; i < rep.filas.length; i++) {
     var f = rep.filas[i];
-    /* v1116: hoja separadora por TORRE — el PowerPoint tiene una slide con el nombre de la
-       torre antes de sus apartamentos, y así se lee mucho mejor con 200 páginas. */
+    /* ── HOJA SEPARADORA DE TORRE ── */
     if (f.torre !== torreImpresa) {
       torreImpresa = f.torre;
-      doc.addPage();
-      doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
-      doc.setFontSize(40);
-      doc.text(String(f.torre||'').toUpperCase(), W/2, H/2, { align:'center' });
-      doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]); doc.setLineWidth(1);
-      doc.line(W/2 - 70, H/2 + 18, W/2 + 70, H/2 + 18);
+      doc.addPage([960,540],'landscape');
+      var ft = f.fotos[0] || primeraFoto;
+      if (ft) { var tc = await _cover(ft, 960, 494); if (tc) doc.addImage(tc, 'JPEG', 0, 0, 960, 494); }
+      else { doc.setFillColor(245,245,245); doc.rect(0, 0, 960, 494, 'F'); }
+      doc.setFillColor(255,255,255); doc.rect(0, 494, 960, 46, 'F');
+      doc.setFillColor(255,255,255); doc.rect(596, 292, 348, 58, 'F');
+      doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]); doc.setFontSize(40);
+      doc.text(String(f.torre||'').toUpperCase(), 608, 332);
     }
-    doc.addPage();
-    /* encabezado como el PPT: el número GRANDE y debajo la palabra APARTAMENTO */
-    doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]);
-    doc.setFontSize(11); doc.text(String(f.nivel||'').toUpperCase(), M, M);
-    doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
-    doc.setFontSize(32); doc.text(String(f.apto||'').toUpperCase(), M, M + 32);
-    doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]);
-    doc.setFontSize(11); doc.text(/PASILLO/i.test(f.apto||'') ? 'ÁREA COMÚN' : 'APARTAMENTO', M, M + 48);
-    doc.setTextColor(64,64,64);
-    /* las dos fotos, una al lado de la otra */
-    var imgW = (W - M*2 - 12) / 2, imgH = 200, y0 = M + 66;
+    /* ── HOJA DE LA UNIDAD ── */
+    doc.addPage([960,540],'landscape');
     for (var k = 0; k < 2; k++) {
-      var x = M + k * (imgW + 12);
-      doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]); doc.setLineWidth(0.8); doc.rect(x, y0, imgW, imgH, 'S');
+      var fx = (k === 0) ? 276 : 585;
       var url = f.fotos[k];
-      if (url) {
-        try {
-          var im = await _amCargarImagen(url);
-          if (im && im.dataUrl) {
-            var r = Math.min(imgW / (im.w||1), imgH / (im.h||1));
-            var dw = (im.w||1) * r, dh = (im.h||1) * r;
-            doc.addImage(im.dataUrl, 'JPEG', x + (imgW-dw)/2, y0 + (imgH-dh)/2, dw, dh);
-          }
-        } catch(e){ console.warn('[reporte] foto no cargó', e); }
-      } else {
-        doc.setFontSize(9); doc.setTextColor(148,163,184);
-        doc.text('SIN FOTO', x + imgW/2, y0 + imgH/2, { align:'center' });
-        doc.setTextColor(15,23,42);
+      if (url) { var cc = await _cover(url, 304, 540); if (cc) doc.addImage(cc, 'JPEG', fx, 0, 304, 540); }
+      else {
+        doc.setFillColor(245,245,245); doc.rect(fx, 0, 304, 540, 'F');
+        doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]); doc.setFontSize(11);
+        doc.text('SIN FOTO', fx + 152, 270, { align:'center' });
       }
     }
-    /* v1116: la tabla como la del PowerPoint — encabezado Actividad/Avance, filas con línea
-       gris fina y la X en rojo. Van las SEIS etapas (decisión de Antonio: "que vea las 6 pero
-       con el mismo diseño que manejamos"), no las cuatro del PPT original. */
-    var ty = y0 + imgH + 30, rowH = 24, colW = W - M*2, xCol = M + colW - 70;
+    doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]); doc.setFontSize(34);
+    doc.text(String(f.apto||'').toUpperCase(), 24, 252);
+    doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]); doc.setFontSize(12);
+    doc.text(/PASILLO/i.test(f.apto||'') ? 'ÁREA COMÚN' : 'APARTAMENTO', 24, 272);
+    doc.setFontSize(10);
+    doc.text(String(f.torre||'').toUpperCase() + ' · ' + String(f.nivel||'').toUpperCase(), 24, 290);
+    /* tabla de actividades arriba a la izquierda */
+    var ty = 40, rowH = 21, colW = 228, xCol = 24 + colW - 26;
+    doc.setTextColor(TXT[0],TXT[1],TXT[2]); doc.setFontSize(10);
+    doc.text('Actividad', 24, ty + 14);
+    doc.text('Avance', xCol, ty + 14);
     doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]); doc.setLineWidth(1);
-    doc.setTextColor(64,64,64); doc.setFontSize(11);
-    doc.text('Actividad', M + 8, ty + 16);
-    doc.text('Avance', xCol, ty + 16);
-    doc.line(M, ty + rowH, M + colW, ty + rowH);
+    doc.line(24, ty + rowH, 24 + colW, ty + rowH);
     ETAPAS.forEach(function(et, idx){
       var ry = ty + rowH * (idx + 1);
       doc.setLineWidth(0.5); doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]);
-      doc.line(M, ry + rowH, M + colW, ry + rowH);
-      doc.setFontSize(10); doc.setTextColor(64,64,64);
-      doc.text(String(et.name||''), M + 8, ry + 16);
+      doc.line(24, ry + rowH, 24 + colW, ry + rowH);
+      doc.setFontSize(8.5); doc.setTextColor(TXT[0],TXT[1],TXT[2]);
+      doc.text(String(et.name||''), 24, ry + 14);
       if (f.marcas[idx]) {
-        doc.setFontSize(13); doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
-        doc.text('X', xCol, ry + 16);
-        doc.setTextColor(64,64,64);
+        doc.setFontSize(12); doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
+        doc.text('X', xCol, ry + 14);
+        doc.setTextColor(TXT[0],TXT[1],TXT[2]);
       }
     });
     var ey = ty + rowH * (ETAPAS.length + 1);
     doc.setLineWidth(1); doc.setDrawColor(GRIS[0],GRIS[1],GRIS[2]);
-    doc.line(M, ey + rowH, M + colW, ey + rowH);
-    doc.setFontSize(10); doc.setTextColor(64,64,64);
-    doc.text('Entregado', M + 8, ey + 16);
+    doc.line(24, ey + rowH, 24 + colW, ey + rowH);
+    doc.setFontSize(8.5); doc.setTextColor(TXT[0],TXT[1],TXT[2]);
+    doc.text('Entregado', 24, ey + 14);
     if (f.entregado) {
-      doc.setFontSize(13); doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
-      doc.text('X', xCol, ey + 16);
-      doc.setTextColor(64,64,64);
+      doc.setFontSize(12); doc.setTextColor(ROJO[0],ROJO[1],ROJO[2]);
+      doc.text('X', xCol, ey + 14);
+      doc.setTextColor(TXT[0],TXT[1],TXT[2]);
     }
     if (f.repetido) {
-      doc.setFontSize(8); doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]);
-      doc.text('SIN AVANCE ESTA SEMANA · SE MANTIENE EL ÚLTIMO REPORTE', M, H - 30);
-      doc.setTextColor(64,64,64);
+      doc.setFontSize(7.5); doc.setTextColor(GRIS2[0],GRIS2[1],GRIS2[2]);
+      doc.text('SIN AVANCE ESTA SEMANA', 24, 512);
     }
     hechas++;
     try { window._prUploadShow && window._prUploadShow('ARMANDO REPORTE · ' + hechas + '/' + total); } catch(e){}
   }
   try { window._prUploadHide && window._prUploadHide(); } catch(e){}
-  /* el reporte se GUARDA recién cuando de verdad se generó */
   try { window._repGuardar(p, rep); } catch(e){ console.warn('[reporte] no se pudo guardar', e); }
   var nombre = 'Reporte Semana ' + rep.semana + ' - ' + String(p.name||'').replace(/[^\w\s-]/g,'') + '.pdf';
   try { doc.save(nombre); } catch(e){ showToast('NO SE PUDO DESCARGAR','red'); return; }

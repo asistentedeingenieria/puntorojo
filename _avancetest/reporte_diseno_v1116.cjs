@@ -30,7 +30,8 @@ ok('portada con REPORTE / FOTOGRÁFICO', /'REPORTE'/.test(zP) && /'FOTOGRÁFICO'
 ok('la semana con dos dígitos, como el PPT (SEMANA 07)', /padStart\(2,'0'\)/.test(zP));
 ok('HOJA SEPARADORA por torre', /torreImpresa/.test(zP));
 ok('la separadora solo sale cuando cambia la torre', /f\.torre !== torreImpresa/.test(zP));
-ok('el número de unidad va grande y APARTAMENTO debajo', /'APARTAMENTO'/.test(zP) && /setFontSize\(32\)/.test(zP));
+/* v1117: el cuerpo pasó a las medidas reales del PPT (960x540) y el número quedó en 34pt */
+ok('el número de unidad va grande y APARTAMENTO debajo', /'APARTAMENTO'/.test(zP) && /setFontSize\(34\)/.test(zP));
 ok('el pasillo no dice APARTAMENTO', /PASILLO/i.test(zP) && /ÁREA COMÚN/.test(zP));
 
 console.log('\n— A3. la tabla: SEIS etapas con el diseño del PPT —');

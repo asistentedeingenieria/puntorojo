@@ -44,10 +44,14 @@ console.log('\n— 4. el PDF —');
 const zP = ex('window._repGenerarPDF = async function(');
 ok('existe el generador', zP.length > 800);
 ok('portada con REPORTE FOTOGRÁFICO y la semana', /REPORTE/.test(zP) && /FOTOGRÁFICO/.test(zP) && /SEMANA/.test(zP));
-ok('una página por unidad', /addPage\(\)/.test(zP));
+/* v1117: addPage lleva el formato explícito porque la hoja es 960x540 (la medida real del PPT
+   de Antonio), no el A4 por defecto */
+ok('una página por unidad', /addPage\(\[960,540\],'landscape'\)/.test(zP));
 ok('mete las DOS fotos', /f\.fotos\[k\]/.test(zP) && /k < 2/.test(zP));
 ok('reusa el cargador con fallback de CORS de Storage', /_amCargarImagen\(/.test(zP));
-ok('respeta la proporción de la foto (no la deforma)', /Math\.min\(imgW/.test(zP));
+/* v1117: la foto ya no se "encaja" con Math.min (dejaba bandas blancas) — ahora LLENA el
+   recuadro con Math.max y se recorta centrada, como en el PowerPoint original */
+ok('respeta la proporción de la foto (no la deforma)', /Math\.max\(wPt \/ iw, hPt \/ ih\)/.test(zP));
 ok('la tabla lleva las SEIS etapas', /ETAPAS\.forEach/.test(zP));
 ok('la X sale de las marcas', /f\.marcas\[idx\]/.test(zP));
 /* v1116: el rótulo pasó a "Entregado" (capitalizado) para calcar el PowerPoint de Antonio */
