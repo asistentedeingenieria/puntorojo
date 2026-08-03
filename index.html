@@ -3269,6 +3269,9 @@ select.pr-filtro{padding:5px 30px 5px 12px}
       <!-- v750: herramienta admin para habilitar/anular el pago de una etapa puntual -->
       <!-- v753: solo visible en la pestaña PAGOS POR ETAPA (setPlanillaTab togglea el display) -->
       <div id="_anulEtapaBar" data-perm="users.manage" style="display:flex;justify-content:flex-end;margin:-8px 0 12px">
+        <!-- v1106: PAGO POR DÍA — el pago que no cuelga de un apartamento ni de una etapa
+             (días de espera de área, etc). Monto = días × precio del día. -->
+        <button class="btn ghost sm" data-perm="planilla.generate|users.manage" onclick="window._abrirPagoPorDia()" style="font-size:10px;color:#1D4ED8;border-color:#93C5FD;background:#EFF6FF;margin-right:8px">+ PAGO POR DÍA</button>
         <button class="btn ghost sm" onclick="abrirAnularEtapa()" style="font-size:10px;color:#92400E;border-color:#FDBA74;background:#FFFBEB">HABILITAR / ANULAR ETAPA</button>
       </div>
 
@@ -3354,7 +3357,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1105</span>
+    <span style="opacity:.5;font-size:9px">v1106</span>
   </footer>
 
 </div>
@@ -49728,6 +49731,88 @@ window.addEventListener('load', () => {
     if (s.estado === 'pendiente_cotizacion')   return { txt:'ESPERANDO COTIZACIÓN DE COMPRAS', bg:'#FEF3C7', fg:'#92400E' };
     if (s.estado === 'pendiente_autorizacion') return { txt:'ESPERANDO AUTORIZACIÓN',          bg:'#FEF3C7', fg:'#92400E' };
     return { txt:String(s.estado||'EN PROCESO').toUpperCase().replace(/_/g,' '), bg:'#F1F5F9', fg:'#475569' };
+  };
+  /* ═══════════ v1106 · PAGO POR DÍA (pedido de Antonio) ═══════════
+     "Armemos una opción en la cual se pueda pagar por día y se le pueda poner un precio del día
+     unitario, para que este tipo de pago se pueda hacer desde la app. Dejá libre el monto y la
+     descripción."
+     Caso real: planilla VLA 01/08/2026 — dos personas, "Día por día en espera de área
+     27/07/2026", NIVEL 2, 1 día × Q200. Eso no se podía cargar: la app solo sabía pagar por
+     ETAPA de un apartamento con precio de modelo, y un día de espera no tiene apartamento ni
+     etapa: es tiempo pagado.
+     DISEÑO: es un pago EXTRA más — el mismo patrón que ya usamos en TORELO, que fluye solo a la
+     liquidación quincenal — con tres campos propios (dias, precioDia y descripción libre). El
+     monto sale de días × precio, no de un modelo. El pago por etapa NO se toca: conviven. */
+  function _pagoDiaCalc(dias, precioDia){
+    var d = Number(dias), p = Number(precioDia);
+    if (!isFinite(d) || !isFinite(p) || d <= 0 || p <= 0) return { bruto:0, retencion:0, neto:0 };
+    var bruto = Math.round(d * p * 100) / 100;
+    var ret   = Math.round(bruto * 0.10 * 100) / 100;
+    return { bruto: bruto, retencion: ret, neto: Math.round((bruto - ret) * 100) / 100 };
+  }
+  try { window._pagoDiaCalc = _pagoDiaCalc; } catch(e){}
+  window._abrirPagoPorDia = async function(){
+    try { if (!(can('planilla.generate') || can('users.manage'))) return showToast('SIN PERMISO PARA GENERAR PAGOS','red'); } catch(e){ return; }
+    const p = (typeof activeProj==='function') ? activeProj() : null;
+    if (!p) return showToast('SIN PROYECTO ACTIVO','red');
+    const colabs = ((p.planilla||{}).colaboradores||[]).slice()
+      .sort((a,b)=>String(a.nombre||'').localeCompare(String(b.nombre||''),'es',{sensitivity:'base'}));
+    if (!colabs.length) return showToast('NO HAY COLABORADORES EN ESTA OBRA','red');
+    const _e = s => String(s==null?'':s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+    /* prConfirm destruye el modal ANTES del await (v813): los valores se capturan a window
+       mientras el usuario escribe, no se leen del DOM después. */
+    window._pdDesc = ''; window._pdDias = '1'; window._pdPrecio = ''; window._pdColab = '';
+    const body =
+      '<div style="display:grid;gap:10px;text-align:left">'
+      + '<label style="font-size:10px;letter-spacing:1px;color:#64748B;font-weight:700">PERSONA'
+      + '<select id="_pdColabSel" class="pr-filtro" style="width:100%;margin-top:4px" onchange="window._pdColab=this.value">'
+      + '<option value="">— ELEGIR —</option>'
+      + colabs.map(c=>'<option value="'+_e(c.id)+'">'+_e(String(c.nombre||'').toUpperCase())+'</option>').join('')
+      + '</select></label>'
+      + '<label style="font-size:10px;letter-spacing:1px;color:#64748B;font-weight:700">DESCRIPCIÓN (libre)'
+      + '<input id="_pdDescInp" class="pr-buscador" style="width:100%;margin-top:4px" placeholder="EJ: DÍA POR DÍA EN ESPERA DE ÁREA 27/07/2026 · NIVEL 2" oninput="window._pdDesc=this.value"></label>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+      + '<label style="font-size:10px;letter-spacing:1px;color:#64748B;font-weight:700">DÍAS'
+      + '<input id="_pdDiasInp" type="number" min="0" step="0.5" value="1" class="pr-buscador" style="width:100%;margin-top:4px" oninput="window._pdDias=this.value"></label>'
+      + '<label style="font-size:10px;letter-spacing:1px;color:#64748B;font-weight:700">PRECIO POR DÍA (Q)'
+      + '<input id="_pdPrecioInp" type="number" min="0" step="0.01" class="pr-buscador" style="width:100%;margin-top:4px" placeholder="200.00" oninput="window._pdPrecio=this.value"></label>'
+      + '</div>'
+      + '<div style="font-size:11px;color:#64748B">El monto sale de DÍAS × PRECIO. Se le aplica la retención del 10% como a cualquier pago, y queda en DISPONIBLES PARA ARMAR.</div>'
+      + '</div>';
+    const okp = await window.prConfirm({ title:'PAGO POR DÍA', bodyHTML:body, okText:'GENERAR PAGO', cancelText:'CANCELAR' });
+    if (!okp) return;
+    await window._pagoDiaGuardar(window._pdColab, window._pdDesc, window._pdDias, window._pdPrecio);
+  };
+  window._pagoDiaGuardar = async function(colabId, desc, dias, precioDia){
+    try { if (!(can('planilla.generate') || can('users.manage'))) return showToast('SIN PERMISO','red'); } catch(e){ return; }
+    const p = (typeof activeProj==='function') ? activeProj() : null;      /* re-leído tras el await del modal (v769/v770) */
+    if (!p) return showToast('SIN PROYECTO ACTIVO','red');
+    const colab = ((p.planilla||{}).colaboradores||[]).find(c => c && c.id === colabId);
+    if (!colab) return showToast('ELEGÍ LA PERSONA','red');
+    const d = String(desc||'').trim();
+    if (!d) return showToast('ESCRIBÍ LA DESCRIPCIÓN','red');
+    const calc = _pagoDiaCalc(dias, precioDia);
+    if (!(calc.bruto > 0)) return showToast('REVISÁ LOS DÍAS Y EL PRECIO','red');
+    if (!p.planilla) p.planilla = {};
+    if (!Array.isArray(p.planilla.pagos)) p.planilla.pagos = [];
+    const T = Date.now();
+    p.planilla.pagos.push({
+      id:'plp-dia'+T, tipo:'ETAPA', ts:T, _ts:T,
+      esExtra:true, esDia:true, dias:Number(dias)||0, precioDia:Number(precioDia)||0,
+      towerId:'', levelId:'', aptoId:'', aptoName:'POR DÍA', towerName:'', levelName:'',
+      stageIdx:0, stageName:'', detalle:'PAGO POR DÍA · '+d, nota:d,
+      bruto:calc.bruto, retencion:calc.retencion, neto:calc.neto,
+      colaborador:String(colab.nombre||'').toUpperCase(), colaboradorId:colab.id, colaboradorRol:colab.rol||'',
+      autorizado:false, retencionPagada:false,
+      targetPct:0, pctDelta:0, stageTotal:calc.bruto,
+      modelKey:'POR_DIA', modelName:'PAGO POR DÍA',
+      generadoPor:(typeof window._getUserEmail==='function'?(window._getUserEmail()||''):''),
+      generadoPorNombre:(typeof window._getUserDisplayName==='function'?(window._getUserDisplayName()||''):'')
+    });
+    saveState();
+    try { if (CloudSync && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(()=>{}); } catch(e){}
+    showToast('PAGO POR DÍA GENERADO · Q'+calc.bruto.toFixed(2)+' (NETO Q'+calc.neto.toFixed(2)+')','green');
+    try { if (typeof renderPlanilla==='function') renderPlanilla(); } catch(e){}
   };
   /* v1105: el historial de entregadas arranca cerrado y se abre con un clic */
   window._antHistOpen = false;
