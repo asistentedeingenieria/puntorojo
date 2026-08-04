@@ -3368,7 +3368,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1130</span>
+    <span style="opacity:.5;font-size:9px">v1131</span>
   </footer>
 
 </div>
@@ -25875,6 +25875,12 @@ function renderOrdenesList(){
        material nunca pasó por ahí), solo deja constancia de que llegó y de quién lo recibió. */
     const _esDpp = _ocSerieDe(oc) === 'DPP';
     const _dppRec = oc.recibidoObra && oc.recibidoObra.ts;
+    /* v1131: las entregas se mueven — el proveedor atrasa, la obra pide adelantar. Se puede
+       corregir sin volver a finanzas: no cambia monto, material ni autorización. */
+    const _puedeEnt = can('compras.autorizar') || can('users.manage');
+    const cambiarEntregaBtn = (_puedeEnt && st !== 'CANCELADA')
+      ? `<button class="btn ghost sm" onclick="window._ocCambiarEntrega('${oc.id}')" title="Cambiar la fecha en que el proveedor entrega">ENTREGA</button>`
+      : '';
     const recibirObraBtn = (_esDpp && isAuth && !_dppRec && (_puedeGestionarBodega() || can('materiales.edit')))
       ? `<button class="btn sm" onclick="window._dppMarcarRecibido('${oc.id}')" style="background:#166534;border-color:#166534;color:#fff" title="Confirmar que el material llegó a la obra">YA RECIBÍ EL MATERIAL</button>`
       : '';
@@ -25919,6 +25925,7 @@ function renderOrdenesList(){
         ${viewBtn}
         ${recibirBtn}
         ${recibirObraBtn}
+        ${cambiarEntregaBtn}
         ${printBtn}
         ${facturaBtn}
         ${_opBtn}
@@ -36203,6 +36210,48 @@ function _trasiegosHTML(){
       + '</div>';
   } catch(e){ console.warn('[v1066] trasiegos', e); return ''; }
 }
+/* ═══════════ v1131 · CAMBIAR LA FECHA DE ENTREGA DE UNA ORDEN YA EMITIDA ═══════════
+   Antonio: "no sé qué hacer con esta OC que ya generaste de la OP. Necesito que con esta OC ya
+   pueda poner de alguna manera la fecha de entrega."
+   v1130 arregló las órdenes nuevas, pero una ya emitida no tenía cómo: _ocEditarBorrador exige
+   status PENDIENTE_AUTORIZACION y la derivada de una producción nace AUTORIZADA.
+   Y no es un caso puntual — las entregas se mueven todo el tiempo. Cambiarla NO altera monto,
+   material ni quién autorizó, así que no vuelve a pasar por finanzas.
+   Solo la ENTREGA: la fecha de EMISIÓN es el día en que se emitió el papel que ya circuló. */
+window._ocCambiarEntrega = async function(ocId){
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
+  const _f = _bodegaFindOc(ocId);
+  if (!_f || !_f.oc) return showToast('ORDEN NO ENCONTRADA', 'red');
+  const oc = _f.oc;
+  if ((oc.status || '') === 'CANCELADA') return showToast('ESTA ORDEN ESTÁ CANCELADA', 'red');
+  const _ini = (function(){
+    const m = String(oc.fechaEntrega || '').trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    return m ? (m[3] + '-' + m[2] + '-' + m[1]) : '';
+  })();
+  window._ocEntForm = { f: _ini };
+  const _e = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  const okc = await window.prConfirm({
+    title: 'FECHA DE ENTREGA',
+    bodyHTML: '<div style="font-size:12px;color:#444;line-height:1.6">Cuándo entrega el proveedor la <b>'
+      + _e(_numLimpio(oc.numero || '')) + '</b>' + (oc.proveedorNombre ? ' (' + _e(oc.proveedorNombre) + ')' : '') + '.</div>'
+      + '<label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">FECHA DE ENTREGA</label>'
+      + '<input type="date" class="pr-fld" style="width:100%" value="' + _e(_ini) + '" onchange="window._ocEntForm.f = this.value">'
+      + '<div style="font-size:10.5px;color:#78716C;margin-top:8px">Dejala vacía si todavía no hay fecha acordada. No cambia el monto ni la autorización.</div>',
+    okText: 'GUARDAR', cancelText: 'CANCELAR'
+  });
+  if (!okc) return;
+  /* re-leer del state vivo tras el await del modal (patrón v769/v940) */
+  const _f2 = _bodegaFindOc(ocId);
+  if (!_f2 || !_f2.oc) return showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red');
+  const sel = String((window._ocEntForm || {}).f || '').trim();
+  _f2.oc.fechaEntrega = sel ? _fechaInputALatam(sel) : '';
+  _f2.oc._ts = Date.now();   /* el contenedor viaja por union-merge (v972) */
+  try { logActivity('update', 'ORDEN DE COMPRA', 'Entrega de ' + (_f2.oc.numero || '') + ' → ' + (_f2.oc.fechaEntrega || 'SIN FECHA')); } catch(e){}
+  saveState();
+  try { await CloudSync.forceUploadNow(); } catch(e){}
+  try { renderOrdenesList(); } catch(e){}
+  showToast(_f2.oc.fechaEntrega ? ('ENTREGA: ' + _f2.oc.fechaEntrega) : 'ENTREGA SIN FECHA', 'green');
+};
 window._ocDerivarDeOp = async function(opId){
   if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
   const _f = _bodegaFindOc(opId);
