@@ -3376,7 +3376,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1137</span>
+    <span style="opacity:.5;font-size:9px">v1138</span>
   </footer>
 
 </div>
@@ -10551,7 +10551,7 @@ const CloudSync = {
     // referencia queda huerfana y el cambio (push/Object.assign/splice) no persiste. Esto
     // arregla de raiz toda la familia "await modal -> escribir" (aprobar/rechazar/procesar/
     // anular planilla, editar/eliminar anticipos y polizas, etc.).
-    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal, #_bodegaCargaModal, #_recepcionModal, #_variosPanelModal, #_limpiaModal, #_limpiaUnirModal, #_adminPanelModal, .prModal-backdrop')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO; v977: prPrompt/prAlert (.prModal-backdrop) — recetaV2Op escribía sobre un p tomado antes del await del prompt. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo.
+    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal, #_bodegaCargaModal, #_recepcionModal, #_variosPanelModal, #_limpiaModal, #_limpiaUnirModal, #_adminPanelModal, #prvRetencionesModal, .prModal-backdrop')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO; v977: prPrompt/prAlert (.prModal-backdrop) — recetaV2Op escribía sobre un p tomado antes del await del prompt. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo.
     const focused = document.activeElement;
     if (focused && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)) return true;
     return false;
@@ -43938,7 +43938,8 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   }
   async function _enviarRetencionesAlGerente(trabajadoresData, granTotal, etiquetaConfirm){
     if(!can('planilla.generate') && !can('users.manage')){ showToast('SIN PERMISO','red'); return false; }
-    const p = activeProj();
+    /* v1138: `let` — se re-lee del state vivo después del modal (ver abajo) */
+    let p = activeProj();
     if(!p) return false;
     const fechaRefIso = new Date().toISOString();
     const fechaSab = _retFechaSabadoTxt(fechaRefIso);
@@ -43952,6 +43953,10 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     if(!ok) return false;
     if(!p.planilla.retencionesPlanillas) p.planilla.retencionesPlanillas = [];
     const supName = (typeof window._getUserDisplayName === 'function') ? window._getUserDisplayName() : '';
+    /* v1138: mismo agujero que en la autorización — `p` se tomó ANTES del modal y el gerente
+       pudo tardar. Se vuelve a leer del state vivo antes de escribir (regla v769/v770/v940). */
+    p = activeProj();
+    if (!p) { showToast('EL PROYECTO YA NO ESTÁ — RECARGÁ', 'red'); return false; }
     const supEmail = (typeof window._getUserEmail === 'function') ? window._getUserEmail() : '';
     const nuevosPagosIds = trabajadoresData.flatMap(t => (t.pagosIds || []));
 
@@ -44017,6 +44022,8 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     p.planilla.retencionesPlanillas.push(retpl);
     logActivity('send', `Planilla de retenciones enviada al gerente`, `${p.name} · ${fQ(granTotal)} · ${nuevosPagosIds.length} retenciones`);
     saveState();
+    /* v1138: es plata — sube de inmediato, sin esperar el debounce */
+    try { CloudSync.forceUploadNow().catch(() => {}); } catch(e){}
     renderPlanilla();
     // v291/v296: notif al Gerente de Proyectos (minimalista).
     try {
@@ -44114,9 +44121,10 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
   window.aprobarPlanillaRetenciones = async function(retplId){
     const esGerente = (typeof window.isPMPlanilla === 'function' && window.isPMPlanilla()) || can('users.manage');
     if(!esGerente){ showToast('SOLO EL GERENTE DE PROYECTOS PUEDE AUTORIZAR','red'); return; }
-    const p = activeProj();
+    /* v1138: `let` y no `const` — después del modal se vuelven a leer del state vivo (ver abajo) */
+    let p = activeProj();
     if(!p) return;
-    const retpl = (p.planilla.retencionesPlanillas||[]).find(x => x.id === retplId);
+    let retpl = (p.planilla.retencionesPlanillas||[]).find(x => x.id === retplId);
     if(!retpl){ showToast('LIQUIDACIÓN NO ENCONTRADA','red'); return; }
     if(retpl.estado !== 'pendiente_pm'){ showToast('YA NO ESTÁ PENDIENTE','red'); return; }
     const ok = await _abrirPreviewRetencionesModal({
@@ -44127,6 +44135,19 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
       okText: 'AUTORIZAR Y GENERAR PDF'
     });
     if(!ok) return;
+    /* ═══ v1138 · RE-LEER DEL STATE VIVO DESPUÉS DEL MODAL (regla v769/v770/v940) ═══
+       El gerente se toma 20-40 segundos leyendo el desglose. En ese rato, cualquiera de los ~30
+       usuarios puede guardar algo: llega un snapshot y `state = merged` reemplaza TODO por
+       objetos NUEVOS. Las referencias `p` y `retpl` tomadas arriba quedan huérfanas, y escribir
+       sobre ellas no cambia nada: el PDF salía, se pagaba, y para la app la liquidación seguía
+       PENDIENTE — a la semana se autorizaba y se pagaba otra vez.
+       La lista de isUserBusy (que ya incluye este modal) es la primera capa; esta es la segunda,
+       y hacen falta las dos: una sola ya falló antes. */
+    const _pV = activeProj();
+    const _retplV = _pV && ((_pV.planilla && _pV.planilla.retencionesPlanillas) || []).find(x => x.id === retplId);
+    if (!_pV || !_retplV) { showToast('LA LIQUIDACIÓN YA NO EXISTE — RECARGÁ', 'red'); return; }
+    if (_retplV.estado !== 'pendiente_pm') { showToast('OTRO USUARIO YA LA AUTORIZÓ — NO SE HIZO NADA', 'red'); return; }
+    p = _pV; retpl = _retplV;
     retpl.estado = 'aprobada';
     retpl._ts = Date.now(); // v891
     retpl.fechaAprobacion = new Date().toISOString();
@@ -44153,6 +44174,9 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     });
     logActivity('paid', `Planilla de retenciones autorizada`, `${p.name} · ${fQ(retpl.granTotal||0)} · ${(retpl.pagosIds||[]).length} retenciones`);
     saveState();
+    /* v1138: es plata — el primer intento tiene que subir, no esperar el debounce. El PDF que
+       sale abajo se entrega al contador y se paga: la nube no puede quedar atrás. */
+    try { CloudSync.forceUploadNow().catch(() => {}); } catch(e){}
     _generarPDFRetencionLocal({
       proyecto: retpl.proyecto || p.name,
       fechaRef: retpl.fechaRef || new Date().toISOString(),

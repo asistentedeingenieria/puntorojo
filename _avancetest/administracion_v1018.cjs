@@ -48,8 +48,12 @@ ok('ni toca los datos de pólizas o anticipos', !/solicitudesAnticipo\s*=/.test(
 console.log('\n— 5. reglas del proyecto —');
 /* la guarda es una lista de selectores: el panel tiene que estar ahí o un merge remoto puede
    pisar la pantalla mientras está abierta (regla v769/v940) */
+/* v1138: se verifica la PERTENENCIA a la lista, no el orden. Antes exigía que
+   '#_adminPanelModal' y '.prModal-backdrop' fueran adyacentes, y al agregar el modal de
+   retenciones entre medio el test se puso rojo sin que nada se hubiera roto. */
+const _lista = (html.match(/document\.querySelector\('#prConfirmModal[^)]*\)/) || [''])[0];
 ok('el panel pospone applyRemote (como bodega y varios)',
-   /#_bodegaPanelModal|#_variosPanelModal/.test(html) && /#_adminPanelModal, \.prModal-backdrop/.test(html));
+   /#_adminPanelModal/.test(_lista) && /\.prModal-backdrop/.test(_lista));
 ok('tiene su gate de permiso', /function _puedeVerAdmin\(/.test(html));
 /* v1023: ya NO entra por polizas.edit ni planilla.ver — Antonio: "predeterminadamente
    nadie lo ve y yo doy el permiso". Ahora pide su propio menu.admin. */
