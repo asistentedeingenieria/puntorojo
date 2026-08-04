@@ -12,7 +12,15 @@ ok('el número lleva OP', /esProduccion \? 'OP' : 'OC'/.test(html));
 ok('la OC guarda el flag', /esProduccion, \/\/ v982/.test(html));
 ok('el documento titula ORDEN DE PRODUCCIÓN', /oc\.esProduccion \? 'ORDEN DE PRODUCCIÓN' : 'ORDEN DE COMPRA'/.test(html));
 ok('subtítulo de fabricación', /FABRICACIÓN DE POSTES A LA MEDIDA/.test(html));
-ok('el campo No. del modal dice OP para pedidos SOLO POSTES', /SOLO POSTES A MEDIDA\/\.test\(String\(pd\.observaciones/.test(html));
+/* v1134: el modal ya NO adivina la serie leyendo el texto de las observaciones. Mira lo que
+   REALMENTE hay en el pedido, porque desde v1133 uno mixto emite OC y OP a la vez y prometer
+   un solo número sería mentir. Un pedido de solo postes sigue anunciando OP — mismo resultado
+   por una vía que no depende de cómo se haya redactado la observación. */
+ok('el modal deduce la serie de los materiales, no del texto del pedido',
+  /_hayMedida\s*&&\s*_hayNormal\s*\?\s*\['OC','OP'\]/.test(html));
+ok('un pedido de solo material a medida sigue anunciando OP',
+  /_hayMedida \? \['OP'\]/.test(html));
+ok('y uno sin nada a medida sigue anunciando OC', /\['OC'\]\)\)/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

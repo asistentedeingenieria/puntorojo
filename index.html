@@ -3376,7 +3376,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1133</span>
+    <span style="opacity:.5;font-size:9px">v1134</span>
   </footer>
 
 </div>
@@ -21479,7 +21479,11 @@ function autoAssignOcProviders(pd){
     const _mts = _ocMedidaEspecialMetros(it.name);
     // v995: el badge A MEDIDA se pinta SIEMPRE que el material lleve medida especial
     // (antes el nombre ya venía colapsado a 10' y nunca se marcaba).
-    if (_mts != null) it.aMedida = true;
+    /* v1134: "a medida" son DOS cosas y las dos se mandan a fabricar — el poste con sufijo
+       "(MEDIDA ESPECIAL n m)" y el material de METAL A MEDIDA, cuyo nombre es
+       "... — FABRICACIÓN A MEDIDA" y por eso nunca entraba por el detector del sufijo.
+       El item ya nacía con isMetalMedida; solo faltaba usarlo. */
+    if (_mts != null || it.isMetalMedida) it.aMedida = true;
     if (!best && _mts != null) {
       const _prev = Number(_memPostes[String(_mts)]) || 0;
       if (_prev > 0 && !(Number(it.precio) > 0)) {
@@ -23570,13 +23574,23 @@ async function openOrdenCompra(){
   // v964: en bodega el folio se DERIVA del máximo existente (sin contador mutable).
   // v993: el número previsto usa la SERIE que le tocará (OC / DESP / OP), cada una con su
   // propio correlativo — antes compartían la serie y salían OC 00002 y DESP 00003.
-  const _seriePrev = _ctx.esBodega ? 'DESP' : (/SOLO POSTES A MEDIDA/.test(String(pd.observaciones || '')) ? 'OP' : 'OC');
+  /* v1134: la serie NO se decide por el texto de las observaciones — eso solo era el número
+     ANUNCIADO en el modal, y desde v1133 un mismo pedido puede emitir OC y OP a la vez (el
+     material a medida se va a su propia orden de producción). Se mira lo que hay REALMENTE en
+     el pedido para no prometer un número que no va a salir. */
+  const _hayMedida = (window.ocWorkingItems || []).some(it => it && it.aMedida);
+  const _hayNormal = (window.ocWorkingItems || []).some(it => it && !it.aMedida && it.proveedorId !== '_bodega');
+  const _seriesPrevistas = _ctx.esBodega ? ['DESP'] : (_hayMedida && _hayNormal ? ['OC','OP'] : (_hayMedida ? ['OP'] : ['OC']));
+  const _seriePrev = _seriesPrevistas[0];
   // v1002: el folio se deriva del CONTENEDOR del pedido (proyecto, bodega o varios)
   const _ordPrev = (_ctx.cont && _ctx.cont.ordenes) || (p.materiales.ordenes || []);
   const nextNum = _primerNumeroLibre(_ordPrev.filter(o => _ocSerieDe(o) === _seriePrev).map(o => Number(o.folio) || 0));
   // v978: el número que se muestra ES el correlativo real (folio) — antes salía "OC01 / SIG.
   // FOLIO 2" y se leía como si fuera la primera OC del proyecto (queja de Antonio 26-jul).
-  document.getElementById('ocNumero').value = `${_seriePrev} ${nextNum} · DEL PEDIDO ${pd.numero}`; // v982/v993: serie propia (OC/DESP/OP)
+  /* v1134: si el pedido va a emitir DOS documentos, el modal lo dice en vez de anunciar uno */
+  document.getElementById('ocNumero').value = (_seriesPrevistas.length > 1)
+    ? `OC + OP · DEL PEDIDO ${pd.numero} — el material a medida sale en su propia orden de producción`
+    : `${_seriePrev} ${nextNum} · DEL PEDIDO ${pd.numero}`; // v982/v993: serie propia (OC/DESP/OP)
   // v978: pedidos DE RECETA — compras NO cambia proveedores (vienen del catálogo v916/v918);
   // lo ÚNICO permitido por material es mandarlo a BODEGA CENTRAL. Admin conserva la mano.
   // v992 (pedido de Antonio: "quiero que funcione igual que el pedido de receta"): el
