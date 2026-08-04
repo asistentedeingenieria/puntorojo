@@ -3376,7 +3376,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1132</span>
+    <span style="opacity:.5;font-size:9px">v1133</span>
   </footer>
 
 </div>
@@ -23871,6 +23871,24 @@ function _abrirPickerProveedorTodos(btn){
 }
 window._abrirPickerProveedor = _abrirPickerProveedor; window._abrirPickerProveedorTodos = _abrirPickerProveedorTodos;
 
+/* ═══════════ v1133 · LOS POSTES A MEDIDA SIEMPRE SON ORDEN DE PRODUCCIÓN ═══════════
+   Antonio: "el poste a la medida SIEMPRE debe de ser una orden de producción", no adentro de la
+   orden de compra del proveedor.
+   La app ya sabía emitir órdenes de producción y cada material ya trae su marca `aMedida`, pero
+   el generador agrupaba SOLO por proveedor y exigía que TODOS los del grupo fueran a medida
+   (`items.every(it => it.aMedida)`). En un pedido mixto el grupo del proveedor quedaba con el
+   poste MÁS canal y tornillos ⇒ every() daba false ⇒ todo salía como orden de compra.
+   Ahora la clave del grupo es PROVEEDOR + TIPO: cada grupo queda homogéneo y cae solo en su
+   serie. La usan LOS DOS lugares que agrupan (el modal de vista previa y el generador): si cada
+   uno agrupara por su cuenta, el modal mostraría un reparto y se emitiría otro.
+   Los pseudo-proveedores (bodega, pre-pago, trasiego) NO se parten: su documento ya es de otra
+   especie y partirlo lo sacaría de su circuito. PURA. */
+function _ocGrupoKey(it){
+  var pid = String((it && it.proveedorId) || OC_NO_PROVIDER);
+  if (pid === '_bodega' || /^_(dpp|tras):/.test(pid)) return pid;
+  return (it && it.aMedida) ? (pid + '|OP') : pid;
+}
+try { window._ocGrupoKey = _ocGrupoKey; } catch(e){}
 function renderOcItems(){
   const cont = document.getElementById('ocItemsList');
   const p = activeProj();
@@ -23883,8 +23901,11 @@ function renderOcItems(){
 
   const groups = {};
   ocWorkingItems.forEach(it => {
-    const key = it.proveedorId || OC_NO_PROVIDER;
-    if (!groups[key]) groups[key] = { count:0, total:0, nombre: key === OC_NO_PROVIDER ? 'SIN PROVEEDOR' : (key === '_bodega' ? 'BODEGA CENTRAL (DESPACHO)' : (String(key).indexOf('_dpp:') === 0 ? 'COMPRA PRE-PAGO (DESPACHO)' : (String(key).indexOf('_tras:') === 0 ? ('TRASIEGO · ' + String((( (state && state.projects) || []).find(x => x && x.id === String(key).slice(6)) || {}).name || 'OBRA').toUpperCase()) : ((proveedores.find(pv => pv.id === key)||{}).nombre || 'PROVEEDOR')))) };
+    /* v1133: proveedor + tipo — el poste a medida arma su propio grupo (ORDEN DE PRODUCCIÓN) */
+    const key = _ocGrupoKey(it);
+    const _base = String(key).split('|')[0];        // el proveedor real
+    const _esProd = String(key).indexOf('|OP') > 0; // este grupo va a producción
+    if (!groups[key]) groups[key] = { count:0, total:0, esProd:_esProd, nombre: (_base === OC_NO_PROVIDER ? 'SIN PROVEEDOR' : (_base === '_bodega' ? 'BODEGA CENTRAL (DESPACHO)' : (String(_base).indexOf('_dpp:') === 0 ? 'COMPRA PRE-PAGO (DESPACHO)' : (String(_base).indexOf('_tras:') === 0 ? ('TRASIEGO · ' + String((( (state && state.projects) || []).find(x => x && x.id === String(_base).slice(6)) || {}).name || 'OBRA').toUpperCase()) : ((proveedores.find(pv => pv.id === _base)||{}).nombre || 'PROVEEDOR'))))) + (_esProd ? ' · ORDEN DE PRODUCCIÓN' : '') };
     groups[key].count += 1;
     groups[key].total += (Number(it.qty)||0) * (Number(it.precio)||0); // v922: precios con IVA incluido
   });
@@ -24642,8 +24663,11 @@ async function generarOrdenCompra(){
 
   const groups = {};
   ocWorkingItems.forEach(it => {
-    if (!groups[it.proveedorId]) groups[it.proveedorId] = [];
-    groups[it.proveedorId].push(it);
+    /* v1133: MISMA clave que usa el modal — proveedor + tipo, para que lo que se ve en la
+       vista previa sea exactamente lo que se emite */
+    const _k = _ocGrupoKey(it);
+    if (!groups[_k]) groups[_k] = [];
+    groups[_k].push(it);
   });
 
   const providerIds = Object.keys(groups);
@@ -24654,9 +24678,12 @@ async function generarOrdenCompra(){
 
   providerIds.forEach((provId, idx) => {
     if (/^_(dpp|tras):/.test(provId)) return; // v1068: pre-pago y trasiego nacen aparte, después del lazo
+    /* v1133: la clave puede venir compuesta (proveedor|OP). El proveedor real es lo de antes
+       del separador; el sufijo solo dice que ese grupo va a producción. */
+    const _provIdReal = String(provId).split('|')[0];
     // v921: '_bodega' = ORDEN DE DESPACHO desde la bodega central (proveedor sintético)
-    const esBodega = provId === '_bodega';
-    const prov = esBodega ? { id: '_bodega', nombre: 'BODEGA CENTRAL' } : _getProveedores().find(x => x.id === provId);
+    const esBodega = _provIdReal === '_bodega';
+    const prov = esBodega ? { id: '_bodega', nombre: 'BODEGA CENTRAL' } : _getProveedores().find(x => x.id === _provIdReal);
     if (!prov) return;
     const items = groups[provId];
     // v922: precios CON IVA — total = suma directa; el desglose (base/IVA) es informativo
