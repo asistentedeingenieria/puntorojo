@@ -3368,7 +3368,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1121</span>
+    <span style="opacity:.5;font-size:9px">v1123</span>
   </footer>
 
 </div>
@@ -25543,6 +25543,9 @@ ${showDraft ? '<div class="no-print" style="background:var(--red-soft);padding:1
         <dt>Señores:</dt><dd>${oc.proveedorNombre}${String(oc.transporte || '') === 'NOSOTROS' ? '<div style="font-size:9px;color:#9B0E14;font-weight:700;letter-spacing:1px;margin-top:2px">EL MATERIAL LO RECOGEMOS NOSOTROS</div>' : ''}</dd><!-- v1078 -->
         <dt>Fecha:</dt><dd>${fechaLarga}</dd>
         <dt>Proyecto:</dt><dd>${_ocProyectoLabel(oc)}</dd>
+        <!-- v1123: el ÁREA dentro de la obra (TORRE 4, NIVEL 12, ETAPA 3), como en el formato
+             en papel de Antonio. Solo sale si el despacho la trae: sin dato no deja la línea. -->
+        ${String(oc.areaDestino || '').trim() ? `<dt>Área:</dt><dd>${esc(String(oc.areaDestino).toUpperCase())}</dd>` : ''}
       </dl>
     </div>
     <div class="oc-info-right">
@@ -35337,7 +35340,26 @@ function _ocEsPrepagoMadre(oc){
    liberar, con el TOTAL que tiene que dar la cantidad comprada.
    PURA: solo lee. El saldo sale de la misma cuenta que _dppSaldoDeMadre para que los números
    nunca diverjan (la lección de v1068: "DEBE DE ESTAR IGUAL"). */
-function _dppResumenPorObra(madre, ordenes){
+/* v1122: el NOMBRE de la obra a la que se fue un despacho. Se resuelve EXACTAMENTE como lo
+   hace la lista "A DÓNDE SE HA IDO": buscando el proyecto por destinoProyectoId dentro de
+   state.projects. Antonio: "el que dice SIN OBRA no debe de existir porque cada orden dice
+   para qué obra va". Tenía razón — el dato siempre estuvo, lo leía mal: destinoProyectoNombre
+   es un campo que _dppCrearDesdeMadre nunca escribe, así que caía al id crudo (ESSENZA-F2) o
+   a "SIN OBRA". Recibe projects por parámetro para no depender del state (función pura). */
+function _dppNombreObraDestino(o, projects){
+  if (!o) return '';
+  var id = String(o.destinoProyectoId || '');
+  if (id) {
+    var p = (projects || []).find(function(x){ return x && String(x.id) === id; });
+    if (p && p.name) return String(p.name).toUpperCase();
+  }
+  var esc = o.destinoProyectoNombre || o.proyectoNombre || o.proyecto || id;
+  /* último recurso: el propio documento dice a dónde va, así que se identifica por su
+     referencia antes que rotularlo "SIN OBRA" (que para Antonio no debe existir) */
+  return String(esc || o.refExterna || o.numero || 'DESPACHO SIN IDENTIFICAR').toUpperCase();
+}
+try { window._dppNombreObraDestino = _dppNombreObraDestino; } catch(e){}
+function _dppResumenPorObra(madre, ordenes, projects){
   var saldo = _dppSaldoDeMadre(madre, ordenes);
   var out = [];
   saldo.orden.forEach(function(k){
@@ -35348,14 +35370,29 @@ function _dppResumenPorObra(madre, ordenes){
       if (String(o.refOcMadre || '') !== String((madre && madre.id) || '')) return;
       (o.items || []).forEach(function(x){
         if (!x || _ocItemMemKey(x.name) !== k) return;
-        var nom = String(o.destinoProyectoNombre || o.proyectoNombre || o.destinoProyectoId || 'SIN OBRA').toUpperCase();
-        if (!obras[nom]) { obras[nom] = 0; ordenObras.push(nom); }
-        obras[nom] += Number(x.qty) || 0;
+        var nom = _dppNombreObraDestino(o, projects);
+        if (!obras[nom]) { obras[nom] = { qty: 0, ts: 0, docs: [] }; ordenObras.push(nom); }
+        var ts = Number(o.ts) || 0;
+        obras[nom].qty += Number(x.qty) || 0;
+        if (ts > obras[nom].ts) obras[nom].ts = ts;
+        /* v1122: el desglose que pidió — qué orden compone cada obra, con el número que el
+           proveedor le puso al papel (8273-XX) además del correlativo interno */
+        obras[nom].docs.push({
+          numero: String(o.numero || ''), ref: String(o.refExterna || ''),
+          fecha: String(o.fecha || ''), ts: ts, qty: +(Number(x.qty) || 0).toFixed(4),
+          area: String(o.areaDestino || '')
+        });
       });
     });
-    /* de mayor a menor, como se lee una tabla dinámica */
-    ordenObras.sort(function(a,b){ return obras[b] - obras[a]; });
-    var filas = ordenObras.map(function(n){ return { obra: n, qty: +obras[n].toFixed(4) }; });
+    /* v1122: manda la FECHA DE DESPACHO — lo más nuevo primero, lo más viejo al final
+       (antes ordenaba por cantidad). Aplica igual a las obras y a sus documentos. */
+    ordenObras.sort(function(a,b){ return obras[b].ts - obras[a].ts; });
+    var filas = ordenObras.map(function(n){
+      return {
+        obra: n, qty: +obras[n].qty.toFixed(4), ts: obras[n].ts,
+        docs: obras[n].docs.slice().sort(function(a,b){ return b.ts - a.ts; })
+      };
+    });
     out.push({
       producto: it.name, unidad: it.unidad || '',
       saldo: it.saldo, comprado: it.qty, despachado: +it.despachado.toFixed(4),
@@ -35374,7 +35411,7 @@ window._dppAbrirResumen = function(madreId){
   var todas = _dppOrdenesGlobal();
   var madre = todas.find(function(o){ return o && o.id === madreId; });
   if (!madre) return showToast('NO ENCONTRÉ LA COMPRA ANTICIPADA','red');
-  var r = _dppResumenPorObra(madre, todas);
+  var r = _dppResumenPorObra(madre, todas, ((state && state.projects) || []));
   var _e = function(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[m]; }); };
   var n = function(v){ return (Number(v)||0).toLocaleString('en-US'); };
   var d = new Date(r.generado);
@@ -35391,8 +35428,19 @@ window._dppAbrirResumen = function(madreId){
       /* lo que todavía NO se ha liberado va primero y resaltado: es el saldo vivo */
       + '<tr style="background:#EFF6FF"><td style="font-weight:800;color:#1D4ED8">COMPRA PRE-PAGO <span style="font-size:9px;font-weight:600;color:#64748B">(sin liberar)</span></td>'
       + '<td style="text-align:right;font-weight:800;color:#1D4ED8">' + n(it.saldo) + '</td></tr>';
+    /* v1122: cada obra abierta en los despachos que la componen, con el número que el
+       proveedor le puso al papel (8273-XX). Antonio: "quiero poder compartir el desglose con
+       el número de cada orden de compra en cada obra". Van de lo más nuevo a lo más viejo. */
     it.filas.forEach(function(f){
-      h += '<tr><td>' + _e(f.obra) + '</td><td style="text-align:right;font-weight:700">' + n(f.qty) + '</td></tr>';
+      h += '<tr style="background:#F8FAFC"><td style="font-weight:700;border-left:3px solid #0F172A">' + _e(f.obra) + '</td>'
+        + '<td style="text-align:right;font-weight:800;font-variant-numeric:tabular-nums">' + n(f.qty) + '</td></tr>';
+      (f.docs || []).forEach(function(dc){
+        var rot = dc.ref ? dc.ref : _numLimpio(dc.numero);
+        h += '<tr><td style="padding-left:26px;font-size:10.5px;color:#64748B">' + _e(rot)
+          + (dc.area ? ' <span style="color:#94A3B8">· ' + _e(dc.area) + '</span>' : '')
+          + (dc.fecha ? ' <span style="color:#94A3B8">· ' + _e(dc.fecha) + '</span>' : '') + '</td>'
+          + '<td style="text-align:right;font-size:10.5px;color:#64748B;font-variant-numeric:tabular-nums">' + n(dc.qty) + '</td></tr>';
+      });
     });
     h += '<tr style="border-top:2px solid #0F172A"><td style="font-weight:800">TOTAL GENERAL</td>'
       + '<td style="text-align:right;font-weight:800">' + n(it.comprado) + '</td></tr>'
@@ -35401,8 +35449,127 @@ window._dppAbrirResumen = function(madreId){
       + '</div>';
   });
   h += '</div>';
+  /* v1122: COMPARTIR IMAGEN va DENTRO del cuerpo porque prConfirm solo tiene dos botones
+     (aceptar/cancelar) y aceptar ya es IMPRIMIR / PDF. Antonio: "quiero que lo que genere sea
+     una imagen para poder compartir de una vez" — un PNG entra a WhatsApp sin abrir nada. */
+  h += '<div style="margin-top:14px;display:flex;justify-content:center">'
+    + '<button class="btn sm" style="font-size:10.5px" onclick="window._dppResumenImagen(\'' + _e(madreId) + '\')">COMPARTIR COMO IMAGEN</button></div>';
   window.prConfirm({ title:'RESUMEN DE MATERIAL PRE-PAGADO', bodyHTML:h, okText:'IMPRIMIR / PDF', cancelText:'CERRAR', wide:true })
     .then(function(ok){ if (ok) { try { window._dppImprimirResumen(h); } catch(e){ window.print(); } } });
+};
+/* ═══════════ v1122 · EL RESUMEN COMO IMAGEN PARA COMPARTIR ═══════════
+   Antonio: "aquí quiero que lo que genere sea una imagen para poder compartir de una vez".
+   Se dibuja a canvas (nada de librerías: es texto y líneas) y se manda por la MISMA escalera
+   ya probada del PDF — plugin nativo de Android → Web Share → descarga. Se dibuja al doble de
+   resolución (devicePixelRatio) o en el teléfono sale borrosa. */
+window._dppResumenImagen = async function(madreId){
+  try {
+    var todas = _dppOrdenesGlobal();
+    var madre = todas.find(function(o){ return o && o.id === madreId; });
+    if (!madre) return showToast('NO ENCONTRÉ LA COMPRA ANTICIPADA','red');
+    var r = _dppResumenPorObra(madre, todas, ((state && state.projects) || []));
+    var n = function(v){ return (Number(v)||0).toLocaleString('en-US'); };
+    var d = new Date(r.generado);
+    var p2 = function(v){ return String(v).padStart(2,'0'); };
+    var fecha = p2(d.getDate())+'/'+p2(d.getMonth()+1)+'/'+d.getFullYear()+' · '+p2(d.getHours())+':'+p2(d.getMinutes());
+
+    /* alto exacto: encabezado + por producto (barra + saldo + obras + docs + total) + pie */
+    var W = 860, PAD = 34, FILA = 30, FILAD = 24, y = 0;
+    var alto = 128;
+    r.items.forEach(function(it){
+      alto += 46 + FILA + (it.filas.length * FILA) + 4;
+      it.filas.forEach(function(f){ alto += (f.docs || []).length * FILAD; });
+      alto += FILA + 22 + (it.cuadra ? 0 : 30);
+    });
+    alto += 46;
+
+    var DPR = Math.min(3, Math.max(2, (window.devicePixelRatio || 1)));
+    var cv = document.createElement('canvas');
+    cv.width = Math.round(W * DPR); cv.height = Math.round(alto * DPR);
+    var g = cv.getContext('2d');
+    g.scale(DPR, DPR);
+    var F = function(px, peso){ g.font = (peso || 400) + ' ' + px + 'px "Familjen Grotesk", Arial, sans-serif'; };
+    var der = function(t, x, yy){ g.textAlign = 'right'; g.fillText(t, x, yy); g.textAlign = 'left'; };
+    /* el nombre largo no debe montarse sobre la cantidad */
+    var cortar = function(t, max){
+      t = String(t == null ? '' : t);
+      if (g.measureText(t).width <= max) return t;
+      while (t.length > 1 && g.measureText(t + '…').width > max) t = t.slice(0, -1);
+      return t + '…';
+    };
+    g.fillStyle = '#FFFFFF'; g.fillRect(0, 0, W, alto);
+
+    y = 44; g.fillStyle = '#0F172A'; F(21, 800); g.textAlign = 'center';
+    g.fillText('MATERIAL PRE-PAGADO · A DÓNDE SE FUE', W/2, y);
+    y += 22; F(12.5, 500); g.fillStyle = '#64748B';
+    g.fillText(String(madre.proveedorNombre || '') + ' · ' + _numLimpio(madre.numero || ''), W/2, y);
+    y += 20; F(12, 700); g.fillStyle = '#B45309';
+    g.fillText('GENERADO EL ' + fecha, W/2, y);
+    g.textAlign = 'left'; y += 30;
+
+    r.items.forEach(function(it){
+      g.fillStyle = '#0F172A'; g.fillRect(PAD, y, W - PAD*2, 34);
+      F(14, 800); g.fillStyle = '#FFFFFF'; g.fillText(cortar(it.producto, W - PAD*2 - 30), PAD + 14, y + 23);
+      y += 34 + 12;
+      /* el saldo vivo, resaltado */
+      g.fillStyle = '#EFF6FF'; g.fillRect(PAD, y - 20, W - PAD*2, FILA);
+      F(13.5, 800); g.fillStyle = '#1D4ED8';
+      g.fillText('COMPRA PRE-PAGO (SIN LIBERAR)', PAD + 14, y);
+      der(n(it.saldo), W - PAD - 14, y);
+      y += FILA;
+      it.filas.forEach(function(f){
+        g.fillStyle = '#F8FAFC'; g.fillRect(PAD, y - 20, W - PAD*2, FILA);
+        g.fillStyle = '#0F172A'; g.fillRect(PAD, y - 20, 3, FILA);
+        F(13, 700); g.fillStyle = '#0F172A';
+        g.fillText(cortar(f.obra, W - PAD*2 - 190), PAD + 14, y);
+        F(13, 800); der(n(f.qty), W - PAD - 14, y);
+        y += FILA;
+        (f.docs || []).forEach(function(dc){
+          F(11.5, 500); g.fillStyle = '#64748B';
+          var rot = (dc.ref ? dc.ref : _numLimpio(dc.numero)) + (dc.area ? ' · ' + dc.area : '') + (dc.fecha ? ' · ' + dc.fecha : '');
+          g.fillText(cortar(rot, W - PAD*2 - 200), PAD + 34, y);
+          der(n(dc.qty), W - PAD - 14, y);
+          y += FILAD;
+        });
+      });
+      g.strokeStyle = '#0F172A'; g.lineWidth = 2; g.beginPath();
+      g.moveTo(PAD, y - 18); g.lineTo(W - PAD, y - 18); g.stroke();
+      F(13.5, 800); g.fillStyle = '#0F172A';
+      g.fillText('TOTAL GENERAL', PAD + 14, y + 4); der(n(it.comprado), W - PAD - 14, y + 4);
+      y += FILA + 22;
+      if (!it.cuadra) {
+        g.fillStyle = '#FEE2E2'; g.fillRect(PAD, y - 20, W - PAD*2, 26);
+        F(11.5, 700); g.fillStyle = '#991B1B';
+        g.fillText('OJO: LO DESPACHADO NO CUADRA CON LO COMPRADO — REVISAR LOS DESPACHOS', PAD + 12, y - 2);
+        y += 30;
+      }
+    });
+    F(10.5, 600); g.fillStyle = '#94A3B8'; g.textAlign = 'center';
+    g.fillText('puntorojo.app', W/2, alto - 18); g.textAlign = 'left';
+
+    var blob = await new Promise(function(res){ cv.toBlob(res, 'image/png'); });
+    if (!blob) return showToast('NO SE PUDO GENERAR LA IMAGEN','red');
+    var nombre = 'MATERIAL PRE-PAGADO ' + _numLimpio(madre.numero || '') + '.png';
+    var caps = null; try { caps = (window.Capacitor && window.Capacitor.Plugins) || null; } catch(e){}
+    var file = null; try { file = new File([blob], nombre, { type:'image/png' }); } catch(e){}
+    var modo = _pdfShareModo(caps, navigator, file);
+    if (modo === 'native') {
+      var b64 = await new Promise(function(res){ var fr = new FileReader(); fr.onload = function(){ res(String(fr.result||'').split(',').pop()); }; fr.readAsDataURL(blob); });
+      var w = await caps.Filesystem.writeFile({ path: nombre, data: b64, directory: 'CACHE' });
+      await caps.Share.share({ title: nombre, files: [ (w && w.uri) ? w.uri : nombre ], dialogTitle: 'Compartir resumen' });
+      return;
+    }
+    if (modo === 'web') {
+      try { await navigator.share({ files:[file], title: nombre }); return; }
+      catch(e){ if (e && e.name === 'AbortError') return; }
+    }
+    /* sin hoja de compartir: se descarga y Antonio la adjunta a mano */
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a'); a.href = url; a.download = nombre;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+    showToast('IMAGEN DESCARGADA','green');
+  } catch(e){ console.warn('[v1122] resumen imagen', e); showToast('NO SE PUDO GENERAR LA IMAGEN','red'); }
 };
 window._dppImprimirResumen = function(htmlBody){
   var w = window.open('', '_blank');
@@ -35530,7 +35697,7 @@ window._dppCrearDesdeMadre = async function(ocId){
   if (!(s0.totalSaldo > 0)) return showToast('YA SE DESPACHÓ TODO LO PRE-PAGADO DE ESTA ORDEN', 'red');
   /* formulario: obra destino + cantidad por material (capturado por oninput porque
      prConfirm destruye el modal antes de resolver el await — patrón v813) */
-  window._dppForm = { destino: '', entrega: '', qtys: {} };
+  window._dppForm = { destino: '', entrega: '', area: '', ref: '', qtys: {} };
   const _e = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
   const obras = ((state && state.projects) || []).filter(x => x && x.id);
   const opts = '<option value="">— ELEGÍ LA OBRA —</option>' + obras.map(x => '<option value="' + _e(x.id) + '">' + _e((x.name || x.id).toUpperCase()) + '</option>').join('');
@@ -35555,6 +35722,15 @@ window._dppCrearDesdeMadre = async function(ocId){
          (patrón v813: prConfirm destruye el modal antes del await). */
       + '<label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">FECHA DE ENTREGA (opcional)</label>'
       + '<input type="date" class="pr-fld" style="width:100%" onchange="window._dppForm.entrega = this.value">'
+      /* v1123 (Antonio, 4-ago): "necesito que se pueda poner el ÁREA para dónde va dirigido
+         esta plancha" — sus despachos en papel siempre la traen (TORRE 4, NIVEL 12, ETAPA 3);
+         sin ella el que recibe en la obra no sabe a dónde subir el material. Y el N° que el
+         proveedor le pone al papel (8273-XX), que hasta hoy solo se podía escribir por consola.
+         Ambos por oninput (patrón v813) y ambos OPCIONALES. */
+      + '<label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">ÁREA A LA QUE VA DIRIGIDO (opcional)</label>'
+      + '<input type="text" class="pr-fld" style="width:100%;text-transform:uppercase" placeholder="TORRE 4, NIVEL 12, ETAPA 3" oninput="window._dppForm.area = this.value">'
+      + '<label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">N° DE ORDEN DEL PROVEEDOR (opcional)</label>'
+      + '<input type="text" class="pr-fld" style="width:100%;text-transform:uppercase" placeholder="8273-10" oninput="window._dppForm.ref = this.value">'
       + '<div style="margin-top:12px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">CANTIDAD A LIBERAR</div>' + filas,
     okText: 'GENERAR DESPACHO', cancelText: 'CANCELAR', wide: true
   });
@@ -35603,6 +35779,9 @@ window._dppCrearDesdeMadre = async function(ocId){
     /* v1068: con fecha si la pusieron (como las OC — decisión de Antonio 30-jul); antes v1067 era siempre '' */
     fechaEntrega: form.entrega ? _fechaInputALatam(form.entrega) : '',
     destinoProyectoId: String(form.destino),
+    /* v1123: el área dentro de la obra y el número que el proveedor le puso al papel */
+    areaDestino: String(form.area || '').trim().toUpperCase(),
+    refExterna: String(form.ref || '').trim().toUpperCase(),
     /* v1068: el papel del despacho dice la OBRA que recibe, no la bodega (el clon heredaba
        el proyecto de la madre y el impreso mentía) */
     proyecto: String(((obras.find(x => x.id === form.destino) || {}).name || '')).toUpperCase() || (madre2.proyecto || ''),

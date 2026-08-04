@@ -26,7 +26,9 @@ ok('reusa el saldo oficial (no recalcula por su cuenta)', /_dppSaldoDeMadre\(mad
 
 let f = null;
 try {
-  f = new Function('_ocItemMemKey', ex('function _dppSaldoDeMadre(') + '\n' + zR + '\nreturn _dppResumenPorObra;')
+  /* v1122: el motor resuelve el nombre de la obra con _dppNombreObraDestino (antes leía un
+     campo que nunca se escribía y caía en "SIN OBRA") */
+  f = new Function('_ocItemMemKey', ex('function _dppSaldoDeMadre(') + '\n' + ex('function _dppNombreObraDestino(') + '\n' + zR + '\nreturn _dppResumenPorObra;')
       (s => String(s||'').toUpperCase().trim());
 } catch(e){ console.log('   ('+e.message+')'); }
 
@@ -68,7 +70,15 @@ if (f) {
   console.log('\n— bordes —');
   ok('sin despachos: todo sigue en pre-pago', f(madre, []).items[0].saldo === 5000);
   ok('sin madre no revienta', Array.isArray(f(null, []).items));
-  ok('un despacho sin obra no se pierde', /SIN OBRA/.test(JSON.stringify(f(madre, [{refOcMadre:'m1', items:[{name:'TABLA ULTRALIGHT', qty:10}]}]))));
+  /* v1122: el rótulo "SIN OBRA" se eliminó a pedido de Antonio ("no debe de existir porque
+     cada orden dice para qué obra va" — y tenía razón: el nombre se leía mal). Un despacho
+     al que de plano le falte todo dato de destino solo puede venir de un registro corrupto:
+     sigue apareciendo, y con una etiqueta que invita a revisarlo en vez de esconderlo. */
+  const huerfano = f(madre, [{refOcMadre:'m1', items:[{name:'TABLA ULTRALIGHT', qty:10}]}]);
+  ok('un despacho sin ningún dato de destino no se pierde', huerfano.items[0].filas.length === 1);
+  ok('su cantidad se sigue contando', huerfano.items[0].filas[0].qty === 10);
+  ok('y se rotula para que se revise, no como "SIN OBRA"',
+    huerfano.items[0].filas[0].obra === 'DESPACHO SIN IDENTIFICAR');
 }
 
 console.log('\n— la pantalla —');
