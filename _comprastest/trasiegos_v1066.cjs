@@ -34,7 +34,8 @@ ok('existe el flujo', zR.length > 1200);
 ok('SOLO compras (decisión de Antonio)', /can\('compras\.autorizar'\)/.test(zR) && /SOLO COMPRAS/.test(zR));
 ok('origen y destino obligatorios y distintos', /origen === destino/.test(zR));
 ok('nace AUTORIZADA directo (decisión de Antonio)', /status:\s*'AUTORIZADA'/.test(zR) && !/PENDIENTE_AUTORIZACION/.test(zR));
-ok('serie TRAS con folio derivado', /serie:\s*'TRAS'/.test(zR) && /_primerNumeroLibre/.test(zR));
+/* v1124: mismo cambio que en los despachos — "TRASIEGO 1" es un número global */
+ok('serie TRAS con folio derivado', /serie:\s*'TRAS'/.test(zR) && /_dppFolioLibreGlobal\('TRAS'\)/.test(zR));
 ok('esDespacho (exclusiones) + esTrasiego (rama propia)', /esDespacho:\s*true/.test(zR) && /esTrasiego:\s*true/.test(zR));
 ok('vive en la bodega central (union-merge v972)', /_bodegaMatStore\(\)/.test(zR));
 ok('precio congelado: entrada a bodega → catálogo', /_precioEntradaBodega/.test(zR) && /precioDeProductoReceta/.test(zR));

@@ -67,7 +67,9 @@ ok('mismos permisos que generar OC', /can\('compras\.autorizar'\)/.test(zC));
 ok('solo madres AUTORIZADAS', /AUTORIZADA/.test(zC));
 ok('re-lee el state tras el await (regla v769/v940)', (zC.match(/_bodegaFindOc\(/g) || []).length >= 2);
 ok('valida contra el saldo FRESCO', (zC.match(/_dppSaldoDeMadre\(/g) || []).length >= 2);
-ok('serie DPP con folio derivado', /serie:\s*'DPP'/.test(zC) && /_primerNumeroLibre/.test(zC));
+/* v1124: el folio ya no se cuenta aquí adentro sobre un solo contenedor — se pide al contador
+   GLOBAL, que barre los tres. Contarlo local repartía números ya usados ("dos nueves"). */
+ok('serie DPP con folio derivado', /serie:\s*'DPP'/.test(zC) && /_dppFolioLibreGlobal\('DPP'\)/.test(zC));
 ok('esDespacho + esPrepago (exclusiones y rama propia)', /esDespacho:\s*true/.test(zC) && /esPrepago:\s*true/.test(zC));
 ok('cita a la madre', /refOcMadre/.test(zC) && /refOcMadreNumero/.test(zC));
 ok('nace PENDIENTE de autorizar (separación de funciones v919)', /PENDIENTE_AUTORIZACION/.test(zC));

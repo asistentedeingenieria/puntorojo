@@ -3368,7 +3368,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1123</span>
+    <span style="opacity:.5;font-size:9px">v1124</span>
   </footer>
 
 </div>
@@ -35359,6 +35359,38 @@ function _dppNombreObraDestino(o, projects){
   return String(esc || o.refExterna || o.numero || 'DESPACHO SIN IDENTIFICAR').toUpperCase();
 }
 try { window._dppNombreObraDestino = _dppNombreObraDestino; } catch(e){}
+/* ═══════════ v1124 · UN SOLO CONTADOR PARA LOS CORRELATIVOS GLOBALES ═══════════
+   Antonio, 4-ago: "tenemos órdenes con el número repetido. Dos nueves."
+   El número de un despacho es GLOBAL ("DESPACHO PRE-PAGO 9", sin sigla que lo distinga),
+   pero el folio libre se calculaba barriendo UN SOLO contenedor —el de la orden madre—
+   mientras el panel y el saldo barren los TRES con _dppOrdenesGlobal(). Un despacho que
+   viviera en otro contenedor era invisible para el contador y su folio se repartía otra vez.
+   Es la misma lección de v1068 (los saldos que no cuadraban por leer fuentes distintas), en
+   una ventanilla que quedó fuera de aquella centralización.
+   Las OC normales NO usan esto: su número lleva la sigla del proyecto ("VLA – OC 12"), así
+   que su correlativo por contenedor es correcto por diseño. */
+function _dppFolioLibreGlobal(serie){
+  var usados = [];
+  (_dppOrdenesGlobal() || []).forEach(function(o){
+    if (o && _ocSerieDe(o) === serie) usados.push(Number(o.folio) || 0);
+  });
+  return _primerNumeroLibre(usados);
+}
+try { window._dppFolioLibreGlobal = _dppFolioLibreGlobal; } catch(e){}
+/* v1124 (Antonio: "no sé por qué dice OC 6 — que sean órdenes de despacho generales"):
+   una compra anticipada se registra como una orden de compra normal de la bodega, así que su
+   número queda "BODEGA – OC 00006" y en pantalla se leía "BODEGA – OC 6". No es una OC
+   corriente: es plata YA PAGADA esperando despacho, y de ella cuelgan los despachos.
+   Se corrige SOLO al MOSTRAR — el campo `numero` guardado es la llave que une la madre con
+   sus despachos (refOcMadreNumero) y ya está impreso y firmado en papeles que existen. PURA. */
+function _dppTituloMadre(oc){
+  var t = _numLimpio((oc && oc.numero) || '');
+  /* solo las compras anticipadas se renombran: una OC corriente SÍ es una OC y debe seguir
+     leyéndose "VLA – OC 12" en todas partes */
+  if (!_ocEsPrepagoMadre(oc)) return t;
+  return t.replace(/\bOC\b\s*/i, 'COMPRA ANTICIPADA ').replace(/\s+/g, ' ').trim();
+}
+try { window._dppTituloMadre = _dppTituloMadre; } catch(e){}
 function _dppResumenPorObra(madre, ordenes, projects){
   var saldo = _dppSaldoDeMadre(madre, ordenes);
   var out = [];
@@ -35419,7 +35451,7 @@ window._dppAbrirResumen = function(madreId){
             + ' · ' + String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
   var h = '<div id="_dppResPrint" style="font-family:inherit">'
     + '<div style="text-align:center;margin-bottom:4px"><div style="font-size:15px;font-weight:800;letter-spacing:.5px">MATERIAL PRE-PAGADO · A DÓNDE SE FUE</div>'
-    + '<div style="font-size:11px;color:#64748B;margin-top:2px">' + _e(madre.proveedorNombre || '') + ' · ' + _e(madre.numero || '') + '</div>'
+    + '<div style="font-size:11px;color:#64748B;margin-top:2px">' + _e(madre.proveedorNombre || '') + ' · ' + _e(_dppTituloMadre(madre)) + '</div>'
     + '<div style="font-size:10.5px;color:#B45309;font-weight:700;margin-top:4px">GENERADO EL ' + fecha + '</div></div>';
   r.items.forEach(function(it){
     h += '<div style="margin-top:14px;border:1px solid var(--line);border-radius:8px;overflow:hidden">'
@@ -35502,7 +35534,7 @@ window._dppResumenImagen = async function(madreId){
     y = 44; g.fillStyle = '#0F172A'; F(21, 800); g.textAlign = 'center';
     g.fillText('MATERIAL PRE-PAGADO · A DÓNDE SE FUE', W/2, y);
     y += 22; F(12.5, 500); g.fillStyle = '#64748B';
-    g.fillText(String(madre.proveedorNombre || '') + ' · ' + _numLimpio(madre.numero || ''), W/2, y);
+    g.fillText(String(madre.proveedorNombre || '') + ' · ' + _dppTituloMadre(madre), W/2, y);
     y += 20; F(12, 700); g.fillStyle = '#B45309';
     g.fillText('GENERADO EL ' + fecha, W/2, y);
     g.textAlign = 'left'; y += 30;
@@ -35713,7 +35745,7 @@ window._dppCrearDesdeMadre = async function(ocId){
   }).join('');
   const okc = await window.prConfirm({
     title: 'DESPACHO PRE-PAGO',
-    bodyHTML: '<div style="font-size:12px;color:#444;line-height:1.6">Liberar material de la <b>' + _e(_numLimpio(madre.numero)) + '</b> (' + _e(madre.proveedorNombre || '') + '). '
+    bodyHTML: '<div style="font-size:12px;color:#444;line-height:1.6">Liberar material de la <b>' + _e(_dppTituloMadre(madre)) + '</b> (' + _e(madre.proveedorNombre || '') + '). '
       + 'El gasto se traslada de BODEGA a la obra elegida, al precio con que se pagó.</div>'
       + '<label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">OBRA QUE PIDE</label>'
       + '<select data-nativo class="pr-fld" style="width:100%" onchange="window._dppForm.destino = this.value">' + opts + '</select>'
@@ -35756,9 +35788,9 @@ window._dppCrearDesdeMadre = async function(ocId){
   }
   if (!items.length) return showToast('PONÉ LA CANTIDAD DE AL MENOS UN MATERIAL', 'red');
   total = +total.toFixed(2);
-  const _usados = [];
-  (cont.ordenes || []).forEach(o => { if (o && _ocSerieDe(o) === 'DPP') _usados.push(Number(o.folio) || 0); });
-  const folio = _primerNumeroLibre(_usados);
+  /* v1124: el folio se cuenta sobre los TRES contenedores. Contarlo solo sobre el de la madre
+     repartía números ya usados por despachos que viven en otro lado ("dos nueves"). */
+  const folio = _dppFolioLibreGlobal('DPP');
   const u0 = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
   const t = Date.now();
   /* se CLONA la madre (como derivar OP→OC): hereda proveedor, dirección y datos del
@@ -35886,7 +35918,8 @@ function _bodegaPrepagoHTML(){
         : '';
       return '<div style="border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:8px;background:#fff">'
         + '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:4px">'
-        + '<div style="min-width:0;flex:1 1 200px"><div style="font-size:11.5px"><b>' + esc(_numLimpio(m.oc.numero)) + '</b> <span style="color:#78716C">· ' + esc(m.oc.proveedorNombre || '') + '</span></div>'
+        /* v1124: se lee "BODEGA – COMPRA ANTICIPADA 6", no "BODEGA – OC 6" (el dato guardado no cambia) */
+        + '<div style="min-width:0;flex:1 1 200px"><div style="font-size:11.5px"><b>' + esc(_dppTituloMadre(m.oc)) + '</b> <span style="color:#78716C">· ' + esc(m.oc.proveedorNombre || '') + '</span></div>'
         + (pend ? '<div style="font-size:9px;color:#B45309;font-weight:700;letter-spacing:.6px;margin-top:2px">PENDIENTE DE AUTORIZAR — aún no se puede despachar</div>' : '') + '</div>'
         /* v1121: el resumen de a dónde se fue el material, con su fecha de generación */
         + '<button class="btn ghost sm" style="font-size:9.5px;margin-right:6px" onclick="window._dppAbrirResumen(\'' + esc(m.oc.id) + '\')">RESUMEN →</button>'
@@ -35960,9 +35993,8 @@ window._trasRegistrar = async function(){
   if (!items.length) return showToast('PONÉ AL MENOS UN MATERIAL CON CANTIDAD', 'red');
   total = +total.toFixed(2);
   const cont = _bodegaMatStore();
-  const _usados = [];
-  (cont.ordenes || []).forEach(o => { if (o && _ocSerieDe(o) === 'TRAS') _usados.push(Number(o.folio) || 0); });
-  const folio = _primerNumeroLibre(_usados);
+  /* v1124: "TRASIEGO 1" también es un número global — mismo contador que los despachos */
+  const folio = _dppFolioLibreGlobal('TRAS');
   const u0 = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
   const nombreDe = id => String((((state && state.projects) || []).find(x => x && x.id === id) || {}).name || id).toUpperCase();
   const t = Date.now();
