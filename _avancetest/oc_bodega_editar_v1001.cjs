@@ -26,7 +26,13 @@ if (f) {
   ok('sin proyecto no rompe', typeof f({}) === 'string');
 }
 ok('el documento usa la etiqueta, no las siglas crudas', /_ocProyectoLabel\(oc\)/.test(html));
-ok('la línea de Área ya no se imprime', !/<dt>Área:<\/dt>/.test(html));
+/* v1123: el requisito CAMBIÓ. En v1001 el Área se quitó del impreso porque repetía el proyecto;
+   el 4-ago Antonio pidió lo contrario para los DESPACHOS ("necesito que se pueda poner el área
+   para dónde va dirigido esta plancha" — TORRE 4, NIVEL 12, ETAPA 3), que es dato que el papel
+   siempre llevó a mano y sin el cual el que recibe no sabe a qué torre subir el material.
+   Ahora la línea existe pero SOLO si el documento trae área: sin dato no deja el renglón vacío,
+   que era la queja original de v1001. */
+ok('el Área solo se imprime cuando el documento la trae', /areaDestino[\s\S]{0,140}<dt>Área:<\/dt>/.test(html));
 ok('el modal pone BODEGA CENTRAL en el campo proyecto', /_esAbastoOc \? 'BODEGA CENTRAL'/.test(html));
 
 // ── 2. editar la OC mientras no esté autorizada ──

@@ -3368,7 +3368,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1129</span>
+    <span style="opacity:.5;font-size:9px">v1130</span>
   </footer>
 
 </div>
@@ -25775,6 +25775,11 @@ function renderOrdenesList(){
        de la madre; si ese pedido de bodega ya está RECIBIDO, _ocPendienteDeRecibir lo mandaría
        al historial colapsado y parecería que "sigue sin aparecer". */
     if ((oc && oc.status) === 'PENDIENTE_AUTORIZACION') { _ocPend.push(oc); return; }
+    /* v1130 (Antonio): "cuando ya la OP se le genera su OC quiero que la OP pase al historial".
+       Una producción ya convertida no es trabajo pendiente — ocupa el lugar de lo que sí falta.
+       Se guarda como respaldo dentro del historial. Ojo: NO se marca como recibida (nadie
+       recibe una OP; lo que se recibe es la orden de compra que salió de ella). */
+    if (oc && _ocSerieDe(oc) === 'OP' && oc.ocDerivadaId) { _ocRecib.push(oc); return; }
     const _pdOc = (typeof _findPedidoGlobal === 'function' && oc && oc.pedidoId) ? _findPedidoGlobal(oc.pedidoId) : null;
     (_ocPendienteDeRecibir(oc, _pdOc && _pdOc.pd) ? _ocPend : _ocRecib).push(oc);
   });
@@ -36206,10 +36211,24 @@ window._ocDerivarDeOp = async function(opId){
   if (_ocSerieDe(op) !== 'OP') return showToast('ESTA ORDEN NO ES DE PRODUCCIÓN', 'red');
   if (!(op.produccionLista && op.produccionLista.ts)) return showToast('PRIMERO MARCÁ QUE EL PROVEEDOR TIENE EL MATERIAL LISTO', 'red');
   if (op.ocDerivadaId) return showToast('ESTA PRODUCCIÓN YA TIENE SU ORDEN DE COMPRA', 'red');
+  /* v1130 (Antonio): "siempre que se genera una OC de una orden de producción necesito que pida
+     la opción de poder cambiar la fecha de entrega". La OP se emite semanas antes — el proveedor
+     fabrica y recién después se acuerda cuándo entrega —, así que heredarla a ciegas imprime un
+     compromiso vencido. Se precarga la que traía y se puede cambiar. Capturada por onchange
+     (prConfirm destruye el modal antes de resolver el await — patrón v813). */
+  window._opDerivarForm = { entrega: '' };
+  const _entIni = (function(){
+    const s = String(op.fechaEntrega || '').trim();
+    const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    return m ? (m[3] + '-' + m[2] + '-' + m[1]) : '';
+  })();
   const okc = await window.prConfirm({
     title: 'GENERAR LA ORDEN DE COMPRA',
     bodyHTML: `<div>Se crea una orden de compra con <b>exactamente la misma información</b> que la ${_numLimpio(op.numero)} — mismos materiales, mismas cantidades y mismos precios.</div>
-               <div style="margin-top:10px">Esa orden es la que suma al gasto del proyecto. La producción queda como respaldo.</div>`,
+               <div style="margin-top:10px">Esa orden es la que suma al gasto del proyecto. La producción queda como respaldo.</div>
+               <label style="display:block;margin:14px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">FECHA DE ENTREGA</label>
+               <input type="date" class="pr-fld" style="width:100%" value="${_entIni}" onchange="window._opDerivarForm.entrega = this.value">
+               <div style="font-size:10.5px;color:#78716C;margin-top:6px">La orden se emite con la fecha de <b>hoy</b>. Si la entrega se movió, cambiala acá.</div>`,
     okText: 'GENERAR', cancelText: 'CANCELAR'
   });
   if (!okc) return;
@@ -36220,6 +36239,8 @@ window._ocDerivarDeOp = async function(opId){
   const op2 = _f2.oc;
   if (op2.ocDerivadaId) return showToast('ESTA PRODUCCIÓN YA TIENE SU ORDEN DE COMPRA', 'red');
 
+  /* v1130: la fecha elegida se lee DESPUÉS del await, del form que quedó en window */
+  const _entregaSel = String((window._opDerivarForm || {}).entrega || '').trim();
   const cont = _f2.cont;
   const _usados = [];
   (cont.ordenes || []).forEach(o => { if (_ocSerieDe(o) === 'OC') _usados.push(Number(o.folio) || 0); });
@@ -36233,6 +36254,12 @@ window._ocDerivarDeOp = async function(opId){
     folio: folio,
     numero: `${_base} - OC ${folio}`,
     ts: t, _ts: t,
+    /* v1130 (Antonio): "la fecha de esta OC quiero que sea la fecha del día que se generó la OC
+       y no la OP como está ahorita". El clon heredaba la fecha de la producción y el documento
+       salía fechado semanas atrás; la fecha del papel es la del día en que se emite. */
+    fecha: (typeof _dateALatam === 'function') ? _dateALatam(new Date()) : (op2.fecha || ''),
+    /* la entrega es la que se acaba de elegir; si no tocaron nada, la que traía la producción */
+    fechaEntrega: _entregaSel ? _fechaInputALatam(_entregaSel) : (op2.fechaEntrega || ''),
     opOrigenId: op2.id,
     opOrigenNumero: op2.numero,
     // hereda la autorización de la OP: Antonio decidió que la copia exacta no vuelve a finanzas
