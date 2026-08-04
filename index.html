@@ -3368,7 +3368,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1126</span>
+    <span style="opacity:.5;font-size:9px">v1127</span>
   </footer>
 
 </div>
@@ -35598,13 +35598,11 @@ window._dppAbrirResumen = function(madreId){
       + '</div>';
   });
   h += '</div>';
-  /* v1122: COMPARTIR IMAGEN va DENTRO del cuerpo porque prConfirm solo tiene dos botones
-     (aceptar/cancelar) y aceptar ya es IMPRIMIR / PDF. Antonio: "quiero que lo que genere sea
-     una imagen para poder compartir de una vez" — un PNG entra a WhatsApp sin abrir nada. */
-  h += '<div style="margin-top:14px;display:flex;justify-content:center">'
-    + '<button class="btn sm" style="font-size:10.5px" onclick="window._dppResumenImagen(\'' + _e(madreId) + '\')">COMPARTIR COMO IMAGEN</button></div>';
-  window.prConfirm({ title:'RESUMEN DE MATERIAL PRE-PAGADO', bodyHTML:h, okText:'IMPRIMIR / PDF', cancelText:'CERRAR', wide:true })
-    .then(function(ok){ if (ok) { try { window._dppImprimirResumen(h); } catch(e){ window.print(); } } });
+  /* v1127 (Antonio): "eliminá la opción de imprimir PDF, quiero que exista solo el de compartir
+     esta info por imagen". El cuadro se manda por WhatsApp — el PDF era un paso de más. La
+     acción del modal ES compartir la imagen. */
+  window.prConfirm({ title:'RESUMEN DE MATERIAL PRE-PAGADO', bodyHTML:h, okText:'COMPARTIR COMO IMAGEN', cancelText:'CERRAR', wide:true })
+    .then(function(ok){ if (ok) window._dppResumenImagen(madreId); });
 };
 /* ═══════════ v1122 · EL RESUMEN COMO IMAGEN PARA COMPARTIR ═══════════
    Antonio: "aquí quiero que lo que genere sea una imagen para poder compartir de una vez".
@@ -35622,13 +35620,17 @@ window._dppResumenImagen = async function(madreId){
     var p2 = function(v){ return String(v).padStart(2,'0'); };
     var fecha = p2(d.getDate())+'/'+p2(d.getMonth()+1)+'/'+d.getFullYear()+' · '+p2(d.getHours())+':'+p2(d.getMinutes());
 
-    /* alto exacto: encabezado + por producto (barra + saldo + obras + docs + total) + pie */
-    var W = 860, PAD = 34, FILA = 30, FILAD = 24, y = 0;
+    /* v1127: cada fila es una CAJA con tope y alto, y su texto va centrado con
+       textBaseline='middle'. Antes se calculaba la línea base a mano (y + 23, y + 4…), que
+       depende de las métricas de la fuente: si Familjen Grotesk no estaba lista en el canvas y
+       caía a Arial, el texto se descolgaba dentro de su barra — eso fue lo que Antonio vio
+       ("donde dice TABLA está como más para abajo"). */
+    var W = 860, PAD = 34, H_BARRA = 36, FILA = 30, FILAD = 24, y = 0;
     var alto = 128;
     r.items.forEach(function(it){
-      alto += 46 + FILA + (it.filas.length * FILA) + 4;
+      alto += H_BARRA + 12 + FILA + (it.filas.length * FILA);
       it.filas.forEach(function(f){ alto += (f.docs || []).length * FILAD; });
-      alto += FILA + 22 + (it.cuadra ? 0 : 30);
+      alto += 10 + FILA + 18 + (it.cuadra ? 0 : 34);
     });
     alto += 46;
 
@@ -35638,7 +35640,15 @@ window._dppResumenImagen = async function(madreId){
     var g = cv.getContext('2d');
     g.scale(DPR, DPR);
     var F = function(px, peso){ g.font = (peso || 400) + ' ' + px + 'px "Familjen Grotesk", Arial, sans-serif'; };
+    g.textBaseline = 'middle';   /* v1127: centrado real, sin depender de las métricas de la fuente */
     var der = function(t, x, yy){ g.textAlign = 'right'; g.fillText(t, x, yy); g.textAlign = 'left'; };
+    /* una fila = caja [tope, tope+alto). El texto se pinta SIEMPRE en su centro vertical. */
+    var _fila = function(tope, alto, izq, der_, sangria, fondo, barra){
+      var mid = tope + alto / 2;
+      if (fondo) { g.fillStyle = fondo; g.fillRect(PAD, tope, W - PAD*2, alto); }
+      if (barra) { g.fillStyle = barra; g.fillRect(PAD, tope, 3, alto); }
+      return mid;
+    };
     /* el nombre largo no debe montarse sobre la cantidad */
     var cortar = function(t, max){
       t = String(t == null ? '' : t);
@@ -35657,40 +35667,45 @@ window._dppResumenImagen = async function(madreId){
     g.textAlign = 'left'; y += 30;
 
     r.items.forEach(function(it){
-      g.fillStyle = '#0F172A'; g.fillRect(PAD, y, W - PAD*2, 34);
-      F(14, 800); g.fillStyle = '#FFFFFF'; g.fillText(cortar(it.producto, W - PAD*2 - 30), PAD + 14, y + 23);
-      y += 34 + 12;
+      /* barra del producto */
+      var mid = _fila(y, H_BARRA, null, null, null, '#0F172A');
+      F(14, 800); g.fillStyle = '#FFFFFF';
+      g.fillText(cortar(it.producto, W - PAD*2 - 30), PAD + 14, mid);
+      y += H_BARRA + 12;
       /* el saldo vivo, resaltado */
-      g.fillStyle = '#EFF6FF'; g.fillRect(PAD, y - 20, W - PAD*2, FILA);
+      mid = _fila(y, FILA, null, null, null, '#EFF6FF');
       F(13.5, 800); g.fillStyle = '#1D4ED8';
-      g.fillText('COMPRA PRE-PAGO (SIN LIBERAR)', PAD + 14, y);
-      der(n(it.saldo), W - PAD - 14, y);
+      g.fillText('COMPRA PRE-PAGO (SIN LIBERAR)', PAD + 14, mid);
+      der(n(it.saldo), W - PAD - 14, mid);
       y += FILA;
       it.filas.forEach(function(f){
-        g.fillStyle = '#F8FAFC'; g.fillRect(PAD, y - 20, W - PAD*2, FILA);
-        g.fillStyle = '#0F172A'; g.fillRect(PAD, y - 20, 3, FILA);
+        mid = _fila(y, FILA, null, null, null, '#F8FAFC', '#0F172A');
         F(13, 700); g.fillStyle = '#0F172A';
-        g.fillText(cortar(f.obra, W - PAD*2 - 190), PAD + 14, y);
-        F(13, 800); der(n(f.qty), W - PAD - 14, y);
+        g.fillText(cortar(f.obra, W - PAD*2 - 190), PAD + 14, mid);
+        F(13, 800); der(n(f.qty), W - PAD - 14, mid);
         y += FILA;
         (f.docs || []).forEach(function(dc){
+          mid = _fila(y, FILAD);
           F(11.5, 500); g.fillStyle = '#64748B';
           var rot = (dc.ref ? dc.ref : _numLimpio(dc.numero)) + (dc.area ? ' · ' + dc.area : '') + (dc.fecha ? ' · ' + dc.fecha : '');
-          g.fillText(cortar(rot, W - PAD*2 - 200), PAD + 34, y);
-          der(n(dc.qty), W - PAD - 14, y);
+          g.fillText(cortar(rot, W - PAD*2 - 200), PAD + 34, mid);
+          der(n(dc.qty), W - PAD - 14, mid);
           y += FILAD;
         });
       });
+      /* el total, cerrado por su línea */
+      y += 10;
       g.strokeStyle = '#0F172A'; g.lineWidth = 2; g.beginPath();
-      g.moveTo(PAD, y - 18); g.lineTo(W - PAD, y - 18); g.stroke();
+      g.moveTo(PAD, y); g.lineTo(W - PAD, y); g.stroke();
+      mid = _fila(y, FILA);
       F(13.5, 800); g.fillStyle = '#0F172A';
-      g.fillText('TOTAL GENERAL', PAD + 14, y + 4); der(n(it.comprado), W - PAD - 14, y + 4);
-      y += FILA + 22;
+      g.fillText('TOTAL GENERAL', PAD + 14, mid); der(n(it.comprado), W - PAD - 14, mid);
+      y += FILA + 18;
       if (!it.cuadra) {
-        g.fillStyle = '#FEE2E2'; g.fillRect(PAD, y - 20, W - PAD*2, 26);
+        mid = _fila(y, 28, null, null, null, '#FEE2E2');
         F(11.5, 700); g.fillStyle = '#991B1B';
-        g.fillText('OJO: LO DESPACHADO NO CUADRA CON LO COMPRADO — REVISAR LOS DESPACHOS', PAD + 12, y - 2);
-        y += 30;
+        g.fillText('OJO: LO DESPACHADO NO CUADRA CON LO COMPRADO — REVISAR LOS DESPACHOS', PAD + 14, mid);
+        y += 34;
       }
     });
     F(10.5, 600); g.fillStyle = '#94A3B8'; g.textAlign = 'center';
@@ -35720,16 +35735,8 @@ window._dppResumenImagen = async function(madreId){
     showToast('IMAGEN DESCARGADA','green');
   } catch(e){ console.warn('[v1122] resumen imagen', e); showToast('NO SE PUDO GENERAR LA IMAGEN','red'); }
 };
-window._dppImprimirResumen = function(htmlBody){
-  var w = window.open('', '_blank');
-  if (!w) return showToast('PERMITÍ LAS VENTANAS EMERGENTES','red');
-  w.document.write('<html><head><title>Material pre-pagado</title><meta name="color-scheme" content="only light">'
-    + '<style>body{font-family:Arial,Helvetica,sans-serif;padding:24px;color:#0F172A}'
-    + 'table{width:100%;border-collapse:collapse}td{border-bottom:1px solid #E2E8F0;padding:6px 10px;font-size:12px}'
-    + '.tbl{margin:0}</style></head><body>' + htmlBody + '</body></html>');
-  w.document.close();
-  setTimeout(function(){ try { w.print(); } catch(e){} }, 300);
-};
+/* v1127: la impresión del resumen se eliminó a pedido de Antonio — el cuadro se comparte como
+   imagen (_dppResumenImagen) y el PDF era un paso de más. */
 function _dppSaldoDeMadre(madre, ordenes){
   var porItem = {}; var orden = [];
   (((madre && madre.items)) || []).forEach(function(it){

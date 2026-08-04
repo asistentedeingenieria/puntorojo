@@ -89,7 +89,12 @@ ok('muestra la FECHA Y HORA de generación', /GENERADO EL/.test(zA));
 ok('el saldo sin liberar va resaltado arriba', /COMPRA PRE-PAGO/.test(zA));
 ok('cierra con el TOTAL GENERAL', /TOTAL GENERAL/.test(zA));
 ok('avisa si los números no cuadran', /NO CUADRA/.test(zA));
-ok('se puede imprimir o guardar como PDF', /_dppImprimirResumen/.test(html));
+/* v1127 (Antonio, 4-ago): "eliminá la opción de imprimir PDF, quiero que exista solo el de
+   compartir esta info por imagen". El cuadro se manda por WhatsApp; un PDF era un paso de más.
+   La acción del modal ES compartir la imagen. */
+ok('YA NO hay impresión / PDF', !/_dppImprimirResumen/.test(html));
+ok('la acción del resumen es compartir la imagen', /COMPARTIR COMO IMAGEN/.test(zA));
+ok('y llama al generador de imagen', /_dppResumenImagen\(/.test(zA));
 ok('no escribe nada', !/saveState/.test(zA));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);

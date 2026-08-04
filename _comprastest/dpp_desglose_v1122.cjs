@@ -116,5 +116,23 @@ ok('reusa la escalera de compartir ya probada (nativo → web → descarga)', /_
 ok('si no puede compartir, la descarga', /download/.test(zI));
 ok('escala para pantallas retina (que no salga borrosa)', /devicePixelRatio|DPR|escala/.test(zI));
 
+/* v1127 (Antonio, 4-ago): "quiero que todo esté bien alineado. Date cuenta que donde dice
+   TABLA está como más para abajo." El texto se colocaba calculando la línea base a mano
+   (y + 23, y + 4…), que depende de la fuente: si Familjen Grotesk no está lista en el canvas
+   y cae a Arial, las métricas cambian y el texto se descuelga dentro de su barra.
+   Se centra de verdad: cada fila es una caja con tope y alto, y el texto va en su centro
+   con textBaseline='middle' — así queda alineado con cualquier fuente. */
+console.log('\n— (5) alineación de la imagen —');
+/* el código SIN comentarios: si no, el propio comentario que explica el arreglo contiene los
+   tokens que se buscan y la aserción pasa (o falla) por la razón equivocada — ya mordió con
+   DUBAI, con max-width:560px y con v972 */
+const zIL = zI.replace(/\/\*[\s\S]*?\*\//g, '');
+ok('centra el texto verticalmente de verdad', /textBaseline\s*=\s*'middle'/.test(zIL));
+ok('cada fila se dibuja como una caja con su alto', /_fila\s*=\s*function\(tope, alto/.test(zIL) && /_fila\(y,/.test(zIL));
+ok('ya no quedan líneas base calculadas a mano', !/y \+ 23|y \+ 4\)|y - 2\)/.test(zIL));
+ok('todas las etiquetas arrancan en la misma sangría', (zI.match(/PAD \+ 14/g) || []).length >= 3);
+ok('las cantidades cierran todas en el mismo borde', (zI.match(/W - PAD - 14/g) || []).length >= 3);
+ok('el desglose va indentado bajo su obra', /PAD \+ 3[0-9]/.test(zI));
+
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
