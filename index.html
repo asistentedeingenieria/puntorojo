@@ -3368,7 +3368,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1125</span>
+    <span style="opacity:.5;font-size:9px">v1126</span>
   </footer>
 
 </div>
@@ -22024,10 +22024,30 @@ function _bodegaMovsList(){
   if (!Array.isArray(state.bodegaMovs)) state.bodegaMovs = [];
   return state.bodegaMovs;
 }
-window._bodegaSaldos = function(movs){
+/* v1126: los despachos PRE-PAGO autorizados ANTES de este arreglo ya dejaron su SALIDA escrita
+   en el ledger. El saldo es DERIVADO (no hay contador mutable), así que esas salidas se IGNORAN
+   al derivar en vez de borrarlas: no se toca ningún dato, no hacen falta tombstones, y los
+   movimientos quedan como registro histórico de lo que pasó. Mismo criterio de self-heal que
+   v1064: lo derivable se sana desde la estructura dueña. */
+function _bodegaSalidasFantasma(){
+  var out = {};
+  try {
+    (_dppOrdenesGlobal() || []).forEach(function(o){
+      if (!o || !o.id) return;
+      var s = _ocSerieDe(o);
+      if (o.esPrepago || o.esTrasiego || s === 'DPP' || s === 'TRAS') out[o.id] = true;
+    });
+  } catch(e){}
+  return out;
+}
+try { window._bodegaSalidasFantasma = _bodegaSalidasFantasma; } catch(e){}
+window._bodegaSaldos = function(movs, fantasmas){
   const out = {};
+  const _fan = fantasmas || ((typeof _bodegaSalidasFantasma === 'function') ? _bodegaSalidasFantasma() : {});
   (Array.isArray(movs) ? movs : []).forEach(m => {
     if (!m || !m.k) return;
+    /* la SALIDA de un despacho pre-pago no resta: ese material nunca entró acá */
+    if (m.tipo === 'SALIDA' && m.ref && _fan && _fan[m.ref.ocId]) return;
     if (!out[m.k]) out[m.k] = { k: m.k, name: m.name || m.k, u: m.u || '', saldo: 0 };
     if (m.u && !out[m.k].u) out[m.k].u = m.u;
     const q = Number(m.qty) || 0;
@@ -22352,6 +22372,16 @@ window._bodegaConfirmarCarga = _bodegaConfirmarCarga;
 /* SALIDA al autorizar un despacho — idempotente por OC (guard _bodegaYaTieneMov). */
 function _bodegaSalidaDespacho(oc){
   if (!oc || !oc.esDespacho) return false;
+  /* v1126 (SALDO FANTASMA): el material PRE-PAGADO nunca entró a la bodega central — la orden
+     madre COMPRA ANTICIPADA está excluida de la recepción (v1089), así que no hay ENTRADA que
+     compensar. Si el despacho descuenta, el ledger resta algo que jamás estuvo ahí y el saldo
+     se va a NEGATIVO; como el rojo del panel es la señal de comprar, terminaría mandando a
+     comprar lo que YA está pagado. Su cuenta vive en el panel BODEGA PRE-PAGO, que es otra
+     contabilidad. El TRASIEGO es obra→obra y tampoco sale de la bodega central.
+     El despacho NORMAL (serie DESP) sí descuenta: ese material sí tuvo su ENTRADA. */
+  if (oc.esPrepago || oc.esTrasiego) return false;
+  var _s = (typeof _ocSerieDe === 'function') ? _ocSerieDe(oc) : '';
+  if (_s === 'DPP' || _s === 'TRAS') return false;
   if (window._bodegaYaTieneMov(state.bodegaMovs, oc.id, 'SALIDA')) return false;
   let n = 0;
   (oc.items || []).forEach(it => {
@@ -25815,6 +25845,16 @@ function renderOrdenesList(){
     const recibidaInfo = _yaRecibida
       ? `<div style="font-size:10px;color:#166534;margin-top:4px;font-weight:700">RECIBIDA EN BODEGA${oc.recibidoBodega && oc.recibidoBodega.por ? ' · ' + oc.recibidoBodega.por : ''}</div>`
       : '';
+    /* v1126: el DESPACHO se recibe EN LA OBRA — no suma existencias a la bodega central (ese
+       material nunca pasó por ahí), solo deja constancia de que llegó y de quién lo recibió. */
+    const _esDpp = _ocSerieDe(oc) === 'DPP';
+    const _dppRec = oc.recibidoObra && oc.recibidoObra.ts;
+    const recibirObraBtn = (_esDpp && isAuth && !_dppRec && (_puedeGestionarBodega() || can('materiales.edit')))
+      ? `<button class="btn sm" onclick="window._dppMarcarRecibido('${oc.id}')" style="background:#166534;border-color:#166534;color:#fff" title="Confirmar que el material llegó a la obra">YA RECIBÍ EL MATERIAL</button>`
+      : '';
+    const recibidoObraInfo = (_esDpp && _dppRec)
+      ? `<div style="font-size:10px;color:#166534;margin-top:4px;font-weight:700">RECIBIDO EN OBRA${oc.recibidoObra.por ? ' · ' + oc.recibidoObra.por : ''}${oc.recibidoObra.fecha ? ' · ' + oc.recibidoObra.fecha : ''}</div>`
+      : '';
     const facturaInfo = oc.facturaUrl
       ? `<div style="font-size:10px;color:#15803D;margin-top:4px;font-weight:700">FACTURA: <a href="${oc.facturaUrl}" target="_blank" style="color:#15803D;text-decoration:underline">VER (${oc.facturaNombre || 'archivo'})</a>${_esAdminOC ? ` · <a href="#" onclick="_ocAbrirSubirFactura('${oc.id}');return false" style="color:#B91C1C;font-size:9px;text-decoration:underline">REEMPLAZAR (ADMIN)</a>` : ''}</div>`
       : '';
@@ -25835,6 +25875,7 @@ function renderOrdenesList(){
         ${_opEstado}
         ${facturaInfo}
         ${recibidaInfo}
+        ${recibidoObraInfo}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px">
           <div><dt>PROYECTO / ÁREA</dt><dd style="font-size:10.5px">${oc.proyecto || '—'}${oc.area ? ' · ' + oc.area : ''}</dd></div>
           <div><dt>PEDIDO ORIGEN</dt><dd style="font-size:10.5px">${oc.pedidoNumero || '—'}</dd></div>
@@ -25851,6 +25892,7 @@ function renderOrdenesList(){
         ${authBtn}
         ${viewBtn}
         ${recibirBtn}
+        ${recibirObraBtn}
         ${printBtn}
         ${facturaBtn}
         ${_opBtn}
@@ -35369,6 +35411,45 @@ function _dppNombreObraDestino(o, projects){
   return String(esc || o.refExterna || o.numero || 'DESPACHO SIN IDENTIFICAR').toUpperCase();
 }
 try { window._dppNombreObraDestino = _dppNombreObraDestino; } catch(e){}
+/* ═══════════ v1126 · ACUSE DE RECIBIDO DEL DESPACHO EN LA OBRA ═══════════
+   Desde v1125 el despacho se ve en las OC de la obra, pero no había forma de confirmar que
+   llegó: MARCAR RECIBIDO exige !esDespacho porque suma existencias a la BODEGA CENTRAL, que
+   no es lo que pasa acá — el material va del proveedor directo a la obra.
+   Este acuse solo sella quién y cuándo lo recibió. NO toca el ledger de bodega (ver el
+   SALDO FANTASMA en _bodegaSalidaDespacho): el pre-pago no pasa por la bodega central. */
+window._dppMarcarRecibido = async function(ocId){
+  var _f = _bodegaFindOc(ocId);
+  if (!_f || !_f.oc) return showToast('ORDEN NO ENCONTRADA', 'red');
+  if ((_f.oc.status || '') !== 'AUTORIZADA') return showToast('EL DESPACHO AÚN NO ESTÁ AUTORIZADO', 'red');
+  if (_f.oc.recibidoObra && _f.oc.recibidoObra.ts) return showToast('ESTE DESPACHO YA ESTABA MARCADO COMO RECIBIDO', 'amber');
+  var okc = await window.prConfirm({
+    title: 'YA RECIBÍ EL MATERIAL',
+    bodyHTML: '<div style="font-size:12px;color:#444;line-height:1.6">Confirmás que el material del <b>'
+      + String(_numLimpio(_f.oc.numero || '')).replace(/[<>]/g, '') + '</b> ya llegó a la obra'
+      + (_f.oc.areaDestino ? ' (<b>' + String(_f.oc.areaDestino).replace(/[<>]/g, '') + '</b>)' : '') + '.</div>'
+      + '<div style="font-size:11px;color:#78716C;margin-top:8px">Queda registrado con tu nombre y la fecha.</div>',
+    okText: 'SÍ, YA LLEGÓ', cancelText: 'CANCELAR'
+  });
+  if (!okc) return;
+  /* re-leer del state vivo: prConfirm es un modal body-level y la referencia de arriba pudo
+     quedar huérfana si entró un applyRemote durante el await (v769/v940) */
+  var _f2 = _bodegaFindOc(ocId);
+  if (!_f2 || !_f2.oc) return showToast('ORDEN NO ENCONTRADA', 'red');
+  if (_f2.oc.recibidoObra && _f2.oc.recibidoObra.ts) return showToast('ESTE DESPACHO YA ESTABA MARCADO COMO RECIBIDO', 'amber');
+  var u = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  var t = Date.now();
+  _f2.oc.recibidoObra = {
+    ts: t,
+    por: String(u.displayName || u.username || '').toUpperCase(),
+    fecha: (typeof _dateALatam === 'function') ? _dateALatam(new Date()) : ''
+  };
+  _f2.oc._ts = t;   /* el contenedor viaja por union-merge (v972): sin sello, el merge lo pisa */
+  try { logActivity('update', 'DESPACHO', 'Recibido en obra: ' + (_f2.oc.numero || '')); } catch(e){}
+  saveState();
+  try { await CloudSync.forceUploadNow(); } catch(e){}
+  try { renderOrdenesList(); } catch(e){}
+  showToast('MARCADO COMO RECIBIDO', 'green');
+};
 /* ═══════════ v1125 · LOS DESPACHOS SE VEN EN LAS OC DE LA OBRA QUE LOS RECIBE ═══════════
    Antonio: "que también una vez generada se vaya al apartado de órdenes de compras dentro de
    compras del proyecto que se seleccionó para que finanzas lo pueda autorizar."
