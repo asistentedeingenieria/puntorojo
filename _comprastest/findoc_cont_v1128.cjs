@@ -66,7 +66,40 @@ if (f) {
   ok('un state vacío no lo tumba', f({}, () => ({}), () => ({}))('z') === null);
   ok('un proyecto sin materiales no lo tumba',
     f({ projects:[{id:'A'}] }, () => ({}), () => ({}))('z') === null);
+
+  /* v1129 — lo que encontró la auditoría de los llamadores:
+     el contrato seguía asimétrico. _findPedidoGlobal (el hermano de esta función, 22503)
+     devuelve cont Y esBodega en sus TRES ramas; acá esBodega solo estaba definido en la rama
+     de VARIOS, y valía false — o sea el ÚNICO resultado con esBodega definido era el que NO es
+     bodega. Hoy nadie lo lee, pero el parecido entre las dos funciones invita a copiar el
+     patrón: el próximo que escriba `if (_hit.esBodega)` iba a fallar en silencio. */
+  console.log('\n— el contrato, completo en las tres ramas —');
+  ok('la de BODEGA se identifica como bodega', buscar('b1').esBodega === true);
+  ok('la de un PROYECTO dice que NO es bodega', buscar('p1').esBodega === false);
+  ok('VARIOS sigue diciendo que no es bodega', buscar('v1').esBodega === false);
+  ok('las tres ramas traen contenedor', !!buscar('b1').cont && !!buscar('p1').cont && !!buscar('v1').cont);
+  ok('solo VARIOS se marca esVarios', buscar('v1').esVarios === true && !buscar('b1').esVarios && !buscar('p1').esVarios);
+
+  console.log('\n— el contenedor del proyecto queda usable —');
+  /* _bodegaMatStore/_variosMatStore garantizan la estructura; p.materiales venía crudo, y los
+     llamadores hacen cont.ordenes.push(...) sin guard */
+  const PROY2 = { id:'B', materiales: { ordenes: [{ id:'q1' }] } };
+  const r2 = f({ projects:[PROY2] }, () => ({}), () => ({}))('q1');
+  ok('trae ordenes como arreglo', Array.isArray(r2.cont.ordenes));
+  ok('y el saco de tombstones listo para borrar', !!r2.cont.ordenesEliminadas);
 }
+
+/* v1129: la auditoría encontró que el test solo cubría UNO de los tres llamadores que tocan
+   el contenedor. Los otros dos tenían el mismo agujero y quedaban sin red. */
+console.log('\n— los otros dos que dependían del contenedor —');
+const zDpp = ex(code, 'window._dppCrearDesdeMadre = async function(');
+ok('generar despacho desde la compra anticipada usa el contenedor', /const cont = _f2\.cont/.test(zDpp));
+ok('y empuja el despacho ahí', /cont\.ordenes\.push\(/.test(zDpp));
+/* el fallback silencioso: con la madre en un proyecto, cont venía undefined y TODO caía a
+   bodega — sin error y sin aviso, que es peor que el crash porque nadie lo nota */
+const zGen = ex(code, 'async function generarOrdenCompra(') || code;
+ok('el despacho desde el pedido sigue viviendo CON su madre', /_fM && _fM\.cont/.test(code));
+ok('y ya no cae siempre a bodega por falta de contenedor', /\(_fM && _fM\.cont\) \|\| _bm/.test(code));
 
 console.log('\n— el flujo que estaba roto —');
 const zD = ex(code, 'window._ocDerivarDeOp = async function(');
