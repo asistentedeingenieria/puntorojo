@@ -3376,7 +3376,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1136</span>
+    <span style="opacity:.5;font-size:9px">v1137</span>
   </footer>
 
 </div>
@@ -46176,7 +46176,7 @@ window.exportarPlanillaExcel = async function(fechaInicio, fechaFin){
         r.height = 24;
 
         subtotalBruto += total;
-        const retencion = Number(pg.retencion || (total * 0.10));
+        const retencion = window._pgRetencion(pg, total);   // v1137: el cero explícito manda
         if (retencion > 0) {
           totalRetencion += retencion;
           lineasRetencion.push([`(-) Retención 10% - ${aptoTitulo}`, retencion]);
@@ -46483,7 +46483,7 @@ window.exportarPlanillaPDFObrero = function(colaboradorNombre, fechaInicio, fech
       const total = Number(pg.bruto || 0);
       rows.push([desc, 'global', '1', `Q ${total.toFixed(2)}`, `Q ${total.toFixed(2)}`]);
       subtotal += total;
-      totalRetencion += Number(pg.retencion || (total*0.10));
+      totalRetencion += window._pgRetencion(pg, total);   // v1137
     });
   });
   rows.push([{ content: 'TOTAL', colSpan: 4, styles: { fontStyle:'bold' } }, { content: `Q ${subtotal.toFixed(2)}`, styles: { fontStyle:'bold' } }]);
@@ -50980,6 +50980,26 @@ window.addEventListener('load', () => {
      siempre el 100%." La retención del 10% aplica al trabajo por etapa (obra pagada por
      destajo); un día de espera se paga completo. Retención SIEMPRE 0 y neto = bruto: no es una
      opción que alguien pueda cambiar por error desde la pantalla. */
+  /* ═══════════ v1137 · LA RETENCIÓN DE UN PAGO, EN UN SOLO LUGAR ═══════════
+     Antonio ordenó en v1107: "las planillas por día NO procede hacer una retención... el monto
+     se desembolsa al 100%". El cálculo quedó bien, pero la regla NO se propagó a los seis
+     lugares que IMPRIMEN, y todos hacían `Number(pg.retencion || (bruto * 0.10))`.
+     `0 || (bruto*0.10)` da bruto*0.10: el `||` no distingue "no hay dato" de "el dato es cero".
+     Un pago por día de Q200 salía en el Excel y el PDF con "(-) Retención 10% · Q20" y al
+     trabajador se le entregaban Q180 — mientras la tarjeta en pantalla mostraba Q200. Y ese
+     10% fantasma nunca quedaba como retención liberable (la lista filtra por retención > 0),
+     así que tampoco se le devolvía nunca.
+     Acá un CERO EXPLÍCITO es un dato. Solo se calcula el 10% cuando de verdad no hay dato. PURA. */
+  function _pgRetencion(pg, bruto){
+    if (!pg) return 0;
+    var r = pg.retencion;
+    if (r !== undefined && r !== null && r !== '') return Number(r) || 0;
+    if (pg.esDia || pg.porDia) return 0;   // por día = 100%, aunque el campo no se haya guardado
+    var b = Number(bruto);
+    if (!isFinite(b)) b = Number(pg.bruto) || 0;
+    return +((b || 0) * 0.10).toFixed(2);
+  }
+  try { window._pgRetencion = _pgRetencion; } catch(e){}
   function _pagoDiaCalc(dias, precioDia){
     var d = Number(dias), p = Number(precioDia);
     if (!isFinite(d) || !isFinite(p) || d <= 0 || p <= 0) return { bruto:0, retencion:0, neto:0 };
@@ -56987,7 +57007,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       let bruto = 0, retencion = 0;
       c.pagos.forEach(pg => {
         const b = Number(pg.bruto || 0);
-        const r = Number(pg.retencion || (b * 0.10));
+        const r = window._pgRetencion(pg, b);   // v1137: por día = sin retención
         bruto += b; retencion += r;
       });
       let descNoRet = 0; c.descuentos.forEach(d => { descNoRet += Number(d.monto || 0); });
@@ -57109,7 +57129,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         r.getCell(7).alignment = {horizontal:'right',vertical:'middle'};
         r.getCell(8).alignment = {horizontal:'right',vertical:'middle'};
         r.height = 22;
-        const ret = Number(pg.retencion || (bruto * 0.10));
+        const ret = window._pgRetencion(pg, bruto);   // v1137
         if(ret > 0) lineasRet.push(['(-) Retención 10% - '+aptoT, ret]);
       });
     });
@@ -57330,7 +57350,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           { content: 'Q '+_fmtN(c.totalBruto||0), styles: { fontStyle:'bold', halign:'right', fillColor:[217,217,217], textColor:[0,0,0] } }
         ]);
         c.pagos.forEach(pg => {
-          const ret = Number(pg.retencion || (Number(pg.bruto||0)*0.10));
+          const ret = window._pgRetencion(pg, Number(pg.bruto||0));   // v1137
           if(ret <= 0) return;
           const aptoT = [pg.towerName, pg.levelName, pg.aptoName].map(s => String(s||'').trim()).filter(Boolean).join(' - '); // v951: CON nivel (Lessy: "TORRE ÚNICA - C" no dice cuál)
           body.push([
@@ -57619,7 +57639,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
 
         const filasDeduc = [];
         filasDetalle.forEach(({row: detRow, pg}) => {
-          const ret = Number(pg.retencion || (Number(pg.bruto||0)*0.10));
+          const ret = window._pgRetencion(pg, Number(pg.bruto||0));   // v1137
           if(ret <= 0) return;
           const aptoT = [pg.towerName, pg.levelName, pg.aptoName].map(s => String(s||'').trim()).filter(Boolean).join(' - ').toUpperCase(); // v951: CON nivel
           const rD = ws.getCell(r, 4);
@@ -57640,7 +57660,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           rG.alignment = { horizontal:'right', vertical:'middle' };
           rG.border = { right:{style:'thin'}, bottom:{style:'thin'} };
           const rH = ws.getCell(r, 8);
-          rH.value = { formula: '+H'+detRow+'*0.1' };
+          /* v1137: el MONTO ya calculado, no una fórmula '*0.1'. La fórmula recalculaba el
+             descuento dentro de la hoja e ignoraba la retención real del pago — con un ajuste
+             a mano distinto del 10%, el Excel mostraba otra cifra que la app. */
+          rH.value = ret;
           rH.font = FNT(16);
           rH.alignment = { horizontal:'center', vertical:'middle' };
           rH.numFmt = FMT_Q;
