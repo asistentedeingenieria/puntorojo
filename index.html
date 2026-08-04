@@ -3368,7 +3368,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1124</span>
+    <span style="opacity:.5;font-size:9px">v1125</span>
   </footer>
 
 </div>
@@ -24705,9 +24705,10 @@ async function generarOrdenCompra(){
         return { name: it.name, unidad: (_reg && _reg.unidad) || '', qty: it.qty, precio: _reg ? (Number(_reg.precio) || 0) : (Number(it.precio) || 0) };
       });
       if (_sobregira) { showToast('"' + _sobregira + '" SOBREGIRA EL SALDO PRE-PAGO — ESE GRUPO NO SE GENERÓ', 'red'); continue; }
-      const _usadosD = [];
-      (_contM.ordenes || []).forEach(o => { if (o && _ocSerieDe(o) === 'DPP') _usadosD.push(Number(o.folio) || 0); });
-      const _folioD = _primerNumeroLibre(_usadosD);
+      /* v1124: folio contra los TRES contenedores. Además este bloque corre DENTRO de un
+         bucle que puede generar varios despachos de una pasada: contar sobre la lista viva
+         hace que cada vuelta vea los que acaba de crear. */
+      const _folioD = _dppFolioLibreGlobal('DPP');
       const _tD = Date.now();
       const _totD = +(_itemsDpp.reduce((a, x) => a + (Number(x.qty) || 0) * (Number(x.precio) || 0), 0)).toFixed(2);
       const _subD = +(_totD / 1.12).toFixed(2);
@@ -24742,9 +24743,8 @@ async function generarOrdenCompra(){
       if (!_obraO) { showToast('LA OBRA ORIGEN DEL TRASIEGO YA NO EXISTE — ESE GRUPO NO SE GENERÓ', 'red'); continue; }
       const _destT = _destD; // v1071: mismo destino derivado
       if (_destT && _destT === _obraId) { showToast('EL TRASIEGO NO PUEDE SALIR DE LA MISMA OBRA QUE PIDE', 'red'); continue; }
-      const _usadosT = [];
-      (_bm.ordenes || []).forEach(o => { if (o && _ocSerieDe(o) === 'TRAS') _usadosT.push(Number(o.folio) || 0); });
-      const _folioT = _primerNumeroLibre(_usadosT);
+      /* v1124: mismo contador global (ver arriba) */
+      const _folioT = _dppFolioLibreGlobal('TRAS');
       const _tT = Date.now();
       const _itemsT = _eitems.map(it => ({ name: it.name, unidad: '', qty: it.qty, precio: Number(it.precio) || 0 }));
       const _totT = +(_itemsT.reduce((a, x) => a + (Number(x.qty) || 0) * (Number(x.precio) || 0), 0)).toFixed(2);
@@ -25681,12 +25681,18 @@ function renderOrdenesList(){
      la obra anfitriona y mostraban el nombre de OTRA obra en su columna PROYECTO/ÁREA. Se
      filtran por el pedido que las originó — el mismo criterio que la lista de pedidos. */
   const _ordTodas = [...(p.materiales.ordenes || [])].sort((a,b) => (b.ts || 0) - (a.ts || 0));
-  const ordenes = _ordTodas.filter(o => {
+  const _ordPropias = _ordTodas.filter(o => {
     if (!o) return false;
     const _pdo = (p.materiales.pedidos || []).find(x => x && x.id === o.pedidoId);
     return _pdo ? _pedidoEsDeEstaObra(_pdo, p) : true; // sin pedido origen se muestra igual
   });
-  const _ordAjenas = _ordTodas.length - ordenes.length;
+  const _ordAjenas = _ordTodas.length - _ordPropias.length;
+  /* v1125: los DESPACHOS PRE-PAGO viven en el contenedor de la bodega pero el material es de
+     esta obra, así que se suman ACÁ — después del filtro de arriba y a propósito: heredan el
+     pedidoId de la madre (un pedido de abastecimiento) y _pedidoEsDeEstaObra los rechazaría
+     como "DE OTRO CLIENTE". La pertenencia se decide por destino, igual que en GASTOS. */
+  const _ordDpp = (typeof _despachosHaciaProyecto === 'function') ? _despachosHaciaProyecto(p) : [];
+  const ordenes = _ordPropias.concat(_ordDpp).sort((a,b) => (b.ts || 0) - (a.ts || 0));
 
   const countLbl = document.getElementById('ocCountLabel');
   if (countLbl) countLbl.textContent = `— ${ordenes.length} ÓRDEN${ordenes.length !== 1 ? 'ES' : ''}`
@@ -25714,6 +25720,10 @@ function renderOrdenesList(){
      recibido se guarda en el historial colapsable. */
   const _ocPend = [], _ocRecib = [];
   ordenes.forEach(function(oc){
+    /* v1125: lo que espera firma de finanzas va ARRIBA siempre. Un despacho hereda el pedido
+       de la madre; si ese pedido de bodega ya está RECIBIDO, _ocPendienteDeRecibir lo mandaría
+       al historial colapsado y parecería que "sigue sin aparecer". */
+    if ((oc && oc.status) === 'PENDIENTE_AUTORIZACION') { _ocPend.push(oc); return; }
     const _pdOc = (typeof _findPedidoGlobal === 'function' && oc && oc.pedidoId) ? _findPedidoGlobal(oc.pedidoId) : null;
     (_ocPendienteDeRecibir(oc, _pdOc && _pdOc.pd) ? _ocPend : _ocRecib).push(oc);
   });
@@ -35359,6 +35369,32 @@ function _dppNombreObraDestino(o, projects){
   return String(esc || o.refExterna || o.numero || 'DESPACHO SIN IDENTIFICAR').toUpperCase();
 }
 try { window._dppNombreObraDestino = _dppNombreObraDestino; } catch(e){}
+/* ═══════════ v1125 · LOS DESPACHOS SE VEN EN LAS OC DE LA OBRA QUE LOS RECIBE ═══════════
+   Antonio: "que también una vez generada se vaya al apartado de órdenes de compras dentro de
+   compras del proyecto que se seleccionó para que finanzas lo pueda autorizar."
+   El despacho se guarda en el contenedor de la MADRE (la bodega) pero lleva destinoProyectoId
+   con la obra que recibe. Se cambia la LECTURA, no el dato: moverlo de contenedor obligaría a
+   migrar los despachos existentes y a pelear con el union-merge por contenedor de v972 (un
+   registro que cambia de contenedor puede duplicarse o resucitar).
+   Es el mismo patrón que ya usan GASTOS y CUENTAS POR PAGAR: barrer los tres contenedores y
+   decidir la pertenencia con _gastoDestinoDeOrden. Así la MISMA orden que ya suma al gasto de
+   la obra pasa a verse en su lista. Solo DPP: un TRASIEGO no es una orden de compra de la obra.
+   PURA (recibe la lista global por parámetro para poder probarla). */
+function _despachosHaciaProyecto(p, todas){
+  var out = [];
+  if (!p || !p.id) return out;
+  var yaEnLaObra = {};
+  (((p.materiales || {}).ordenes) || []).forEach(function(o){ if (o && o.id) yaEnLaObra[o.id] = true; });
+  (todas || _dppOrdenesGlobal() || []).forEach(function(o){
+    if (!o || !o.id || yaEnLaObra[o.id]) return;      /* dedup: el barrido incluye los proyectos */
+    if (_ocSerieDe(o) !== 'DPP') return;
+    if (o.status === 'CANCELADA') return;
+    if (_gastoDestinoDeOrden(o) !== String(p.id)) return;
+    out.push(o);
+  });
+  return out;
+}
+try { window._despachosHaciaProyecto = _despachosHaciaProyecto; } catch(e){}
 /* ═══════════ v1124 · UN SOLO CONTADOR PARA LOS CORRELATIVOS GLOBALES ═══════════
    Antonio, 4-ago: "tenemos órdenes con el número repetido. Dos nueves."
    El número de un despacho es GLOBAL ("DESPACHO PRE-PAGO 9", sin sigla que lo distinga),
@@ -35814,6 +35850,12 @@ window._dppCrearDesdeMadre = async function(ocId){
     /* v1123: el área dentro de la obra y el número que el proveedor le puso al papel */
     areaDestino: String(form.area || '').trim().toUpperCase(),
     refExterna: String(form.ref || '').trim().toUpperCase(),
+    /* v1125: el clon heredaba el pedido de la MADRE (un pedido de abastecimiento de bodega).
+       Al autorizar el despacho se le avisaba al solicitante de ESE pedido que "su pedido ya
+       fue liberado", y el despacho contaba como una OC más en la cobertura de un pedido ajeno.
+       Nace sin pedido: un despacho pre-pago no sale de un pedido de la obra. */
+    pedidoId: '',
+    pedidoNumero: '',
     /* v1068: el papel del despacho dice la OBRA que recibe, no la bodega (el clon heredaba
        el proyecto de la madre y el impreso mentía) */
     proyecto: String(((obras.find(x => x.id === form.destino) || {}).name || '')).toUpperCase() || (madre2.proyecto || ''),
@@ -58607,7 +58649,13 @@ async function _anulAnularReal(){
   window._cntOCsPend = function(){
     try{ if(typeof can==='function' && (can('compras.autorizar')||can('users.manage')||(typeof isReadOnly==='function' && isReadOnly()))){
       var p=(typeof activeProj==='function')?activeProj():null;
-      if(p && p.materiales && Array.isArray(p.materiales.ordenes)) return p.materiales.ordenes.filter(function(o){ return o && (o.status||'AUTORIZADA')!=='AUTORIZADA'; }).length;
+      if(p && p.materiales && Array.isArray(p.materiales.ordenes)){
+        var _pend=function(o){ return o && (o.status||'AUTORIZADA')!=='AUTORIZADA'; };
+        /* v1125: el badge cuenta lo MISMO que muestra la lista — si no, la pestaña diría 0
+           mientras adentro hay despachos esperando la firma de finanzas. */
+        var _dpp=(typeof _despachosHaciaProyecto==='function')?_despachosHaciaProyecto(p):[];
+        return p.materiales.ordenes.filter(_pend).length + _dpp.filter(_pend).length;
+      }
     } }catch(e){}
     return 0;
   };

@@ -62,6 +62,16 @@ ok('y ya NO cuenta sobre un solo contenedor',
 const zT = ex(code, 'window._trasCrear = async function(') || ex(code, 'window._trasGuardar = async function(') || code;
 ok('el trasiego también', /_dppFolioLibreGlobal\('TRAS'\)/.test(code));
 
+/* el OTRO constructor: los despachos y trasiegos que salen DESDE UN PEDIDO. Corre dentro de
+   un bucle que puede generar varios de una pasada, así que contar sobre una lista congelada
+   repetía folios incluso dentro del mismo lote. */
+ok('el despacho generado desde un pedido usa el mismo contador',
+  (code.match(/_dppFolioLibreGlobal\('DPP'\)/g) || []).length >= 2);
+ok('y el trasiego desde un pedido también',
+  (code.match(/_dppFolioLibreGlobal\('TRAS'\)/g) || []).length >= 2);
+ok('ya no queda ningún conteo local de folios DPP/TRAS',
+  !/_ocSerieDe\(o\) === '(DPP|TRAS)'\)\s*_?usados?D?T?\.push/i.test(code.replace(/\s+/g,' ')));
+
 console.log('\n— lo que NO se debe tocar —');
 ok('la OC normal sigue con correlativo por contenedor (lleva sigla de proyecto)',
   /cont\.ordenes[\s\S]{0,140}_ocSerieDe\(o\) === 'OC'/.test(code));
