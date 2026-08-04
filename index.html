@@ -3376,7 +3376,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1138</span>
+    <span style="opacity:.5;font-size:9px">v1139</span>
   </footer>
 
 </div>
@@ -9302,6 +9302,11 @@ function _mostrarBloqueoVersion(minVer){
 
 const CloudSync = {
   enabled: false,
+  /* v1139: si una subida no confirma en este tiempo, se libera el candado para poder RECIBIR.
+     El SDK de Firestore encola la escritura cuando el canal está saturado y su promesa nunca
+     resuelve ni falla; sin este guard el flag queda puesto para siempre y applyRemote descarta
+     todo lo que llega — el dispositivo sube a ciegas y no ve a nadie. */
+  _UPLOAD_GUARD_MS: 45000,
   ref: null,                 // Doc reference: /appState/main (legacy / respaldo, ya no se reescribe)
   coreRef: null,             // v491: /appState/core — globals livianos + lista de proyectos
   _projHashes: null,         // v491: hash por proyecto para no reescribir los que no cambian (se recalcula en applyRemote)
@@ -9461,10 +9466,33 @@ const CloudSync = {
       this.pendingWrite = null;
       this.uploadingNow = true;
       this._armSyncingChip();
+      /* ═══ v1139 · EL CANDADO SE LIBERA SOLO ═══
+         Cuando el canal de escritura de Firestore se satura (hoy: el doc de asistencia de
+         770 KB), el SDK ENCOLA la escritura y la promesa NUNCA resuelve ni falla: ni el then
+         ni el catch corren, y `uploadingNow` queda en true para siempre. Ese mismo flag hace
+         que applyRemote DESCARTE todo lo que llega, así que el dispositivo sube a ciegas y
+         deja de recibir. De ahí salieron, el 4-ago, las tres caras del mismo problema: el
+         pedido de Rony que nunca llegó, dos pedidos con el número VLA-11 (el correlativo se
+         deriva de lo que el dispositivo VE), y una solicitud de anticipo repetida seis veces
+         (sin confirmación, la persona vuelve a mandarla).
+         La escritura sigue encolada en el SDK y se confirmará cuando pueda; lo que se recupera
+         acá es la capacidad de RECIBIR. Es seguro porque desde v972 los contenedores que
+         importan se UNEN por id en vez de pisarse — y aun así se pide un resync para que lo
+         local se vuelva a subir después de aplicar lo remoto. */
+      const _guard = setTimeout(() => {
+        if (!this.uploadingNow) return;
+        this.uploadingNow = false;
+        try { asistNeedsResync = true; } catch(e){}
+        console.warn('[v1139] la subida no confirmó en ' + ((this._UPLOAD_GUARD_MS||45000)/1000) + 's — se libera el candado para poder RECIBIR; la escritura sigue encolada');
+        try { this._chipError(new Error('sync lento')); } catch(e){}
+        try { this.scheduleSave(); } catch(e){}   // reintento
+      }, (this._UPLOAD_GUARD_MS || 45000));
       this.uploadCurrent().then(() => {
+        clearTimeout(_guard);
         this.uploadingNow = false; this._chipDone();
         try { if (typeof _fotosPendClear === 'function') _fotosPendClear(); } catch(e2){} // v899: la nube confirmó → chip POR COMPARTIR fuera
       }).catch((e) => {
+        clearTimeout(_guard);
         this.uploadingNow = false; console.error('CloudSync auto-save error:', e); this._chipError(e);
       });
     }, 1200);
@@ -9495,12 +9523,22 @@ const CloudSync = {
     }
     this.uploadingNow = true;
     this._armSyncingChip();
+    /* v1139: mismo guard que en la subida con debounce — forceUploadNow también se cuelga
+       cuando el canal está saturado, y es el que usan las acciones de plata */
+    const _guardF = setTimeout(() => {
+      if (!this.uploadingNow) return;
+      this.uploadingNow = false;
+      console.warn('[v1139] forceUploadNow no confirmó en ' + ((this._UPLOAD_GUARD_MS||45000)/1000) + 's — candado liberado');
+      try { this._chipError(new Error('sync lento')); } catch(e){}
+    }, (this._UPLOAD_GUARD_MS || 45000));
     this._forceInFlight = (async () => {
       try {
         await this.uploadCurrent();
+        clearTimeout(_guardF);
         this.uploadingNow = false; this._chipDone();
         try { if (typeof _fotosPendClear === 'function') _fotosPendClear(); } catch(e2){} // v899: la nube confirmó → chip POR COMPARTIR fuera
       } catch(e) {
+        clearTimeout(_guardF);
         this.uploadingNow = false;
         console.error('CloudSync forceUploadNow error:', e);
         this._chipError(e);
@@ -9776,8 +9814,17 @@ const CloudSync = {
       this._asistPending = null;
       this._asistUploading = true;
       this._armSyncingChip();
-      this.uploadAsistencia().then(() => { this._asistUploading = false; this._chipDone(); })
-        .catch((e) => { this._asistUploading = false; console.warn('CloudSync uploadAsistencia:', e); this._chipError(e); });
+      /* v1139: la asistencia es JUSTO la escritura que satura el canal (el doc pesa 770 KB).
+         Sin este guard, su flag colgado bloquea también la subida general (línea ~9410:
+         `if (this.uploadingNow || this._asistUploading) return;`). */
+      const _guardA = setTimeout(() => {
+        if (!this._asistUploading) return;
+        this._asistUploading = false;
+        console.warn('[v1139] la asistencia no confirmó en ' + ((this._UPLOAD_GUARD_MS||45000)/1000) + 's — candado liberado; la escritura sigue encolada');
+        try { this._chipError(new Error('sync lento')); } catch(e){}
+      }, (this._UPLOAD_GUARD_MS || 45000));
+      this.uploadAsistencia().then(() => { clearTimeout(_guardA); this._asistUploading = false; this._chipDone(); })
+        .catch((e) => { clearTimeout(_guardA); this._asistUploading = false; console.warn('CloudSync uploadAsistencia:', e); this._chipError(e); });
     }, 1200);
   },
 
