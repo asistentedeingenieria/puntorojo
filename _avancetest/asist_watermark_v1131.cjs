@@ -131,9 +131,19 @@ ok('el listener de config lo trae', /asistCutoff/.test(code) && /_asistCutoff/.t
 console.log('\n— los cuatro sitios que mergean pasan el corte —');
 /* si uno solo se olvida, el hash local nunca cuadra con la nube y se arma el bucle de
    re-subida que ya mordió en v856 */
-const llamadas = (code.match(/_mergeAsistencia\([^)]*\)/g) || []).filter(s => !/function/.test(s));
-ok('hay al menos 4 llamadas al merge', llamadas.length >= 4);
-ok('TODAS pasan el corte', llamadas.every(s => /,\s*[^,)]+,\s*[^,)]+\)$/.test(s)));
+/* los tres sitios que mergean asistencia: la subida transaccional, el ensamblado del snapshot
+   y applyRemote. Si UNO solo se olvidara el corte, su resultado diferiría del de los otros dos
+   y el hash local nunca cuadraría con la nube: bucle de re-subida (el síntoma de v856). */
+const SITIOS = [
+  ['la subida transaccional',        /_mergeAsistencia\(_asistPayload, cloud, tomb, _cutTx\)/],
+  ['el ensamblado del snapshot',     /_mergeAsistencia\(_coreAsist, _docAsist, null, [^)]*_asistCutoffVigente/],
+  ['applyRemote',                    /_mergeAsistencia\(\s*\(state && state\.asistenciaGlobal\)[\s\S]{0,220}_asistCutoffVigente/],
+];
+SITIOS.forEach(([nombre, re]) => ok(nombre + ' pasa el corte', re.test(code)));
+/* y que no haya APARECIDO un cuarto sitio sin corte: las llamadas totales tienen que seguir
+   siendo las tres verificadas arriba */
+const _llamadas = (code.match(/_mergeAsistencia\(/g) || []).length - 1;  // menos la definición
+ok('siguen siendo exactamente tres los sitios que mergean', _llamadas === 3);
 
 console.log('\n— el archivo en memoria no se sube ni se cachea —');
 ok('_asistArchive queda fuera de lo que viaja a la nube', /_asistArchive/.test(code) && /delete .*_asistArchive/.test(code));

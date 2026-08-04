@@ -3376,7 +3376,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1134</span>
+    <span style="opacity:.5;font-size:9px">v1135</span>
   </footer>
 
 </div>
@@ -9278,7 +9278,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 923; // v1110: contenedor nuevo p.reportesSemanales (reportes fotográficos semanales) con union-merge por proyecto
+const APP_SYNC_VERSION = 924; // v1110: contenedor nuevo p.reportesSemanales (reportes fotográficos semanales) con union-merge por proyecto
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9330,6 +9330,13 @@ const CloudSync = {
       cfgRef.onSnapshot((s) => {
         try {
           this._minSyncVersion = Number((s && s.exists && (s.data()||{}).minSyncVersion) || 0) || 0;
+          /* v1135: el corte de asistencia viaja en el MISMO doc del kill-switch (ya tiene
+             listener vivo, es chiquito, y las versiones viejas ni lo conocen). Monótono: se
+             queda con el mayor, nunca retrocede. */
+          try {
+            this._asistCutoff = _asistCutoffMax(this._asistCutoff, (s && s.exists && (s.data()||{}).asistCutoff) || '');
+            if (this._asistCutoff) { try { localStorage.setItem(_ASIST_CUT_KEY, this._asistCutoff); } catch(e){} }
+          } catch(e){}
           if (_versionBloqueada(APP_SYNC_VERSION, this._minSyncVersion)) _mostrarBloqueoVersion(this._minSyncVersion);
         } catch(e){}
       }, (e) => { console.warn('[v892] listener config:', e && e.message); });
@@ -9728,12 +9735,17 @@ const CloudSync = {
     if (this._asistHash === _asistJson) return;   // sin cambios → no escribir
     const ref = db.collection('appState').doc('asistencia');
     const tomb = (typeof _getAsistTomb === 'function') ? _getAsistTomb() : null;
+    /* v1135: fuera de la transacción — el callback de abajo es una función plana (sin `this`)
+       y el corte no cambia entre reintentos de contención */
+    const _cutTx = (typeof _asistCutoffVigente === 'function') ? _asistCutoffVigente() : '';
     let _mergedFinal = _asistPayload;
     await db.runTransaction(async function(tx){
       const snap = await tx.get(ref);
       const cloud = (snap.exists && snap.data() && typeof snap.data().asistencia === 'object') ? snap.data().asistencia : {};
       let merged = _asistPayload;
-      try { if (typeof _mergeAsistencia === 'function') merged = _mergeAsistencia(_asistPayload, cloud, tomb).asistencia; } catch(e){ console.warn('[v902] merge en subida:', e); }
+      /* v1135: el corte se captura FUERA de la transacción — este callback es una función
+         plana, sin `this`, y el corte no cambia entre reintentos */
+      try { if (typeof _mergeAsistencia === 'function') merged = _mergeAsistencia(_asistPayload, cloud, tomb, _cutTx).asistencia; } catch(e){ console.warn('[v902] merge en subida:', e); }
       _mergedFinal = merged;
       if (!snap.exists) { tx.set(ref, { asistencia: merged, _lastUpdate: stamp }); return; }
       const cloudDayJson = {}; Object.keys(cloud).forEach(function(f){ cloudDayJson[f] = JSON.stringify(cloud[f]); });
@@ -9848,7 +9860,7 @@ const CloudSync = {
     {
       const _coreAsist = (data.asistenciaGlobal && typeof data.asistenciaGlobal==='object') ? data.asistenciaGlobal : {};
       const _docAsist = (asistData && typeof asistData==='object') ? asistData : {};
-      data.asistenciaGlobal = (typeof _mergeAsistencia==='function') ? _mergeAsistencia(_coreAsist, _docAsist).asistencia : Object.assign({}, _coreAsist, _docAsist);
+      data.asistenciaGlobal = (typeof _mergeAsistencia==='function') ? _mergeAsistencia(_coreAsist, _docAsist, null, (typeof _asistCutoffVigente==='function') ? _asistCutoffVigente() : '').asistencia : Object.assign({}, _coreAsist, _docAsist);
       data._asistDocOnly = _docAsist;
     }
     return data;
@@ -10018,7 +10030,8 @@ const CloudSync = {
         const _rA = _mergeAsistencia(
           (state && state.asistenciaGlobal) || {},
           merged.asistenciaGlobal || {},
-          _tomb
+          _tomb,
+          (typeof _asistCutoffVigente === 'function') ? _asistCutoffVigente() : ''
         );
         merged.asistenciaGlobal = _rA.asistencia;
         if (_rA.changed) asistNeedsResync = true; // v649: ruta LIVIANA — unir marcas no debe re-subir el core
@@ -10544,6 +10557,11 @@ const CloudSync = {
     // a Firestore, cuando un usuario cambia de proyecto se le cambia a TODOS
     // los demas usuarios. Lo eliminamos del upload.
     delete clone.activeProjectId;
+    /* v1135: el archivo de asistencia que se cargue en memoria (state._asistArchive) es una
+       CACHE de lectura de meses viejos — puede pesar cientos de KB. Si viaja, se mete dentro
+       del doc `core`, que tiene su propio techo de 1 MB: justo el problema que se está
+       resolviendo. Nunca sube. */
+    delete clone._asistArchive;
     (clone.projects || []).forEach(p =>
       (p.towers || []).forEach(t =>
         (t.levels || []).forEach(l =>
@@ -37409,13 +37427,74 @@ function _planillaSelloSelfHeal(p){
     return changed;
   } catch(e){ console.warn('[v1064] sello self-heal', e); return false; }
 }
-function _mergeAsistencia(localAsis, remoteAsis, tombSet){
+/* ═══════════ v1135 · MARCA DE AGUA DE LA ASISTENCIA (fase 1 del archivado) ═══════════
+   El documento appState/asistencia pesa 770 KB con 50 días y crece 14.2 KB por día de marcado.
+   El techo DURO de Firestore es 1 MB por documento: quedan ~18 días de marcado, y ya degrada
+   hoy (una escritura tan pesada satura la cola y deja la subida colgada).
+
+   Para poder archivar los días viejos hace falta ESTO primero. _mergeAsistencia parte de una
+   copia del remoto y le vuelca encima TODAS las fechas locales — nunca borra una fecha. Basta
+   un dispositivo con los 50 días en su cache para devolver al documento todo lo archivado: sin
+   marca de agua, el archivado se deshace solo en horas.
+
+   `asistCutoff` dice "lo anterior a esta fecha ya vive en el archivo". El merge la respeta en
+   los DOS lados, que es el único punto por el que pasan todos los caminos:
+     · GUARD A (remoto): poda las fechas viejas que sigan en la nube y marca changed=true, para
+       que la subida emita el borrado.
+     · GUARD B (local): descarta las fechas viejas del cache SIN marcar changed — no hay nada
+       que propagar, y así un teléfono viejo no las resucita.
+
+   FAIL-OPEN: corte vacío o malformado ⇒ NO se poda NADA. Jamás borrar por una config rota.
+   Esta versión sale con el corte VACÍO: se comporta igual que hoy. Primero toda la flota tiene
+   que tener el guard (por eso sube APP_SYNC_VERSION y Antonio sube minSyncVersion); recién
+   después se archiva. Un cliente viejo no entiende el 4º parámetro, hace un set del documento
+   completo y deshace el archivado de un golpe: el mínimo de versión es lo único que lo impide. */
+var _ASIST_CUT_KEY = 'pr_asist_cutoff';
+/* el corte nunca retrocede: bajarlo haría que los días archivados vuelvan al documento. PURA. */
+function _asistCutoffMax(a, b){
+  var ok = function(x){ return (typeof x === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x)) ? x : ''; };
+  a = ok(a); b = ok(b);
+  return (a > b) ? a : b;
+}
+/* a qué fecha cortar: hoy menos N días, en calendario real (cruza meses, años y bisiestos). PURA. */
+function _asistCutoffObjetivo(hoyISO, dias){
+  if (typeof hoyISO !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(hoyISO)) return '';
+  var p = hoyISO.split('-');
+  var d = new Date(Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2])));
+  d.setUTCDate(d.getUTCDate() - (Number(dias) || 0));
+  var mm = String(d.getUTCMonth() + 1).padStart(2, '0'), dd = String(d.getUTCDate()).padStart(2, '0');
+  return d.getUTCFullYear() + '-' + mm + '-' + dd;
+}
+/* el corte vigente = el mayor entre lo que dice la nube y lo que quedó espejado acá. El espejo
+   en localStorage es necesario porque un arranque previo al primer snapshot correría con corte
+   vacío, y eso resucitaría lo archivado. */
+function _asistCutoffVigente(){
+  var ls = ''; try { ls = localStorage.getItem(_ASIST_CUT_KEY) || ''; } catch(e){}
+  var nube = ''; try { nube = (typeof CloudSync !== 'undefined' && CloudSync._asistCutoff) || ''; } catch(e){}
+  var m = _asistCutoffMax(ls, nube);
+  if (m && m !== ls) { try { localStorage.setItem(_ASIST_CUT_KEY, m); } catch(e){} }
+  return m;
+}
+try { window._asistCutoffMax = _asistCutoffMax; window._asistCutoffObjetivo = _asistCutoffObjetivo; window._asistCutoffVigente = _asistCutoffVigente; } catch(e){}
+function _mergeAsistencia(localAsis, remoteAsis, tombSet, cutoff){
   var _ts = function(r){ return (r && typeof r._ts === 'number') ? r._ts : ((r && typeof r.ausenteTs === 'number') ? r.ausenteTs : 0); };
   var _score = function(r){ if(!r) return -1; if(r.presente===false && r.motivo) return 3; return (r.presente?2:0)+(r.entrada?1:0)+(r.salida?1:0)+(r.motivo?1:0); };
+  /* v1135: fail-open — un corte vacío o malformado NO poda nada. Comparación de STRING, que
+     vale porque las claves son 'YYYY-MM-DD' de largo fijo. Estrictamente MENOR: el día del
+     corte SE QUEDA. */
+  var _cut = (typeof cutoff === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(cutoff)) ? cutoff : '';
   var out = (remoteAsis && typeof remoteAsis === 'object') ? JSON.parse(JSON.stringify(remoteAsis)) : {};
   var changed = false;
+  /* GUARD A — lo viejo que siga en la nube se poda, y se marca changed para que la subida
+     emita el borrado de esos días */
+  if (_cut) Object.keys(out).forEach(function(f){
+    if (f < _cut) { delete out[f]; changed = true; }
+  });
   var L = (localAsis && typeof localAsis === 'object') ? localAsis : {};
   Object.keys(L).forEach(function(f){
+    /* GUARD B — un cache local con días ya archivados NO los resucita. Sin marcar changed:
+       no hay nada que propagar, y marcarlo dispararía re-subidas en bucle (lección v856). */
+    if (_cut && f < _cut) return;
     var day = L[f]; if (!day || typeof day !== 'object') return;
     if (!out[f] || typeof out[f] !== 'object') out[f] = {};
     Object.keys(day).forEach(function(pid){
