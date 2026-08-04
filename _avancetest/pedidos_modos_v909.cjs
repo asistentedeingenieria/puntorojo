@@ -50,7 +50,9 @@ const srcCob = extractFn('_coberturaAptosEtapa');
 ok('_coberturaAptosEtapa existe', !!srcCob);
 if (srcCob) {
   // v991: la cobertura usa _pedidoCubre (lo RECIBIDO manda sobre lo pedido)
-  const g = new Function(extractFn('_pedidoCubre') + '\n' + srcCob + '\nreturn _coberturaAptosEtapa;')();
+  /* v1136: la cobertura resta las devoluciones por trasiego — se extrae también esa función
+     para que el test corra sobre el código real (acá no hay trasiegos, así que no resta nada) */
+  const g = new Function(extractFn('_pedidoCubre') + '\n' + extractFn('_devolucionesDeEtapa') + '\n' + srcCob + '\nreturn _coberturaAptosEtapa;')();
   const cob = g([ pdApto('a-201', { 'CANAL X': 50 }), pdApto('a-202', { 'CANAL X': 60 }), pdNivel({ [POSTE]: 424 }) ], 'l-2', 0);
   ok('suma cantidades por apto', cob['CANAL X'] && cob['CANAL X'].total === 110);
   ok('marca los aptos pedidos', cob['CANAL X'].porApto['a-201'] === true && cob['CANAL X'].porApto['a-202'] === true);
@@ -77,6 +79,7 @@ if (srcYa) {
 // ── 4. _etapaItemsParaPedir: nivel resta cobertura / apto bloquea lo suyo ──
 const deps = extractFn('_recetaV2EtapaNivel') + '\n' + extractFn('_recetaEtapaResuelta') + '\n'
   + extractFn('_pedidoCubre') + '\n' // v991: la cobertura cuenta lo RECIBIDO
+  + extractFn('_devolucionesDeEtapa') + '\n' // v1136: y resta lo que se fue por trasiego
   + srcYa + '\n' + srcCob + '\n' + srcApto + '\n';
 const srcPara = extractFn('_etapaItemsParaPedir');
 if (srcPara && srcCob && srcApto) {

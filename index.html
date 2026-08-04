@@ -3376,7 +3376,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1135</span>
+    <span style="opacity:.5;font-size:9px">v1136</span>
   </footer>
 
 </div>
@@ -9278,7 +9278,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 924; // v1110: contenedor nuevo p.reportesSemanales (reportes fotográficos semanales) con union-merge por proyecto
+const APP_SYNC_VERSION = 925; // v1110: contenedor nuevo p.reportesSemanales (reportes fotográficos semanales) con union-merge por proyecto
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10140,6 +10140,17 @@ const CloudSync = {
           if (_mpd.changed) needsResync = true;
           // v997: las ENTREGAS de un pedido se unen por OC (ver _mergeRecepciones)
           if (_mergeRecepciones((lp && lp.materiales && lp.materiales.pedidos) || [], rp.materiales.pedidos)) needsResync = true;
+          /* v1136: las DEVOLUCIONES por trasiego (lo que se descargó de un área) viajan como
+             los pedidos: unión por id + tombstones. Si fueran last-write-wins, dos obras
+             trasegando a la vez se pisarían la descarga y un nivel volvería a darse por
+             cubierto con el material ya fuera de la obra. */
+          const _tdv = Object.assign({},
+            (lp && lp.materiales && lp.materiales.devolucionesRecetaEliminadas) || {},
+            rp.materiales.devolucionesRecetaEliminadas || {});
+          rp.materiales.devolucionesRecetaEliminadas = _tdv;
+          const _mdv = _mergeById((lp && lp.materiales && lp.materiales.devolucionesReceta) || [], rp.materiales.devolucionesReceta || [], _tdv);
+          rp.materiales.devolucionesReceta = _mdv.list;
+          if (_mdv.changed) needsResync = true;
           const _toc = Object.assign({},
             (lp && lp.materiales && lp.materiales.ordenesEliminadas) || {},
             rp.materiales.ordenesEliminadas || {});
@@ -14873,7 +14884,29 @@ function _pedidoCubre(pd){
   }
   return base;
 }
-function _coberturaAptosEtapa(pedidos, levelId, stageIdx){
+/* ═══════════ v1136 · DEVOLUCIONES POR TRASIEGO ═══════════
+   Antonio: "cargamos [el material] a una etapa y área del proyecto, y necesito ver cómo se hace
+   la descarga de esa área" cuando ese material se trasiega a otra obra.
+   Un trasiego movía material y gasto entre obras, pero del lado de la que ENTREGA no quedaba
+   registro: su nivel seguía marcado como CUBIERTO con el material ya fuera de la obra.
+   La cobertura no es un contador guardado — se DERIVA de los pedidos. Así que la devolución se
+   anota APARTE en vez de restarle al pedido original: ese pedido ya se imprimió, se firmó y se
+   mandó al proveedor, y reescribirlo dejaría la historia incomprensible. Con el registro
+   separado se lee completa: se pidieron 100, se llevaron 37 a otra obra, faltan 37.
+   PURA. */
+function _devolucionesDeEtapa(devoluciones, levelId, stageIdx){
+  var out = {};
+  (devoluciones || []).forEach(function(d){
+    if (!d || d.anulada) return;
+    if (String(d.levelId || '') !== String(levelId)) return;
+    if (Number(d.etapaIdx) !== Number(stageIdx)) return;
+    var q = d.qty || {};
+    Object.keys(q).forEach(function(k){ out[k] = (out[k] || 0) + (Number(q[k]) || 0); });
+  });
+  return out;
+}
+try { window._devolucionesDeEtapa = _devolucionesDeEtapa; } catch(e){}
+function _coberturaAptosEtapa(pedidos, levelId, stageIdx, devoluciones){
   var cob = {};
   (pedidos||[]).forEach(function(pd){
     if (!(pd && pd.esDeReceta && pd.recetaLevelId===levelId && pd.recetaEtapaIdx===stageIdx)) return;
@@ -14894,6 +14927,15 @@ function _coberturaAptosEtapa(pedidos, levelId, stageIdx){
       cob[k].total += Number(qtys[k]) || 0;
       if (pd.recetaAptoId) cob[k].porApto[pd.recetaAptoId] = true;
     });
+  });
+  /* v1136: lo que se fue por trasiego deja de estar cubierto — ese nivel vuelve a deber
+     EXACTAMENTE lo que salió. Nunca baja de cero: una devolución mayor a lo pedido dejaría
+     cobertura negativa y el nivel pediría de más. Y solo toca claves que ya tenían cobertura:
+     una devolución de un material que nadie pidió no inventa una cuenta. */
+  var _dv = _devolucionesDeEtapa(devoluciones, levelId, stageIdx);
+  Object.keys(_dv).forEach(function(k){
+    if (!cob[k]) return;
+    cob[k].total = Math.max(0, cob[k].total - (Number(_dv[k]) || 0));
   });
   return cob;
 }
@@ -14954,7 +14996,7 @@ function _etapaItemsParaPedir(p, t, l, stageIdx, aptoId){
   var metalKeywords=['POSTE','CANAL','CANALETA','CANALILLO','ANGULAR'];
   var yaMetal = stageIdx===0 && p.materiales && p.materiales.metalMedidaPedida && Array.isArray(p.materiales.metalMedidaPedida[l.id]) && p.materiales.metalMedidaPedida[l.id].length>0;
   var ya=_itemsYaPedidosEtapa(p.materiales&&p.materiales.pedidos, l.id, stageIdx);
-  var cob=_coberturaAptosEtapa(p.materiales&&p.materiales.pedidos, l.id, stageIdx); // v909
+  var cob=_coberturaAptosEtapa(p.materiales&&p.materiales.pedidos, l.id, stageIdx, p.materiales&&p.materiales.devolucionesReceta); // v909 · v1136 resta lo trasegado a otra obra
   var out=[];
   Object.keys(etapaReceta).forEach(function(key){
     var itemName=(key.split('::')[1]||key).toUpperCase();
@@ -23866,7 +23908,7 @@ function _abrirPickerProveedor(btn, idx){
     const _multi = _provsDelProducto(it.name);
     if (_multi.length > 1){
       _abrirPicker(btn, {
-        items: _multi.map(x => ({ id: x.id, label: x.nombre + '  ·  Q' + fmtQ(x.precio) })).concat([{ id: '_bodega', label: 'BODEGA CENTRAL (DESPACHO)' }]).concat(_dppOpcionesDeItem(it.name)).concat(_trasOpcionesDeItem()), // v990: precio con formato · v1068: pre-pago y trasiego
+        items: _multi.map(x => ({ id: x.id, label: x.nombre + '  ·  Q' + fmtQ(x.precio) })).concat([{ id: '_bodega', label: 'BODEGA CENTRAL (DESPACHO)' }]).concat(_dppOpcionesDeItem(it.name)).concat(_trasOpcionesDeItem(it.name)), // v990: precio con formato · v1068: pre-pago y trasiego
         selectedId: it.proveedorId || '',
         onPick: function(id){ updateOcItemProveedor(idx, id); }
       });
@@ -23875,7 +23917,7 @@ function _abrirPickerProveedor(btn, idx){
     if (it._provAuto){
       const provA = _getProveedores().find(x => x.id === it._provAuto);
       _abrirPicker(btn, {
-        items: [ { id: it._provAuto, label: (provA ? provA.nombre : 'PROVEEDOR DEL CATÁLOGO') }, { id: '_bodega', label: 'BODEGA CENTRAL (DESPACHO)' } ].concat(_dppOpcionesDeItem(it.name)).concat(_trasOpcionesDeItem()), // v1068
+        items: [ { id: it._provAuto, label: (provA ? provA.nombre : 'PROVEEDOR DEL CATÁLOGO') }, { id: '_bodega', label: 'BODEGA CENTRAL (DESPACHO)' } ].concat(_dppOpcionesDeItem(it.name)).concat(_trasOpcionesDeItem(it.name)), // v1068
         selectedId: it.proveedorId || '',
         onPick: function(id){ updateOcItemProveedor(idx, id); }
       });
@@ -23884,7 +23926,7 @@ function _abrirPickerProveedor(btn, idx){
     // sin proveedor auto (no hubo match en el catálogo): se deja elegir para no trabar la OC
   }
   _abrirPicker(btn, {
-    items: _provPickerItems('— ASIGNAR —').concat(_dppOpcionesDeItem(it.name)).concat(_trasOpcionesDeItem()), // v1068
+    items: _provPickerItems('— ASIGNAR —').concat(_dppOpcionesDeItem(it.name)).concat(_trasOpcionesDeItem(it.name)), // v1068
     selectedId: it.proveedorId || '',
     onPick: function(id){ updateOcItemProveedor(idx, id); }
   });
@@ -24856,7 +24898,12 @@ async function generarOrdenCompra(){
       _contM.ordenes.push(dpp);
       created.push(dpp);
     } else {
-      const _obraId = _eid.slice(6);
+      /* v1136: la clave puede traer el ÁREA de origen — '_tras:<obraId>:<levelId>:<etapaIdx>'.
+         Sin área es un SOBRANTE: mueve el gasto y no toca la receta de nadie. */
+      const _pt = String(_eid).slice(6).split(':');
+      const _obraId = _pt[0];
+      const _origLevelId = _pt[1] || '';
+      const _origEtapaIdx = (_pt.length > 2 && _pt[2] !== '') ? Number(_pt[2]) : null;
       const _obraO = ((state && state.projects) || []).find(x => x && x.id === _obraId);
       if (!_obraO) { showToast('LA OBRA ORIGEN DEL TRASIEGO YA NO EXISTE — ESE GRUPO NO SE GENERÓ', 'red'); continue; }
       const _destT = _destD; // v1071: mismo destino derivado
@@ -24876,6 +24923,8 @@ async function generarOrdenCompra(){
         proyecto: proyectoOc, area: areaOc,
         esDespacho: true, esTrasiego: true, esPrepago: false, esProduccion: false,
         origenProyectoId: _obraId, destinoProyectoId: _destT,
+        /* v1136: de qué área de la obra origen salió (vacío = sobrante) */
+        origenLevelId: _origLevelId, origenEtapaIdx: _origEtapaIdx,
         origenProyectoNombre: String(_obraO.name || _obraId).toUpperCase(), destinoProyectoNombre: _nomDest,
         proveedorId: '', proveedorNombre: 'TRASIEGO ENTRE OBRAS',
         formaPago: 'NO APLICA · TRASIEGO', credito: 0,
@@ -24889,6 +24938,37 @@ async function generarOrdenCompra(){
       };
       _bm.ordenes.push(tras);
       created.push(tras);
+      /* v1136: DESCARGA DEL ÁREA. Se anota una devolución en la obra que ENTREGA por lo que
+         salió — exactamente eso, ni más ni menos: ese nivel vuelve a deber lo que se llevó y
+         conserva el resto como cubierto. El pedido original NO se toca: ya se imprimió, se
+         firmó y se mandó al proveedor. Y se re-abre el candado de la etapa, que es booleano
+         derivado, para que vuelva a ofrecerse PEDIR ET. N. */
+      if (_origLevelId && _origEtapaIdx != null) {
+        try {
+          const _po = ((state && state.projects) || []).find(x => x && x.id === _obraId);
+          if (_po && _po.materiales) {
+            if (!Array.isArray(_po.materiales.devolucionesReceta)) _po.materiales.devolucionesReceta = [];
+            const _qtyDev = {};
+            /* la clave tiene que ser la MISMA de la receta, no el nombre que muestra la OC */
+            const _areas = _trasAreasConMaterial(_po, (_itemsT[0] || {}).name || '');
+            _itemsT.forEach(function(x){
+              const _a = _areas.find(function(z){ return z.levelId === _origLevelId && Number(z.etapaIdx) === Number(_origEtapaIdx) && _ocItemMemKey(z.clave) === _ocItemMemKey(x.name); });
+              const _k = _a ? _a.clave : x.name;
+              _qtyDev[_k] = (_qtyDev[_k] || 0) + (Number(x.qty) || 0);
+            });
+            _po.materiales.devolucionesReceta.push({
+              id: 'dv-' + uid(), ts: _tT, _ts: _tT,
+              trasId: tras.id, trasNumero: tras.numero,
+              levelId: _origLevelId, etapaIdx: Number(_origEtapaIdx),
+              qty: _qtyDev,
+              haciaProyectoId: _destT, haciaProyectoNombre: _nomDest,
+              por: String(_uT.displayName || _uT.username || '').toUpperCase()
+            });
+            _po._ts = _tT;
+            try { _recetaLiberarCandadoEtapa(_po, _origLevelId, Number(_origEtapaIdx)); } catch(e){}
+          }
+        } catch(e){ console.warn('[v1136] devolución por trasiego:', e); }
+      }
     }
   }
 
@@ -26427,6 +26507,20 @@ function _doDeleteOrden(id){
     p.materiales.ordenes = p.materiales.ordenes.filter(x => x.id !== id);
     if (!p.materiales.ordenesEliminadas || typeof p.materiales.ordenesEliminadas !== 'object') p.materiales.ordenesEliminadas = {};
     p.materiales.ordenesEliminadas[id] = Date.now();
+  }
+  /* v1136: si el trasiego descargó un área, al borrarlo hay que volver a cargarla — si no, ese
+     nivel queda pidiendo material para siempre y se termina comprando de más. La devolución se
+     ANULA (no se borra) por el mismo motivo que se creó aparte: la historia se lee completa. */
+  if (oc && oc.esTrasiego && oc.origenLevelId) {
+    try {
+      const _po = ((state && state.projects) || []).find(x => x && x.id === oc.origenProyectoId);
+      const _dvs = (_po && _po.materiales && _po.materiales.devolucionesReceta) || [];
+      let _n = 0;
+      _dvs.forEach(function(d){
+        if (d && d.trasId === oc.id && !d.anulada) { d.anulada = true; d.anuladaTs = Date.now(); d._ts = Date.now(); _n++; }
+      });
+      if (_n) { _po._ts = Date.now(); logActivity('update', 'TRASIEGO', 'Se re-cargó el área de ' + (_po.name || '') + ' al eliminar ' + (oc.numero || '')); }
+    } catch(e){ console.warn('[v1136] reversa de devolución:', e); }
   }
   logActivity('delete', `Orden de Compra No. ${oc.numero} eliminada`, `${_esDeBodegaMat ? 'BODEGA CENTRAL' : p.name} · ${oc.proveedorNombre} · Q ${fmtQ(oc.total)}`);
   saveState();
@@ -35925,14 +36019,46 @@ function _dppOpcionesDeItem(nombre){
 }
 /* v1068: opciones TRASIEGO · <obra> — todas las obras menos la que pide el material.
    Al generar nace el TRASIEGO v1066 (DIRECTO) ligado al pedido. */
-function _trasOpcionesDeItem(){
+/* v1136: las áreas de una obra donde ESE material está cubierto — o sea, dónde se pidió y hoy
+   figura como abastecido. Son las únicas de las que tiene sentido sacarlo, y por eso el picker
+   ofrece solo estas (no una lista genérica de niveles). PURA salvo la lectura del proyecto. */
+function _trasAreasConMaterial(proj, itemName){
+  var out = [];
+  try {
+    if (!proj || !proj.materiales) return out;
+    var k = _ocItemMemKey(itemName);
+    (proj.towers || []).forEach(function(t){
+      (t.levels || []).forEach(function(l){
+        for (var ei = 0; ei < 4; ei++) {
+          var cob = _coberturaAptosEtapa(proj.materiales.pedidos, l.id, ei, proj.materiales.devolucionesReceta);
+          Object.keys(cob).forEach(function(clave){
+            if (_ocItemMemKey(clave) !== k) return;
+            if (!(cob[clave].total > 0)) return;
+            out.push({ levelId: l.id, etapaIdx: ei, clave: clave, cubierto: cob[clave].total,
+                       label: String(t.name || '') + ' · ' + String(l.name || '') + ' · ET. ' + (ei + 1) });
+          });
+        }
+      });
+    });
+  } catch(e){}
+  return out;
+}
+try { window._trasAreasConMaterial = _trasAreasConMaterial; } catch(e){}
+/* v1136: además de la obra, el picker dice DE QUÉ ÁREA sale. La clave lleva el nivel y la
+   etapa para que al generar se sepa qué descargar. "SOBRANTE" mueve el gasto sin tocar receta. */
+function _trasOpcionesDeItem(itemName){
   var ops = [];
   try {
     var dest = _pedidoDestinoActual(); // v1071: destino derivado (con respaldo a la obra donde vive)
     if (!dest) return ops; // v1070: sin obra destino no hay trasiego (el gasto se perdería en el aire)
     ((state && state.projects) || []).forEach(function(x){
       if (!x || !x.id || x.id === dest) return;
-      ops.push({ id: '_tras:' + x.id, label: 'TRASIEGO · ' + String(x.name || x.id).toUpperCase() });
+      var nom = String(x.name || x.id).toUpperCase();
+      _trasAreasConMaterial(x, itemName).forEach(function(a){
+        ops.push({ id: '_tras:' + x.id + ':' + a.levelId + ':' + a.etapaIdx,
+                   label: 'TRASIEGO · ' + nom + ' · ' + a.label + ' (hay ' + a.cubierto + ')' });
+      });
+      ops.push({ id: '_tras:' + x.id, label: 'TRASIEGO · ' + nom + ' · SOBRANTE (no descarga área)' });
     });
   } catch(e){}
   return ops;
@@ -38897,7 +39023,7 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
 
   // v699b: dedup — sacar items YA pedidos antes; y si vienen selectedKeys (del selector), sólo esos.
   const _yaPedidos = _itemsYaPedidosEtapa(p.materiales.pedidos, levelId, stageIdx);
-  const _cobAptos = _coberturaAptosEtapa(p.materiales.pedidos, levelId, stageIdx); // v909
+  const _cobAptos = _coberturaAptosEtapa(p.materiales.pedidos, levelId, stageIdx, p.materiales.devolucionesReceta); // v909 · v1136
   const _selSet = Array.isArray(selectedKeys) ? new Set(selectedKeys) : null;
   const recetaDisponible = {};
   Object.keys(recetaFiltrada).forEach(key => {
@@ -39091,7 +39217,9 @@ function _pedidoResyncConReceta(p, pd){
       : (_recetaV2EtapaNivel(p, lid, ei) || {});
     if (!Object.keys(fuente).length) return false; // sin receta estándar resuelta: no tocar
     const otros = ((p.materiales && p.materiales.pedidos) || []).filter(x => x && x.id !== pd.id);
-    const cob = _coberturaAptosEtapa(otros, lid, ei) || {};
+    /* v1136: también acá — si no, el resync con la receta volvería a dar por cubierto lo que
+       se trasegó a otra obra */
+    const cob = _coberturaAptosEtapa(otros, lid, ei, p.materiales && p.materiales.devolucionesReceta) || {};
     const items = {}, recetaQty = {}, keysVivas = [];
     pd.recetaKeys.forEach(key => {
       if (!(key in fuente)) return; // material quitado de la receta

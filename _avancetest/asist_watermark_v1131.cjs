@@ -149,7 +149,10 @@ console.log('\n— el archivo en memoria no se sube ni se cachea —');
 ok('_asistArchive queda fuera de lo que viaja a la nube', /_asistArchive/.test(code) && /delete .*_asistArchive/.test(code));
 
 console.log('\n— el ritual de sync —');
-ok('APP_SYNC_VERSION subió a 924', /APP_SYNC_VERSION = 924/.test(code));
+/* >= y no el literal: el guard entró en 924 y la versión sigue subiendo con cada cambio de
+   sync. Clavar el número hace que el test se rompa solo — ya mordió 4 veces (nota de v902). */
+ok('APP_SYNC_VERSION es 924 o mayor',
+  Number((code.match(/APP_SYNC_VERSION = (\d+)/) || [])[1] || 0) >= 924);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

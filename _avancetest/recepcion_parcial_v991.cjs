@@ -22,10 +22,12 @@ if (fC) {
 // ── la cobertura y el "ya pedido" respetan la recepción ──
 const zCob = ex('function _coberturaAptosEtapa(');
 let fCob = null;
-try { fCob = new Function('_pedidoCubre', 'return (' + zCob + ')'); } catch(e){}
+try { fCob = new Function('_pedidoCubre','_devolucionesDeEtapa', 'return (' + zCob + ')'); } catch(e){}
 if (fCob) {
   const cubre = pd => (pd.recepcion && pd.recepcion.recetaRecibido) || pd.recetaQty || {};
-  const f = fCob(cubre);
+  /* v1136: la cobertura ahora resta las devoluciones por trasiego. Acá se inyecta vacío a
+     propósito: este test verifica la recepción parcial SIN trasiegos de por medio. */
+  const f = fCob(cubre, () => ({}));
   // pedido de NIVEL con recepción parcial: su recibido entra a la resta
   const r1 = f([{ esDeReceta:true, recetaLevelId:'l2', recetaEtapaIdx:0, recetaQty:{ A:100 }, recepcion:{ parcial:true, recetaRecibido:{ A:60 } } }], 'l2', 0);
   ok('el pedido de NIVEL parcial suma su RECIBIDO a la cobertura', r1.A && r1.A.total === 60);

@@ -46,7 +46,7 @@ const zYa    = ex('function _itemsYaPedidosEtapa(');
 let cubre=null, cob=null, ya=null;
 try {
   cubre = new Function('return (' + zCubre + ')')();
-  cob   = new Function('_pedidoCubre', 'return (' + zCob + ')')(cubre);
+  cob   = new Function('_pedidoCubre','_devolucionesDeEtapa', 'return (' + zCob + ')')(cubre, () => ({}));
   ya    = new Function('return (' + zYa + ')')();
 } catch(e){ console.log('   (no evaluable: ' + e.message + ')'); }
 

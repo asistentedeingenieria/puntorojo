@@ -12,7 +12,11 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
 // ── 1. sync: union-merge del store con tombstones (regla v752) ──
 const iApply = html.indexOf('applyRemote(remoteData');
-const zApply = html.slice(iApply, iApply + 30000);
+/* v1136: la ventana era de 30.000 caracteres y applyRemote sigue creciendo (cada contenedor
+   nuevo que se une suma su bloque). Al agregar el merge de devoluciones por trasiego, el de
+   bodega quedó fuera y el test se puso rojo sin que nada se hubiera roto. Se amplía; si vuelve
+   a pasar, conviene extraer la función completa en vez de seguir estirando el número. */
+const zApply = html.slice(iApply, iApply + 60000);
 ok('applyRemote mergea bodegaMat.pedidos', /state\.bodegaMat/.test(zApply) && /_mergeById\(_bmL\.pedidos/.test(zApply));
 ok('applyRemote mergea bodegaMat.ordenes', /_mergeById\(_bmL\.ordenes/.test(zApply));
 ok('...con tombstones de ambos', /pedidosEliminados/.test(zApply) && /ordenesEliminadas/.test(zApply));
