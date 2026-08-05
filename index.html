@@ -3376,7 +3376,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1143</span>
+    <span style="opacity:.5;font-size:9px">v1144</span>
   </footer>
 
 </div>
@@ -23671,7 +23671,14 @@ async function openOrdenCompra(){
   if (!can('compras.autorizar') && !can('users.manage') && !_okBodega) return showToast('SOLO QUIEN AUTORIZA OC PUEDE GENERARLAS', 'red');
 
   const existingOcs = getPedidoOrdenes(pd.id);
-  if (existingOcs.length > 0) {
+  /* v1144: la EDICIÓN se exime del candado — _ocEditarBorrador setea _ocEditandoId y el
+     barrido v1001 reemplaza las versiones viejas al generar, así que no se duplica nada.
+     Este candado NUNCA tuvo la exención: el flujo EDITAR estuvo roto desde v1001 (el pedido
+     siempre tiene la orden que estás editando) y el CORREGIR de v1143 lo puso a la vista.
+     La exención exige que la orden editada sea DE ESTE pedido: un _ocEditandoId huérfano de
+     otra pantalla no abre el candado. */
+  const _editando = window._ocEditandoId && existingOcs.some(o => o && o.id === window._ocEditandoId);
+  if (existingOcs.length > 0 && !_editando) {
     // v927: un pedido con sus OC generadas NO genera más (antes se permitían "adicionales").
     // Si hace falta rehacerlas, se eliminan las OC y el botón vuelve a aparecer.
     return showToast('ESTE PEDIDO YA TIENE SUS ÓRDENES GENERADAS', 'red');
@@ -24773,7 +24780,11 @@ async function generarOrdenCompra(){
   if (!_ctx) return showToast('EL PEDIDO YA NO EXISTE (CAMBIÓ EN OTRO DISPOSITIVO) — RECARGÁ', 'red');
   p = activeProj();
   pd = _ctx.pd;
-  if (getPedidoOrdenes(pd.id).length > 0) return showToast('ESTE PEDIDO YA TIENE SUS ÓRDENES GENERADAS', 'red');
+  /* v1144: misma exención que en openOrdenCompra — este es el re-check tras el await (v940),
+     y una capa sola ya falló antes */
+  const _ordenesPrevias = getPedidoOrdenes(pd.id);
+  const _editandoG = window._ocEditandoId && _ordenesPrevias.some(o => o && o.id === window._ocEditandoId);
+  if (_ordenesPrevias.length > 0 && !_editandoG) return showToast('ESTE PEDIDO YA TIENE SUS ÓRDENES GENERADAS', 'red');
   /* v964/v978/v992: folio DERIVADO (sin contador mutable) y que rellena huecos.
      v993 (pedido de Antonio): CADA SERIE lleva su propio correlativo — las órdenes de
      compra (OC), los despachos de bodega (DESP) y las órdenes de producción (OP) ya no
@@ -25076,7 +25087,10 @@ async function generarOrdenCompra(){
         const o = _arr[i];
         if (!o || _nuevos[o.id]) continue;
         if (o.pedidoId !== pd.id) continue;
-        if ((o.status || 'AUTORIZADA') !== 'PENDIENTE_AUTORIZACION') continue;
+        /* v1144: la DEVUELTA por finanzas también se barre — es justamente la versión que se
+           está corrigiendo; dejarla viva duplicaría el material junto a la orden nueva */
+        const _stB = o.status || 'AUTORIZADA';
+        if (_stB !== 'PENDIENTE_AUTORIZACION' && _stB !== 'DEVUELTA') continue;
         _arr.splice(i, 1);
         // tombstone: el borrador corregido no puede resucitar por el union-merge (v972)
         _ctx.cont.ordenesEliminadas = _ctx.cont.ordenesEliminadas || {};
@@ -25101,7 +25115,9 @@ async function generarOrdenCompra(){
           if (!o || _nuevos2[o.id]) continue;
           if (o.pedidoId !== pd.id) continue;
           if (_ocSerieDe(o) !== 'DPP') continue;
-          if ((o.status || 'AUTORIZADA') !== 'PENDIENTE_AUTORIZACION') continue;
+          /* v1144: mismo criterio que arriba — la DEVUELTA también se reemplaza */
+          const _stB = o.status || 'AUTORIZADA';
+          if (_stB !== 'PENDIENTE_AUTORIZACION' && _stB !== 'DEVUELTA') continue;
           _cB.ordenes.splice(i, 1);
           _cB.ordenesEliminadas = _cB.ordenesEliminadas || {};
           _cB.ordenesEliminadas[o.id] = Date.now(); // tombstone: no resucita por union-merge (v972)

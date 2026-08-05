@@ -51,7 +51,11 @@ ok('regenerar reemplaza la orden en edición (no crea otra)', /_ocEditandoId/.te
 ok('no se edita si el pedido ya tiene otra orden AUTORIZADA', /YA TIENE OTRA ORDEN AUTORIZADA/.test(zE));
 const zG2 = ex('async function generarOrdenCompra(');
 ok('al regenerar se quitan las versiones pendientes viejas del pedido', /_nuevos\[o\.id\]/.test(zG2) && /o\.pedidoId !== pd\.id/.test(zG2));
-ok('las autorizadas nunca se borran en ese barrido', /!== 'PENDIENTE_AUTORIZACION'\) continue/.test(zG2));
+/* v1144: el barrido ahora también quita las DEVUELTAS (es la versión que se está corrigiendo).
+   La propiedad de esta aserción SE CONSERVA: una AUTORIZADA no es ni pendiente ni devuelta,
+   así que el continue la salta igual — jamás se barre. */
+ok('las autorizadas nunca se borran en ese barrido',
+  /_stB !== 'PENDIENTE_AUTORIZACION' && _stB !== 'DEVUELTA'\) continue/.test(zG2));
 ok('el borrador reemplazado deja tombstone (union-merge v972)', /ordenesEliminadas\[o\.id\] = Date\.now\(\)/.test(zG2));
 ok('el reemplazo ocurre DESPUÉS de crear las nuevas', zG2.indexOf('created.push(oc)') < zG2.indexOf('_ocEditandoId && created.length'));
 
