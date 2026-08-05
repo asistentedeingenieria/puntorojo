@@ -43,7 +43,11 @@ console.log('\n— el papel lo imprime —');
 const info = code.slice(code.indexOf('<dt>Señores:</dt>'), code.indexOf('<dt>Señores:</dt>') + 1400);
 ok('el impreso tiene una línea Área', /<dt>Área:<\/dt>/.test(info));
 ok('sale debajo de Proyecto, como en su formato', info.indexOf('<dt>Proyecto:</dt>') < info.indexOf('<dt>Área:</dt>'));
-ok('solo aparece si el despacho trae área (no deja una línea vacía)', /areaDestino[\s\S]{0,120}<dt>Área:/.test(info));
+/* v1141: la línea dejó de leer areaDestino directo — pasa por _ocAreaImpreso, que prioriza
+   areaDestino (despachos) y agrega oc.area (OC normales) + derivación del pedido. El
+   comportamiento de v1123 se conserva: sin dato, el renglón no se imprime. */
+ok('solo aparece si el documento trae área (no deja una línea vacía)',
+  /_ocAreaImpreso\(oc\)[\s\S]{0,80}<dt>Área:/.test(info));
 
 console.log('\n— el área viaja al resumen —');
 const zR = ex(code, 'function _dppResumenPorObra(');

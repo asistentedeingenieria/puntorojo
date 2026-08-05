@@ -32,7 +32,9 @@ ok('el documento usa la etiqueta, no las siglas crudas', /_ocProyectoLabel\(oc\)
    siempre llevó a mano y sin el cual el que recibe no sabe a qué torre subir el material.
    Ahora la línea existe pero SOLO si el documento trae área: sin dato no deja el renglón vacío,
    que era la queja original de v1001. */
-ok('el Área solo se imprime cuando el documento la trae', /areaDestino[\s\S]{0,140}<dt>Área:<\/dt>/.test(html));
+/* v1141: la línea pasa por _ocAreaImpreso (areaDestino → area → pedido origen). La regla de
+   fondo de v1001 se conserva: sin dato, el renglón no se imprime. */
+ok('el Área solo se imprime cuando el documento la trae', /_ocAreaImpreso\(oc\)[\s\S]{0,80}<dt>Área:<\/dt>/.test(html));
 ok('el modal pone BODEGA CENTRAL en el campo proyecto', /_esAbastoOc \? 'BODEGA CENTRAL'/.test(html));
 
 // ── 2. editar la OC mientras no esté autorizada ──
