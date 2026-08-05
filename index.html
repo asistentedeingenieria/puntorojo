@@ -3376,7 +3376,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1144</span>
+    <span style="opacity:.5;font-size:9px">v1145</span>
   </footer>
 
 </div>
@@ -24182,7 +24182,7 @@ window.updateOcItemVariante = function(idx, valor){
   }
   renderOcItems();
 };
-function updateOcItemProveedor(idx, provId){
+function updateOcItemProveedor(idx, provId, opts){
   const item = ocWorkingItems[idx];
   if (!item) return;
   // v1068: pseudo-fuentes nuevas — liberar de una COMPRA PRE-PAGO o TRASEGAR de otra obra
@@ -24224,6 +24224,19 @@ function updateOcItemProveedor(idx, provId){
     }
     renderOcItems();
     return;
+  }
+  /* v1145 (pedido de Antonio: "la pasta tengo 2 en bodega central y una la tengo que
+     comprar"): elegir BODEGA con saldo que NO cubre la cantidad pregunta cuántas van de
+     bodega y PARTE la línea — lo demás se compra con el proveedor que la línea ya tenía.
+     El check va ANTES de mutar nada: si se pregunta, la línea queda intacta hasta la
+     respuesta. Saldo CERO no pregunta (no hay nada que partir): sigue el aviso de siempre.
+     La re-entrada tras partir pasa {sinPreguntar:true} para no preguntar en bucle. */
+  if (provId === '_bodega' && !(opts && opts.sinPreguntar)) {
+    const _resB = _bodegaBuscarMaterial(item.name);
+    if (_resB && _resB.saldo > 0 && (Number(item.qty) || 0) > _resB.saldo + 0.0001) {
+      _ocPreguntarParticionBodega(idx, _resB);
+      return;
+    }
   }
   item.proveedorId = provId || '';
   item.autoAssigned = false;
@@ -24268,6 +24281,56 @@ function updateOcItemProveedor(idx, provId){
 /* v1016: busca un material en la BODEGA CENTRAL y devuelve cómo está registrado ahí — su
    nombre real, su saldo y el precio con que entró. Respeta las equivalencias declaradas en la
    limpia del catálogo (v1010): si Antonio dijo que dos nombres son el mismo, los encuentra. */
+/* v1145: parte una línea de la OC en (lo que sale de bodega) + (lo que se compra).
+   PURA: devuelve DOS COPIAS y no toca la original — el resto conserva el proveedor y el
+   precio del catálogo que la línea ya tenía (decisión de Antonio), y las dos comparten
+   sourceKey porque la recepción SUMA lo recibido por clave a través de las entregas
+   (v996/v1036): 2 de bodega + 1 comprada cubren el pedido de 3. Solo parte con
+   0 < deBodega < qty; cualquier otra cosa devuelve null y el llamador decide. */
+function _ocPartirLineaBodega(item, deBodega){
+  if (!item) return null;
+  const q = Number(item.qty) || 0;
+  const b = Number(deBodega);
+  if (!isFinite(b) || b <= 0 || b >= q - 0.0001) return null;
+  const bodega = Object.assign({}, item, { qty: b });
+  const resto = Object.assign({}, item, { qty: Math.round((q - b) * 10000) / 10000, esBodega: false });
+  return { bodega: bodega, resto: resto };
+}
+/* v1145: la pregunta. El valor viaja por oninput a window._ocPartForm (v813: prConfirm
+   destruye el modal antes de resolver el await). Tras el await se RE-LEE la línea:
+   ocWorkingItems pudo cambiar mientras el modal estuvo abierto. */
+async function _ocPreguntarParticionBodega(idx, resB){
+  const item = ocWorkingItems[idx];
+  if (!item) return;
+  const _e = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  window._ocPartForm = { deBodega: String(resB.saldo) };
+  const okc = await window.prConfirm({
+    title: 'LA BODEGA NO CUBRE TODO',
+    bodyHTML: '<div style="font-size:12px;color:#444;line-height:1.6">En bodega central hay <b>' + _e(resB.saldo) + '</b> de <b>' + _e(resB.name || item.name) + '</b> y el pedido lleva <b>' + _e(item.qty) + '</b>.</div>'
+      + '<label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">¿CUÁNTAS VAN DE BODEGA?</label>'
+      + '<input type="number" min="0" step="any" value="' + _e(resB.saldo) + '" class="pr-fld" style="width:120px;text-align:right" oninput="window._ocPartForm.deBodega = this.value">'
+      + '<div style="font-size:10.5px;color:#78716C;margin-top:8px;line-height:1.5">Lo que falte se compra con el proveedor que la línea ya tenía. Poné <b>0</b> para comprarlo todo.</div>',
+    okText: 'ACEPTAR', cancelText: 'CANCELAR'
+  });
+  if (!okc) return;  /* cancelar: la línea queda como estaba */
+  const item2 = ocWorkingItems[idx];
+  if (!item2 || item2 !== item) return showToast('LA LISTA CAMBIÓ MIENTRAS TANTO — VOLVÉ A ELEGIR', 'red');
+  const b = Number(String((window._ocPartForm || {}).deBodega || '').replace(',', '.'));
+  if (!isFinite(b) || b < 0) return showToast('CANTIDAD INVÁLIDA — NO SE PARTIÓ NADA', 'red');
+  if (b === 0) return showToast('TODO SE COMPRA — LA LÍNEA QUEDA COMO ESTABA', 'ok');
+  if (b >= (Number(item2.qty) || 0) - 0.0001) {
+    /* todo a bodega aunque no alcance: el camino de siempre avisa SE DESPACHA LO QUE HAYA */
+    updateOcItemProveedor(idx, '_bodega', { sinPreguntar: true });
+    return;
+  }
+  const _p = _ocPartirLineaBodega(item2, b);
+  if (!_p) return;
+  ocWorkingItems.splice(idx, 1, _p.bodega, _p.resto);
+  /* la parte de bodega se asigna por el camino NORMAL: adopta el nombre y el precio con
+     que está en bodega, marca esBodega y cae en su propia orden (_ocGrupoKey v1133) */
+  updateOcItemProveedor(idx, '_bodega', { sinPreguntar: true });
+  showToast('PARTIDO: ' + b + ' DE BODEGA + ' + _p.resto.qty + ' AL PROVEEDOR', 'ok');
+}
 function _bodegaBuscarMaterial(nombre){
   const saldos = (typeof window._bodegaSaldos === 'function') ? window._bodegaSaldos((state || {}).bodegaMovs) : {};
   const k0 = (function(){ try { return _ocItemMemKey(nombre); } catch(e){ return ''; } })();
