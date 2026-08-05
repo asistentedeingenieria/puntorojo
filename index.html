@@ -3376,7 +3376,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1142</span>
+    <span style="opacity:.5;font-size:9px">v1143</span>
   </footer>
 
 </div>
@@ -26004,7 +26004,8 @@ function renderOrdenesList(){
     /* v1125: lo que espera firma de finanzas va ARRIBA siempre. Un despacho hereda el pedido
        de la madre; si ese pedido de bodega ya está RECIBIDO, _ocPendienteDeRecibir lo mandaría
        al historial colapsado y parecería que "sigue sin aparecer". */
-    if ((oc && oc.status) === 'PENDIENTE_AUTORIZACION') { _ocPend.push(oc); return; }
+    /* v1143: la DEVUELTA también va arriba — es trabajo pendiente de compras, no historial */
+    if ((oc && oc.status) === 'PENDIENTE_AUTORIZACION' || (oc && oc.status) === 'DEVUELTA') { _ocPend.push(oc); return; }
     /* v1130 (Antonio): "cuando ya la OP se le genera su OC quiero que la OP pase al historial".
        Una producción ya convertida no es trabajo pendiente — ocupa el lugar de lo que sí falta.
        Se guarda como respaldo dentro del historial. Ojo: NO se marca como recibida (nadie
@@ -26019,13 +26020,22 @@ function renderOrdenesList(){
     const st = oc.status || 'AUTORIZADA'; // fallback para OCs antiguas
     const isPending = st === 'PENDIENTE_AUTORIZACION';
     const isAuth = st === 'AUTORIZADA';
+    const isDevuelta = st === 'DEVUELTA'; // v1143: finanzas la regresó con observación
 
     let statusBadge = '';
     if (isPending) {
       statusBadge = `<div style="display:inline-block;background:#FFFBEB;color:#B45309;padding:3px 9px;border-radius:10px;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border:1px solid #B45309">PENDIENTE FINANZAS</div>`; // v993: pendiente = naranja
     } else if (isAuth) {
       statusBadge = `<div style="display:inline-block;background:#F0FDF4;color:#15803D;padding:3px 9px;border-radius:10px;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border:1px solid #15803D">AUTORIZADA</div>`; // v993: autorizado = verde
+    } else if (isDevuelta) {
+      statusBadge = `<div style="display:inline-block;background:#FEF2F2;color:#B91C1C;padding:3px 9px;border-radius:10px;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border:1px solid #B91C1C">DEVUELTA · CORREGIR</div>`;
     }
+
+    /* v1143: el motivo de la devolución, visible en la fila — es lo que compras necesita
+       leer para saber qué cambiar (antes viajaba por WhatsApp) */
+    const devueltaInfo = (isDevuelta && oc.devolucion && oc.devolucion.motivo)
+      ? `<div style="font-size:10px;color:#B91C1C;margin-top:4px;font-weight:600">FINANZAS: ${String(oc.devolucion.motivo).replace(/[<>]/g,'')}${oc.devolucion.por ? ' — ' + String(oc.devolucion.por).replace(/[<>]/g,'') : ''}</div>`
+      : '';
 
     const autorizInfo = isAuth && oc.autorizadoPor
       ? `<div style="font-size:9px;color:var(--mute);margin-top:3px">POR ${oc.autorizadoPor}</div>`
@@ -26077,6 +26087,14 @@ function renderOrdenesList(){
       : (isPending && canAuthorize && _ocPropia
         ? `<button class="btn ghost sm" disabled style="opacity:.5;cursor:not-allowed" title="Esta OC la generaste vos — la debe autorizar otra persona">AUTORIZAR</button>`
         : '');
+    /* v1143: finanzas puede DEVOLVER en vez de autorizar — con observación obligatoria */
+    const devolverBtn = (isPending && canAuthorize)
+      ? `<button class="btn ghost sm" onclick="window._ocDevolver('${oc.id}')" style="color:#B91C1C;border-color:#FCA5A5" title="Regresarla a compras con la observación de qué corregir">DEVOLVER</button>`
+      : '';
+    /* v1143: compras corrige la devuelta desde la propia fila (reusa el editor de borradores) */
+    const corregirBtn = (isDevuelta && (canFactura || can('materiales.bodega')))
+      ? `<button class="btn sm" onclick="_ocEditarBorrador('${oc.id}')" style="background:#B91C1C;border-color:#B91C1C;color:#fff" title="Corregir lo que señaló finanzas y volver a generarla">CORREGIR</button>`
+      : '';
 
     const viewBtn = isPending
       ? `<button class="btn ghost sm" onclick="previewOrden('${oc.id}')" title="Ver borrador">VER BORRADOR</button>`
@@ -26133,7 +26151,7 @@ function renderOrdenesList(){
       <div class="oc-list-num"><small>No.</small>${numHTML}</div>
       <dl class="oc-list-info" style="margin:0">
         <dd class="proveedor">${oc.proveedorNombre || '—'}</dd>
-        <div style="margin-top:4px">${statusBadge}${autorizInfo}</div>
+        <div style="margin-top:4px">${statusBadge}${autorizInfo}${devueltaInfo}</div>
         ${_opEstado}
         ${facturaInfo}
         ${recibidaInfo}
@@ -26152,6 +26170,8 @@ function renderOrdenesList(){
       <div class="oc-list-total">Q ${fmtQ(oc.total)}<small>TOTAL</small></div>
       <div class="oc-list-actions">
         ${authBtn}
+        ${devolverBtn}
+        ${corregirBtn}
         ${viewBtn}
         ${recibirBtn}
         ${recibirObraBtn}
@@ -26279,7 +26299,8 @@ window._ocEditarBorrador = async function(ocId){
   const _hit = _bodegaFindOc(ocId);
   const oc = _hit && _hit.oc;
   if (!oc) return showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red');
-  if ((oc.status || 'AUTORIZADA') !== 'PENDIENTE_AUTORIZACION') {
+  /* v1143: la DEVUELTA por finanzas también se edita — es justamente para eso */
+  if ((oc.status || 'AUTORIZADA') !== 'PENDIENTE_AUTORIZACION' && (oc.status || '') !== 'DEVUELTA') {
     return showToast('YA ESTÁ AUTORIZADA — NO SE PUEDE EDITAR', 'red');
   }
   /* El modal re-arma la orden DESDE EL PEDIDO y vuelve a agrupar por proveedor, así que
@@ -26289,9 +26310,14 @@ window._ocEditarBorrador = async function(ocId){
   if (_hermanas.some(o => o && o.id !== ocId && (o.status || 'AUTORIZADA') === 'AUTORIZADA')) {
     return showToast('ESTE PEDIDO YA TIENE OTRA ORDEN AUTORIZADA — NO SE PUEDE RE-ARMAR', 'red');
   }
+  /* v1143: si finanzas la devolvió, la observación se muestra ACÁ — es lo primero que compras
+     tiene que leer antes de corregir */
+  const _obsDev = (oc.devolucion && oc.devolucion.motivo)
+    ? `<div style="margin-top:10px;padding:8px 12px;background:#FEF2F2;border-left:3px solid #B91C1C;font-size:12px;color:#B91C1C;font-weight:600">FINANZAS DEVOLVIÓ ESTA ORDEN: ${String(oc.devolucion.motivo).replace(/[<>]/g,'')}</div>`
+    : '';
   const _ok = await window.prConfirm({
     title: 'CORREGIR LA ORDEN',
-    bodyHTML: `<div style="font-size:12.5px;color:#333;line-height:1.5">Vas a volver a armar <b>${String(_numLimpio(oc.numero)).replace(/[<>]/g,'')}</b> (${String(oc.proveedorNombre||'').replace(/[<>]/g,'')}).</div>
+    bodyHTML: `<div style="font-size:12.5px;color:#333;line-height:1.5">Vas a volver a armar <b>${String(_numLimpio(oc.numero)).replace(/[<>]/g,'')}</b> (${String(oc.proveedorNombre||'').replace(/[<>]/g,'')}).</div>${_obsDev}
                <div style="margin-top:10px;font-size:12px;color:#666">Al generarla de nuevo, esta versión se reemplaza. Si el pedido tiene otras órdenes, no se tocan.</div>`,
     okText: 'CORREGIR', cancelText: 'CANCELAR'
   });
@@ -26299,7 +26325,7 @@ window._ocEditarBorrador = async function(ocId){
   // re-leer tras el modal (regla v769/v770): pudo autorizarse mientras tanto
   const _hit2 = _bodegaFindOc(ocId);
   if (!_hit2 || !_hit2.oc) return showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red');
-  if ((_hit2.oc.status || 'AUTORIZADA') !== 'PENDIENTE_AUTORIZACION') {
+  if ((_hit2.oc.status || 'AUTORIZADA') !== 'PENDIENTE_AUTORIZACION' && (_hit2.oc.status || '') !== 'DEVUELTA') {
     return showToast('YA FUE AUTORIZADA MIENTRAS TANTO — NO SE PUEDE EDITAR', 'red');
   }
   window._ocEditandoId = ocId;
@@ -26329,6 +26355,60 @@ window._ocAvisoEntrega = function(){
 function _puedeAutorizarOc(){
   try { return can('compras.revisar') || can('users.manage'); } catch(e){ return false; }
 }
+/* ═══════════ v1143 · FINANZAS DEVUELVE LA ORDEN A COMPRAS ═══════════
+   Antonio: "necesito que la persona que autoriza las órdenes de compra de finanzas tenga la
+   opción de devolverle a la de compras la orden si hay algo que está mal... pero que OBLIGUE
+   a poner una observación para que la de compras sepa qué es lo que tiene que cambiar."
+   Hoy finanzas solo podía autorizar o dejar la orden en el limbo, y el "corregí esto" viajaba
+   por WhatsApp. El ciclo queda dentro de la app:
+     PENDIENTE --[DEVOLVER + motivo obligatorio]--> DEVUELTA --[compras EDITA]--> PENDIENTE */
+window._ocDevolver = async function(id){
+  if (!can('compras.revisar') && !can('users.manage')) return showToast('SOLO EL REVISOR DE FINANZAS PUEDE DEVOLVER', 'red');
+  const _f = _bodegaFindOc(id);
+  if (!_f || !_f.oc) return showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red');
+  if ((_f.oc.status || 'AUTORIZADA') !== 'PENDIENTE_AUTORIZACION') return showToast('SOLO SE DEVUELVE UNA ORDEN PENDIENTE DE AUTORIZAR', 'red');
+  const _e = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  /* la observación se captura por oninput: prConfirm destruye el modal antes del await (v813) */
+  window._ocDevForm = { motivo: '' };
+  const okc = await window.prConfirm({
+    title: 'DEVOLVER A COMPRAS',
+    bodyHTML: '<div style="font-size:12px;color:#444;line-height:1.6">La <b>' + _e(_numLimpio(_f.oc.numero)) + '</b> (' + _e(_f.oc.proveedorNombre || '') + ') vuelve a compras para que la corrija.</div>'
+      + '<label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">¿QUÉ ESTÁ MAL? — OBLIGATORIO</label>'
+      + '<textarea class="pr-fld" rows="3" style="width:100%;resize:vertical" placeholder="EJ: EL PROVEEDOR NO ES — ES DESPACHO DE BODEGA, NO COMPRA" oninput="window._ocDevForm.motivo = this.value"></textarea>'
+      + '<div style="font-size:10.5px;color:#78716C;margin-top:6px">Compras va a ver esta observación en la orden y en su campanita.</div>',
+    okText: 'DEVOLVER', cancelText: 'CANCELAR'
+  });
+  if (!okc) return;
+  const _motivo = String((window._ocDevForm || {}).motivo || '').trim();
+  if (!_motivo) return showToast('ESCRIBÍ LA OBSERVACIÓN — LA ORDEN NO SE DEVOLVIÓ', 'red');
+  /* re-leer del state vivo tras el await del modal (patrón v769/v940) */
+  const _f2 = _bodegaFindOc(id);
+  if (!_f2 || !_f2.oc) return showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red');
+  if ((_f2.oc.status || 'AUTORIZADA') !== 'PENDIENTE_AUTORIZACION') return showToast('CAMBIÓ DE ESTADO MIENTRAS TANTO — NO SE HIZO NADA', 'red');
+  const _u = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  const _t = Date.now();
+  _f2.oc.status = 'DEVUELTA';
+  _f2.oc.devolucion = {
+    motivo: _motivo,
+    por: String(_u.displayName || _u.username || '').toUpperCase(),
+    ts: _t,
+    fecha: (typeof _dateALatam === 'function') ? _dateALatam(new Date()) : ''
+  };
+  _f2.oc._ts = _t;   /* el contenedor viaja por union-merge (v972) */
+  try { logActivity('update', 'ORDEN DE COMPRA', 'Devuelta a compras: ' + (_f2.oc.numero || '') + ' — ' + _motivo); } catch(e){}
+  try {
+    if (typeof window.prAddNotif === 'function') window.prAddNotif({
+      toPerms: ['compras.autorizar', 'users.manage'],
+      title: 'ORDEN DEVUELTA POR FINANZAS',
+      body: _numLimpio(_f2.oc.numero) + ' (' + (_f2.oc.proveedorNombre || '') + '): ' + _motivo + ' — corregila y volvé a generarla.',
+      type: 'oc.devuelta'
+    });
+  } catch(e){}
+  saveState();
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch(e){}
+  try { renderOrdenesList(); } catch(e){}
+  showToast('DEVUELTA A COMPRAS', 'red');
+};
 async function autorizarOrden(id){
   // v919: autoriza el REVISOR (compras.revisar) — compras genera pero no autoriza
   if (!can('compras.revisar') && !can('users.manage')) return showToast('SOLO EL REVISOR AUTORIZADO PUEDE DAR EL VISTO BUENO Y FIRMAR', 'red');
@@ -26338,6 +26418,10 @@ async function autorizarOrden(id){
   if (!oc) return;
 
   if (oc.status === 'AUTORIZADA') return showToast('YA ESTÁ AUTORIZADA', 'amber');
+  /* v1143: una DEVUELTA no se autoriza — compras tiene que corregirla primero. El botón no
+     aparece para devueltas, pero el guard cubre la carrera (otra pestaña la devolvió mientras
+     este modal estaba abierto) y la consola. */
+  if (oc.status === 'DEVUELTA') return showToast('FUE DEVUELTA A COMPRAS — TIENE QUE CORREGIRLA PRIMERO', 'red');
 
   // v919: quien generó la OC no puede autorizarla (control interno). Admin exento.
   if (!can('users.manage')) {
@@ -26383,6 +26467,8 @@ async function autorizarOrden(id){
   p = (_hit && _hit.p) || activeProj();
   if (!oc) return showToast('LA OC YA NO EXISTE (CAMBIÓ EN OTRO DISPOSITIVO) — RECARGÁ LA LISTA', 'red');
   if (oc.status === 'AUTORIZADA') return showToast('YA ESTÁ AUTORIZADA', 'amber');
+  /* v1143: segunda capa — la pudieron devolver mientras este modal estaba abierto */
+  if (oc.status === 'DEVUELTA') return showToast('FUE DEVUELTA A COMPRAS MIENTRAS TANTO — NO SE AUTORIZÓ', 'red');
 
   /* v1061: un DESPACHO PRE-PAGO no puede autorizar más de lo que queda por liberar de su
      compra anticipada — si otro despacho se adelantó mientras este esperaba, se frena acá

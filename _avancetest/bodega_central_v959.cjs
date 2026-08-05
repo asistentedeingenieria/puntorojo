@@ -156,7 +156,10 @@ ok('botón GENERAR OC del detalle admite bodega', /materiales\.bodega/.test(zDet
 
 // ── 14. MARCAR RECIBIDO en la lista de órdenes (solo abastecimiento autorizado) ──
 const iRol = html.indexOf('const canDeleteOC = can(');
-const zLista = html.slice(iRol, iRol + 9000);
+/* v1143: la ventana era de 9.000 caracteres y la fila de la orden sigue creciendo (cada botón
+   nuevo suma su bloque — DEVOLVER/CORREGIR la empujaron fuera). Se amplía; si vuelve a pasar,
+   extraer la función completa en vez de seguir estirando el número. */
+const zLista = html.slice(iRol, iRol + 16000);
 ok('renderOrdenesList arma botón MARCAR RECIBIDO', /_ocAbrirRecibido/.test(zLista));
 
 // ── 15. eliminar orden con movimientos escribe la REVERSA (auditable) ──
