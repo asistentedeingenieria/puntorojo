@@ -94,7 +94,8 @@ console.log('\n— la firma también sube de inmediato —');
 ok('la firma QR hace forceUploadNow tras guardar', /Acuse digital firmado[\s\S]{0,400}forceUploadNow|forceUploadNow[\s\S]{0,600}Acuse digital firmado/.test(code));
 
 console.log('\n— el ritual de sync —');
-ok('APP_SYNC_VERSION subió a 926', /APP_SYNC_VERSION = 926/.test(html));
+/* v1152: sin literal congelado — el invariante es AL MENOS 926 (la lección de v1136, otra vez) */
+ok('APP_SYNC_VERSION subió a 926 o más', (Number((html.match(/APP_SYNC_VERSION = (\d+)/) || [])[1]) || 0) >= 926);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
