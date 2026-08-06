@@ -140,10 +140,15 @@ const SITIOS = [
   ['applyRemote',                    /_mergeAsistencia\(\s*\(state && state\.asistenciaGlobal\)[\s\S]{0,220}_asistCutoffVigente/],
 ];
 SITIOS.forEach(([nombre, re]) => ok(nombre + ' pasa el corte', re.test(code)));
-/* y que no haya APARECIDO un cuarto sitio sin corte: las llamadas totales tienen que seguir
-   siendo las tres verificadas arriba */
+/* y que no haya APARECIDO un sitio nuevo sin corte. v1148 sumó DOS llamadas legítimas en el
+   ARCHIVADOR (_asistArchivarViejo) que pasan '' A PROPÓSITO: el archivo UNE y jamás poda —
+   podar la fuente del archivo lo vaciaría. El invariante real: los sitios de SYNC son tres y
+   pasan el corte; cualquier llamada extra tiene que ser del archivador y llevar (null, ''). */
 const _llamadas = (code.match(/_mergeAsistencia\(/g) || []).length - 1;  // menos la definición
-ok('siguen siendo exactamente tres los sitios que mergean', _llamadas === 3);
+ok('tres sitios de sync + dos del archivador (v1148)', _llamadas === 5);
+const _zArch = (function(){ let m=code.indexOf('window._asistArchivarViejo'); if(m<0) return ''; let i=code.indexOf('{',m),d=0; for(;i<code.length;i++){ if(code[i]==='{')d++; else if(code[i]==='}'){ d--; if(d===0) return code.slice(m,i+1); } } return ''; })();
+ok('las del archivador van SIN tombstones y SIN corte (unión pura)',
+  (_zArch.match(/_mergeAsistencia\([^)]*\bnull,\s*''\)/g) || []).length === 2);
 
 console.log('\n— el archivo en memoria no se sube ni se cachea —');
 ok('_asistArchive queda fuera de lo que viaja a la nube', /_asistArchive/.test(code) && /delete .*_asistArchive/.test(code));
