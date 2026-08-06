@@ -29,8 +29,10 @@ try {
   const marcas = { 'p-otra': { presente: true, obraId: 'OTRA', obraDesc: 'REPARACIÓN ZONA 15' },
                    'p-multi': { presente: true, multiSesion: true, sessions: [{ obraId: 'OTRA', obraDesc: 'CASA LA CUMBRE' }] },
                    'p-obra': { presente: true, obraId: 'proj1' } };
-  enLista = new Function('_getUserObraAsignada','_getAsistencia','_asistFechaActual', 'return (' + zF + ')')(
-    () => '', () => ({ [hoy]: marcas }), () => hoy);
+  /* v1149: la función lee por _getAsistenciaDia (el shim caliente→archivo) — se inyecta
+     con la misma semántica sobre el fixture */
+  enLista = new Function('_getUserObraAsignada','_getAsistencia','_asistFechaActual','_getAsistenciaDia', 'return (' + zF + ')')(
+    () => '', () => ({ [hoy]: marcas }), () => hoy, (f) => (f === hoy ? marcas : {}));
 } catch(e){ console.log('extract err', e.message); }
 ok('extraíble', typeof enLista === 'function');
 if (enLista) {
