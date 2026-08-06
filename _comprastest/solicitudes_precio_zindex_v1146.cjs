@@ -61,5 +61,13 @@ ok('el catálogo desde COMPRAS sigue a 99000 (encima del panel, v1062)',
 ok('el modal de proveedor sigue con su arreglo (el precedente del patrón)',
   /_bringModalFront\(/.test(ex(code, 'function openAddProveedorFromCatalog(')));
 
+console.log('\n— v1147: el hermano tenía el MISMO agujero —');
+/* editCurrentProveedor abre modalAddProveedor (que además vive ANTES del catálogo en el
+   DOM: con z igual pinta DEBAJO). Solo el camino "+" tenía el arreglo; EDITAR no. */
+const zE = ex(code, 'function editCurrentProveedor(');
+ok('EDITAR PROVEEDOR también abre su modal', /classList\.add\('show'\)/.test(zE));
+ok('y también lo trae al frente', /_bringModalFront\(/.test(zE));
+ok('después de mostrarlo', zE.indexOf("classList.add('show')") < zE.indexOf('_bringModalFront'));
+
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
