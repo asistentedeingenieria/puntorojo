@@ -25,7 +25,11 @@ ok('renderPedidoCard existe', zC.length > 500);
 
 console.log('\n— 1. en la obra ya NO se aprueba ni se genera OC —');
 ok('no queda el botón genérico de avance de estado', !/nextLabel\.toUpperCase\(\)/.test(zC));
-ok('no queda la rama que habilitaba a quien autoriza OC', !/compras\.autorizar/.test(zC));
+/* v1151: reapareció UNA mención de compras.autorizar — pero para lo CONTRARIO: excluir a
+   compras del botón de recepción (_esSoloCompras). El invariante v1096 se conserva: ninguna
+   rama HABILITA a compras a avanzar estado desde la obra. */
+ok('compras.autorizar solo aparece para EXCLUIR (v1151), nunca para habilitar',
+  (zC.match(/compras\.autorizar/g) || []).length === 1 && /_esSoloCompras/.test(zC) && /!_esSoloCompras/.test(zC));
 ok('no queda el avance por rol de oficina', !/pedidos\.advance/.test(zC));
 
 console.log('\n— 2. lo que Antonio SÍ quiere que quede —');
