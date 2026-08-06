@@ -3376,7 +3376,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1149</span>
+    <span style="opacity:.5;font-size:9px">v1150</span>
   </footer>
 
 </div>
@@ -9278,7 +9278,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 925; // v1110: contenedor nuevo p.reportesSemanales (reportes fotográficos semanales) con union-merge por proyecto
+const APP_SYNC_VERSION = 926; // v1150: acuses por unión con tombstones + fusión de horas en asistencia (los merges cambiaron)
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -18401,6 +18401,12 @@ async function deleteAcuseRecepcion(towerId, levelId, aptoId, slotKey){
 
   const oldUrl = slot.url || (typeof slot.data === 'string' && slot.data.startsWith('https://') ? slot.data : null);
   delete a.acuseRecepciones[slotKey];
+  /* v1150: tombstone del borrado formal — sin él, cualquier copia vieja resucitaba el acuse
+     con la unión nueva. Una re-firma POSTERIOR (sello mayor) sí lo revive a propósito. */
+  try {
+    p.acusesEliminados = (p.acusesEliminados && typeof p.acusesEliminados === 'object') ? p.acusesEliminados : {};
+    p.acusesEliminados[a.id + '|' + slotKey] = Date.now();
+  } catch(e){}
 
   // Como el acuse anterior no existe más, también desmarcamos las etapas que dependían de él
   const slotIdxNum = parseInt(slotKey);
@@ -18414,6 +18420,8 @@ async function deleteAcuseRecepcion(towerId, levelId, aptoId, slotKey){
   }
 
   saveState();
+  /* v1150: el borrado formal se propaga YA (con el debounce, otro dispositivo podía subir antes) */
+  try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow(); } catch(e){}
 
   if (oldUrl && oldUrl.includes('firebasestorage')) {
     try {
@@ -37331,9 +37339,66 @@ function _reevalAutoMarcaApto(a){
 /* v897: recorre torre→nivel→apto POR ID y une las fotos (ver _mergeFotosApto).
    v900: en el mismo recorrido une también los cuadritos de etapa (_mergeEtapasApto).
    Devuelve cuántos aptos rescataron/propagaron algo (0 = nada que hacer). */
+/* v1150 (auditoría 4-ago, hallazgo A — la SEXTA mordida de la clase v897/v1039/v1064/v1070):
+   a.acuseRecepciones viajaba LWW puro dentro del árbol de torres — una copia vieja que subía
+   pisaba el acuse FIRMADO (evidencia legal de entrega). Unión por slot con el patrón v897,
+   esta vez CON tombstones (p.acusesEliminados, clave aptoId|slot) porque el borrado del admin
+   es un acto formal que debe propagarse — y una RE-FIRMA posterior lo revive (sello mayor). */
+function _acuseSlotTs(s){
+  if (!s || typeof s !== 'object') return 0;
+  return Math.max(Number(s.ts) || 0, Number(s.photoTs) || 0, Number(s.signatureTs) || 0);
+}
+function _acuseSlotScore(s){
+  /* la FIRMA gana a la foto sola; más fotos gana a menos; el legacy url/data cuenta 1 */
+  if (!s || typeof s !== 'object') return -1;
+  var n = 0;
+  if (s.receptorSignatureUrl || s.type === 'digital' || s.type === 'portal-cliente') n += 4;
+  if (Array.isArray(s.urls)) n += s.urls.filter(function(u){ return !!u; }).length;
+  if (s.url || (typeof s.data === 'string' && s.data)) n += 1;
+  return n;
+}
+function _mergeAcusesApto(la, ra, tomb, aptoId){
+  if (!la || !ra) return false;
+  var L = (la.acuseRecepciones && typeof la.acuseRecepciones === 'object') ? la.acuseRecepciones : {};
+  var R = (ra.acuseRecepciones && typeof ra.acuseRecepciones === 'object') ? ra.acuseRecepciones : {};
+  var T = (tomb && typeof tomb === 'object') ? tomb : {};
+  var keys = {};
+  Object.keys(L).forEach(function(k){ keys[k] = 1; });
+  Object.keys(R).forEach(function(k){ keys[k] = 1; });
+  var chg = false;
+  Object.keys(keys).forEach(function(k){
+    var tombTs = Number(T[String(aptoId || '') + '|' + k]) || 0;
+    var ls = L[k], rs = R[k];
+    if (ls && _acuseSlotTs(ls) <= tombTs) ls = null;   /* borrado formal: solo revive una re-firma POSTERIOR */
+    if (rs && _acuseSlotTs(rs) <= tombTs) rs = null;
+    var win;
+    if (ls && rs) {
+      var sl = _acuseSlotScore(ls), sr = _acuseSlotScore(rs);
+      win = (sl > sr) ? ls : (sr > sl) ? rs : (_acuseSlotTs(ls) > _acuseSlotTs(rs) ? ls : rs);
+    } else win = ls || rs || null;
+    var cur = R[k] || null;
+    if (JSON.stringify(win) !== JSON.stringify(cur)) {
+      if (!ra.acuseRecepciones || typeof ra.acuseRecepciones !== 'object') ra.acuseRecepciones = {};
+      if (win) ra.acuseRecepciones[k] = JSON.parse(JSON.stringify(win));
+      else delete ra.acuseRecepciones[k];
+      chg = true;
+    }
+  });
+  return chg;
+}
 function _mergeFotosProyecto(lp, rp){
   if (!lp || !rp || !Array.isArray(lp.towers) || !Array.isArray(rp.towers)) return 0;
   var n = 0;
+  /* v1150: tombstones de acuses del proyecto — unión con el ts MAYOR por clave, y el
+     resultado queda en rp (la futura verdad) para que el borrado se propague */
+  var _tombAc = {};
+  try {
+    var _tl = (lp.acusesEliminados && typeof lp.acusesEliminados === 'object') ? lp.acusesEliminados : {};
+    var _tr = (rp.acusesEliminados && typeof rp.acusesEliminados === 'object') ? rp.acusesEliminados : {};
+    Object.keys(_tl).forEach(function(k){ _tombAc[k] = Number(_tl[k]) || 0; });
+    Object.keys(_tr).forEach(function(k){ var v = Number(_tr[k]) || 0; if (v > (_tombAc[k] || 0)) _tombAc[k] = v; });
+    if (Object.keys(_tombAc).length) rp.acusesEliminados = _tombAc;
+  } catch(e){}
   var lT = {}; lp.towers.forEach(function(t){ if (t && t.id) lT[t.id] = t; });
   rp.towers.forEach(function(rt){
     var lt = rt && lT[rt.id]; if (!lt || !Array.isArray(rt.levels) || !Array.isArray(lt.levels)) return;
@@ -37350,6 +37415,8 @@ function _mergeFotosProyecto(lp, rp){
         // v948: tras unir fotos y cuadritos, re-evaluar la auto-marca por fotos (v903 solo
         // corría en la subida local; las fotos llegadas por sync jamás marcaban el cuadrito).
         try { if (typeof _reevalAutoMarcaApto === 'function' && _reevalAutoMarcaApto(raApto)) chg = true; } catch(e){}
+        // v1150: los ACUSES firmados también se unen (eran el último dato del apto en LWW puro)
+        try { if (typeof _mergeAcusesApto === 'function' && _mergeAcusesApto(laApto, raApto, _tombAc, raApto.id)) chg = true; } catch(e){}
         if (chg) n++;
       });
     });
@@ -38024,6 +38091,44 @@ async function _asistArchAsegurar(fechas){
   return _cargados;
 }
 try { window._asistCutoffMax = _asistCutoffMax; window._asistCutoffObjetivo = _asistCutoffObjetivo; window._asistCutoffVigente = _asistCutoffVigente; } catch(e){}
+/* v1150 (auditoría 4-ago, hallazgo B): la rama de registros SIMPLES reemplazaba la celda
+   ENTERA por _ts — el celular que no vio la entrada de la mañana (sync caído, v1139) formaba
+   {entrada:'12:00'} con _ts mayor y PISABA la de las 07:00. Cuando AMBOS registros son
+   PRESENTES simples se fusionan las horas: se juntan TODAS (entradas, salidas y la 'hora'
+   legacy), la más TEMPRANA queda de entrada y la más TARDÍA de salida — el escaneo tardío se
+   rescata como salida en vez de inventar una entrada falsa. El geo viaja con la hora que lo
+   aportó; el resto de campos, del ganador por _ts. CONMUTATIVA: los dos celulares convergen
+   al mismo registro (la base es el MISMO ganador en ambos, así el orden de claves y el JSON
+   coinciden y la comparación v856 no cicla). Ausencias, sesiones (v653 ya une) y celdas sin
+   horas devuelven null: decide la rama de siempre. */
+function _asistFuseCelda(lr, rr){
+  if (!lr || !rr || typeof lr !== 'object' || typeof rr !== 'object') return null;
+  if (Array.isArray(lr.sessions) || lr.multiSesion || Array.isArray(rr.sessions) || rr.multiSesion) return null;
+  if (lr.presente !== true || rr.presente !== true) return null;
+  var _t = function(r){ return (typeof r._ts === 'number') ? r._ts : 0; };
+  var HH = /^\d{2}:\d{2}$/;
+  var horas = [];
+  [[lr.entrada || lr.hora, lr.geoEntrada], [lr.salida, lr.geoSalida], [rr.entrada || rr.hora, rr.geoEntrada], [rr.salida, rr.geoSalida]].forEach(function(par){
+    if (typeof par[0] === 'string' && HH.test(par[0])) horas.push({ h: par[0], geo: par[1] });
+  });
+  if (!horas.length) return null;
+  horas.sort(function(a, b){ return a.h < b.h ? -1 : (a.h > b.h ? 1 : 0); });
+  var prim = horas[0], ult = horas[horas.length - 1];
+  var base = _t(lr) > _t(rr) ? lr : rr;
+  var out = Object.assign({}, base);
+  out.presente = true;
+  out.entrada = prim.h;
+  if (prim.geo) out.geoEntrada = prim.geo;
+  if (ult.h !== prim.h) {
+    out.salida = ult.h;
+    if (ult.geo) out.geoSalida = ult.geo;
+  } else {
+    out.salida = null;
+    if (out.geoSalida) delete out.geoSalida;
+  }
+  out._ts = Math.max(_t(lr), _t(rr));
+  return out;
+}
 function _mergeAsistencia(localAsis, remoteAsis, tombSet, cutoff){
   var _ts = function(r){ return (r && typeof r._ts === 'number') ? r._ts : ((r && typeof r.ausenteTs === 'number') ? r.ausenteTs : 0); };
   var _score = function(r){ if(!r) return -1; if(r.presente===false && r.motivo) return 3; return (r.presente?2:0)+(r.entrada?1:0)+(r.salida?1:0)+(r.motivo?1:0); };
@@ -38070,8 +38175,17 @@ function _mergeAsistencia(localAsis, remoteAsis, tombSet, cutoff){
         return;
       }
       if (!rr) { out[f][pid] = lr; changed = true; }
-      else if (_ts(lr) > _ts(rr)) { out[f][pid] = lr; changed = true; }
-      else if (_ts(lr) === _ts(rr) && _score(lr) > _score(rr)) { out[f][pid] = lr; changed = true; }
+      else {
+        /* v1150: dos PRESENTES simples se FUSIONAN (entrada más temprana + salida más
+           tardía) en vez de reemplazarse por _ts — la entrada de la mañana ya no se pierde.
+           changed SOLO si difiere del remoto (idempotencia v856). */
+        var _fus = (typeof _asistFuseCelda === 'function') ? _asistFuseCelda(lr, rr) : null;
+        if (_fus) {
+          if (JSON.stringify(_fus) !== JSON.stringify(rr)) { out[f][pid] = _fus; changed = true; }
+        }
+        else if (_ts(lr) > _ts(rr)) { out[f][pid] = lr; changed = true; }
+        else if (_ts(lr) === _ts(rr) && _score(lr) > _score(rr)) { out[f][pid] = lr; changed = true; }
+      }
     });
   });
   // v666: tombstones de ausencias. Borran SOLO una AUSENCIA manual (presente===false && motivo),
@@ -48396,6 +48510,8 @@ async function processQRScan(decoded){
     }
 
     saveState();
+    /* v1150: la firma es evidencia legal — sube de inmediato, no con el debounce */
+    try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow(); } catch(e){}
     logActivity('auth',
       `Acuse digital firmado: ${l.name} · ${a.name} · ${slotInfo ? slotInfo.label : ctx.slotKey}`,
       `Firmado por ${r.nombre}${r.cargo ? ' (' + r.cargo + ')' : ''}${etapaMarcada ? ' · Etapa marcada como entregada' : ''}`);
