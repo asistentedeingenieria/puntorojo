@@ -3376,7 +3376,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1152</span>
+    <span style="opacity:.5;font-size:9px">v1153</span>
   </footer>
 
 </div>
@@ -20003,6 +20003,7 @@ function renderPedidoCard(pd, p){
         </div>`;
       })()}
       ${pd.ordenCambio ? `<div style="font-size:11px;color:var(--amber);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px"><strong>ORDEN DE CAMBIO:</strong> ${esc(pd.ordenCambio)}</div>` : ''}
+      ${(pd.itemsQuitados || []).length ? `<div style="font-size:10.5px;background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:8px 10px;margin-bottom:8px"><div style="font-size:8.5px;letter-spacing:1.2px;font-weight:700;color:#B91C1C;text-transform:uppercase;margin-bottom:4px">Quitado por compras — no aplica</div>${pd.itemsQuitados.map(q => `<div style="padding:2px 0;color:#7F1D1D"><b>${esc(q.name)}</b> ×${esc(q.qty)} — "${esc(q.motivo)}" <span style="color:#9CA3AF">(${esc(q.por || '')}${q.fecha ? ' · ' + esc(q.fecha) : ''})</span></div>`).join('')}</div>` : ''}<!-- v1153: el solicitante ve qué le quitaron y por qué -->
       ${pd.observaciones ? `<div style="font-size:11px;color:var(--mute);margin-bottom:8px;font-style:italic">"${esc(pd.observaciones)}"</div>` : ''}
       <div class="pedido-actions">
         <div class="timeline">${timelineDots}</div>
@@ -21483,6 +21484,16 @@ function _varianteRecordada(p, nombreInterno){
     return v ? String(v) : '';
   } catch (e) { return ''; }
 }
+/* v1153: los materiales que compras QUITÓ de un pedido MANUAL ("no aplica") — PURA.
+   Devuelve el mapa de sourceKeys quitados, o null si no hay (cero costo). El registro
+   completo (motivo, quién, cuándo) vive en pd.itemsQuitados y se pinta en la tarjeta. */
+function _pedidoQuitadosKeys(pd){
+  var q = (pd && Array.isArray(pd.itemsQuitados)) ? pd.itemsQuitados : null;
+  if (!q || !q.length) return null;
+  var out = {};
+  q.forEach(function(x){ if (x && x.sourceKey) out[x.sourceKey] = true; });
+  return Object.keys(out).length ? out : null;
+}
 function buildPedidoOcItems(pd){
   const arr = [];
   const specs = pd.specs || {};
@@ -21524,6 +21535,10 @@ function buildPedidoOcItems(pd){
     const fullName = `${m.tipo} ${m.medida}${m.calibre ? ' ' + m.calibre : ''} — FABRICACIÓN A MEDIDA${loc ? ' (' + loc + ')' : ''}`;
     arr.push({ sourceKey:'metal-'+i, cat:'METAL A MEDIDA', name: fullName, qty: Number(m.qty) || 0, precio: 0, proveedorId: '', autoAssigned:false, isMetalMedida:true });
   });
+  /* v1153: acá se filtran los quitados por compras — este es el punto ÚNICO por donde
+     pasan la OC, la recepción (v990) y el detalle: quitarlo acá lo quita en todos lados. */
+  var _quit = (typeof _pedidoQuitadosKeys === 'function') ? _pedidoQuitadosKeys(pd) : null;
+  if (_quit) return arr.filter(function(it){ return !_quit[it.sourceKey]; });
   return arr;
 }
 
@@ -23730,6 +23745,9 @@ async function openOrdenCompra(){
   // candado aplica a TODOS los pedidos, no solo a los de receta. Compras no inventa
   // proveedores: elige entre los que SÍ venden el material (v989) o manda a bodega.
   window._ocProvLocked = !can('users.manage');
+  /* v1153 (pedido de Antonio): compras puede QUITAR materiales que no aplican — SOLO en
+     pedidos MANUALES (+ NUEVO PEDIDO). En pedidos DE RECETA todo se envía, sin excepción. */
+  window._ocPuedeQuitar = !pd.esDeReceta && (can('compras.autorizar') || can('users.manage'));
   // v984: el botón TODOS se bloquea para TODOS (admin incluido) —
   // los proveedores YA vienen del catálogo; el admin conserva la mano POR ÍTEM.
   window._ocProvLockedTodos = true;
@@ -24103,7 +24121,7 @@ function renderOcItems(){
       <div>${((it.aMedida || it.eventual || it.proveedorId === '_bodega' || String(it.proveedorId||'').indexOf('_tras:') === 0) && String(it.proveedorId||'').indexOf('_dpp:') !== 0)
         ? `<input type="number" step="0.01" min="0" value="${it.precio || ''}" placeholder="0.00" oninput="updateOcPrecio(${idx}, this.value)" title="${it.aMedida ? 'Poste a medida: precio de fabricación digitable' : 'Material extraordinario: no está en el catálogo, escribí el precio acordado'}">`
         : `<input type="number" value="${it.precio || ''}" placeholder="—" disabled style="background:var(--cream);cursor:not-allowed" title="El precio viene del catálogo de precios — para cambiarlo enviá una solicitud">`}</div>
-      <div class="oc-subtotal" id="ocSubtotal-${idx}">Q ${fmtQ(it.qty * (it.precio || 0))}</div>
+      <div class="oc-subtotal" id="ocSubtotal-${idx}">Q ${fmtQ(it.qty * (it.precio || 0))}${window._ocPuedeQuitar ? `<button type="button" onclick="_ocQuitarItem(${idx})" title="Quitar este material del pedido (no aplica) — con observación obligatoria para el solicitante" style="margin-left:8px;border:1px solid #FCA5A5;background:#fff;color:#B91C1C;border-radius:6px;width:22px;height:22px;line-height:1;cursor:pointer;font-size:12px;vertical-align:middle">✕</button>` : ''}</div>
     </div>
   `).join('');
 
@@ -24199,6 +24217,52 @@ window.updateOcItemVariante = function(idx, valor){
     item.autoAssigned = false;
     item.eventual = true;
   }
+  renderOcItems();
+};
+/* v1153 (pedido de Antonio): compras QUITA un material que no aplica — SOLO pedidos
+   MANUALES (+ NUEVO PEDIDO); en los de receta TODO se envía. La observación es OBLIGATORIA
+   y queda en pd.itemsQuitados: el solicitante la ve en la tarjeta de su pedido. */
+window._ocQuitarItem = async function(idx){
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS PUEDE QUITAR MATERIALES', 'red');
+  const item = ocWorkingItems[idx];
+  if (!item) return;
+  const _ctx0 = _findPedidoGlobal(currentPedidoDetalleId);
+  if (!_ctx0 || !_ctx0.pd) return showToast('EL PEDIDO YA NO EXISTE — RECARGÁ', 'red');
+  if (_ctx0.pd.esDeReceta) return showToast('EN PEDIDOS DE RECETA TODO SE ENVÍA — NO SE PUEDE QUITAR NADA', 'red');
+  const _e = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  /* la observación viaja por oninput: prConfirm destruye el modal antes del await (v813) */
+  window._ocQuitForm = { motivo: '' };
+  const okc = await window.prConfirm({
+    title: 'QUITAR MATERIAL DEL PEDIDO',
+    bodyHTML: '<div style="font-size:12px;color:#444;line-height:1.6">Se quita <b>' + _e(item.name) + '</b> (×' + _e(item.qty) + ') del pedido <b>' + _e(_numLimpio(_ctx0.pd.numero)) + '</b>. La orden de compra sale sin este material y la recepción no lo espera.</div>'
+      + '<label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">¿POR QUÉ NO APLICA? — OBLIGATORIO (el solicitante lo va a ver)</label>'
+      + '<textarea class="pr-fld" rows="3" style="width:100%;resize:vertical" placeholder="EJ: YA HAY EN LA OBRA / NO CORRESPONDE A ESTA ETAPA" oninput="window._ocQuitForm.motivo = this.value"></textarea>',
+    okText: 'QUITAR', cancelText: 'CANCELAR'
+  });
+  if (!okc) return;
+  const _motivo = String((window._ocQuitForm || {}).motivo || '').trim();
+  if (!_motivo) return showToast('ESCRIBÍ POR QUÉ NO APLICA — NO SE QUITÓ NADA', 'red');
+  /* re-leer del state vivo tras el await del modal (patrón v769/v940) */
+  const _ctx2 = _findPedidoGlobal(currentPedidoDetalleId);
+  if (!_ctx2 || !_ctx2.pd) return showToast('EL PEDIDO YA NO EXISTE — RECARGÁ', 'red');
+  const pd2 = _ctx2.pd;
+  if (pd2.esDeReceta) return showToast('EN PEDIDOS DE RECETA TODO SE ENVÍA — NO SE QUITÓ NADA', 'red');
+  const _u = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  const _t = Date.now();
+  pd2.itemsQuitados = Array.isArray(pd2.itemsQuitados) ? pd2.itemsQuitados : [];
+  pd2.itemsQuitados.push({
+    sourceKey: item.sourceKey || '', name: item.name, qty: Number(item.qty) || 0,
+    motivo: _motivo, por: String(_u.displayName || _u.username || '').toUpperCase(),
+    ts: _t, fecha: (typeof _dateALatam === 'function') ? _dateALatam(new Date()) : ''
+  });
+  pd2._ts = _t;   /* el contenedor viaja por union-merge (v972) */
+  /* quita TODAS las líneas del material — una línea partida (v1145) comparte sourceKey:
+     "no aplica" es del material entero, no de una parte */
+  ocWorkingItems = ocWorkingItems.filter(function(it2){ return (it2.sourceKey || '') !== (item.sourceKey || ''); });
+  try { logActivity('update', 'MATERIAL QUITADO DEL PEDIDO', _numLimpio(pd2.numero) + ': ' + item.name + ' ×' + item.qty + ' — ' + _motivo); } catch(e){}
+  saveState();
+  try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow(); } catch(e){}
+  showToast('QUITADO: ' + item.name + ' — EL SOLICITANTE VA A VER EL MOTIVO EN SU PEDIDO', 'ok');
   renderOcItems();
 };
 function updateOcItemProveedor(idx, provId, opts){
