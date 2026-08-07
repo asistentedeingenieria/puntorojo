@@ -52,7 +52,8 @@ ok('el hash-skip sigue después (sin cambios no escribe)', /_asistHash === _asis
 ok('la telemetría de tamaño sigue (v649)', /_asistSizeWarned/.test(zU));
 
 console.log('\n— el ritual de sync —');
-ok('APP_SYNC_VERSION subió a 927', /APP_SYNC_VERSION = 927/.test(html));
+/* sin literal congelado — el invariante es AL MENOS 927 (la lección de v1136, tercera vez) */
+ok('APP_SYNC_VERSION subió a 927 o más', (Number((html.match(/APP_SYNC_VERSION = (\d+)/) || [])[1]) || 0) >= 927);
 ok('los guards A/B del merge siguen intactos (la poda no los reemplaza)', /GUARD A/.test(html) && /GUARD B/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);

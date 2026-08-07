@@ -3376,7 +3376,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1154</span>
+    <span style="opacity:.5;font-size:9px">v1155</span>
   </footer>
 
 </div>
@@ -9278,7 +9278,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 927; // v1152: la subida de asistencia PODA la copia local antes del payload (incidente resource-exhausted 6-ago)
+const APP_SYNC_VERSION = 928; // v1155: contenedor nuevo herrMovs (herramientas de bodega) con union-merge + tombstones
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10338,6 +10338,12 @@ const CloudSync = {
         merged.bodegaMovsEliminados = _bmTomb;
         const _mBm = _mergeById((state && state.bodegaMovs) || [], merged.bodegaMovs || [], _bmTomb);
         merged.bodegaMovs = _mBm.list; if (_mBm.changed) needsResync = true;
+        // v1155: HERRAMIENTAS DE TRABAJO — libro propio (sin precio), mismo régimen que
+        // el de existencias: unión por id + tombstones. Dos bodegueros no se pisan.
+        const _hmTomb = Object.assign({}, (state && state.herrMovsEliminados) || {}, merged.herrMovsEliminados || {});
+        merged.herrMovsEliminados = _hmTomb;
+        const _mHm = _mergeById((state && state.herrMovs) || [], merged.herrMovs || [], _hmTomb);
+        merged.herrMovs = _mHm.list; if (_mHm.changed) needsResync = true;
 
         /* v1010: CORRECCIONES DEL CATÁLOGO (equivalencias de nombre y materiales eliminados
            en la limpia). Se unen igual: si dos personas limpian a la vez, las dos limpiezas
@@ -20004,6 +20010,7 @@ function renderPedidoCard(pd, p){
       })()}
       ${pd.ordenCambio ? `<div style="font-size:11px;color:var(--amber);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px"><strong>ORDEN DE CAMBIO:</strong> ${esc(pd.ordenCambio)}</div>` : ''}
       ${(pd.itemsQuitados || []).length ? `<div style="font-size:10.5px;background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:8px 10px;margin-bottom:8px"><div style="font-size:8.5px;letter-spacing:1.2px;font-weight:700;color:#B91C1C;text-transform:uppercase;margin-bottom:4px">Quitado por compras — no aplica</div>${pd.itemsQuitados.map(q => `<div style="padding:2px 0;color:#7F1D1D"><b>${esc(q.name)}</b> ×${esc(q.qty)} — "${esc(q.motivo)}" <span style="color:#9CA3AF">(${esc(q.por || '')}${q.fecha ? ' · ' + esc(q.fecha) : ''})</span></div>`).join('')}</div>` : ''}<!-- v1153: el solicitante ve qué le quitaron y por qué -->
+      ${(pd.herramientas || []).length ? `<div style="font-size:10.5px;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:6px;padding:8px 10px;margin-bottom:8px"><div style="font-size:8.5px;letter-spacing:1.2px;font-weight:700;color:#1D4ED8;text-transform:uppercase;margin-bottom:4px">Herramientas de bodega · sin costo</div>${pd.herramientas.map(h => `<div style="padding:2px 0;color:#1E3A5F">${esc(h.name)} ×${esc(h.qty)}</div>`).join('')}${pd.herrDespacho ? `<div style="margin-top:4px;font-size:9.5px;font-weight:700;color:#15803D">DESPACHADAS ✓ ${esc(pd.herrDespacho.fecha || '')} · ${esc(pd.herrDespacho.por || '')}</div>` : (_puedeGestionarBodega() ? `<button class="btn sm" style="margin-top:6px;background:#1D4ED8;border-color:#1D4ED8;color:#fff" onclick="_herrDespacharDePedido('${pd.id}')">DESPACHAR HERRAMIENTAS</button>` : '<div style="margin-top:4px;font-size:9.5px;color:#B45309;font-weight:700">PENDIENTES DE DESPACHO EN BODEGA</div>')}</div>` : ''}<!-- v1155 -->
       ${pd.observaciones ? `<div style="font-size:11px;color:var(--mute);margin-bottom:8px;font-style:italic">"${esc(pd.observaciones)}"</div>` : ''}
       <div class="pedido-actions">
         <div class="timeline">${timelineDots}</div>
@@ -20307,6 +20314,16 @@ function _rotularProyectoPedido(){
   opt.textContent = nombre || 'PROYECTO ACTIVO';
 }
 
+/* v1155: el catálogo del pedido = la constante + la categoría DINÁMICA de HERRAMIENTAS DE
+   BODEGA (lo que la bodega tiene con saldo, sin precio). Render y badges comparten este
+   array para que los índices coincidan. */
+function _bloquesPedido(){
+  try {
+    const _h = (typeof _herrDisponibles === 'function') ? _herrDisponibles() : [];
+    if (_h.length) return CATALOGO_MATERIALES.concat([{ cat: 'HERRAMIENTAS DE BODEGA (SIN COSTO)', items: _h }]);
+  } catch(e){}
+  return CATALOGO_MATERIALES;
+}
 function renderPedidoForm(){
   if (!can('pedidos.create')) return showToast('SIN PERMISO PARA CREAR PEDIDOS', 'red');
   const p = activeProj();
@@ -20326,7 +20343,7 @@ function renderPedidoForm(){
 
   // Catálogo formato PDF: todas las categorías siempre visibles en 3 columnas
   const cont = document.getElementById('catalogoMateriales');
-  cont.innerHTML = CATALOGO_MATERIALES.map((block, bIdx) => {
+  cont.innerHTML = _bloquesPedido().map((block, bIdx) => {
     // Helper para extraer nombre de item (puede ser string u objeto)
     const getName = it => typeof it === 'string' ? it : it.name;
     const selectedCount = block.items.filter(item => (pedidoFormItems[block.cat + '::' + getName(item)] || 0) > 0).length;
@@ -20724,12 +20741,13 @@ function updatePedidoItem(key, val){
 
   // Actualizar badge de la categoría
   const [cat, itemName] = key.split('::');
-  const bIdx = CATALOGO_MATERIALES.findIndex(b => b.cat === cat);
+  const _blq = (typeof _bloquesPedido === 'function') ? _bloquesPedido() : CATALOGO_MATERIALES; /* v1155 */
+  const bIdx = _blq.findIndex(b => b.cat === cat);
   if (bIdx >= 0) {
-    const count = CATALOGO_MATERIALES[bIdx].items.filter(item => (pedidoFormItems[cat + '::' + getName(item)] || 0) > 0).length;
+    const count = _blq[bIdx].items.filter(item => (pedidoFormItems[cat + '::' + getName(item)] || 0) > 0).length;
     const badge = document.getElementById('catCount-'+bIdx);
     if (badge) {
-      badge.textContent = `${count} / ${CATALOGO_MATERIALES[bIdx].items.length}`;
+      badge.textContent = `${count} / ${_blq[bIdx].items.length}`;
       badge.classList.toggle('empty', count === 0);
     }
   }
@@ -20896,6 +20914,18 @@ async function submitPedido(){
     if (pedidoFormSpecs[key]) specs[key] = pedidoFormSpecs[key];
   });
 
+  /* v1155: las HERRAMIENTAS DE BODEGA van APARTE — jamás a pd.items, así el circuito de
+     compras (buildPedidoOcItems, OC, gasto) ni se entera de que existen. */
+  const _itemsPedido = { ...pedidoFormItems };
+  const _herrPedido = [];
+  Object.keys(_itemsPedido).forEach(_hk => {
+    if (_hk.indexOf('HERRAMIENTAS DE BODEGA') === 0) {
+      const _hq = Number(_itemsPedido[_hk]) || 0;
+      if (_hq > 0) _herrPedido.push({ name: _hk.split('::').slice(1).join('::'), qty: _hq });
+      delete _itemsPedido[_hk];
+    }
+  });
+
   const pedido = {
     id: 'pd-' + uid(),
     numero,
@@ -20915,7 +20945,8 @@ async function submitPedido(){
     apto: aptoLabel,
     ordenCambio: document.getElementById('pfOrdenCambio').value.trim().toUpperCase(),
     observaciones: document.getElementById('pfObservaciones').value.trim(),
-    items: { ...pedidoFormItems },
+    items: _itemsPedido,
+    herramientas: _herrPedido, /* v1155: sin precio, sin OC — las despacha bodega */
     specs,
     extras: validExtras.map(m => ({ name: m.name, unit: m.unit || '', qty: m.qty })),
     metalMedida: validMetal.map(m => {
@@ -21140,6 +21171,15 @@ function openPedidoDetalle(id){
     html += `<div class="pedido-detail-cat" style="border:2px dashed var(--cafe);padding:10px;border-radius:3px;margin-top:14px">
       <div class="pedido-detail-cat-title" style="color:var(--cafe)">MATERIAL EXTRAORDINARIO</div>
       ${pd.extras.map(e => `<div class="pedido-detail-item"><span class="name">${esc(e.name)}${e.unit ? ' <span style="color:var(--mute);font-size:10px">(' + esc(e.unit) + ')</span>' : ''}</span><span class="qty">${e.qty}</span></div>`).join('')}
+    </div>`;
+  }
+
+  // v1155: herramientas de bodega (sin costo) — con su estado de despacho
+  if (Array.isArray(pd.herramientas) && pd.herramientas.length > 0) {
+    html += `<div class="pedido-detail-cat" style="border:2px dashed #93C5FD;padding:10px;border-radius:3px;margin-top:14px;background:#EFF6FF">
+      <div class="pedido-detail-cat-title" style="color:#1D4ED8">HERRAMIENTAS DE BODEGA · SIN COSTO</div>
+      ${pd.herramientas.map(h => `<div class="pedido-detail-item"><span class="name">${esc(h.name)}</span><span class="qty">${h.qty}</span></div>`).join('')}
+      ${pd.herrDespacho ? `<div style="font-size:10px;font-weight:700;color:#15803D;margin-top:6px">DESPACHADAS ✓ ${esc(pd.herrDespacho.fecha || '')} · ${esc(pd.herrDespacho.por || '')}</div>` : '<div style="font-size:10px;font-weight:700;color:#B45309;margin-top:6px">PENDIENTES DE DESPACHO EN BODEGA</div>'}
     </div>`;
   }
 
@@ -22177,6 +22217,203 @@ function _bodegaMovsList(){
   if (!Array.isArray(state.bodegaMovs)) state.bodegaMovs = [];
   return state.bodegaMovs;
 }
+/* ══════════ v1155 — HERRAMIENTAS DE TRABAJO (sin precio, con devolución) ══════════
+   Escaleras, atornilladoras y equipo PROPIO que sale de bodega a las obras y VUELVE.
+   No es gasto de la obra ni pasa por compras/OC/finanzas — libro aparte (state.herrMovs,
+   union-merge por id + tombstones, régimen v972) con saldo DERIVADO (lección v959):
+   ENTRADA (alta) · SALIDA (a una obra) · DEVOLUCION (vuelve de la obra) · AJUSTE (± con
+   motivo: merma/rotura). El saldo dice cuántas hay EN BODEGA y DÓNDE está cada una. */
+function _herrKey(name){
+  return String(name == null ? '' : name).toUpperCase().replace(/\s+/g, ' ').trim();
+}
+function _herrMov(tipo, name, qty, extra){
+  const u0 = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  const t = Date.now();
+  return Object.assign({
+    id: 'hm-' + uid(), ts: t, _ts: t, tipo,
+    k: _herrKey(name), name: _herrKey(name), qty: Number(qty) || 0,
+    por: String(u0.displayName || u0.username || '').toUpperCase(),
+    porUsername: String(u0.username || '').toLowerCase()
+  }, extra || {});
+}
+function _herrMovsList(){
+  if (!Array.isArray(state.herrMovs)) state.herrMovs = [];
+  return state.herrMovs;
+}
+/* PURA. Deriva por herramienta: total (en propiedad), enBodega, porObra{obraId: n}. */
+function _herrSaldos(movs){
+  var out = {};
+  (Array.isArray(movs) ? movs : []).forEach(function(m){
+    if (!m || !m.tipo) return;
+    var k = m.k || _herrKey(m.name);
+    if (!k) return;
+    if (!out[k]) out[k] = { k: k, name: _herrKey(m.name) || k, total: 0, enBodega: 0, porObra: {}, obraDesc: {} };
+    var s = out[k], q = Number(m.qty) || 0;
+    if (m.tipo === 'ENTRADA') { s.total += q; s.enBodega += q; }
+    else if (m.tipo === 'SALIDA') {
+      s.enBodega -= q;
+      var o = String(m.obraId || 'OTRA');
+      s.porObra[o] = (s.porObra[o] || 0) + q;
+      if (m.obraDesc) s.obraDesc[o] = m.obraDesc;
+    }
+    else if (m.tipo === 'DEVOLUCION') {
+      s.enBodega += q;
+      var od = String(m.obraId || 'OTRA');
+      s.porObra[od] = (s.porObra[od] || 0) - q;
+      if (s.porObra[od] <= 0) delete s.porObra[od];
+    }
+    else if (m.tipo === 'AJUSTE') { s.total += q; s.enBodega += q; }
+  });
+  return out;
+}
+/* las herramientas con saldo en bodega — alimenta la categoría dinámica del pedido */
+function _herrDisponibles(){
+  var s = _herrSaldos((typeof state !== 'undefined' && state && state.herrMovs) || []);
+  return Object.keys(s).filter(function(k){ return s[k].enBodega > 0; })
+    .map(function(k){ return s[k].name; }).sort();
+}
+function _herrRefrescarPanel(){
+  try { const m = document.getElementById('_bodegaPanelModal'); if (m) m.remove(); } catch(e){}
+  try { _abrirPanelBodega(); } catch(e){}
+}
+/* alta de una herramienta (o más unidades de una existente) — sin precio */
+window._herrCargar = async function(){
+  if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA', 'red');
+  window._herrForm = { nombre: '', qty: '' };
+  const okc = await window.prConfirm({
+    title: 'CARGAR HERRAMIENTA',
+    bodyHTML: '<div style="font-size:11px;color:#78716C;line-height:1.5">Equipo PROPIO que se despacha a las obras sin costo (escaleras, atornilladoras…). Si la herramienta ya existe con el mismo nombre, se le SUMAN las unidades.</div>'
+      + '<label style="display:block;margin:10px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">HERRAMIENTA</label>'
+      + '<input type="text" class="pr-fld" style="width:100%;text-transform:uppercase" placeholder="EJ: ESCALERA TIJERA 8 PIES" oninput="window._herrForm.nombre = this.value">'
+      + '<label style="display:block;margin:10px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">CUÁNTAS</label>'
+      + '<input type="number" min="1" step="1" class="pr-fld" style="width:120px" oninput="window._herrForm.qty = this.value">',
+    okText: 'CARGAR', cancelText: 'CANCELAR'
+  });
+  if (!okc) return;
+  const _n = _herrKey((window._herrForm || {}).nombre);
+  const _q = Math.floor(Number((window._herrForm || {}).qty)) || 0;
+  if (!_n || _q <= 0) return showToast('FALTA EL NOMBRE O LA CANTIDAD — NO SE CARGÓ NADA', 'red');
+  _herrMovsList().push(_herrMov('ENTRADA', _n, _q));
+  try { logActivity('create', 'HERRAMIENTA CARGADA', _n + ' ×' + _q); } catch(e){}
+  saveState();
+  try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow(); } catch(e){}
+  showToast('CARGADA: ' + _n + ' ×' + _q, 'green');
+  _herrRefrescarPanel();
+};
+/* despacho DIRECTO desde bodega (sin pedido): elegí la obra y cuántas */
+window._herrDespachar = async function(nombre){
+  if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA', 'red');
+  const _s = _herrSaldos(state.herrMovs)[_herrKey(nombre)];
+  if (!_s || _s.enBodega <= 0) return showToast('NO HAY EN BODEGA', 'red');
+  const _e = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  const obras = ((state && state.projects) || []).filter(x => x && x.id);
+  const opts = '<option value="">— ELEGÍ LA OBRA —</option>' + obras.map(x => '<option value="' + _e(x.id) + '">' + _e((x.name || x.id).toUpperCase()) + '</option>').join('');
+  window._herrForm = { obra: '', qty: '' };
+  const okc = await window.prConfirm({
+    title: 'DESPACHAR A OBRA',
+    bodyHTML: '<div style="font-size:12px;color:#444"><b>' + _e(_s.name) + '</b> — en bodega: <b>' + _s.enBodega + '</b></div>'
+      + '<label style="display:block;margin:10px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">OBRA</label>'
+      + '<select data-nativo class="pr-fld" style="width:100%" onchange="window._herrForm.obra = this.value">' + opts + '</select>'
+      + '<label style="display:block;margin:10px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">CUÁNTAS</label>'
+      + '<input type="number" min="1" max="' + _s.enBodega + '" step="1" class="pr-fld" style="width:120px" oninput="window._herrForm.qty = this.value">',
+    okText: 'DESPACHAR', cancelText: 'CANCELAR'
+  });
+  if (!okc) return;
+  const _ob = String((window._herrForm || {}).obra || '');
+  const _q = Math.floor(Number((window._herrForm || {}).qty)) || 0;
+  if (!_ob) return showToast('ELEGÍ LA OBRA — NO SE DESPACHÓ NADA', 'red');
+  /* re-leer el saldo tras el await (v769/v940): otro bodeguero pudo despachar mientras tanto */
+  const _s2 = _herrSaldos(state.herrMovs)[_herrKey(nombre)];
+  if (!_s2 || _q <= 0 || _q > _s2.enBodega) return showToast('CANTIDAD INVÁLIDA (HAY ' + ((_s2 && _s2.enBodega) || 0) + ') — NO SE DESPACHÓ NADA', 'red');
+  const _pj = obras.find(x => x.id === _ob);
+  _herrMovsList().push(_herrMov('SALIDA', nombre, _q, { obraId: _ob, obraDesc: String((_pj && _pj.name) || '').toUpperCase() }));
+  try { logActivity('update', 'HERRAMIENTA DESPACHADA', _herrKey(nombre) + ' ×' + _q + ' → ' + ((_pj && _pj.name) || _ob)); } catch(e){}
+  saveState();
+  try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow(); } catch(e){}
+  showToast('DESPACHADA ×' + _q, 'green');
+  _herrRefrescarPanel();
+};
+/* la herramienta VUELVE de la obra a bodega */
+window._herrDevolver = async function(nombre, obraId){
+  if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA', 'red');
+  const _k = _herrKey(nombre);
+  const _s = _herrSaldos(state.herrMovs)[_k];
+  const _en = (_s && _s.porObra[obraId]) || 0;
+  if (_en <= 0) return showToast('ESA OBRA NO TIENE ESTA HERRAMIENTA', 'red');
+  const _e = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  window._herrForm = { qty: String(_en) };
+  const okc = await window.prConfirm({
+    title: 'REGISTRAR DEVOLUCIÓN',
+    bodyHTML: '<div style="font-size:12px;color:#444"><b>' + _e(_s.name) + '</b> — en ' + _e((_s.obraDesc && _s.obraDesc[obraId]) || obraId) + ' hay <b>' + _en + '</b>.</div>'
+      + '<label style="display:block;margin:10px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">¿CUÁNTAS VUELVEN A BODEGA?</label>'
+      + '<input type="number" min="1" max="' + _en + '" step="1" value="' + _en + '" class="pr-fld" style="width:120px" oninput="window._herrForm.qty = this.value">',
+    okText: 'DEVOLVER', cancelText: 'CANCELAR'
+  });
+  if (!okc) return;
+  const _q = Math.floor(Number((window._herrForm || {}).qty)) || 0;
+  const _s2 = _herrSaldos(state.herrMovs)[_k];
+  const _en2 = (_s2 && _s2.porObra[obraId]) || 0;
+  if (_q <= 0 || _q > _en2) return showToast('CANTIDAD INVÁLIDA (EN LA OBRA HAY ' + _en2 + ') — NO SE DEVOLVIÓ NADA', 'red');
+  _herrMovsList().push(_herrMov('DEVOLUCION', nombre, _q, { obraId: obraId, obraDesc: (_s2.obraDesc && _s2.obraDesc[obraId]) || '' }));
+  try { logActivity('update', 'HERRAMIENTA DEVUELTA', _k + ' ×' + _q + ' desde ' + ((_s2.obraDesc && _s2.obraDesc[obraId]) || obraId)); } catch(e){}
+  saveState();
+  try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow(); } catch(e){}
+  showToast('DEVUELTA ×' + _q + ' — VOLVIÓ AL SALDO DE BODEGA', 'green');
+  _herrRefrescarPanel();
+};
+/* el despacho desde un PEDIDO: todo o nada, marca el pedido y cierra los de solo-herramientas */
+window._herrDespacharDePedido = async function(pdId){
+  if (!_puedeGestionarBodega()) return showToast('SOLO BODEGA PUEDE DESPACHAR HERRAMIENTAS', 'red');
+  const _c0 = _findPedidoGlobal(pdId);
+  if (!_c0 || !_c0.pd) return showToast('EL PEDIDO YA NO EXISTE — RECARGÁ', 'red');
+  const _pd0 = _c0.pd;
+  const _lista = Array.isArray(_pd0.herramientas) ? _pd0.herramientas : [];
+  if (!_lista.length) return;
+  if (_pd0.herrDespacho) return showToast('YA ESTÁN DESPACHADAS', 'red');
+  /* ATÓMICO: el saldo COMPLETO se valida ANTES de escribir nada — o va todo o no va nada */
+  const _sal = _herrSaldos(state.herrMovs);
+  const _falt = [];
+  _lista.forEach(h => {
+    const s = _sal[_herrKey(h.name)];
+    if (!s || s.enBodega < (Number(h.qty) || 0)) _falt.push(_herrKey(h.name) + ' (hay ' + ((s && s.enBodega) || 0) + ' de ' + h.qty + ')');
+  });
+  if (_falt.length) return showToast('NO ALCANZA EN BODEGA: ' + _falt.join(' · ') + ' — NO SE DESPACHÓ NADA', 'red');
+  const _e = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  const okc = await window.prConfirm({
+    title: 'DESPACHAR HERRAMIENTAS',
+    bodyHTML: '<div style="font-size:12px;color:#444;line-height:1.7">Salen a <b>' + _e(_pd0.proyectoPedido || '') + '</b>:<br>'
+      + _lista.map(h => '· ' + _e(_herrKey(h.name)) + ' ×' + _e(h.qty)).join('<br>')
+      + '<br><br>Quedan ASIGNADAS a la obra hasta que se devuelvan. Sin costo para la obra.</div>',
+    okText: 'DESPACHAR', cancelText: 'CANCELAR'
+  });
+  if (!okc) return;
+  /* re-leer del state vivo tras el await del modal (patrón v769/v940) */
+  const _c2 = _findPedidoGlobal(pdId);
+  if (!_c2 || !_c2.pd) return showToast('EL PEDIDO YA NO EXISTE — RECARGÁ', 'red');
+  const pd2 = _c2.pd;
+  if (pd2.herrDespacho) return showToast('OTRO DISPOSITIVO YA LAS DESPACHÓ MIENTRAS TANTO', 'red');
+  const _u = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  const _t = Date.now();
+  const _obraId = pd2.proyectoId || '';
+  const _obraDesc = String(pd2.proyectoPedido || '').toUpperCase();
+  (pd2.herramientas || []).forEach(h => {
+    _herrMovsList().push(_herrMov('SALIDA', h.name, h.qty, { obraId: _obraId, obraDesc: _obraDesc, ref: { pedidoId: pd2.id, pedidoNumero: pd2.numero || '' } }));
+  });
+  pd2.herrDespacho = { ts: _t, por: String(_u.displayName || _u.username || '').toUpperCase(), fecha: (typeof _dateALatam === 'function') ? _dateALatam(new Date()) : '' };
+  pd2._ts = _t;   /* el contenedor viaja por union-merge (v972) */
+  /* un pedido de SOLO herramientas jamás genera OC y sin OC no hay RECIBIDO (hallazgo del
+     mapeo) — al despachar queda cumplido de verdad, así que cierra acá mismo */
+  const _soloHerr = !Object.keys(pd2.items || {}).length && !(pd2.extras || []).length && !(pd2.metalMedida || []).length;
+  if (_soloHerr) {
+    pd2.status = 'RECIBIDO';
+    (pd2.history = Array.isArray(pd2.history) ? pd2.history : []).push({ status: 'RECIBIDO', ts: _t, por: pd2.herrDespacho.por });
+  }
+  try { logActivity('update', 'HERRAMIENTAS DESPACHADAS', _numLimpio(pd2.numero) + ' → ' + _obraDesc + ': ' + (pd2.herramientas || []).map(h => _herrKey(h.name) + ' ×' + h.qty).join(', ')); } catch(e){}
+  saveState();
+  try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow(); } catch(e){}
+  showToast('HERRAMIENTAS DESPACHADAS A ' + _obraDesc, 'green');
+  try { if (typeof renderPedidosList === 'function') renderPedidosList(); } catch(e){}
+};
 /* v1126: los despachos PRE-PAGO autorizados ANTES de este arreglo ya dejaron su SALIDA escrita
    en el ledger. El saldo es DERIVADO (no hay contador mutable), así que esas salidas se IGNORAN
    al derivar en vez de borrarlas: no se toca ningún dato, no hacen falta tombstones, y los
@@ -23014,6 +23251,32 @@ function _abrirPanelBodega(){
         <button class="btn sm" onclick="_bodegaAplicarAjustes()" style="height:34px;padding:4px 14px">APLICAR AJUSTES</button>
       </div>` : ''}
     </div>
+    ${(function(){
+      /* v1155: HERRAMIENTAS DE TRABAJO — equipo propio, sin precio, con devolución.
+         El saldo es DERIVADO del libro herrMovs; los chips por obra registran la vuelta. */
+      const _hs = _herrSaldos((state && state.herrMovs) || []);
+      const _hks = Object.keys(_hs).sort();
+      const _jq = s => JSON.stringify(String(s)).replace(/"/g, '&quot;');
+      const _fh = _hks.map(k => {
+        const s = _hs[k];
+        const chips = Object.keys(s.porObra).map(o =>
+          `<button class="btn ghost sm" style="padding:2px 8px;font-size:9px;border-color:#93C5FD;color:#1D4ED8" title="Registrar la devolución desde esta obra" onclick="_herrDevolver(${_jq(s.name)}, ${_jq(o)})">${esc((s.obraDesc && s.obraDesc[o]) || o)}: ${s.porObra[o]} ⟲</button>`).join(' ');
+        return `<div style="display:grid;grid-template-columns:minmax(0,1fr) 70px 80px minmax(0,1fr) 96px;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6;font-size:11px">
+          <div style="font-weight:600">${esc(s.name)}</div>
+          <div style="text-align:center;color:#78716C">${s.total}</div>
+          <div style="text-align:center;font-weight:700;color:${s.enBodega > 0 ? '#166534' : '#9CA3AF'}">${s.enBodega}</div>
+          <div>${chips || '<span style="color:#D6D3D1;font-size:9.5px">TODAS EN BODEGA</span>'}</div>
+          <div>${s.enBodega > 0 ? `<button class="btn ghost sm" style="font-size:9px;padding:3px 8px" onclick="_herrDespachar(${_jq(s.name)})">→ A OBRA</button>` : ''}</div>
+        </div>`;
+      }).join('');
+      return `<div class="card" style="padding:12px 18px;margin-top:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px">
+          <div><span style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700">HERRAMIENTAS DE TRABAJO · SIN PRECIO · CON DEVOLUCIÓN</span></div>
+          ${_puedeGestionarBodega() ? '<button class="btn primary sm" onclick="_herrCargar()">+ CARGAR HERRAMIENTA</button>' : ''}
+        </div>
+        ${_hks.length ? `<div style="display:grid;grid-template-columns:minmax(0,1fr) 70px 80px minmax(0,1fr) 96px;gap:8px;font-size:8px;letter-spacing:1px;color:#9CA3AF;font-weight:700;padding-bottom:4px;border-bottom:1px solid #E7E5E4"><div>HERRAMIENTA</div><div style="text-align:center">TOTAL</div><div style="text-align:center">EN BODEGA</div><div>EN OBRAS · TOCÁ PARA DEVOLVER</div><div></div></div>${_fh}` : '<div style="padding:14px;text-align:center;color:var(--mute);font-size:10.5px">SIN HERRAMIENTAS — CARGÁ LA PRIMERA (ESCALERAS, ATORNILLADORAS…)</div>'}
+      </div>`;
+    })()}
     ${pedAb.length ? `<div class="card" style="padding:12px 18px;margin-top:12px">
       <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:6px">PEDIDOS DE ABASTECIMIENTO (${pedAb.length})</div>
       ${pedAbHTML}
