@@ -65,6 +65,10 @@ ok('el estado del poste especial existe y se limpia con el form',
 console.log('\n— el envío del pedido —');
 const zS = ex(code, 'async function submitPedido(');
 ok('sin tipo o metros el pedido NO sale (aviso)', /_posteEspecialNombre\(/.test(zS) && /FALTA EL TIPO O LA MEDIDA|ELEG[ÍI] EL TIPO/.test(zS));
+/* v1157 (bug de Antonio, con captura): el validador VIEJO de specs seguía exigiendo el
+   texto libre del POSTE ESPECIAL (pedidoFormSpecs) y bloqueaba el envío con "FALTA MEDIDA"
+   aunque el tipo y los metros estuvieran puestos — el ítem ya no escribe ahí. */
+ok('el validador viejo de specs EXIME al POSTE ESPECIAL', /POSTE ESPECIAL[\s\S]{0,120}return|itemName === 'POSTE ESPECIAL'/.test(zS.slice(zS.indexOf('missingSpecs'), zS.indexOf('ESPECIFICAR'))));
 ok('se convierte en EXTRA con el nombre convertido (viaja por el circuito de siempre)',
   /_herrPedido|validExtras/.test(zS) && /_peNombre|_posteEspecialNombre/.test(zS));
 ok('la clave POSTE ESPECIAL se saca de items', /POSTE ESPECIAL[\s\S]{0,220}delete _itemsPedido\[/.test(zS) || /delete _itemsPedido\[[\s\S]{0,80}POSTE ESPECIAL/.test(zS));
