@@ -43,7 +43,10 @@ ok('el detalle tiene UN solo botón COMPARTIR SOLICITUD', /COMPARTIR SOLICITUD/.
 
 // ── 4. v984: dirección sanada AL ABRIR EL MODAL + candado TODOS para todos ──
 const iModal = html.indexOf('const _dirs = p.materiales.direccionesEntrega');
-const zModal = html.slice(iModal - 1200, iModal + 200);
+/* v1158: la ventana de 1200 quedó corta — el seed de la dirección de VICINIA DEL CARMEN
+   se insertó entre el heal v984 y este marcador. Si vuelve a quedar corta, extraer
+   openOrdenCompra entera en vez de ampliar otra vez. */
+const zModal = html.slice(iModal - 3000, iModal + 200);
 ok('v984: el heal de la dirección corre al ABRIR el modal (por contenido)', /4TA AVENIDA 20-51\/i\.test\(String\(d\.direccion/.test(zModal) && /_dirFix/.test(zModal));
 ok('v984: si sanó, guarda y sube', /if \(_dirFix\) \{ saveState\(\);/.test(zModal.replace(/\n\s*/g,' ')));
 // v992: el candado se universalizó — aplica a TODOS los pedidos (pedido de Antonio)
