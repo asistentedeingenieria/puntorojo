@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1158</span>
+    <span style="opacity:.5;font-size:9px">v1159</span>
   </footer>
 
 </div>
@@ -9283,7 +9283,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 928; // v1155: contenedor nuevo herrMovs (herramientas de bodega) con union-merge + tombstones
+const APP_SYNC_VERSION = 929; // v1159: base central direccionesObra con merge por clave (_ts mayor)
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10349,6 +10349,17 @@ const CloudSync = {
         merged.herrMovsEliminados = _hmTomb;
         const _mHm = _mergeById((state && state.herrMovs) || [], merged.herrMovs || [], _hmTomb);
         merged.herrMovs = _mHm.list; if (_mHm.changed) needsResync = true;
+        // v1159: DIRECCIONES DE ENTREGA por obra — mapa chico que editan compras y el
+        // admin: se une POR CLAVE con el _ts mayor (dos editando a la vez no se pisan).
+        try {
+          const _doL = (state && state.direccionesObra) || {};
+          const _doOut = Object.assign({}, merged.direccionesObra || {});
+          Object.keys(_doL).forEach(k => {
+            const l = _doL[k], r = _doOut[k];
+            if (l && (!r || (Number(l._ts) || 0) > (Number(r._ts) || 0))) { _doOut[k] = l; needsResync = true; }
+          });
+          merged.direccionesObra = _doOut;
+        } catch(e){}
 
         /* v1010: CORRECCIONES DEL CATÁLOGO (equivalencias de nombre y materiales eliminados
            en la limpia). Se unen igual: si dos personas limpian a la vez, las dos limpiezas
@@ -22335,6 +22346,104 @@ function _herrSaldos(movs){
   });
   return out;
 }
+/* ══════════ v1159 — BASE CENTRAL DE DIRECCIONES DE ENTREGA POR OBRA ══════════
+   Pedido de Antonio tras fallar el seed v1158 (que miraba el proyecto ACTIVO en vez del
+   proyecto DEL PEDIDO): una base que compras y el admin configuran UNA vez y el modal de
+   OC usa SIEMPRE. Vive en state.direccionesObra = { [proyectoId]: {direccion, contacto,
+   telefono, _ts} } y applyRemote la une POR CLAVE con el _ts mayor. */
+function _dirObraDe(proyectoId, comoTexto){
+  try {
+    const d = (state && state.direccionesObra && state.direccionesObra[String(proyectoId || '')]) || null;
+    if (!d || !String(d.direccion || '').trim()) return null;
+    if (!comoTexto) return d;
+    const dir = String(d.direccion || '').trim().toUpperCase();
+    const cn = String(d.contacto || '').trim().toUpperCase();
+    const tel = String(d.telefono || '').trim();
+    return dir + (cn || tel ? ' — CONTACTO: ' + [cn, tel].filter(Boolean).join(' ') : '');
+  } catch(e){ return null; }
+}
+function _seedDireccionesObra(){
+  /* las obras CONOCIDAS nacen configuradas — el id sale de state.projects por NOMBRE
+     (jamás inventado, lección v950). Idempotente: solo si la obra existe y NO tiene entrada. */
+  try {
+    if (typeof state === 'undefined' || !state) return 0;
+    state.direccionesObra = (state.direccionesObra && typeof state.direccionesObra === 'object') ? state.direccionesObra : {};
+    const _defs = [
+      { re: /VICINIA (DEL |EL )?CARMEN/i, direccion: '29 CALLE 1-09, COLONIA EL CARMEN ZONA 12', contacto: 'FRANCISCO CHACAT', telefono: '4705 4324' },
+      { re: /ESSENZA/i, direccion: '16 CALLE 14-35 ZONA 13', contacto: 'RONY RIVERA 4703 8139 · DAVID SURET', telefono: '4932 0414' }
+    ];
+    let n = 0;
+    (state.projects || []).forEach(p => {
+      if (!p || !p.id) return;
+      _defs.forEach(df => {
+        if (df.re.test(String(p.name || '')) && !state.direccionesObra[p.id]) {
+          state.direccionesObra[p.id] = { direccion: df.direccion, contacto: df.contacto, telefono: df.telefono, _ts: Date.now() };
+          n++;
+        }
+      });
+    });
+    return n;
+  } catch(e){ return 0; }
+}
+window._abrirDireccionesObra = function(){
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O EL ADMINISTRADOR', 'red');
+  if (document.getElementById('_dirObraModal')) return;
+  _seedDireccionesObra();
+  const _e = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  const obras = ((state && state.projects) || []).filter(x => x && x.id);
+  window._dirObraForm = {};
+  const filas = obras.map(p => {
+    const d = (state.direccionesObra || {})[p.id] || {};
+    window._dirObraForm[p.id] = { direccion: d.direccion || '', contacto: d.contacto || '', telefono: d.telefono || '' };
+    return `<div style="border:1px solid #F3F4F6;border-radius:8px;padding:10px 12px;margin-bottom:8px">
+      <div style="font-weight:700;font-size:11px;letter-spacing:.5px;margin-bottom:6px">${_e((p.name || '').toUpperCase())}${d.direccion ? '' : ' <span style="font-size:8.5px;color:#B45309;letter-spacing:1px">· SIN DIRECCIÓN</span>'}</div>
+      <input class="pr-fld" style="width:100%;margin-bottom:5px;text-transform:uppercase" placeholder="DIRECCIÓN — EJ: 29 CALLE 1-09, COLONIA EL CARMEN ZONA 12" value="${_e(d.direccion || '')}" oninput="window._dirObraForm['${p.id}'].direccion = this.value">
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 130px;gap:6px">
+        <input class="pr-fld" style="text-transform:uppercase" placeholder="QUIÉN RECIBE" value="${_e(d.contacto || '')}" oninput="window._dirObraForm['${p.id}'].contacto = this.value">
+        <input class="pr-fld" placeholder="TELÉFONO" value="${_e(d.telefono || '')}" oninput="window._dirObraForm['${p.id}'].telefono = this.value">
+      </div>
+    </div>`;
+  }).join('');
+  const wrap = document.createElement('div');
+  wrap.id = '_dirObraModal';
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:100070;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+  wrap.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:640px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid rgba(0,0,0,.08)">
+      <b style="font-size:13px;letter-spacing:.5px">DIRECCIONES DE ENTREGA POR OBRA</b>
+      <div style="font-size:11px;color:#78716C;margin-top:4px;line-height:1.5">La dirección configurada acá sale SOLA en todas las órdenes de compra de esa obra. Se guarda una vez y queda para siempre.</div>
+    </div>
+    <div class="pr-scroll-vis" style="overflow:auto;flex:1;padding:12px 18px">${filas || '<div style="padding:20px;text-align:center;color:#9CA3AF;font-size:11px">SIN OBRAS</div>'}</div>
+    <div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" onclick="(function(){const m=document.getElementById('_dirObraModal');if(m)m.remove();})()">CERRAR</button>
+      <button class="btn primary" onclick="_guardarDireccionesObra()">GUARDAR DIRECCIONES</button>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap);
+};
+window._guardarDireccionesObra = function(){
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O EL ADMINISTRADOR', 'red');
+  if (typeof state === 'undefined' || !state) return;
+  state.direccionesObra = (state.direccionesObra && typeof state.direccionesObra === 'object') ? state.direccionesObra : {};
+  let n = 0;
+  Object.keys(window._dirObraForm || {}).forEach(id => {
+    const f = window._dirObraForm[id] || {};
+    const prev = state.direccionesObra[id] || {};
+    const dir = String(f.direccion || '').trim().toUpperCase();
+    const cn = String(f.contacto || '').trim().toUpperCase();
+    const tel = String(f.telefono || '').trim();
+    /* sin cambio real no se sella _ts (sellar de más pisaría ediciones concurrentes) */
+    if (dir === String(prev.direccion || '') && cn === String(prev.contacto || '') && tel === String(prev.telefono || '')) return;
+    if (!dir && !prev.direccion) return;
+    state.direccionesObra[id] = { direccion: dir, contacto: cn, telefono: tel, _ts: Date.now() };
+    n++;
+  });
+  const m = document.getElementById('_dirObraModal'); if (m) m.remove();
+  if (!n) return showToast('SIN CAMBIOS', '');
+  try { logActivity('update', 'DIRECCIONES DE ENTREGA', n + ' obra(s) actualizada(s)'); } catch(e){}
+  saveState();
+  try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow(); } catch(e){}
+  showToast('DIRECCIONES GUARDADAS — SALEN SOLAS EN LAS OC', 'green');
+};
 /* las herramientas con saldo en bodega — alimenta la categoría dinámica del pedido */
 function _herrDisponibles(){
   var s = _herrSaldos((typeof state !== 'undefined' && state && state.herrMovs) || []);
@@ -23275,8 +23384,9 @@ function _abrirPanelBodega(){
       <div style="flex:1"></div>
       <button class="btn ghost" onclick="_cerrarPanelBodega(); window._abrirPantallaObra(true)">← VOLVER AL MENÚ PRINCIPAL</button>
       <span id="_comprasAccionesBodega" style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn ghost" onclick="_abrirDireccionesObra()" title="Configurar la dirección de entrega de cada obra — sale sola en todas sus OC">DIRECCIONES DE ENTREGA</button>
         <button class="btn ghost" onclick="_abrirCargaExistencias()" title="Anotar el total real que YA hay físicamente — sin pedido ni OC">CARGAR EXISTENCIAS</button>
-        <button class="btn primary" onclick="_abrirModalBodega()" title="Generar pedido de abastecimiento (los faltantes van pre-llenados)">ABASTECER</button>
+        <button class="btn primary" onclick="_abrirModalBodega()" title="Generar pedido de abastecimiento">ABASTECER</button>
       </span>
     </div>
     ${_comprasBarraHTML()}
@@ -24146,27 +24256,8 @@ async function openOrdenCompra(){
     });
     if (_dirFix) { saveState(); try { CloudSync.forceUploadNow().catch(() => {}); } catch(e){} }
   } catch(e){}
-  /* v1158 (pedido de Antonio): la dirección de VICINIA DEL CARMEN va SEMBRADA desde el
-     código — siempre sale en sus OC, sin escribirla a mano. Idempotente por CONTENIDO
-     (si ya hay una con 1-09 / EL CARMEN no crea) y con id FIJO (lección v950: los seeds
-     con ids random se multiplican entre dispositivos). */
-  try {
-    if (/VICINIA (DEL |EL )?CARMEN/i.test(String(p.name || pd.proyectoPedido || ''))) {
-      p.materiales.direccionesEntrega = Array.isArray(p.materiales.direccionesEntrega) ? p.materiales.direccionesEntrega : [];
-      const _yaVdc = p.materiales.direccionesEntrega.some(d => d && (d.id === 'dir-vdc-seed' || /1-09/.test(String(d.direccion || '')) || /EL CARMEN/i.test(String(d.direccion || ''))));
-      if (!_yaVdc) {
-        p.materiales.direccionesEntrega.push({
-          id: 'dir-vdc-seed',
-          label: 'OBRA — VICINIA DEL CARMEN',
-          direccion: '29 CALLE 1-09, COLONIA EL CARMEN ZONA 12',
-          contacto: 'FRANCISCO CHACAT',
-          telefono: '4705 4324'
-        });
-        saveState();
-        try { CloudSync.forceUploadNow().catch(() => {}); } catch(e){}
-      }
-    }
-  } catch(e){}
+  /* v1159: el seed v1158 se RETIRÓ (miraba el proyecto ACTIVO en vez del proyecto DEL
+     PEDIDO y desde COMPRAS global nunca sembraba). Lo reemplaza la BASE CENTRAL. */
   const _dirs = p.materiales.direccionesEntrega || [];
   const _obraNombre = String(pd.proyectoPedido || p.name || '').toUpperCase();
   const _normDir = s => String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -24174,12 +24265,19 @@ async function openOrdenCompra(){
   const _esOficina = /^OFICINA CENTRAL/.test(_obraNombre);
   const _dirObra = _dirs.find(d => _normDir(d.label).includes(_normDir(_obraNombre)) || _normDir(d.direccion).includes(_normDir(_obraNombre)))
     || (_esOficina ? _dirs.find(d => _normDir(d.label).includes('OFICINA')) : null);
+  /* v1159: PRIMERO la base central, por la obra DEL PEDIDO (pd.proyectoId — no la activa,
+     el bug del seed v1158). Con entrada central la dirección se pone SOLA, sin aviso. */
+  try { _seedDireccionesObra(); } catch(e){}
+  const _dirCentral = (typeof _dirObraDe === 'function') ? _dirObraDe(pd.proyectoId, true) : null;
   const dirSel = document.getElementById('ocDireccionSel');
-  dirSel.innerHTML = (_dirObra ? '' : `<option value="_obra">OBRA — ${_obraNombre}</option>`)
+  dirSel.innerHTML = (_dirCentral ? `<option value="_central">OBRA — ${_obraNombre} · DIRECCIÓN CONFIGURADA</option>` : (_dirObra ? '' : `<option value="_obra">OBRA — ${_obraNombre}</option>`))
     + _dirs.map(d => `<option value="${d.id}">${d.label}</option>`).join('')
-    + ((_dirs.length || !_dirObra) ? '' : '<option value="">— SIN DIRECCIONES —</option>');
+    + ((_dirs.length || _dirCentral || !_dirObra) ? '' : '<option value="">— SIN DIRECCIONES —</option>');
 
-  if (_dirObra) {
+  if (_dirCentral) {
+    dirSel.value = '_central';
+    document.getElementById('ocEntregarA').value = _dirCentral;
+  } else if (_dirObra) {
     dirSel.value = _dirObra.id;
     applyOcDireccion(_dirObra.id);
   } else {
