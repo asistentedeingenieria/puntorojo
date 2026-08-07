@@ -1490,6 +1490,11 @@ html.ios-standalone .pedido-meta dd{font-size:11px}
 
 /* ═════════════════════════ MODALS ═════════════════════════ */
 .modal-bg{position:fixed;inset:0;background:rgba(28,25,23,.5);display:none;align-items:center;justify-content:center;z-index:100;padding:20px;backdrop-filter:blur(2px)}
+/* v1156: scroll SIEMPRE visible en las listas largas de bodega (Windows lo esconde) */
+.pr-scroll-vis{scrollbar-width:thin;scrollbar-color:#D0151C #F3F4F6}
+.pr-scroll-vis::-webkit-scrollbar{width:10px}
+.pr-scroll-vis::-webkit-scrollbar-track{background:#F3F4F6;border-radius:5px}
+.pr-scroll-vis::-webkit-scrollbar-thumb{background:#D0151C;border-radius:5px;border:2px solid #F3F4F6}
 .modal-bg.show{display:flex}
 /* v1132 (Antonio: "abre hasta abajo de todas las pestañas entonces no lo veo"): el modal de
    CONFIRMAR PEDIDO se abre ENCIMA del panel PEDIR DE RECETA (z 100070) y del menú de modos
@@ -3376,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1155</span>
+    <span style="opacity:.5;font-size:9px">v1156</span>
   </footer>
 
 </div>
@@ -19629,6 +19634,45 @@ window.DELETION_EXECUTORS['material'] = (payload) => _doDeleteMat(payload.id);
 
 // State local del formulario (no persiste hasta crear)
 let pedidoFormItems = {}; // { "categoria::item": cantidad }
+/* v1156: el POSTE ESPECIAL del catálogo — tipo elegido + medida en METROS; la descripción
+   se autogenera con la conversión a pies (1 m = 3.28084'). Formato del circuito real. */
+let pedidoPosteEspecial = { tipo: '', metros: '' };
+function _posteTipos(){
+  var out = [], visto = {};
+  try {
+    (CATALOGO_MATERIALES || []).forEach(function(b){
+      (b.items || []).forEach(function(it){
+        var n = (typeof it === 'string') ? it : (it && it.name) || '';
+        var m = /^POSTE DE (.+?) X .+? CAL\. (\d+)$/.exec(n);
+        if (!m) return;
+        var k = m[1] + '|' + m[2];
+        if (visto[k]) return;
+        visto[k] = 1;
+        out.push({ perfil: m[1], cal: m[2] });
+      });
+    });
+  } catch(e){}
+  out.sort(function(a, b){ return (a.perfil + a.cal).localeCompare(b.perfil + b.cal, 'es'); });
+  return out;
+}
+function _posteEspecialNombre(perfil, cal, metros){
+  var m = Number(metros);
+  if (!perfil || !cal || !isFinite(m) || m <= 0) return '';
+  var pies = Math.round(m * 3.28084 * 100) / 100;
+  return 'POSTE DE ' + perfil + ' X ' + pies + "' CAL. " + cal + ' (MEDIDA ESPECIAL ' + m + ' M)';
+}
+window._peSet = function(campo, valor){
+  pedidoPosteEspecial[campo] = valor;
+  try {
+    var pv = document.getElementById('peNombrePreview');
+    if (pv) {
+      var t = String(pedidoPosteEspecial.tipo || '').split('|');
+      var n = _posteEspecialNombre(t[0], t[1], pedidoPosteEspecial.metros);
+      pv.textContent = n || '— elegí tipo y medida en metros —';
+      pv.style.color = n ? '#166534' : '#9CA3AF';
+    }
+  } catch(e){}
+};
 let pedidoFormSpecs = {}; // { "categoria::item": especificación opcional }
 let currentPedidoTab = 'lista';
 
@@ -20406,6 +20450,27 @@ function renderCatalogItem(cat, item){
     </div>`;
   }
 
+  /* v1156 (pedido de Antonio): el POSTE ESPECIAL deja el texto libre — se elige el TIPO
+     (perfil+calibre de los postes del catálogo), la CANTIDAD y la MEDIDA EN METROS; la
+     descripción sale sola con la conversión a pies (vista previa en vivo). */
+  if (name === 'POSTE ESPECIAL') {
+    const _ts = _posteTipos();
+    const _optT = '<option value="">— TIPO DE POSTE —</option>' + _ts.map(t => `<option value="${escapeAttr(t.perfil + '|' + t.cal)}"${pedidoPosteEspecial.tipo === (t.perfil + '|' + t.cal) ? ' selected' : ''}>POSTE DE ${t.perfil} CAL. ${t.cal}</option>`).join('');
+    const _tp = String(pedidoPosteEspecial.tipo || '').split('|');
+    const _pv = _posteEspecialNombre(_tp[0], _tp[1], pedidoPosteEspecial.metros);
+    return `<div class="cat-pdf-item with-spec${isSel?' selected':''}">
+      <div class="cat-pdf-item-name">${name}<span class="spec-badge">MEDIDA EN METROS</span></div>
+      <div class="cat-pdf-item-qty">
+        <input type="number" min="0" step="1" value="${qty || ''}" placeholder="0" onchange="updatePedidoItem('${escapeAttr(key)}', this.value)" class="${isSel?'has-value':''}">
+      </div>
+      <div class="cat-pdf-item-spec" style="grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) 110px;gap:8px;margin-top:4px">
+        <select data-nativo class="pr-fld" style="font-size:11px" onchange="_peSet('tipo', this.value)">${_optT}</select>
+        <input type="number" min="0.1" step="0.01" class="pr-fld" style="font-size:11px;text-align:right" placeholder="METROS" value="${escapeAttr(pedidoPosteEspecial.metros || '')}" oninput="_peSet('metros', this.value)">
+        <div id="peNombrePreview" style="grid-column:1/-1;font-size:10px;letter-spacing:.3px;font-weight:700;color:${_pv ? '#166534' : '#9CA3AF'}">${_pv || '— elegí tipo y medida en metros —'}</div>
+      </div>
+    </div>`;
+  }
+
   // Item con especificación
   const specDisabled = !isSel;
   return `<div class="cat-pdf-item with-spec${isSel?' selected':''}">
@@ -20793,6 +20858,7 @@ async function resetPedidoForm(){
   }
   pedidoFormItems = {};
   pedidoFormSpecs = {};
+  pedidoPosteEspecial = { tipo: '', metros: '' }; /* v1156 */
   pedidoExtraMaterials = [];
   pedidoMetalMedida = [];
   ['pfSolicitante','pfOrdenCambio','pfObservaciones','pfProyectoManual','pfAptoManual'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
@@ -20925,6 +20991,19 @@ async function submitPedido(){
       delete _itemsPedido[_hk];
     }
   });
+  /* v1156: el POSTE ESPECIAL con cantidad exige TIPO y MEDIDA EN METROS, y viaja como
+     EXTRA con el nombre ya convertido a pies — la descripción que Antonio quiere ver. */
+  const _peKey = Object.keys(_itemsPedido).find(_k => _k.split('::').pop() === 'POSTE ESPECIAL');
+  if (_peKey && (Number(_itemsPedido[_peKey]) || 0) > 0) {
+    const _peQty = Number(_itemsPedido[_peKey]) || 0;
+    const _peTp = String(pedidoPosteEspecial.tipo || '').split('|');
+    const _peNombre = _posteEspecialNombre(_peTp[0], _peTp[1], pedidoPosteEspecial.metros);
+    if (!_peNombre) return showToast('POSTE ESPECIAL: ELEGÍ EL TIPO Y LA MEDIDA EN METROS — EL PEDIDO NO SE ENVIÓ', 'red');
+    validExtras.push({ name: _peNombre, unit: 'UND', qty: _peQty });
+    delete _itemsPedido[_peKey];
+  } else if (_peKey) {
+    delete _itemsPedido[_peKey];
+  }
 
   const pedido = {
     id: 'pd-' + uid(),
@@ -21016,6 +21095,7 @@ async function submitPedido(){
   pedidoMetalMedida = [];
   pedidoFormItems = {};
   pedidoFormSpecs = {};
+  pedidoPosteEspecial = { tipo: '', metros: '' }; /* v1156 */
   pedidoExtraMaterials = [];
   /* v996 (reporte de Antonio: "le doy enviar a compras y el pedido no se va ni me borra
      todo"): el pedido ya está GUARDADO; el cierre de pantalla no puede depender de que
@@ -22109,7 +22189,7 @@ function _abrirModalBodega(){
     </div>
     <div style="padding:10px 18px 0"><input id="_bodegaAbFiltro" class="pr-buscador" placeholder="BUSCAR MATERIAL…" oninput="window._bodegaAbFiltrar(this.value)" style="width:100%"></div>
     <div style="display:grid;grid-template-columns:34px minmax(0,1fr) 84px 110px;gap:10px;padding:10px 18px 4px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700"><span>BOD.</span><span>MATERIAL</span><span style="text-align:right">PRECIO</span><span style="text-align:right">CANTIDAD</span></div>
-    <div style="overflow:auto;flex:1;padding:0 18px 8px">${filas}</div>
+    <div class="pr-scroll-vis" style="overflow:auto;flex:1;padding:0 18px 8px">${filas}</div>
     <div style="padding:12px 18px;border-top:1px solid rgba(0,0,0,.08);display:flex;gap:10px;align-items:end">
       <label style="font-size:8.5px;letter-spacing:1.5px;color:#78716C;font-weight:700" title="La fecha que heredan las OC al proveedor">¿PARA CUÁNDO LO NECESITÁS EN BODEGA?<br><input type="date" id="_bodegaFecha" class="pr-buscador" style="margin-top:3px"></label>
       <div style="flex:1"></div>
@@ -22120,24 +22200,9 @@ function _abrirModalBodega(){
   document.body.appendChild(wrap);
   const _f = document.getElementById('_bodegaFecha'); if (_f) _f.min = _hoyInputISO();
   window._bodegaProds = prods;
-  // v959: los FALTANTES de bodega (existencia negativa) vienen pre-llenados como sugerido de compra.
-  try {
-    const _sal = window._bodegaSaldos((state || {}).bodegaMovs);
-    prods.forEach((x, i) => {
-      /* v1010: los movimientos están sellados con la clave del nombre con que se movió el
-         material. Si Antonio unió dos nombres, el saldo vive bajo la clave VIEJA — hay que
-         sumar todas las claves fundidas o el faltante desaparece de la pantalla. */
-      let _saldo = 0, _hay = false;
-      (x.keys && x.keys.length ? x.keys : [x.key]).forEach(k => {
-        const s = _sal[k];
-        if (s) { _saldo += Number(s.saldo) || 0; _hay = true; }
-      });
-      if (_hay && _saldo < 0) {
-        const q = wrap.querySelector('input[data-bqty="' + i + '"]');
-        if (q && !q.value) q.value = -_saldo;
-      }
-    });
-  } catch (e) {}
+  /* v1156 (pedido de Antonio): el modal abre SIEMPRE con las cantidades VACÍAS — el
+     pre-llenado de faltantes (v959) se retiró; los faltantes se siguen viendo en ROJO
+     en la tabla del panel de bodega, que es donde se consultan. */
   wrap.querySelectorAll('input[data-bi]').forEach(chk => chk.addEventListener('change', () => _toggleItemBodega(window._bodegaProds[Number(chk.dataset.bi)].name)));
   // v969: el sugerido de receta se eliminó — la receta no pinta en el abastecimiento.
 }
@@ -22700,7 +22765,7 @@ function _abrirCargaExistencias(){
     </div>
     <div style="padding:10px 18px 0"><input id="_bodegaCargaFiltro" class="pr-buscador" placeholder="BUSCAR MATERIAL…" oninput="window._bodegaCargaFiltrar(this.value)" style="width:100%"></div>
     <div class="carga-hd" style="display:grid;grid-template-columns:minmax(0,1fr) 56px 80px 110px;gap:10px;padding:10px 18px 4px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700"><span>MATERIAL</span><span style="text-align:center">U</span><span style="text-align:right">REGISTRADO</span><span style="text-align:right">TOTAL REAL</span></div>
-    <div style="overflow:auto;flex:1;padding:0 18px 8px">${filasHTML}</div>
+    <div class="pr-scroll-vis" style="overflow:auto;flex:1;padding:0 18px 8px">${filasHTML}</div>
     <div style="padding:10px 18px;border-top:1px solid rgba(0,0,0,.06)">
       <div style="font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700;margin-bottom:6px">OTRO MATERIAL (LIBRE — no está en las recetas)</div>
       <div class="carga-libre" style="display:grid;grid-template-columns:minmax(0,1fr) 90px 110px;gap:10px">

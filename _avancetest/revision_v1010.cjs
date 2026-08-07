@@ -80,7 +80,11 @@ if (prods) {
 
 console.log('\n— 4. el saldo del material unido no queda huérfano —');
 const zModal = ex('function _abrirModalBodega(');
-ok('el pre-llenado suma el saldo de todas las claves fundidas', /x\.keys/.test(zModal));
+/* v1156: el pre-llenado de faltantes se RETIRÓ (Antonio: cantidades siempre vacías), así
+   que la suma de claves fundidas ya no vive en este modal. La propiedad de fondo v1010
+   (sumar TODAS las claves fundidas al derivar) sigue protegida donde importa: en la tabla
+   del panel de bodega, que es donde se consultan los faltantes en rojo. */
+ok('el modal ya no pre-llena (v1156) y no dejó restos de la suma', !/x\.keys/.test(zModal) && !/q\.value = -_saldo/.test(zModal));
 
 console.log('\n— 5. lo barato que igual conviene —');
 ok('_matEstaOculto está cacheado como el de alias', /_matEstaOculto\._cache/.test(html));

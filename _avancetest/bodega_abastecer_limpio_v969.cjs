@@ -64,7 +64,10 @@ function _matFixReset(){ _matAliasMap._cache = null; _matEstaOculto._cache = nul
 const zAb = extractFrom('function _abrirModalBodega(');
 ok('sin columna TOTAL RECETA', !/TOTAL RECETA/.test(zAb));
 ok('sin sugerido de receta (data-bsug)', !/data-bsug/.test(zAb) && !/total de la receta/i.test(zAb));
-ok('el prefill de FALTANTES (por saldo) se queda', /_bodegaSaldos/.test(zAb));
+/* v1156: el requisito CAMBIÓ — Antonio pidió que el modal abra SIEMPRE con las cantidades
+   vacías, así que el pre-llenado de faltantes (v959) se retiró. La propiedad v969 que este
+   test protege (nada de RECETA en el abastecimiento) se conserva intacta arriba. */
+ok('el prefill de FALTANTES se retiró (v1156: cantidades siempre vacías)', !/q\.value = -_saldo/.test(zAb));
 
 // ── 2. unidad derivada del nombre ──
 const uSrc = extractFrom('function _bodegaUnidadDelNombre(');
