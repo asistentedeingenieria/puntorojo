@@ -33,8 +33,10 @@ ok('la firma del SOLICITANTE de la solicitud (la de la captura de Antonio)',
   /_miFirmaImg\(pd\.solicitanteUsername\)[\s\S]{0,220}\$\{_FIRMA_TINTA\}/.test(html));
 ok('las dos firmas de la OC', /_miFirmaImg\(oc\.generadoPorUsername\)[\s\S]{0,260}\$\{_FIRMA_TINTA\}/.test(html)
   && /_firmaUsernameAutoriza\(oc\)[\s\S]{0,300}\$\{_FIRMA_TINTA\}/.test(html));
-ok('la del recibo de recepción', /src="\$\{firma\}"[\s\S]{0,140}\$\{_FIRMA_TINTA\}/.test(html));
-ok('la del receptor del acuse', /src="\$\{firmaUrl\}"[\s\S]{0,160}\$\{_FIRMA_TINTA\}/.test(html));
+/* v1160: los src ahora pasan por _firmaTintaSrc(...) — el filtro CSS sigue en el style
+   como FALLBACK mientras la binarización corre. La propiedad v1154 se conserva. */
+ok('la del recibo de recepción', /src="\$\{_firmaTintaSrc\(firma\)\}"[\s\S]{0,140}\$\{_FIRMA_TINTA\}/.test(html));
+ok('la del receptor del acuse', /src="\$\{_firmaTintaSrc\(firmaUrl\)\}"[\s\S]{0,160}\$\{_FIRMA_TINTA\}/.test(html));
 
 console.log('\n— lo que no cambia —');
 ok('el fallback de firma en letra script sigue (quien no registró firma)', /firma-script/.test(html));
