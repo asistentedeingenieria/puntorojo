@@ -52,7 +52,9 @@ console.log('\n— enganches —');
 /* en el merge multi-dispositivo (donde se PIERDE el sello) y al pintar la planilla */
 ok('corre dentro de _mergePlanillaProyecto y pide re-subida', /_planillaSelloSelfHeal\(rp\)[\s\S]{0,60}changed = true/.test(ex('function _mergePlanillaProyecto(')));
 ok('corre al entrar a la planilla (curación local)', /_planillaSelloSelfHeal\(/.test(ex('window.renderPlanilla = function')));
-ok('cambio de sync ⇒ versión nueva (ritual v892)', /APP_SYNC_VERSION = 92[2-9]/.test(html)); // v1070: subió a 922 (merge del catálogo de precios)
+/* v1164: el rango 92[2-9] se quedó corto al llegar a 930 — sin literal, el invariante es
+   AL MENOS 922 (la versión en que este cambio de sync entró). Cuarta vez que muerde. */
+ok('cambio de sync ⇒ versión nueva (ritual v892)', (Number((html.match(/APP_SYNC_VERSION = (\d+)/) || [])[1]) || 0) >= 922);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

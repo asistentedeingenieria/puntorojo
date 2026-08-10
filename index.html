@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1163</span>
+    <span style="opacity:.5;font-size:9px">v1164</span>
   </footer>
 
 </div>
@@ -9283,7 +9283,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 929; // v1159: base central direccionesObra con merge por clave (_ts mayor)
+const APP_SYNC_VERSION = 930; // v1164: solicitudesReceta (log de cambios de receta) pasa a union-merge por id
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10479,6 +10479,16 @@ const CloudSync = {
             const _chgF = (typeof _mergeFotosProyecto === 'function') ? _mergeFotosProyecto(_locProj[rp && rp.id], rp) : 0;
             if (_chgF && !(typeof isReadOnly === 'function' && isReadOnly())) { needsResync = true; _blindadosFotos += _chgF; }
           } catch(e){ console.warn('blindaje de fotos en applyRemote:', e); }
+          /* v1164: el LOG de cambios de la receta iba LWW — dos personas tocando la receta
+             a la vez se perdían registros, y un historial con huecos no sirve. Unión por id. */
+          try {
+            const _lpSR = _locProj[rp && rp.id];
+            if (_lpSR && (Array.isArray(_lpSR.solicitudesReceta) || Array.isArray(rp.solicitudesReceta))) {
+              const _mSR = _mergeById(_lpSR.solicitudesReceta || [], rp.solicitudesReceta || [], null);
+              rp.solicitudesReceta = _mSR.list;
+              if (_mSR.changed && !(typeof isReadOnly === 'function' && isReadOnly())) needsResync = true;
+            }
+          } catch(e){ console.warn('merge de solicitudesReceta:', e); }
           const _chgPl = _mergePlanillaProyecto(_locProj[rp && rp.id], rp);
           // solo-lectura: su subida es no-op — marcar needsResync solo ciclaría el breaker
           if (_chgPl && !(typeof isReadOnly === 'function' && isReadOnly())) { needsResync = true; _blindados++; }
@@ -39411,7 +39421,9 @@ window.verSolicitudesReceta = async function(){
   const fFecha = iso => { try { const d=new Date(iso); return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear(); } catch(e){ return ''; } };
   const sols = p.solicitudesReceta.slice();
   const pend = sols.filter(s => s.estado==='PENDIENTE');
-  const proc = sols.filter(s => s.estado!=='PENDIENTE').sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,15);
+  /* v1164: el historial ahora incluye los cambios DIRECTOS (estado APLICADA) — se muestran
+     más registros porque es el libro de auditoría de la receta, no solo las solicitudes */
+  const proc = sols.filter(s => s.estado!=='PENDIENTE').sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,60);
   let body = '<div style="font-size:12px;color:#1F2937;line-height:1.5;margin-bottom:14px">'+(esGer?'Solicitudes de cambio de receta. Autorizá o rechazá.':'Tus solicitudes de cambio y su estado.')+'</div>';
   if (!pend.length) body += '<div style="padding:18px;text-align:center;background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;color:#15803D;font-weight:700;margin-bottom:14px">SIN PENDIENTES</div>';
   else {
@@ -39424,10 +39436,12 @@ window.verSolicitudesReceta = async function(){
     body += '</div></div>';
   }
   if (proc.length){
-    body += '<div style="border:1px solid #E2E8F0;border-radius:8px;background:#F8FAFC"><div style="padding:10px 14px;font-size:11px;font-weight:700;color:#475569;background:#F1F5F9;border-bottom:1px solid #E2E8F0;letter-spacing:.6px;border-radius:8px 8px 0 0">HISTORIAL · ÚLTIMAS '+proc.length+'</div><div style="padding:8px 14px">';
+    body += '<div style="border:1px solid #E2E8F0;border-radius:8px;background:#F8FAFC"><div style="padding:10px 14px;font-size:11px;font-weight:700;color:#475569;background:#F1F5F9;border-bottom:1px solid #E2E8F0;letter-spacing:.6px;border-radius:8px 8px 0 0">HISTORIAL DE CAMBIOS DE LA RECETA · '+proc.length+'</div><div style="padding:8px 14px">';
     proc.forEach(s => {
-      const estBadge = s.estado==='APROBADA' ? '<span class="planilla-badge" style="background:#DCFCE7;color:#15803D;border:1px solid #86EFAC;font-size:8.5px">APROBADA</span>' : '<span class="planilla-badge" style="background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;font-size:8.5px">RECHAZADA</span>';
-      body += '<div style="padding:6px 0;border-bottom:1px solid #E2E8F0;font-size:10.5px;color:#475569;display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:center"><div>'+estBadge+'</div><div>'+esc(s.resumen||'')+_recetaSolDeltaChip(s.resumen)+(s.motivoRechazo?' · "'+esc(s.motivoRechazo)+'"':'')+'</div></div>';
+      /* v1164: APLICADA = cambio hecho directo en la receta (sin pasar por solicitud) */
+      const estBadge = s.estado==='APLICADA' ? '<span class="planilla-badge" style="background:#DBEAFE;color:#1E40AF;border:1px solid #93C5FD;font-size:8.5px">'+esc(s.tipo||'CAMBIO')+'</span>'
+        : (s.estado==='APROBADA' ? '<span class="planilla-badge" style="background:#DCFCE7;color:#15803D;border:1px solid #86EFAC;font-size:8.5px">APROBADA</span>' : '<span class="planilla-badge" style="background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;font-size:8.5px">RECHAZADA</span>');
+      body += '<div style="padding:6px 0;border-bottom:1px solid #E2E8F0;font-size:10.5px;color:#475569;display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center"><div>'+estBadge+'</div><div>'+esc(s.resumen||'')+_recetaSolDeltaChip(s.resumen)+(s.motivoRechazo?' · "'+esc(s.motivoRechazo)+'"':'')+'</div><div style="font-size:9px;color:#94A3B8;white-space:nowrap">'+esc(s.byNombre||s.by||'')+' · '+esc(fFecha(s.ts))+'</div></div>';
     });
     body += '</div></div>';
   }
@@ -39834,15 +39848,43 @@ function toggleRecetaEditMode(){
   renderReceta();
 }
 
+/* v1164 (pedido de Antonio: "el historial de las modificaciones que se generan en las
+   recetas"): los cambios DIRECTOS (los que hace quien puede editar sin pasar por
+   solicitud) no quedaban registrados en NINGÚN lado — el panel solo mostraba lo que
+   PIDIÓ un supervisor. Se registran en el MISMO libro que el panel ya lee, con estado
+   APLICADA. Tope de 300 para que el log no crezca sin freno. */
+function _recetaLogCambio(p, tipo, resumen){
+  try {
+    if (!p) return;
+    if (!Array.isArray(p.solicitudesReceta)) p.solicitudesReceta = [];
+    const u = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+    p.solicitudesReceta.push({
+      id: 'rl-' + uid(),
+      tipo: String(tipo || 'CAMBIO'),
+      resumen: String(resumen || ''),
+      estado: 'APLICADA',
+      by: String(u.username || '').toLowerCase(),
+      byNombre: String(u.displayName || u.username || '').toUpperCase(),
+      ts: new Date().toISOString(),
+      _ts: Date.now()
+    });
+    if (p.solicitudesReceta.length > 300) p.solicitudesReceta = p.solicitudesReceta.slice(-300);
+    saveState();
+  } catch(e){}
+}
 function updateRecetaQty(key, val){
   if (!can('receta.edit') && !can('users.manage')) return;
   const p = activeProj();
   const q = Number(val) || 0;
+  const _etq = 'ETAPA ' + (Number(currentRecetaStage) + 1);
+  const _nomQ = (key || '').split('::').slice(1).join('::') || key;
+  const _antes = Number((p.materiales.receta[currentRecetaStage] || {})[key]) || 0;
   if (q > 0) {
     p.materiales.receta[currentRecetaStage][key] = q;
   } else {
     delete p.materiales.receta[currentRecetaStage][key];
   }
+  if (_antes !== q) _recetaLogCambio(p, 'CANTIDAD', _etq + ' · ' + _nomQ + ': ' + _antes + ' → ' + q);
   saveState();
   renderReceta();
 }
@@ -39862,7 +39904,9 @@ function _doRemoveRecetaMaterial(key, stage){
   const p = activeProj();
   const stIdx = (typeof stage === 'number') ? stage : currentRecetaStage;
   if (!p || !p.materiales || !p.materiales.receta || !p.materiales.receta[stIdx]) return;
+  const _qAnt = Number(p.materiales.receta[stIdx][key]) || 0;
   delete p.materiales.receta[stIdx][key];
+  _recetaLogCambio(p, 'QUITÓ', 'ETAPA ' + (Number(stIdx) + 1) + ' · ' + ((key || '').split('::').slice(1).join('::') || key) + (_qAnt ? ' (era ' + _qAnt + ')' : '')); // v1164
   saveState();
   renderReceta();
   showToast('MATERIAL QUITADO DE LA RECETA');
@@ -39913,6 +39957,7 @@ function saveRecetaAdd(){
   saveState();
   closeModal('recetaAdd');
   renderReceta();
+  _recetaLogCambio(p, 'AGREGÓ', 'ETAPA ' + (Number(currentRecetaStage) + 1) + ' · ' + ((key || '').split('::').slice(1).join('::') || key) + ' × ' + qty); // v1164
   showToast('MATERIAL AGREGADO A LA RECETA', 'green');
 }
 
