@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1161</span>
+    <span style="opacity:.5;font-size:9px">v1162</span>
   </footer>
 
 </div>
@@ -14982,6 +14982,9 @@ function _coberturaAptosEtapa(pedidos, levelId, stageIdx, devoluciones){
   var cob = {};
   (pedidos||[]).forEach(function(pd){
     if (!(pd && pd.esDeReceta && pd.recetaLevelId===levelId && pd.recetaEtapaIdx===stageIdx)) return;
+    /* v1162: un pedido CANCELADO no cubre nada — sin esto el material quedaría cubierto
+       para siempre y la receta jamás lo volvería a ofrecer. */
+    if (pd.status === 'CANCELADO') return;
     // v991: además de los pedidos POR APTO (v909), entran los de NIVEL con recepción
     // PARCIAL — su clave ya no se cierra en _itemsYaPedidosEtapa, así que la resta por
     // cantidades es la que deja disponible exactamente el faltante.
@@ -15033,6 +15036,7 @@ function _itemsYaPedidosEtapa(pedidos, levelId, stageIdx){
   var keys={};
   (pedidos||[]).forEach(function(pd){
     if(pd && pd.esDeReceta && pd.recetaLevelId===levelId && pd.recetaEtapaIdx===stageIdx){
+      if (pd.status === 'CANCELADO') return; // v1162: un cancelado no cierra ninguna clave
       // v909: los pedidos POR APARTAMENTO no cierran la clave a escala de nivel;
       // su cobertura se resta con _coberturaAptosEtapa.
       if (pd.recetaAptoId) return;
@@ -19892,7 +19896,8 @@ function renderPedidosList(){
   pedidos.forEach(pd => { if (byState[pd.status] !== undefined) byState[pd.status]++; });
   /* v1012: el total decía "3 · ESTE PROYECTO" con UNA tarjeta en pantalla, porque contaba
      también los recibidos que el historial esconde. Ahora el número grande es lo que se ve. */
-  const _activos = total - (byState['RECIBIDO'] || 0);
+  const _cancelados = pedidos.filter(pd => pd && pd.status === 'CANCELADO').length; // v1162
+  const _activos = total - (byState['RECIBIDO'] || 0) - _cancelados;
 
   document.getElementById('pedKpis').innerHTML = `
     <div class="kpi cafe"><div class="lbl">Total pedidos</div><div class="val">${_activos}</div><div class="sub">${(byState['RECIBIDO'] || 0) ? 'Activos · ' + (byState['RECIBIDO'] || 0) + ' en historial' : 'Este proyecto'}</div></div>
@@ -19919,8 +19924,10 @@ function renderPedidosList(){
   /* v996 (pedido de Antonio: "las que ya fueron entregadas guardalas y escondelas como el
      historial de planillas"): los pedidos RECIBIDO EN OBRA se van a un bloque colapsable
      al final. No se borra nada — se guardan y se muestran cuando se pide. */
-  const _act = pedidos.filter(pd => pd && pd.status !== 'RECIBIDO');
-  const _hist = pedidos.filter(pd => pd && pd.status === 'RECIBIDO');
+  /* v1162: los CANCELADOS bajan al historial junto con los recibidos — salen de la vista
+     activa pero se pueden consultar con su número y su motivo. */
+  const _act = pedidos.filter(pd => pd && pd.status !== 'RECIBIDO' && pd.status !== 'CANCELADO');
+  const _hist = pedidos.filter(pd => pd && (pd.status === 'RECIBIDO' || pd.status === 'CANCELADO'));
   const _hKey = 'pedidos_historial_visible_' + ((p && p.id) || 'def');
   const _hVis = _histVisible(_hKey); // v1067: cerrado por default en cada entrada
   let _html = _avisoAjenos;
@@ -19956,7 +19963,8 @@ function renderPedidoCard(pd, p){
   const totalQty = Object.values(items).reduce((s,v) => s + (Number(v)||0), 0)
                  + extras.reduce((s,e) => s + (Number(e.qty)||0), 0);
   const statusClass = pd.status.replace(/\s+/g,'-');
-  const statusInfo = PEDIDO_ESTADOS.find(s => s.key === pd.status) || PEDIDO_ESTADOS[0];
+  const _esCancel = pd.status === 'CANCELADO'; // v1162
+  const statusInfo = PEDIDO_ESTADOS.find(s => s.key === pd.status) || (_esCancel ? { key:'CANCELADO', label:'CANCELADO', next:null, role:null } : PEDIDO_ESTADOS[0]);
   // v1005: APROBADO solo cuando finanzas firmó TODAS sus órdenes
   const _estCard = _estadoPedidoMostrar(pd, getPedidoOrdenes(pd.id));
   const stepIdx = PEDIDO_ESTADOS.findIndex(s => s.key === pd.status);
@@ -19983,7 +19991,8 @@ function renderPedidoCard(pd, p){
 
   // Botones de acción según estado y rol
   let actionBtn = '';
-  if (statusInfo.next) {
+  if (_esCancel) { /* v1162: un pedido cancelado no avanza ni se recibe */ }
+  else if (statusInfo.next) {
     // Caso especial: APROBADO → RECIBIDO solo si OC autorizada Y es el solicitante original (o admin)
     if (pd.status === 'APROBADO' && statusInfo.next === 'RECIBIDO') {
       const ocsPedido = getPedidoOrdenes(pd.id);
@@ -20036,7 +20045,7 @@ function renderPedidoCard(pd, p){
         ${pd.fechaEntrega ? `<div><dt>Entrega</dt><dd>${pd.fechaEntrega}</dd></div>` : ''}
       </dl>
       <!-- v1005: APROBADO solo si finanzas ya firmó; si no, PENDIENTE DE AUTORIZACIÓN -->
-      <div class="pedido-status ${statusClass}" ${_estCard.texto !== statusInfo.label ? 'style="background:#B45309"' : ''}>${_estCard.texto === 'PENDIENTE DE AUTORIZACIÓN' ? _estCard.texto : statusInfo.label}</div>
+      <div class="pedido-status ${statusClass}" ${_esCancel ? 'style="background:#6B7280"' : (_estCard.texto !== statusInfo.label ? 'style="background:#B45309"' : '')}>${_esCancel ? 'CANCELADO' : (_estCard.texto === 'PENDIENTE DE AUTORIZACIÓN' ? _estCard.texto : statusInfo.label)}</div><!-- v1162 -->
     </div>
     <div class="pedido-body">
       <div class="pedido-items-summary"><strong>${totalItemCount}</strong> material${totalItemCount!==1?'es':''} · <strong>${totalQty}</strong> unidad${totalQty!==1?'es':''}${extraItemCount > 0 ? ` · <span style="color:var(--cafe);font-weight:700">${extraItemCount} EXTRAORDINARIO${extraItemCount!==1?'S':''}</span>` : ''}${pd.ordenCambio ? ' · <span style="color:var(--amber);font-weight:700">ORDEN DE CAMBIO</span>' : ''}</div>
@@ -20065,6 +20074,7 @@ function renderPedidoCard(pd, p){
       })()}
       ${pd.ordenCambio ? `<div style="font-size:11px;color:var(--amber);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px"><strong>ORDEN DE CAMBIO:</strong> ${esc(pd.ordenCambio)}</div>` : ''}
       ${(pd.itemsQuitados || []).length ? `<div style="font-size:10.5px;background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:8px 10px;margin-bottom:8px"><div style="font-size:8.5px;letter-spacing:1.2px;font-weight:700;color:#B91C1C;text-transform:uppercase;margin-bottom:4px">Quitado por compras — no aplica</div>${pd.itemsQuitados.map(q => `<div style="padding:2px 0;color:#7F1D1D"><b>${esc(q.name)}</b> ×${esc(q.qty)} — "${esc(q.motivo)}" <span style="color:#9CA3AF">(${esc(q.por || '')}${q.fecha ? ' · ' + esc(q.fecha) : ''})</span></div>`).join('')}</div>` : ''}<!-- v1153: el solicitante ve qué le quitaron y por qué -->
+      ${_esCancel && pd.cancelacion ? `<div style="font-size:10.5px;background:#F3F4F6;border:1px solid #D1D5DB;border-radius:6px;padding:8px 10px;margin-bottom:8px"><div style="font-size:8.5px;letter-spacing:1.2px;font-weight:700;color:#4B5563;text-transform:uppercase;margin-bottom:3px">Pedido cancelado</div><div style="color:#374151">"${esc(pd.cancelacion.motivo || '')}" <span style="color:#9CA3AF">(${esc(pd.cancelacion.por || '')}${pd.cancelacion.fecha ? ' · ' + esc(pd.cancelacion.fecha) : ''})</span></div></div>` : ''}<!-- v1162 -->
       ${(pd.herramientas || []).length ? `<div style="font-size:10.5px;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:6px;padding:8px 10px;margin-bottom:8px"><div style="font-size:8.5px;letter-spacing:1.2px;font-weight:700;color:#1D4ED8;text-transform:uppercase;margin-bottom:4px">Herramientas de bodega · sin costo</div>${pd.herramientas.map(h => `<div style="padding:2px 0;color:#1E3A5F">${esc(h.name)} ×${esc(h.qty)}</div>`).join('')}${pd.herrDespacho ? `<div style="margin-top:4px;font-size:9.5px;font-weight:700;color:#15803D">DESPACHADAS ✓ ${esc(pd.herrDespacho.fecha || '')} · ${esc(pd.herrDespacho.por || '')}</div>` : (_puedeGestionarBodega() ? `<button class="btn sm" style="margin-top:6px;background:#1D4ED8;border-color:#1D4ED8;color:#fff" onclick="_herrDespacharDePedido('${pd.id}')">DESPACHAR HERRAMIENTAS</button>` : '<div style="margin-top:4px;font-size:9.5px;color:#B45309;font-weight:700">PENDIENTES DE DESPACHO EN BODEGA</div>')}</div>` : ''}<!-- v1155 -->
       ${pd.observaciones ? `<div style="font-size:11px;color:var(--mute);margin-bottom:8px;font-style:italic">"${esc(pd.observaciones)}"</div>` : ''}
       <div class="pedido-actions">
@@ -20074,6 +20084,7 @@ function renderPedidoCard(pd, p){
         ${pd.recepcion ? `<button class="btn ghost sm" onclick="imprimirRecibo('${pd.id}')" title="Comprobante de recepción firmado">VER RECIBO</button>
         <button class="btn sm" onclick="compartirReciboImg('${pd.id}')" style="background:#25D366;border-color:#25D366;color:#fff">COMPARTIR RECIBO</button>` : ''}
         ${actionBtn}
+        ${(!_esCancel && can('users.manage')) ? `<button class="btn ghost sm" style="border-color:#6B7280;color:#374151" onclick="_cancelarPedido('${pd.id}')" title="Cancelar el pedido — conserva su número y baja al historial (solo admin)">CANCELAR</button>` : ''}
         ${canDelete ? `<button class="btn-icon danger" onclick="deletePedido('${pd.id}')" title="ELIMINAR">✕</button>` : ''}
       </div>
     </div>
@@ -20085,6 +20096,7 @@ async function advancePedido(id, ocId){
   if (!_ctx) return;
   const p = activeProj();
   let pd = _ctx.pd; // v990: se re-asigna con el objeto VIVO después del modal (regla v769/v770)
+  if (pd.status === 'CANCELADO') return showToast('ESTE PEDIDO ESTÁ CANCELADO — NO SE PUEDE AVANZAR', 'red'); // v1162
   const statusInfo = PEDIDO_ESTADOS.find(s => s.key === pd.status);
   if (!statusInfo || !statusInfo.next) return;
   let _recepcionHecha = false; // v989: el modal de recepción reemplaza el confirm genérico
@@ -20267,6 +20279,67 @@ function _recetaLiberarCandadoEtapa(p, levelId, etapaIdx){
   }catch(e){}
   return false;
 }
+/* v1162 (pedido de Antonio): CANCELAR ≠ ELIMINAR. El pedido conserva su NÚMERO y su
+   historia, sale de la lista activa y queda marcado CANCELADO con su motivo. Solo admin.
+   ALCANCE SEGURO (del análisis adversarial): NO se cancela un pedido que ya tiene OCs —
+   esas órdenes viven en el gasto, en el badge de pendientes y en "por recibir" de bodega;
+   primero se cancelan ellas. Al cancelar se libera lo que el pedido trababa, igual que el
+   borrado (v979/v981), y la receta deja de contarlo (guards en cobertura/ya-pedidos). */
+window._cancelarPedido = async function(id){
+  if (!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE CANCELAR UN PEDIDO', 'red');
+  const _c0 = _findPedidoGlobal(id);
+  if (!_c0 || !_c0.pd) return showToast('EL PEDIDO YA NO EXISTE — RECARGÁ', 'red');
+  const _pd0 = _c0.pd;
+  if (_pd0.status === 'CANCELADO') return showToast('YA ESTÁ CANCELADO', 'red');
+  const _ocs0 = (typeof getPedidoOrdenes === 'function') ? getPedidoOrdenes(id) : [];
+  const _ocsVivas = (_ocs0 || []).filter(o => o && (o.status || 'AUTORIZADA') !== 'CANCELADA');
+  if (_ocsVivas.length) return showToast('ESTE PEDIDO YA TIENE ' + _ocsVivas.length + ' ORDEN(ES) — CANCELÁ LAS ÓRDENES PRIMERO', 'red');
+  const _e = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  window._cancelPdForm = { motivo: '' };
+  const okc = await window.prConfirm({
+    title: 'CANCELAR PEDIDO',
+    bodyHTML: '<div style="font-size:12px;color:#444;line-height:1.6">El pedido <b>' + _e(_numLimpio(_pd0.numero)) + '</b> queda marcado como CANCELADO y sale de la lista activa. <b>Conserva su número</b> — no se renumera nada. Si era de receta, el material vuelve a quedar disponible para pedirse.</div>'
+      + '<label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">¿POR QUÉ SE CANCELA? — OBLIGATORIO</label>'
+      + '<textarea class="pr-fld" rows="3" style="width:100%;resize:vertical" placeholder="EJ: SE PIDIÓ POR ERROR / YA NO SE NECESITA" oninput="window._cancelPdForm.motivo = this.value"></textarea>',
+    okText: 'CANCELAR PEDIDO', cancelText: 'NO'
+  });
+  if (!okc) return;
+  const _motivo = String((window._cancelPdForm || {}).motivo || '').trim();
+  if (!_motivo) return showToast('ESCRIBÍ EL MOTIVO — EL PEDIDO NO SE CANCELÓ', 'red');
+  /* re-leer del state vivo tras el await del modal (patrón v769/v940) */
+  const _c2 = _findPedidoGlobal(id);
+  if (!_c2 || !_c2.pd) return showToast('EL PEDIDO YA NO EXISTE — RECARGÁ', 'red');
+  const pd2 = _c2.pd, p2 = _c2.p || activeProj();
+  if (pd2.status === 'CANCELADO') return showToast('OTRO DISPOSITIVO YA LO CANCELÓ', 'red');
+  if (((typeof getPedidoOrdenes === 'function' ? getPedidoOrdenes(id) : []) || []).some(o => o && (o.status || 'AUTORIZADA') !== 'CANCELADA'))
+    return showToast('LE GENERARON UNA ORDEN MIENTRAS TANTO — NO SE CANCELÓ', 'red');
+  const _u = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  const _t = Date.now();
+  pd2.status = 'CANCELADO';
+  pd2.cancelacion = {
+    motivo: _motivo,
+    por: String(_u.displayName || _u.username || '').toUpperCase(),
+    ts: _t,
+    fecha: (typeof _dateALatam === 'function') ? _dateALatam(new Date()) : ''
+  };
+  (pd2.history = Array.isArray(pd2.history) ? pd2.history : []).push({ status: 'CANCELADO', ts: _t, por: pd2.cancelacion.por });
+  pd2._ts = _t;   /* el contenedor viaja por union-merge (v972) */
+  /* liberar lo que trababa — mismo orden que el borrado (v979/v981): primero el metal,
+     después el candado de etapa (su regla consulta la disponibilidad) */
+  try {
+    if (pd2.esDeReceta && pd2.recetaLevelId && p2 && p2.materiales) {
+      if (p2.materiales.metalMedidaPedida && Array.isArray(p2.materiales.metalMedidaPedida[pd2.recetaLevelId])) {
+        p2.materiales.metalMedidaPedida[pd2.recetaLevelId] = p2.materiales.metalMedidaPedida[pd2.recetaLevelId].filter(x => x !== id);
+      }
+      if (typeof _recetaLiberarCandadoEtapa === 'function') _recetaLiberarCandadoEtapa(p2, pd2.recetaLevelId, pd2.recetaEtapaIdx);
+    }
+  } catch(e){}
+  try { logActivity('update', 'PEDIDO CANCELADO', _numLimpio(pd2.numero) + ' — ' + _motivo); } catch(e){}
+  saveState();
+  try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow(); } catch(e){}
+  showToast('PEDIDO CANCELADO — CONSERVA SU NÚMERO', 'ok');
+  try { if (typeof renderPedidosList === 'function') renderPedidosList(); } catch(e){}
+};
 function deletePedido(id){
   // v978: gate DURO — eliminar pedidos es SOLO del admin (el ✕ ya era solo-admin desde
   // v949; esto blinda la frontera igual que deleteOrden).
@@ -40470,6 +40543,7 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
 function _pedidoResyncConReceta(p, pd){
   try{
     if (!pd || !pd.esDeReceta || !pd.recetaLevelId || !Array.isArray(pd.recetaKeys)) return false;
+    if (pd.status === 'CANCELADO') return false; // v1162: no resucitar un pedido cancelado
     /* v1036: cantidad puesta A MANO — el pedido ya NO es un espejo de la receta, y este resync
        corre SOLO (editar receta, toggle ≈). Sin este candado, el pedido de 70 se re-inflaba a
        lo que dijera la receta y la OC salía por 100 sin que nadie lo pidiera. */
