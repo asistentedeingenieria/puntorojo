@@ -14,7 +14,10 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
 console.log('\n— 1. de ahora en adelante, la entrada sella su precio —');
 const zE = ex('window._bodegaMovsEntradaDeOc = function');
-ok('la entrada guarda el precio de la línea', /_mov\.precio = Number\(it\.precio\)/.test(zE));
+/* v1161: el precio se DES-CONVIERTE cuando la línea vino en presentación (CIENTO/CAJA) —
+   sin factor sigue siendo el de la línea, tal como fijó v1019. */
+ok('la entrada guarda el precio de la línea (des-convertido si hay presentación)',
+  /_mov\.precio = _fp > 1 \? \(\(Number\(it\.precio\) \|\| 0\) \/ _fp\) : \(Number\(it\.precio\) \|\| 0\)/.test(zE));
 
 console.log('\n— 2. y para lo que ya entró, se busca en cascada —');
 const zP = ex('function _precioEntradaBodega(');

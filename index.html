@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1160</span>
+    <span style="opacity:.5;font-size:9px">v1161</span>
   </footer>
 
 </div>
@@ -21629,6 +21629,30 @@ function _pedidoQuitadosKeys(pd){
   q.forEach(function(x){ if (x && x.sourceKey) out[x.sourceKey] = true; });
   return Object.keys(out).length ? out : null;
 }
+/* v1161 (pedido de Antonio): el catálogo de compras vende por PRESENTACIÓN (CIENTO DE
+   TORNILLO…, CAJA 1,000U) pero el supervisor pide en UNIDADES. PURA: saca el factor del
+   nombre de compra. null = material suelto (el 99% del catálogo) ⇒ nada cambia.
+   OJO: "CAJA 21.8 KG" NO tiene factor de piezas — solo cuenta si el número es de UNIDADES. */
+function _presFactor(nombreCompra){
+  const s = String(nombreCompra == null ? '' : nombreCompra).toUpperCase();
+  if (!s) return null;
+  if (/\bCIENTOS?\s+DE\b/.test(s)) return { factor: 100, etiqueta: 'CIENTO' };
+  if (/\bMILLAR(?:ES)?\s+DE\b/.test(s)) return { factor: 1000, etiqueta: 'MILLAR' };
+  /* CAJA/BOLSA DE N UNIDADES — el número tiene que venir acompañado de U/UNIDAD(ES) */
+  const m = /\b(CAJA|BOLSA)\b[^)]{0,12}?([\d.,]+)\s*(U\b|UNIDADES?\b)/.exec(s);
+  if (m) {
+    const n = Number(String(m[2]).replace(/[.,]/g, ''));
+    if (isFinite(n) && n > 1) return { factor: n, etiqueta: m[1] + ' DE ' + n };
+  }
+  return null;
+}
+/* el nombre SIN la presentación — para que el ledger de bodega use UNA sola clave */
+function _presNombreBase(nombreCompra){
+  return String(nombreCompra == null ? '' : nombreCompra)
+    .replace(/^\s*(CIENTOS?|MILLARES?)\s+DE\s+/i, '')
+    .replace(/\s*\((?:CAJA|BOLSA)[^)]*\)\s*/i, ' ')
+    .replace(/\s+/g, ' ').trim();
+}
 function buildPedidoOcItems(pd){
   const arr = [];
   const specs = pd.specs || {};
@@ -21651,6 +21675,17 @@ function buildPedidoOcItems(pd){
     const base = esMedida ? name : (elegida || nc || name);
     const fullName = base + (spec ? ` [${spec}]` : '');
     const it = { sourceKey:key, cat, name: fullName, qty: Number(qty) || 0, precio: 0, proveedorId: '', autoAssigned:false };
+    /* v1161: el supervisor pide UNIDADES; si el nombre de compra es una PRESENTACIÓN
+       (CIENTO DE…, CAJA 1,000U), la OC va en presentaciones y la línea RECUERDA el factor
+       y las unidades reales — la recepción y el ledger de bodega des-convierten con eso.
+       ceil: nunca se pide de menos. El PRECIO no se toca (el catálogo ya es por ciento). */
+    const _pf = (typeof _presFactor === 'function') ? _presFactor(base) : null; /* guard: los tests extraen esta función aislada (lección v1153) */
+    if (_pf && it.qty > 0) {
+      it.qtyUnidades = it.qty;
+      it.factorPres = _pf.factor;
+      it.presEtiqueta = _pf.etiqueta;
+      it.qty = Math.ceil(it.qty / _pf.factor);
+    }
     if (esMedida) it.matchName = nc || _ocNombreBaseMedida(name);
     if (variantes.length) {
       it.variantes = variantes;
@@ -22804,8 +22839,15 @@ window._bodegaMovsEntradaDeOc = function(oc, cants){
     /* v1019: se SELLA el precio con que entra. Antes solo quedaba el ocId y había que ir a
        buscarlo a la orden; si esa orden se borraba, el material quedaba sin valor y todo
        despacho suyo salía en Q 0. */
-    const _mov = _bodegaMov('ENTRADA', it.name, q, { ocId: oc.id, ocNumero: oc.numero || '', proyecto: oc.proyecto || '' });
-    _mov.precio = Number(it.precio) || 0;
+    /* v1161: la bodega cuenta en UNIDADES con el nombre BASE — si entrara "CIENTO DE
+       TORNILLO ×5" el mismo tornillo quedaría partido en dos productos con claves
+       distintas y el saldo de los sueltos no sumaría. El precio también se des-convierte
+       (el catálogo lo trae por ciento) para que el valor del inventario no se multiplique. */
+    const _fp = Number(it.factorPres) || 1;
+    const _nom = _fp > 1 ? _presNombreBase(it.name) : it.name;
+    const _mov = _bodegaMov('ENTRADA', _nom, q * _fp, { ocId: oc.id, ocNumero: oc.numero || '', proyecto: oc.proyecto || '' });
+    _mov.precio = _fp > 1 ? ((Number(it.precio) || 0) / _fp) : (Number(it.precio) || 0);
+    if (_fp > 1) { _mov.pres = it.presEtiqueta || ''; _mov.presFactor = _fp; }
     out.push(_mov);
   });
   return out;
@@ -24567,7 +24609,7 @@ function renderOcItems(){
             </select>`
           : ''
       }</div>
-      <div class="oc-qty">${it.qty}</div>
+      <div class="oc-qty">${it.qty}${it.factorPres ? `<div style="font-size:8px;letter-spacing:.3px;color:#166534;font-weight:700;line-height:1.3" title="El supervisor pidió ${it.qtyUnidades} unidades y este producto se compra por ${it.presEtiqueta || 'presentación'} de ${it.factorPres}">${it.presEtiqueta || 'PRES.'}<br>${it.qtyUnidades} UND</div>` : ''}</div>
       <div><button type="button" onclick="_abrirPickerProveedor(this, ${idx})" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 10px;border:1px solid ${it.proveedorId ? '#D1D5DB' : '#FCA5A5'};border-radius:8px;background:#fff;font-family:inherit;font-size:11px;cursor:pointer;text-align:left"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${it.proveedorId === '_bodega' ? 'BODEGA CENTRAL (DESPACHO)' : (String(it.proveedorId||'').indexOf('_dpp:') === 0 ? 'COMPRA PRE-PAGO' : (String(it.proveedorId||'').indexOf('_tras:') === 0 ? ('TRASIEGO · ' + String((((state && state.projects) || []).find(pv => pv && pv.id === String(it.proveedorId).slice(6)) || {}).name || 'OBRA').toUpperCase()) : ((proveedores.find(pv => pv.id === it.proveedorId)||{}).nombre || '— ASIGNAR —')))}</span><span style="color:#9CA3AF">▾</span></button></div>
       <div>${((it.aMedida || it.eventual || it.proveedorId === '_bodega' || String(it.proveedorId||'').indexOf('_tras:') === 0) && String(it.proveedorId||'').indexOf('_dpp:') !== 0)
         ? `<input type="number" step="0.01" min="0" value="${it.precio || ''}" placeholder="0.00" oninput="updateOcPrecio(${idx}, this.value)" title="${it.aMedida ? 'Poste a medida: precio de fabricación digitable' : 'Material extraordinario: no está en el catálogo, escribí el precio acordado'}">`
@@ -27742,8 +27784,10 @@ window._abrirRecepcion = async function(id, ocId){
      material, el TOTAL mentía y un pedido de solo extras no se podía recibir NUNCA. */
   // v991: src = la clave del pedido, para mapear lo recibido a las claves de RECETA
   const lineas = (_ocRec
-      ? (_ocRec.items || []).map(x => ({ k: x.name, q: Number(x.qty) || 0, src: x.sourceKey }))
-      : (typeof buildPedidoOcItems === 'function' ? buildPedidoOcItems(pd2) : []).map(x => ({ k: x.name, q: Number(x.qty) || 0, src: x.sourceKey }))
+      /* v1161: fac = el factor de presentación de la línea — la recepción cuenta en
+         PRESENTACIONES (lo que llega en el camión) pero la receta se cubre en UNIDADES */
+      ? (_ocRec.items || []).map(x => ({ k: x.name, q: Number(x.qty) || 0, src: x.sourceKey, fac: Number(x.factorPres) || 1 }))
+      : (typeof buildPedidoOcItems === 'function' ? buildPedidoOcItems(pd2) : []).map(x => ({ k: x.name, q: Number(x.qty) || 0, src: x.sourceKey, fac: Number(x.factorPres) || 1 }))
     ).filter(x => x.k);
   if (!lineas.length) return 'sin-detalle'; // v990: no bloquea el pedido
   const esc2 = s => String(s == null ? '' : s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
@@ -27800,7 +27844,10 @@ window._recepcionConfirmar = async function(){
     if (!inp) return;
     const q = Number(inp.value) || 0;
     if (q > 0) items[ln.k] = q;
-    if (ln.src) _recQtyPorLinea[ln.src] = q;
+    /* v1161: a la RECETA se le devuelven UNIDADES (5 cientos recibidos = 500 unidades) —
+       sin esto, recetaRecibido pisaría la cobertura con 5 y la etapa quedaría debiendo 495
+       (la sobre-compra silenciosa que cerró v1036). */
+    if (ln.src) _recQtyPorLinea[ln.src] = q * (Number(ln.fac) || 1);
     if (q < ln.q) parcial = true;
   });
   const _entrego = (() => { const e = modal.querySelector('#_recepEntrego'); return e ? String(e.value || '').trim().toUpperCase() : ''; })();
