@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1165</span>
+    <span style="opacity:.5;font-size:9px">v1166</span>
   </footer>
 
 </div>
@@ -9283,7 +9283,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 930; // v1164: solicitudesReceta (log de cambios de receta) pasa a union-merge por id
+const APP_SYNC_VERSION = 931; // v1166: gastos historicos importados en doc propio (gastosimp_) + vigilancia de peso
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9751,6 +9751,28 @@ const CloudSync = {
       }
       projects[_gi] = _projSinPagosCongelados(_gp, _gctx); // confirmado: el proj_ sube SOLO los pagos calientes (mismo ctx que la partición)
     }
+    /* ── v1166: GASTOS HISTÓRICOS IMPORTADOS a su propio doc. Mismo ORDEN SEGURO que la
+       receta (v930) y los pagos congelados (v931): el doc se CONFIRMA en la nube ANTES de
+       quitarlos del clon; si falla (reglas/red), viajan embebidos y no se pierde nada. */
+    if (!this._gastosImpHashes) this._gastosImpHashes = {};
+    for (let _xi = 0; _xi < projects.length; _xi++) {
+      const _xp = projects[_xi];
+      if (!_xp || !_xp.id || !_xp.materiales) continue;
+      const _imp = Array.isArray(_xp.materiales.gastosImp) ? _xp.materiales.gastosImp : [];
+      if (_imp.length) {
+        const _xjson = JSON.stringify(_imp);
+        if (_xjson.length > 900000) console.warn('[SIZE] gastos importados de "'+(_xp.name||_xp.id)+'": '+Math.round(_xjson.length/1024)+' KB (límite Firestore 1 MB)');
+        if (this._gastosImpHashes[_xp.id] !== _xjson) {
+          try { await db.collection('appState').doc('gastosimp_' + _xp.id).set({ gastos: _imp, _lastUpdate: stamp }); this._gastosImpHashes[_xp.id] = _xjson; }
+          catch(e){ console.warn('Doc de gastos importados no se subió (viajan embebidos esta vez):', e && e.message); continue; }
+        }
+      } else if (this._gastosImpHashes[_xp.id]) {
+        try { await db.collection('appState').doc('gastosimp_' + _xp.id).delete(); delete this._gastosImpHashes[_xp.id]; }
+        catch(e){ console.warn('Doc de gastos importados no se pudo borrar:', e && e.message); }
+      }
+      projects[_xi] = _projSinGastosImp(_xp); // confirmado: el proj_ sube SIN los importados
+    }
+    try { _autoAligerarProyectos(projects); } catch(e){} // v1166: vigilancia de peso, sin molestar
     const seen = {};
     projects.forEach(p => {
       if (!p || !p.id) return;
@@ -9908,12 +9930,14 @@ const CloudSync = {
     if (!snap) return null;
     let core = null, facesData = null, asistData = null; const projById = {}; const recetaById = {}; // v930
     const pagosArchById = {}; // v931
+    const gastosImpById = {}; // v1166
     snap.forEach(doc => {
       if (doc.id === 'core') core = doc.data();
       else if (doc.id === 'faces') { const d = doc.data(); facesData = (d && d.faces && typeof d.faces==='object') ? d.faces : null; }
       else if (doc.id === 'asistencia') { const d = doc.data(); asistData = (d && d.asistencia && typeof d.asistencia==='object') ? d.asistencia : null; } // v649
       else if (doc.id.indexOf('receta_') === 0) { const d = doc.data(); if (d && d.recetaV2 && typeof d.recetaV2==='object') recetaById[doc.id.slice(7)] = d.recetaV2; } // v930
       else if (doc.id.indexOf('pagosarch_') === 0) { const d = doc.data(); if (d && Array.isArray(d.pagos)) pagosArchById[doc.id.slice(10)] = d.pagos; } // v931
+      else if (doc.id.indexOf('gastosimp_') === 0) { const d = doc.data(); if (d && Array.isArray(d.gastos)) gastosImpById[doc.id.slice(10)] = d.gastos; } // v1166
       else if (doc.id.indexOf('proj_') === 0) { const d = doc.data(); if (d && d.p) projById[doc.id.slice(5)] = d.p; }
     });
     if (!core) return null;
@@ -9970,6 +9994,16 @@ const CloudSync = {
       });
       data._pagosArchDocOnly = pagosArchById;
       data._pagosArchEmbebidaIds = _gEmbIds;
+      /* v1166: re-adjuntar los gastos importados — en memoria la app SIEMPRE los ve */
+      data.projects.forEach(p => {
+        if (!p || !p.id) return;
+        const _imp = gastosImpById[p.id];
+        if (!_imp || !_imp.length) return;
+        if (!p.materiales) p.materiales = {};
+        const _hot = Array.isArray(p.materiales.gastosImp) ? p.materiales.gastosImp : [];
+        const _ids = {}; _hot.forEach(g => { if (g && g.id) _ids[g.id] = 1; });
+        p.materiales.gastosImp = _hot.concat(_imp.filter(g => g && g.id && !_ids[g.id]));
+      });
     }
     // v633: re-adjuntar las caras desde el doc appState/faces a cada persona (el core ya no las trae).
     if (facesData && Array.isArray(data.personalGlobal)) {
@@ -36140,6 +36174,25 @@ function _gastosDeProyecto(projectId){
       pedidoId: o.pedidoId || '', items: items, monto: monto
     });
   }));
+  /* v1166: los GASTOS HISTÓRICOS IMPORTADOS (facturas viejas cargadas de Excel) suman como
+     COMPRA — son gasto real ya facturado. Viven en su propio doc (no inflan el proyecto) y
+     se rotulan IMPORTADO para distinguirlos de las OC vivas de la app. */
+  try {
+    const _pImp = ((state && state.projects) || []).find(pj => pj && pj.id === pid);
+    const _imps = (_pImp && _pImp.materiales && Array.isArray(_pImp.materiales.gastosImp)) ? _pImp.materiales.gastosImp : [];
+    _imps.forEach(g => {
+      if (!g) return;
+      const its = (g.items || []).map(it => ({ name: it.name, qty: Number(it.qty) || 0, precio: Number(it.precio) || 0 }));
+      const monto = Number(g.total) || its.reduce((s, it) => s + it.qty * it.precio, 0);
+      totalCompra += monto;
+      ordenes.push({
+        id: g.id, numero: g.numero || ('IMPORTADO ' + (g.factura || '')), serie: 'IMPORTADO', esDespacho: false,
+        esImportado: true, proveedorNombre: g.proveedorNombre || '', ts: g.ts || 0,
+        status: 'AUTORIZADA', formaPago: g.formaPago || '', credito: 0,
+        pedidoId: '', items: its, monto: monto
+      });
+    });
+  } catch(e){}
   ordenes.sort((a, b) => (b.ts || 0) - (a.ts || 0));
   return { ordenes: ordenes, totalCompra: totalCompra, totalDespacho: totalDespacho, total: totalCompra + totalDespacho };
 }
@@ -38484,6 +38537,94 @@ function _pagoCongCtx(p){
    Igual que _projSinReceta: se usa en AMBOS lados del hash-skip. No muta el recibido.
    v933: acepta un ctx precalculado — el que pase el llamador DEBE ser el mismo con el que
    particionó (un pago que cruce el corte entre dos evaluaciones quedaría fuera de ambos docs). */
+/* v1166: los GASTOS HISTÓRICOS IMPORTADOS (facturas viejas cargadas de Excel) son el dato
+   más pesado y más estable que existe — nunca cambian. Viven FUERA del doc del proyecto,
+   como la receta (v930) y los pagos congelados (v931). PURA. */
+/* v1166: importador de gastos históricos (Excel de contabilidad → app). Recibe el arreglo
+   de órdenes ya armado y lo guarda en p.materiales.gastosImp, que viaja en su PROPIO doc.
+   · SALTEA lo que ya existe (mismo # de OC o misma factura, tanto contra las OC vivas
+     como contra lo ya importado) — cargar dos veces duplicaría el gasto.
+   · MIDE el peso del proyecto ANTES de escribir y ABORTA si el resultado no cabe: nunca
+     se deja un proyecto que Firestore vaya a rechazar. */
+window._importarGastosVEC = async function(lista, nombreObra){
+  if (!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE IMPORTAR GASTOS', 'red');
+  if (!Array.isArray(lista) || !lista.length) return showToast('SIN DATOS QUE IMPORTAR', 'red');
+  const p = ((state && state.projects) || []).find(x => x && new RegExp(String(nombreObra || ''), 'i').test(String(x.name || '')));
+  if (!p) return showToast('NO ENCONTRÉ LA OBRA ' + nombreObra, 'red');
+  p.materiales = p.materiales || {};
+  const yaImp = Array.isArray(p.materiales.gastosImp) ? p.materiales.gastosImp : [];
+  /* claves de lo que YA existe: OC vivas de la app + lo ya importado */
+  const nums = {}, facts = {};
+  const _k = s => String(s == null ? '' : s).replace(/\D/g, '');
+  (p.materiales.ordenes || []).forEach(o => { if (!o) return; if (o.numero) nums[_k(o.numero)] = 1; if (o.factura) facts[_k(o.factura)] = 1; });
+  yaImp.forEach(g => { if (!g) return; if (g.ocNum) nums[_k(g.ocNum)] = 1; if (g.factura) facts[_k(g.factura)] = 1; });
+  const nuevos = [], salteados = [];
+  lista.forEach(o => {
+    const kn = _k(o.ocNum), kf = _k(o.factura);
+    if ((kn && nums[kn]) || (kf && facts[kf])) { salteados.push(o.ocNum || o.factura); return; }
+    if (kn) nums[kn] = 1; if (kf) facts[kf] = 1;
+    nuevos.push({
+      id: 'gi-' + uid(), ocNum: o.ocNum || '', numero: o.ocNum ? ('OC ' + o.ocNum) : ('FACT ' + (o.factura || '')),
+      factura: o.factura || '', proveedorNombre: o.proveedorNombre || '', fecha: o.fecha || '', ts: Number(o.ts) || 0,
+      area: o.area || '', formaPago: o.formaPago || '', rubro: o.rubro || '', empresa: o.empresa || '',
+      estatusFactura: o.estatusFactura || '', items: o.items || [], total: Number(o.total) || 0, _ts: Date.now()
+    });
+  });
+  if (!nuevos.length) return showToast('TODAS YA ESTABAN CARGADAS — NO SE DUPLICÓ NADA', 'ok');
+  /* GUARD DE PESO: se mide el proyecto SIN los importados (que viajan aparte) y el doc de
+     importados por separado. Ninguno puede pasar de 1 MB. */
+  const _prueba = yaImp.concat(nuevos);
+  const _pesoImp = JSON.stringify(_prueba).length;
+  let _pesoProj = 0;
+  try {
+    let _c = _projSinGastosImp(Object.assign({}, p, { materiales: Object.assign({}, p.materiales, { gastosImp: _prueba }) }));
+    try { _c = _projSinReceta(_c); } catch(e){}
+    try { _c = _projSinPagosCongelados(_c, _pagoCongCtx(_c)); } catch(e){}
+    _pesoProj = JSON.stringify(_c).length;
+  } catch(e){}
+  if (_pesoImp > 950000) return showToast('LOS GASTOS IMPORTADOS PESARÍAN ' + Math.round(_pesoImp/1024) + ' KB (máx 1024) — HAY QUE PARTIRLOS POR AÑO', 'red');
+  if (_pesoProj > 1000000) return showToast('EL PROYECTO QUEDARÍA EN ' + Math.round(_pesoProj/1024) + ' KB — NO SE IMPORTÓ NADA', 'red');
+  const okc = await window.prConfirm({
+    title: 'IMPORTAR GASTOS HISTÓRICOS',
+    bodyHTML: '<div style="font-size:12px;color:#444;line-height:1.7">Se cargan <b>' + nuevos.length + '</b> órdenes históricas a <b>' + String(p.name).toUpperCase() + '</b>'
+      + (salteados.length ? '<br>Se saltean <b>' + salteados.length + '</b> que ya estaban cargadas (no se duplica nada).' : '')
+      + '<br>Total: <b>Q ' + fmtQ(nuevos.reduce((s, g) => s + (Number(g.total) || 0), 0)) + '</b>'
+      + '<br><br>Van en su PROPIO documento: el proyecto queda en <b>' + Math.round(_pesoProj/1024) + ' KB</b> (no crece).</div>',
+    okText: 'IMPORTAR', cancelText: 'CANCELAR'
+  });
+  if (!okc) return;
+  p.materiales.gastosImp = _prueba;
+  try { logActivity('create', 'GASTOS HISTÓRICOS IMPORTADOS', nuevos.length + ' órdenes · Q ' + fmtQ(nuevos.reduce((s, g) => s + (Number(g.total) || 0), 0)) + ' → ' + p.name); } catch(e){}
+  saveState();
+  try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) await CloudSync.forceUploadNow(); } catch(e){}
+  showToast('IMPORTADAS ' + nuevos.length + ' ÓRDENES' + (salteados.length ? ' · ' + salteados.length + ' SALTEADAS (YA ESTABAN)' : ''), 'green');
+};
+function _projSinGastosImp(p){
+  if (!p || !p.materiales || !Array.isArray(p.materiales.gastosImp) || !p.materiales.gastosImp.length) return p;
+  const c = Object.assign({}, p);
+  c.materiales = Object.assign({}, p.materiales);
+  delete c.materiales.gastosImp;
+  return c;
+}
+/* v1166 (pedido de Antonio: "que TU estés pendiente y lo vayas corrigiendo, no que me
+   avises"): vigilancia automática del peso. Corre en cada subida; si un proyecto pasa del
+   75% del límite deja el dato en consola para que la próxima sesión lo aligere — sin
+   toasts que interrumpan a las 50 personas trabajando. */
+function _autoAligerarProyectos(projects){
+  var LIMITE = 1048576, UMBRAL = 0.75, avisos = [];
+  try {
+    (projects || []).forEach(function(p){
+      if (!p || !p.id) return;
+      var n = 0;
+      try { n = JSON.stringify(p).length; } catch(e){ return; }
+      if (n > LIMITE * UMBRAL) {
+        avisos.push({ obra: p.name || p.id, kb: Math.round(n / 1024), pct: Math.round(n / LIMITE * 100) });
+      }
+    });
+    if (avisos.length) console.warn('[PESO] proyectos sobre el 75% del límite:', avisos);
+  } catch(e){}
+  return avisos;
+}
 function _projSinPagosCongelados(p, ctx){
   if (!p || !p.planilla || !Array.isArray(p.planilla.pagos)) return p;
   const _ctx = ctx || _pagoCongCtx(p);
