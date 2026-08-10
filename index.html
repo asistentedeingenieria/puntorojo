@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1164</span>
+    <span style="opacity:.5;font-size:9px">v1165</span>
   </footer>
 
 </div>
@@ -9289,9 +9289,72 @@ function _versionBloqueada(appVer, minVer){
   if (!isFinite(m) || m <= 0) return false;
   return Number(appVer) < m;
 }
+/* v1165 (incidente 10-ago con 50 empleados en línea): el candado v892 protege la nube,
+   pero dejaba al usuario mirando un overlay esperando un CLICK. El auto-update de v437 sí
+   existe, pero espera a que la app esté OCIOSA o vuelva al foreground — y el mínimo de
+   versión bloquea EN EL INSTANTE. Esa ventana muerta es la que paraba a la flota.
+   Acá se fuerza la actualización YA: SW en espera → activar, cachés de la app borradas
+   (menos las FOTOS, v993: si no, 50 dispositivos re-descargan todo) y recarga con
+   cache-bust. GUARD ANTI-BUCLE de 90 s en sessionStorage — sin él, un despliegue a medias
+   haría girar a la flota en recargas infinitas (la lección del 8-jul). */
+function _autoActualizar(forzar){
+  try {
+    var K = 'pr_autoupd_ts';
+    var VENTANA = 90000;
+    var ult = 0;
+    try { ult = Number(sessionStorage.getItem(K)) || 0; } catch(e){}
+    if (!forzar && ult && (Date.now() - ult) < VENTANA) return false; /* ya se intentó: que aparezca el overlay */
+    try { sessionStorage.setItem(K, String(Date.now())); } catch(e){}
+    var _recargar = function(){
+      try {
+        var u = new URL(location.href);
+        u.searchParams.set('_v', String(Date.now()));
+        location.replace(u.toString());
+      } catch(e){ location.reload(); }
+    };
+    var _limpiarYRecargar = function(){
+      if (!(window.caches && caches.keys)) return _recargar();
+      caches.keys().then(function(ks){
+        return Promise.all(ks.filter(function(k){
+          return k.indexOf('puntorojo-') === 0 && k.indexOf('fotos') < 0; /* las FOTOS se conservan (v993) */
+        }).map(function(k){ return caches.delete(k); }));
+      }).catch(function(){}).then(_recargar, _recargar);
+    };
+    if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) {
+      navigator.serviceWorker.getRegistration().then(function(reg){
+        if (!reg) return _limpiarYRecargar();
+        var _saltar = function(){
+          if (reg.waiting) { try { reg.waiting.postMessage('SKIP_WAITING'); } catch(e){} }
+          /* el controllerchange recarga solo; si en 6 s no pasó, se fuerza */
+          setTimeout(_limpiarYRecargar, 6000);
+        };
+        try { reg.update().then(_saltar, _saltar); } catch(e){ _saltar(); }
+      }).catch(_limpiarYRecargar);
+    } else _limpiarYRecargar();
+    return true;
+  } catch(e){ return false; }
+}
+try { window._autoActualizar = _autoActualizar; } catch(e){}
+/* v1165: diagnóstico de sync en UN comando — versión de esta app, mínimo exigido por la
+   nube, si hay escritura colgada y el último error con su código. */
+window._syncDiag = function(){
+  var d = {
+    version: (typeof APP_SYNC_VERSION !== 'undefined') ? APP_SYNC_VERSION : '?',
+    minimoNube: (typeof CloudSync !== 'undefined' && CloudSync._minSyncVersion) || 0,
+    bloqueado: false,
+    subiendo: (typeof CloudSync !== 'undefined' && !!CloudSync.uploadingNow),
+    ultimoError: window._syncUltimoError || null
+  };
+  try { d.bloqueado = _versionBloqueada(APP_SYNC_VERSION, d.minimoNube); } catch(e){}
+  try { console.log('%c[SYNC]', 'font-weight:700', d); } catch(e){}
+  return d;
+};
 function _mostrarBloqueoVersion(minVer){
   try {
     if (document.getElementById('verBloqueoOverlay')) return;
+    /* v1165: primero se intenta actualizar SOLA. Si arrancó, no se pinta nada: la recarga
+       viene en camino. El overlay queda de último recurso (auto-actualización ya probada). */
+    if (_autoActualizar(false)) return;
     var d = document.createElement('div');
     d.id = 'verBloqueoOverlay';
     d.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(17,17,17,.96);display:flex;align-items:center;justify-content:center;text-align:center;padding:24px';
@@ -9299,7 +9362,8 @@ function _mostrarBloqueoVersion(minVer){
       + '<div style="font-size:40px;margin-bottom:14px">&#9940;</div>'
       + '<div style="font-size:18px;font-weight:800;letter-spacing:.5px;margin-bottom:10px">VERSIÓN DESACTUALIZADA</div>'
       + '<div style="font-size:13px;line-height:1.6;opacity:.9;margin-bottom:18px">Esta versión de la app ya no puede guardar cambios (mínima requerida: v'+Number(minVer)+', esta es v'+APP_SYNC_VERSION+'). Actualizá para seguir trabajando — tus datos locales no se pierden.</div>'
-      + '<button onclick="window.location.reload()" style="background:#C62828;border:none;color:#fff;font:inherit;font-weight:800;font-size:14px;letter-spacing:.5px;padding:14px 28px;border-radius:8px;cursor:pointer">ACTUALIZAR AHORA</button>'
+      + '<button onclick="window._autoActualizar(true)" style="background:#C62828;border:none;color:#fff;font:inherit;font-weight:800;font-size:14px;letter-spacing:.5px;padding:14px 28px;border-radius:8px;cursor:pointer">ACTUALIZAR AHORA</button>'
+      + '<div style="font-size:11px;opacity:.6;margin-top:14px;line-height:1.5">Si el botón no funciona: cerrá la app por completo y volvé a abrirla.</div>'
       + '</div>';
     document.body.appendChild(d);
   } catch(e){}
@@ -9444,6 +9508,9 @@ const CloudSync = {
     try { clearTimeout(this._syncChipTimer); } catch(err){} this._syncChipTimer = null;
     const code = (e && e.code) ? String(e.code) : '';
     this._lastSyncError = { code: code || 'sin-codigo', msg: String((e && e.message) || e || ''), ts: Date.now(), ver: APP_SYNC_VERSION };
+    /* v1165: el motivo del último fallo queda a mano — diagnosticar a ciegas costó horas
+       el 6-ago. window._syncDiag() lo imprime junto con las versiones en juego. */
+    try { window._syncUltimoError = this._lastSyncError; } catch(_e){}
     if (_syncErrReintentable(code)) {
       try { setSyncStatus('syncing', 'REINTENTANDO...'); } catch(err){}
       if (!this._retryTimer) {

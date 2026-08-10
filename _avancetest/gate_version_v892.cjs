@@ -41,7 +41,10 @@ ok('setea _minSyncVersion desde el doc', html.indexOf('minSyncVersion') >= 0 && 
 const ov = extractFn('_mostrarBloqueoVersion');
 ok('_mostrarBloqueoVersion existe', !!ov);
 ok('overlay a pantalla completa con z-index máximo', ov.indexOf('2147483647') >= 0 && ov.indexOf('position:fixed') >= 0);
-ok('botón ACTUALIZAR recarga', ov.indexOf('window.location.reload()') >= 0);
+/* v1165: el botón ya no hace un reload pelado (con el SW sirviendo caché vieja, recargaba
+   a la MISMA versión = bucle). Ahora fuerza la actualización real: SW en espera activado,
+   cachés de la app borradas y recarga con cache-bust. */
+ok('botón ACTUALIZAR fuerza la actualización real', ov.indexOf('window._autoActualizar(true)') >= 0);
 ok('no duplica el overlay', ov.indexOf("getElementById('verBloqueoOverlay')") >= 0);
 
 // ── 5. forense: el stamp de subida lleva versión (además de ts y by que ya llevaba) ──
