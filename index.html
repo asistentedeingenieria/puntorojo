@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1175</span>
+    <span style="opacity:.5;font-size:9px">v1176</span>
   </footer>
 
 </div>
@@ -38886,13 +38886,48 @@ function _projSinGastosImp(p){
    avises"): vigilancia automática del peso. Corre en cada subida; si un proyecto pasa del
    75% del límite deja el dato en consola para que la próxima sesión lo aligere — sin
    toasts que interrumpan a las 50 personas trabajando. */
+/* ══ v1176 — MEDIR COMO COBRA FIRESTORE, NO COMO CUENTA JSON.stringify ══
+   El 11-ago confundí el payload de TRANSPORTE del SDK ({"presente":{"booleanValue":true}}, que
+   figuraba como 1.0 MB en la consola) con el tamaño que Firestore COBRA, y creí que todas las
+   alarmas subestimaban al doble. No era así: el factor real de la asistencia es 1.05.
+   Fórmula oficial (firebase.google.com/docs/firestore/storage-size): nombre del doc + suma de
+   los nombres de campo + suma de los valores + 32 bytes. String = bytes UTF-8 + 1. Y la tabla:
+   boolean 1 · null 1 · número 8 SIEMPRE · array = suma de sus valores sin overhead · map = como
+   un documento (arrastra sus propios +32).
+   Importa medirlo bien porque el factor NO es parejo: va de 0.53× (booleanos) a 4× (arrays de
+   enteros chicos) según la forma del dato — un multiplicador global habría sido un error.
+   Validado contra el ejemplo de la documentación: da 44 y 147 clavados. */
+function _fsStrSize(s){
+  var t = String(s == null ? '' : s), n;
+  try { n = (typeof TextEncoder !== 'undefined') ? new TextEncoder().encode(t).length : unescape(encodeURIComponent(t)).length; }
+  catch(e){ n = t.length; }
+  return n + 1;
+}
+function _fsValSize(v){
+  if (v === null || v === undefined) return 1;
+  var t = typeof v;
+  if (t === 'boolean') return 1;
+  if (t === 'number') return 8;              // int o float, sin importar los dígitos
+  if (t === 'string') return _fsStrSize(v);
+  if (Array.isArray(v)) { var s = 0; for (var i = 0; i < v.length; i++) s += _fsValSize(v[i]); return s; }
+  if (t === 'object') return _fsDocSize(v);  // un map cuesta como un documento
+  return 1;
+}
+function _fsDocSize(o){
+  if (!o || typeof o !== 'object') return 32;
+  var s = 0, k = Object.keys(o);
+  for (var i = 0; i < k.length; i++) s += _fsStrSize(k[i]) + _fsValSize(o[k[i]]);
+  return s + 32;   // NO incluye el nombre del documento: depende del path, son ~40 bytes más
+}
+try { window._fsDocSize = _fsDocSize; } catch(e){}
 function _autoAligerarProyectos(projects){
   var LIMITE = 1048576, UMBRAL = 0.75, avisos = [];
   try {
     (projects || []).forEach(function(p){
       if (!p || !p.id) return;
       var n = 0;
-      try { n = JSON.stringify(p).length; } catch(e){ return; }
+      // v1176: el peso REAL que cobra Firestore, no el largo del JSON (ver _fsDocSize)
+      try { n = _fsDocSize(p); } catch(e){ try { n = JSON.stringify(p).length; } catch(e2){ return; } }
       if (n > LIMITE * UMBRAL) {
         avisos.push({ obra: p.name || p.id, kb: Math.round(n / 1024), pct: Math.round(n / LIMITE * 100) });
       }
