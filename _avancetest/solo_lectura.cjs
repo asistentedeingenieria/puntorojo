@@ -68,7 +68,10 @@ if (arrMatch && permVerSrc && canSrc && roSrc) {
 
 // ── candado de escritura (estructural) ──
 ok('saveState bloquea escritura en solo-lectura', /function saveState\(\)\{\s*if\s*\(\s*isReadOnly\(\)\s*\)/.test(html));
-ok('uploadCurrent bloquea en solo-lectura', /async uploadCurrent\(\)\{\s*if\s*\([^)]*isReadOnly\(\)/.test(html));
+/* v1170: el regex exigía que el guard fuera la PRIMERA línea del cuerpo; ahora hay un
+   comentario en medio, y el guard además devuelve FALSE (antes undefined) para que el chip no
+   pueda pintar EN LÍNEA sin haber escrito nada. La propiedad verificada es la misma. */
+ok('uploadCurrent bloquea en solo-lectura', /async uploadCurrent\(\)\{[\s\S]{0,900}?isReadOnly\(\)\)\s*return false/.test(html));
 ok('uploadAsistencia bloquea en solo-lectura', /async uploadAsistencia\(\)\{\s*if\s*\([^)]*isReadOnly\(\)/.test(html));
 
 // ── preset en el modal de usuarios (estructural) ──

@@ -61,7 +61,10 @@ console.log('\n— 3c. ENVIAR A COMPRAS avisa de verdad —');
 /* Antonio: "se envia a compras y solo no pasa nada... no se si se pidio". v996 ya limpiaba y
    redirigía, pero avisaba con un toast que se va solo. */
 const zSub = ex('function submitPedido(');
-ok('el aviso hay que cerrarlo (no es un toast que se va)', /prAlert\(\{[\s\S]{0,200}PEDIDO ENVIADO A COMPRAS/.test(zSub));
+/* v1170: el aviso sigue siendo un modal que hay que cerrar; lo que cambió es que su texto lo
+   decide _pedidoAvisoEnvio según la nube haya confirmado, en vez de afirmar siempre que el
+   pedido se envió (lo hacía 1.2 s antes de intentar escribir). */
+ok('el aviso hay que cerrarlo (no es un toast que se va)', /prAlert\(\{[\s\S]{0,200}_av\.title/.test(zSub) && /_pedidoAvisoEnvio\(/.test(zSub));
 ok('dice el número del pedido', /_numLimpio\(numero\)/.test(zSub));
 ok('y dice dónde verlo', /_dondeVerlo/.test(zSub));
 ok('el de abastecimiento manda a BODEGA CENTRAL, no a la lista de la obra', /pedido\.esBodega\) \{[\s\S]{0,120}_abrirPanelBodega/.test(zSub));

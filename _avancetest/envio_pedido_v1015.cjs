@@ -27,14 +27,21 @@ ok('y sus errores no rompen nada', /_notifyByPerm\([\s\S]{0,400}?\.catch\(/.test
 
 console.log('\n— 2. el orden correcto: primero el usuario, después la red —');
 const iLimpia = zSub.indexOf('renderPedidoForm()');
-const iAviso  = zSub.indexOf('PEDIDO ENVIADO A COMPRAS');
+/* v1170: el aviso ya no es un literal dentro de submitPedido — el texto lo decide
+   _pedidoAvisoEnvio (pura, con test), porque el cartel viejo afirmaba que el pedido se había
+   enviado ANTES de que la app intentara escribir. Se ancla en la llamada, no en el texto. */
+const iAviso  = zSub.indexOf('_pedidoAvisoEnvio(');
 const iNotif  = zSub.indexOf('_notifyByPerm(');
 ok('el talonario se limpia antes de tocar la red', iLimpia > 0 && iNotif > 0 && iLimpia < iNotif);
 ok('el aviso también', iAviso > 0 && iAviso < iNotif);
 ok('el pedido ya está guardado para entonces', zSub.indexOf('pedidos.push') < iLimpia);
 
 console.log('\n— 3. lo que ya se había pedido, sigue —');
-ok('el aviso hay que cerrarlo', /prAlert\(\{[\s\S]{0,200}PEDIDO ENVIADO A COMPRAS/.test(zSub));
+/* v1170: sigue siendo un aviso que hay que cerrar (no un toast que se va), pero el texto ya
+   no es un literal optimista: lo decide _pedidoAvisoEnvio según la nube haya confirmado o no.
+   El cartel viejo afirmaba "ENVIADO A COMPRAS" 1.2 s ANTES de intentar escribir — eso fue lo
+   que dejó tranquilo a Rony con un pedido que nunca salió. */
+ok('el aviso hay que cerrarlo', /prAlert\(\{[\s\S]{0,200}_av\.title/.test(zSub) && /_pedidoAvisoEnvio\(/.test(zSub));
 ok('dice el número del pedido', /_numLimpio\(numero\)/.test(zSub));
 ok('redirige a la lista de pedidos', /setPedidoTab\('lista'\)/.test(zSub));
 ok('el de abastecimiento va a BODEGA CENTRAL', /_abrirPanelBodega\(\)/.test(zSub));

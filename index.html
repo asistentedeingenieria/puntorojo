@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1169</span>
+    <span style="opacity:.5;font-size:9px">v1170</span>
   </footer>
 
 </div>
@@ -9283,7 +9283,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 933; // v1166: gastos historicos importados en doc propio (gastosimp_) + vigilancia de peso
+const APP_SYNC_VERSION = 934; // v1166: gastos historicos importados en doc propio (gastosimp_) + vigilancia de peso
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9559,10 +9559,14 @@ const CloudSync = {
         try { this._chipError(new Error('sync lento')); } catch(e){}
         try { this.scheduleSave(); } catch(e){}   // reintento
       }, (this._UPLOAD_GUARD_MS || 45000));
-      this.uploadCurrent().then(() => {
+      this.uploadCurrent().then((_r) => {
         clearTimeout(_guard);
-        this.uploadingNow = false; this._chipDone();
+        this.uploadingNow = false;
+        // v1170: sin escritura real no se pinta EN LÍNEA ni se limpian los pendientes
+        if (_r === false) return;
+        this._chipDone();
         try { if (typeof _fotosPendClear === 'function') _fotosPendClear(); } catch(e2){} // v899: la nube confirmó → chip POR COMPARTIR fuera
+        try { if (typeof _pedPendClear === 'function') _pedPendClear(); } catch(e2){} // v1170: ídem para los pedidos POR ENVIAR
       }).catch((e) => {
         clearTimeout(_guard);
         this.uploadingNow = false; console.error('CloudSync auto-save error:', e); this._chipError(e);
@@ -9605,10 +9609,17 @@ const CloudSync = {
     }, (this._UPLOAD_GUARD_MS || 45000));
     this._forceInFlight = (async () => {
       try {
-        await this.uploadCurrent();
+        const _escribio = (await this.uploadCurrent()) !== false;
         clearTimeout(_guardF);
-        this.uploadingNow = false; this._chipDone();
+        this.uploadingNow = false;
+        /* v1170: si uploadCurrent salió SIN escribir (solo lectura o candado de versión), no se
+           canta victoria: no se limpian los pendientes ni se pinta EN LÍNEA, y se devuelve
+           false para que quien esperaba —submitPedido -- pueda decir la verdad. */
+        if (!_escribio) return false;
+        this._chipDone();
         try { if (typeof _fotosPendClear === 'function') _fotosPendClear(); } catch(e2){} // v899: la nube confirmó → chip POR COMPARTIR fuera
+        try { if (typeof _pedPendClear === 'function') _pedPendClear(); } catch(e2){} // v1170: ídem para los pedidos POR ENVIAR
+        return true;
       } catch(e) {
         clearTimeout(_guardF);
         this.uploadingNow = false;
@@ -9646,9 +9657,14 @@ const CloudSync = {
   /* v491: sube el state PARTIDO en core + un doc por proyecto. Cada doc << 1MB.
      Solo reescribe los proyectos que cambiaron (hash). appState/main NO se toca. */
   async uploadCurrent(){
-    if (typeof isReadOnly==='function' && isReadOnly()) return; // v866: SOLO LECTURA no sube nada a la nube
-    if (_versionBloqueada(APP_SYNC_VERSION, this._minSyncVersion)) { _mostrarBloqueoVersion(this._minSyncVersion); console.warn('[v892] subida BLOQUEADA: v'+APP_SYNC_VERSION+' < mínima v'+this._minSyncVersion); return; } // v892
-    if (!this.coreRef) return;
+    /* v1170 — ESTAS SALIDAS DEVUELVEN FALSE: "no se escribió nada". Antes devolvían undefined
+       y quien esperaba la promesa la veía resuelta, así que el chip se pintaba EN LÍNEA y los
+       marcadores de pendientes se limpiaban sin que hubiera salido un solo byte. Con el candado
+       de versión cerrado —lo que le pasó a Antonio el 11-ago— la app decía "sincronizado"
+       mientras en realidad no podía escribir. Un estado que miente es peor que uno rojo. */
+    if (typeof isReadOnly==='function' && isReadOnly()) return false; // v866: SOLO LECTURA no sube nada a la nube
+    if (_versionBloqueada(APP_SYNC_VERSION, this._minSyncVersion)) { _mostrarBloqueoVersion(this._minSyncVersion); console.warn('[v892] subida BLOQUEADA: v'+APP_SYNC_VERSION+' < mínima v'+this._minSyncVersion); return false; } // v892
+    if (!this.coreRef) return false;
     const db = firebase.firestore();
     const data = this.stripLocal(state);              // clon sin base64 ni activeProjectId
     const _pendUp = (typeof _asistPendingKeys==='function') ? _asistPendingKeys() : []; // v629: marcas que esta subida confirmará
@@ -16285,6 +16301,41 @@ function _fotosPendClear(){
     try { if (typeof photoCtx!=='undefined' && photoCtx && photoCtx.aptoId && typeof renderPhotosModal==='function') renderPhotosModal(); } catch(e){}
   } catch(e){}
 }
+/* v1170: PEDIDOS "POR ENVIAR" — el mismo patrón que las fotos (v899), por el mismo motivo.
+   Antonio, 11-ago: RONY vio el cartel "PEDIDO ENVIADO A COMPRAS", lo imprimió con firma y lo
+   mandó por WhatsApp. Ese pedido nunca llegó a la nube y nadie se enteró hasta que otra
+   persona recibió el mismo número. El cartel salía 1.2 s ANTES de que la app intentara
+   escribir, sin esperar ningún resultado.
+   Marcador LOCAL por dispositivo (localStorage, NO se sincroniza): significa "este equipo
+   todavía no confirmó que la nube recibió el pedido". Se limpia SOLO cuando uploadCurrent
+   commitea de verdad — nunca por reloj. */
+function _pedPendGet(){ try { return JSON.parse(localStorage.getItem('pr_pedidos_pend_v1')||'{}')||{}; } catch(e){ return {}; } }
+function _pedPendAdd(id){ if(!id) return; try { var m=_pedPendGet(); m[id]=Date.now(); localStorage.setItem('pr_pedidos_pend_v1', JSON.stringify(m)); } catch(e){} }
+function _pedidoEstaPendiente(id){ try { return !!(id && _pedPendGet()[id]); } catch(e){ return false; } }
+function _pedPendClear(){ try { if (!Object.keys(_pedPendGet()).length) return; localStorage.setItem('pr_pedidos_pend_v1', '{}'); } catch(e){} }
+/* PURA: decide qué se le dice al usuario. Existe para que sea IMPOSIBLE volver a afirmar que
+   un pedido salió cuando no salió — la regla se prueba en un test, no depende de acordarse. */
+function _pedidoAvisoEnvio(confirmado, numero, dondeVerlo){
+  var n = String(numero == null ? '' : numero);
+  if (confirmado) {
+    return {
+      title: 'PEDIDO ENVIADO A COMPRAS',
+      tono: 'ok',
+      bodyHTML: '<div style="line-height:1.7">Se envió el pedido <b>' + n + '</b> a compras.<br>' + (dondeVerlo || '') + '</div>'
+    };
+  }
+  return {
+    title: 'GUARDADO EN ESTE EQUIPO — TODAVÍA NO SALIÓ',
+    tono: 'alerta',
+    bodyHTML: '<div style="line-height:1.7">El pedido <b>' + n + '</b> quedó guardado acá, pero '
+      + '<b>la nube todavía no lo confirmó</b>: por ahora nadie más lo ve.'
+      + '<br><br><b>No lo imprimas ni lo mandes por WhatsApp todavía.</b> Un papel firmado de un '
+      + 'pedido que no salió no le llega a compras.'
+      + '<br><br>Revisá la conexión y dejá la app abierta un momento — se reintenta solo. '
+      + 'Mientras tanto el pedido aparece marcado como <b>POR ENVIAR</b> en tu lista.</div>'
+  };
+}
+try { window._pedidoAvisoEnvio = _pedidoAvisoEnvio; window._pedidoEstaPendiente = _pedidoEstaPendiente; } catch(e){}
 function renderPhotosModal(){
   const p = activeProj();
   const t = p.towers.find(x => x.id === photoCtx.towerId); if (!t) return;
@@ -20236,7 +20287,7 @@ function renderPedidoCard(pd, p){
 
   return `<div class="pedido-card">
     <div class="pedido-hd">
-      <div class="pedido-num">${_numLimpio(pd.numero)}<small>PEDIDO N°</small></div>
+      <div class="pedido-num">${_numLimpio(pd.numero)}<small>PEDIDO N°</small>${(typeof _pedidoEstaPendiente === 'function' && _pedidoEstaPendiente(pd.id)) ? `<div style="margin-top:6px;display:inline-block;background:#B45309;color:#fff;font-size:9px;font-weight:800;letter-spacing:.6px;padding:3px 7px;border-radius:999px" title="Guardado en este equipo; la nube todavía no lo confirmó. No lo imprimas ni lo mandes hasta que salga.">POR ENVIAR</div>` : ''}</div><!-- v1170: mismo chip que las fotos (v899) -->
       <dl class="pedido-meta">
         <div><dt>Proyecto</dt><dd>${esc(pd.proyectoPedido || p.name)}${pd.proyectoManual ? ' · MANUAL' : ''}</dd></div>
         <div><dt>Solicitante</dt><dd>${pd.solicitante || '—'}</dd></div>
@@ -21413,12 +21464,31 @@ async function submitPedido(){
      A DÓNDE fue el pedido: los de abastecimiento se ven en BODEGA CENTRAL, no en la obra. */
   const _dondeVerlo = pedido.esBodega ? 'Lo ves en <b>BODEGA CENTRAL</b>.'
     : (pedido.esVarios ? 'Lo ves en <b>PROYECTOS VARIOS</b>.' : 'Lo ves en <b>LISTA DE PEDIDOS</b>.');
+  /* ══ v1170 — EL AVISO YA NO MIENTE ══
+     Antes este cartel salía SIEMPRE, ~1.2 s ANTES de que el SDK intentara escribir (saveState
+     solo agenda con debounce), sin esperar resultado y sin mirar si había conexión. Eso fue lo
+     que dejó tranquilo a RONY el 11-ago: imprimió y mandó por WhatsApp un pedido que nunca
+     llegó a la nube, y el número se lo dieron a otra persona.
+     Ahora se fuerza la subida y se ESPERA, igual que las fotos desde v899. El texto sale de
+     _pedidoAvisoEnvio (pura, con test): si la nube no confirmó, en ninguna parte dice que se
+     envió, y le pide explícitamente que NO lo imprima todavía. */
+  try { _pedPendAdd(pedido.id); } catch(e){}
+  try { showToast('CONFIRMANDO EN LA NUBE...', ''); } catch(e){}
+  let _nubeOk = false;
   try {
-    await window.prAlert({
-      title: 'PEDIDO ENVIADO A COMPRAS',
-      bodyHTML: `<div style="line-height:1.7">Se envió el pedido <b>${_numLimpio(numero)}</b> a compras.<br>${_dondeVerlo}</div>`
-    });
-  } catch(e){ showToast(`PEDIDO ${numero} ENVIADO A COMPRAS`, 'green'); }
+    if (typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow) {
+      _nubeOk = (await CloudSync.forceUploadNow()) !== false;
+    }
+  } catch(e){ console.warn('[v1170] el pedido no se pudo confirmar en la nube:', e && (e.code || e.message)); }
+  if (_nubeOk) {
+    pedido.nubeOk = true;            // queda en el dato: el impreso puede saber si salió
+    try { _pedPendClear(); } catch(e){}
+    try { saveState(); } catch(e){}  // el sello viaja en la próxima subida (sin forzar de nuevo)
+  }
+  const _av = _pedidoAvisoEnvio(_nubeOk, _numLimpio(numero), _dondeVerlo);
+  try {
+    await window.prAlert({ title: _av.title, bodyHTML: _av.bodyHTML });
+  } catch(e){ showToast(_av.title, _nubeOk ? 'green' : 'red'); }
   /* v1007: si el pedido se hizo DESDE el panel de PROYECTOS VARIOS, el formulario está
      prestado ahí: se devuelve y se vuelve a su listado — no a la pestaña del proyecto. */
   if (window._variosFormOrigen) {

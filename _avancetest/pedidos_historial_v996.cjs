@@ -28,7 +28,10 @@ ok('el toggle no explota sin localStorage', /catch\(e\)\{\}/.test(zT));
 const zS = ex('async function submitPedido(');
 ok('repinta el catálogo tras enviar (la causa del "no me borra todo")', /renderPedidoForm\(\)/.test(zS));
 ok('repinta los materiales extraordinarios', /renderExtraMaterials\(\)/.test(zS));
-ok('avisa que el pedido se envió', /ENVIADO A COMPRAS/.test(zS));
+/* v1170: el texto del aviso ya no vive dentro de submitPedido — sale de _pedidoAvisoEnvio,
+   que dice "enviado" SOLO si la nube confirmó. Se verifica que AVISE, no que afirme algo que
+   puede no haber pasado. */
+ok('le avisa al usuario cómo quedó el pedido', /_pedidoAvisoEnvio\(/.test(zS) && /prAlert\(/.test(zS));
 ok('la limpieza no puede tumbar el cierre (va en try)', /catch\(e\)\{ console\.warn\('\[v996\] limpieza del formulario/.test(zS));
 ok('los campos ocultos de proyecto MANUAL ya no se leen a ciegas', /const _nv = document\.getElementById\('pfNivel'\); if \(_nv\)/.test(zS));
 ok('el cambio de pestaña también está blindado', /try \{ setPedidoTab\('lista'\); \} catch/.test(zS));
