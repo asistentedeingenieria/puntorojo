@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1166</span>
+    <span style="opacity:.5;font-size:9px">v1167</span>
   </footer>
 
 </div>
@@ -24568,6 +24568,26 @@ function _pickerGeom(anclaBottom, altoVentana){
   }
   return { top: top, maxH: maxH };
 }
+/* v1167: las filas del picker se arman acá, PURO y testeable. El bug que cerró (Antonio,
+   11-ago: "no me cambia la presentación"): la fila llevaba el valor elegido dentro de un
+   atributo HTML sin escapar, y un material como CLAVO CON ROLDANA 1" CIERRA el atributo en
+   su comilla de pulgadas → volvía el texto recortado, no coincidía con ninguna <option>, el
+   select quedaba vacío y el onchange recibía '' (= "ninguna"). Mordía en TODO desplegable,
+   porque el catálogo entero usa pulgadas.
+   La fila ahora lleva su POSICIÓN (un número: ningún carácter lo puede romper) y el id se
+   resuelve del arreglo en memoria. El label además se escapa — antes se inyectaba crudo. */
+function _pickerFilas(items, filtro, selectedId){
+  var f = String(filtro || '').toUpperCase();
+  var its = (items || []).filter(function(x){ return !f || String(x.label).toUpperCase().includes(f); });
+  if (!its.length) return '<div style="padding:14px;text-align:center;color:#9CA3AF;font-size:11px">SIN RESULTADOS</div>';
+  var esc = (typeof _escTxt === 'function') ? _escTxt : function(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); };
+  return its.map(function(x, i){
+    var marcada = (x.id === selectedId);
+    return '<div class="_prPickerIt" data-i="' + i + '" style="padding:8px 10px;border-radius:6px;cursor:pointer;font-size:12px;letter-spacing:.3px;'
+      + (marcada ? 'background:#FEF2F2;color:#B91C1C;font-weight:700' : 'color:#374151') + '">' + esc(x.label) + '</div>';
+  }).join('');
+}
+try { window._pickerFilas = _pickerFilas; } catch(e){}
 function _abrirPicker(anchorEl, opts){
   _cerrarPicker();
   const r = anchorEl.getBoundingClientRect();
@@ -24586,14 +24606,14 @@ function _abrirPicker(anchorEl, opts){
   document.body.appendChild(panel);
   const pinta = (f) => {
     const list = panel.querySelector('#_prPickerList');
+    // v1167: la fila viaja por ÍNDICE de la lista filtrada; el id se resuelve acá, en memoria
     const its = (opts.items || []).filter(x => !f || String(x.label).toUpperCase().includes(f));
-    list.innerHTML = its.map(x =>
-      '<div class="_prPickerIt" data-id="' + String(x.id) + '" style="padding:8px 10px;border-radius:6px;cursor:pointer;font-size:12px;letter-spacing:.3px;' + (x.id === opts.selectedId ? 'background:#FEF2F2;color:#B91C1C;font-weight:700' : 'color:#374151') + '">' + x.label + '</div>'
-    ).join('') || '<div style="padding:14px;text-align:center;color:#9CA3AF;font-size:11px">SIN RESULTADOS</div>';
+    list.innerHTML = _pickerFilas(opts.items || [], f, opts.selectedId);
     list.querySelectorAll('._prPickerIt').forEach(el => {
+      const _it = its[Number(el.dataset.i)];
       el.onmouseenter = () => { el.style.background = '#F9FAFB'; };
-      el.onmouseleave = () => { el.style.background = el.dataset.id === String(opts.selectedId) ? '#FEF2F2' : ''; };
-      el.onclick = () => { _cerrarPicker(); opts.onPick(el.dataset.id); };
+      el.onmouseleave = () => { el.style.background = (_it && _it.id === opts.selectedId) ? '#FEF2F2' : ''; };
+      el.onclick = () => { _cerrarPicker(); opts.onPick(_it ? _it.id : ''); };
     });
   };
   pinta('');
@@ -24648,10 +24668,18 @@ window._abrirPicker = _abrirPicker; window._cerrarPicker = _cerrarPicker;
       items: items,
       selectedId: sel.value,
       onPick: function(id){
+        if (sel.value === id) return;
+        sel.value = id;
+        /* v1167 — BLINDAJE: si el valor no entró (no existe esa <option>), el navegador deja
+           sel.value = '' sin avisar. Antes se disparaba igual el change y el onchange lo leía
+           como "el usuario eligió NINGUNA" — borrando la selección en silencio. Ese fue el
+           bug de la presentación. Ahora se corta y se avisa en vez de romper el dato. */
         if (sel.value !== id) {
-          sel.value = id;
-          sel.dispatchEvent(new Event('change', { bubbles: true })); // los onchange inline siguen vivos
+          console.warn('[picker v1167] la opción no existe en el select — selección descartada:', id);
+          try { showToast('NO SE PUDO APLICAR LA SELECCIÓN — AVISAME', 'red'); } catch(e){}
+          return;
         }
+        sel.dispatchEvent(new Event('change', { bubbles: true })); // los onchange inline siguen vivos
       }
     });
   }, true);
