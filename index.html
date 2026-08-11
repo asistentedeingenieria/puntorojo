@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1172</span>
+    <span style="opacity:.5;font-size:9px">v1173</span>
   </footer>
 
 </div>
@@ -9283,7 +9283,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 934; // v1166: gastos historicos importados en doc propio (gastosimp_) + vigilancia de peso
+const APP_SYNC_VERSION = 935; // v1166: gastos historicos importados en doc propio (gastosimp_) + vigilancia de peso
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -38915,9 +38915,20 @@ function _resyncFingerprint(merged){
          huella nunca se repetía y el breaker NUNCA cortaba — el único freno contra un bucle
          de sync estaba neutralizado sin que se notara. Su volumen sí es señal; su contenido
          minuto a minuto, no. */
+      /* v1173 — ACÁ ESTABA LA CEGUERA. `asistenciaGlobal[fecha]` es un MAPA
+         {personaId: registro}, NO un arreglo: `.length` daba **undefined siempre** y la huella
+         de la asistencia se reducía a la lista de fechas ("2026-08-10:undefined"). La intención
+         de v1091 (que entrara por TAMAÑO) era correcta; la implementación no medía nada.
+         CONSECUENCIA REAL (10-ago): con 30 personas marcando y la cola saturada, cinco pasadas
+         con estados DISTINTOS daban la misma cadena y el cortacircuitos concluía "bucle" y
+         pausaba 60 s. No había bucle: el detector no distinguía dos estados distintos. */
       (function(){ try {
         var A = merged.asistenciaGlobal || {};
-        return Object.keys(A).sort().map(function(d){ return d + ':' + ((A[d] || []).length); }).join(',');
+        return Object.keys(A).sort().map(function(d){
+          var dia = A[d];
+          var n = !dia ? 0 : (Array.isArray(dia) ? dia.length : (typeof dia === 'object' ? Object.keys(dia).length : 0));
+          return d + ':' + n;
+        }).join(',');
       } catch(e){ return ''; } })(),
       /* v1091: los contenedores NUEVOS — es justo donde nacieron los merges de v1068-v1074 y
          de donde saldría un bucle nuevo; la huella no los miraba. Mismo criterio de sello que
@@ -38938,7 +38949,14 @@ function _resyncFingerprint(merged){
         if (!p) return '';
         var pla = p.planilla || {};
         var sig = function(arr){ return (arr||[]).map(function(o){ return o ? (o.id+'@'+(o._ts||o.ts||0)) : ''; }).join(','); };
-        return String(p.id)+'|'+sig(pla.planillasArmadas)+'|'+sig(pla.pagos)+'|'+sig(pla.retencionesPlanillas);
+        /* v1173: se suman COLABORADORES DEL PROYECTO y TOMAS — justo lo que el mensaje del
+           breaker nombra ("projects(colab/tomas/caras)") y que la firma no miraba, así que sus
+           re-syncs legítimos daban todos la misma huella. OJO: hay DOS listas de colaboradores
+           y solo esta era ciega; colaboradoresGlobal ya entraba arriba. Las CARAS no hacen
+           falta: viajan dentro de personalGlobal, que entra entero en la huella. */
+        var mat = p.materiales || {};
+        return String(p.id)+'|'+sig(pla.planillasArmadas)+'|'+sig(pla.pagos)+'|'+sig(pla.retencionesPlanillas)
+          +'|'+sig(pla.colaboradores)+'|'+sig(mat.tomas);
       })
     ];
     var s = JSON.stringify(parts);
