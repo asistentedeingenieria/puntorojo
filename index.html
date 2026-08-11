@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1167</span>
+    <span style="opacity:.5;font-size:9px">v1168</span>
   </footer>
 
 </div>
@@ -9283,7 +9283,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 931; // v1166: gastos historicos importados en doc propio (gastosimp_) + vigilancia de peso
+const APP_SYNC_VERSION = 932; // v1166: gastos historicos importados en doc propio (gastosimp_) + vigilancia de peso
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9802,6 +9802,11 @@ const CloudSync = {
       const _cs = this;
       db.collection('appState').doc('pagosarch_' + id).delete().then(() => { delete _cs._pagosArchHashes[id]; }).catch(()=>{});
     });
+    Object.keys(this._gastosImpHashes || {}).forEach(id => {    // v1168: ídem para los gastos importados
+      if (seen[id]) return;
+      const _cs = this;
+      db.collection('appState').doc('gastosimp_' + id).delete().then(() => { delete _cs._gastosImpHashes[id]; }).catch(()=>{});
+    });
     const CHUNK = 450;
     for (let i = 0; i < ops.length; i += CHUNK) {
       const slice = ops.slice(i, i + CHUNK);
@@ -9994,16 +9999,26 @@ const CloudSync = {
       });
       data._pagosArchDocOnly = pagosArchById;
       data._pagosArchEmbebidaIds = _gEmbIds;
-      /* v1166: re-adjuntar los gastos importados — en memoria la app SIEMPRE los ve */
+      /* v1166: re-adjuntar los gastos importados — en memoria la app SIEMPRE los ve.
+         v1168: faltaban las DOS piezas que receta (v930) y pagos congelados (v931) sí tienen:
+         · _gastosImpDocOnly  → applyRemote siembra con esto los hashes del doc gastosimp_; sin
+           él, la PRIMERA subida de cada sesión reescribe el doc de gastos completo.
+         · _gastosImpEmbebidaIds → los proj_ que TODAVÍA traen los gastos adentro quedan fuera
+           del hash-skip a propósito, para que la próxima subida los adelgace (migración
+           automática, sin comandos). */
+      const _impEmbIds = [];
       data.projects.forEach(p => {
         if (!p || !p.id) return;
+        const _hot = (p.materiales && Array.isArray(p.materiales.gastosImp)) ? p.materiales.gastosImp : [];
+        if (_hot.length) _impEmbIds.push(p.id);   // vinieron DENTRO del proj_ → hay que migrarlos
         const _imp = gastosImpById[p.id];
         if (!_imp || !_imp.length) return;
         if (!p.materiales) p.materiales = {};
-        const _hot = Array.isArray(p.materiales.gastosImp) ? p.materiales.gastosImp : [];
         const _ids = {}; _hot.forEach(g => { if (g && g.id) _ids[g.id] = 1; });
         p.materiales.gastosImp = _hot.concat(_imp.filter(g => g && g.id && !_ids[g.id]));
       });
+      data._gastosImpDocOnly = gastosImpById;
+      data._gastosImpEmbebidaIds = _impEmbIds;
     }
     // v633: re-adjuntar las caras desde el doc appState/faces a cada persona (el core ya no las trae).
     if (facesData && Array.isArray(data.personalGlobal)) {
@@ -10173,6 +10188,10 @@ const CloudSync = {
     // los migra a su doc pagosarch_ (mismo patrón de migración que receta v930 / asistencia v649).
     try { const _gdo = merged._pagosArchDocOnly || {}; const _gh = {}; Object.keys(_gdo).forEach(id => { if (_gdo[id]) _gh[id] = JSON.stringify(_gdo[id]); }); this._pagosArchHashes = _gh; } catch(e){ this._pagosArchHashes = {}; }
     try { delete merged._pagosArchDocOnly; } catch(e){}
+    // v1168: sembrar los hashes del doc gastosimp_ con lo BAJADO (mismo patrón v649/v930/v931).
+    // Sin esto, la primera subida de CADA sesión reescribía el doc de gastos importados entero.
+    try { const _xdo = merged._gastosImpDocOnly || {}; const _xh = {}; Object.keys(_xdo).forEach(id => { if (_xdo[id]) _xh[id] = JSON.stringify(_xdo[id]); }); this._gastosImpHashes = _xh; } catch(e){ this._gastosImpHashes = {}; }
+    try { delete merged._gastosImpDocOnly; } catch(e){}
     try {
       if (typeof _mergeAsistencia === 'function') {
         // v666: unir los tombstones de ausencia (local ∪ remoto, conservando el _ts más nuevo por llave)
@@ -10640,9 +10659,18 @@ const CloudSync = {
     // receta vive en su doc aparte y acá viene RE-ADJUNTADA en memoria; hashearla crearía
     // re-escrituras eternas). Los proj_ que AÚN traen la receta embebida (_recetaEmbebidaIds)
     // quedan fuera del hash-skip a propósito: la próxima subida los reescribe adelgazados.
-    { const _nh = {}; (remoteData.projects || []).forEach(pp => { if (pp && pp.id) _nh[pp.id] = JSON.stringify(_projSinPagosCongelados(_projSinReceta(pp))); }); (merged._recetaEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._pagosArchEmbebidaIds || []).forEach(id => { delete _nh[id]; }); this._projHashes = _nh; }
+    /* v1168 — LA PUNTA QUE FALTABA. El hash TIENE que calcularse sobre la MISMA forma
+       canónica que sube uploadCurrent: receta (v930) + pagos congelados (v931) + gastos
+       importados (v1166), en ESE orden. v1166 partió los gastos a su doc pero no los descontó
+       acá, así que el hash bajado (CON gastos) nunca podía igualar al subido (SIN gastos): el
+       hash-skip dejaba de acertar y el proj_ —858 KB en VICINIA— se reescribía ENTERO en cada
+       subida de cada usuario, hasta desbordar la cola de escrituras de Firestore
+       (resource-exhausted, 11-ago). Es exactamente lo que advierte el comentario de v930 acá
+       arriba, cometido de nuevo. */
+    { const _nh = {}; (remoteData.projects || []).forEach(pp => { if (pp && pp.id) _nh[pp.id] = JSON.stringify(_projSinGastosImp(_projSinPagosCongelados(_projSinReceta(pp)))); }); (merged._recetaEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._pagosArchEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._gastosImpEmbebidaIds || []).forEach(id => { delete _nh[id]; }); this._projHashes = _nh; }
     try { delete merged._recetaEmbebidaIds; } catch(e){}
     try { delete merged._pagosArchEmbebidaIds; } catch(e){}
+    try { delete merged._gastosImpEmbebidaIds; } catch(e){}
     // v235: restaurar el proyecto activo LOCAL del usuario (no compartir entre sesiones).
     if (localActivePID && (state.projects||[]).some(pp => pp.id === localActivePID)) {
       state.activeProjectId = localActivePID;

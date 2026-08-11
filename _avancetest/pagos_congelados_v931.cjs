@@ -79,7 +79,18 @@ if (asm && pred) {
 // ── 5. applyRemote: siembra + hash canónico + migración forzada ──
 const ap = extractMethod('applyRemote(remoteData, opts = {}){');
 ok('siembra _pagosArchHashes con lo BAJADO DE LOS DOCS', /_pagosArchDocOnly/.test(ap) && /this\._pagosArchHashes = /.test(ap));
-ok('hash canónico compuesto (sin receta NI congelados)', ap.indexOf('_nh[pp.id] = JSON.stringify(_projSinPagosCongelados(_projSinReceta(pp)))') > -1);
+/* v1168: esta aserción tenía CONGELADA la composición exacta de v931, así que al sumar la
+   tercera partición (gastos importados) se puso roja sin que nada estuviera mal. Peor: si
+   alguien la "arreglaba" pegando la nueva forma literal, volvería a romperse en la cuarta.
+   Ahora verifica la PROPIEDAD que de verdad importa —el hash descuenta TODO lo que viaja en
+   doc aparte, igual que uploadCurrent— y no el texto.
+   ⚠️ TODA partición nueva (un doc propio para algún dato del proyecto) DEBE sumarse acá: si
+   una punta hashea con el dato y la otra sin él, el proj_ se reescribe entero para siempre y
+   satura la cola de escrituras. Eso fue el incidente del 11-ago (v1166 → v1168). */
+const _hashLinea = (ap.match(/_nh\[pp\.id\] = JSON\.stringify\(([\s\S]*?)\);/) || ['',''])[1];
+ok('hash canónico: descuenta la receta (v930)', /_projSinReceta\(\s*pp\s*\)/.test(_hashLinea));
+ok('hash canónico: descuenta los pagos congelados (v931)', /_projSinPagosCongelados\(/.test(_hashLinea));
+ok('hash canónico: descuenta los gastos importados (v1166/v1168)', /_projSinGastosImp\(/.test(_hashLinea));
 ok('proj_ sin migrar quedan FUERA del hash-skip', /\(merged\._pagosArchEmbebidaIds \|\| \[\]\)\.forEach/.test(ap));
 ok('llaves transitorias no llegan al cache', /delete merged\._pagosArchDocOnly/.test(ap) && /delete merged\._pagosArchEmbebidaIds/.test(ap));
 
