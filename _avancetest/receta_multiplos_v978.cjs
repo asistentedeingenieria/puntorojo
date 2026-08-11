@@ -42,7 +42,11 @@ const zTg = ex('window.recetaToggleMiles = async function');
 ok('toggle async: pregunta el múltiplo con prPrompt (default 1000)', /prPrompt/.test(zTg) && /1000/.test(zTg));
 ok('guarda {on, ts, mult}', /\{ on: nuevo, ts: Date\.now\(\), mult: mult \}/.test(zTg));
 ok('re-lee p tras el await del prompt (regla v769/v770)', /activeProj\(\)[\s\S]*prPrompt[\s\S]*activeProj\(\)/.test(zTg));
-ok('múltiplo mínimo 10 (rechaza basura)', /mult >= 10/.test(zTg));
+/* v1177: el mínimo bajó de 10 a 2. El tope de 10 dejaba fuera presentaciones REALES: Antonio
+   (11-ago) necesita el ALAMBRE GALVANIZADO en múltiplos de 5 libras — el pedido VLA-19 salió
+   con 6 y 14 lbs, cantidades que el proveedor no despacha, y no se podía configurar.
+   Sigue rechazando basura y el 1 (que no es un múltiplo, es "de uno en uno"). */
+ok('múltiplo mínimo 2 (permite el de 5; sigue rechazando basura y el 1)', /mult >= 2/.test(zTg));
 
 // ── 4. TODOS los sitios de aplicación usan el múltiplo del material ──
 const iR = html.indexOf('// v949: el admin APLICA cambios directo');
