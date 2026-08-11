@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1170</span>
+    <span style="opacity:.5;font-size:9px">v1171</span>
   </footer>
 
 </div>
@@ -9349,6 +9349,54 @@ window._syncDiag = function(){
   try { console.log('%c[SYNC]', 'font-weight:700', d); } catch(e){}
   return d;
 };
+/* ══════ v1171 — SUBIR EL MÍNIMO DE VERSIÓN, SIN DEJAR A NADIE PARADO ══════
+   El 11-ago le pasé a Antonio el comando crudo de Firestore para subir minSyncVersion a 932.
+   Lo corrió desde una pestaña que todavía tenía v1167 (APP_SYNC 931) y se bloqueó a sí mismo:
+   el candado v892 rechaza toda subida por debajo del mínimo. Con él, cualquiera de los 50 que
+   no hubiera recargado. Un procedimiento que depende de que yo me acuerde de decir "recargá
+   primero" no es un blindaje — la app tiene que negarse sola. */
+function _minimoSyncValidar(nuevo, miVersion){
+  var n = parseInt(nuevo, 10), mia = parseInt(miVersion, 10);
+  if (!(n > 0)) return { ok: false, motivo: 'El mínimo tiene que ser un número de versión válido.' };
+  if (!(mia > 0)) return { ok: false, motivo: 'No se pudo leer la versión de esta app.' };
+  if (n > mia) return { ok: false, motivo: 'NO SE SUBIÓ. Estás en la versión ' + mia + ' y querés poner el mínimo en ' + n + ': te bloquearías a vos mismo y a todo el que no haya recargado. RECARGÁ la app (Ctrl+Shift+R) y volvé a intentar.' };
+  return { ok: true, motivo: '' };
+}
+/* PURA: con los datos reales de users/ dice a quién dejaría parado ANTES de aplicar. Antes esto
+   se hacía a ciegas: no había forma de saber en qué versión estaba cada equipo. */
+function _minimoSyncResumen(usuarios, nuevo){
+  var n = parseInt(nuevo, 10) || 0, atrasados = [], alDia = 0, sinDato = 0;
+  (usuarios || []).forEach(function(u){
+    if (!u) return;
+    var v = parseInt(u.appVer, 10);
+    if (!(v > 0)) { sinDato++; return; }
+    if (v < n) atrasados.push({ nombre: u.nombre || '(sin nombre)', ver: v });
+    else alDia++;
+  });
+  return { atrasados: atrasados, alDia: alDia, sinDato: sinDato };
+}
+window._subirMinimoSync = async function(nuevo){
+  var v = _minimoSyncValidar(nuevo, APP_SYNC_VERSION);
+  if (!v.ok) { console.error('%c[minSync] ' + v.motivo, 'color:#B91C1C;font-weight:700'); try { alert(v.motivo); } catch(e){} return false; }
+  var n = parseInt(nuevo, 10), lista = [];
+  try {
+    var q = await firebase.firestore().collection('users').get();
+    q.forEach(function(d){ var u = d.data() || {}; lista.push({ nombre: u.displayName || u.username || d.id, appVer: u.appVer }); });
+  } catch(e){ console.warn('[minSync] no se pudo leer users/:', e && e.message); }
+  var r = _minimoSyncResumen(lista, n);
+  console.log('%c[minSync] al día: ' + r.alDia + ' · sin dato: ' + r.sinDato + ' · QUEDARÍAN PARADOS: ' + r.atrasados.length, 'font-weight:700');
+  if (r.atrasados.length) console.table(r.atrasados);
+  var msg = 'Subir el mínimo a ' + n + '.\n\n'
+    + 'AL DÍA: ' + r.alDia + '\nSIN DATO (no se sabe): ' + r.sinDato + '\n'
+    + 'QUEDARÍAN PARADOS: ' + r.atrasados.length + (r.atrasados.length ? ('\n  · ' + r.atrasados.map(function(a){ return a.nombre + ' (v' + a.ver + ')'; }).join('\n  · ')) : '')
+    + '\n\nLos que queden parados pueden seguir trabajando pero NO se les sube nada hasta que recarguen.\n\n¿Seguimos?';
+  if (!confirm(msg)) { console.log('[minSync] cancelado — no se tocó nada'); return false; }
+  var quien = '';
+  try { var u2 = firebase.auth().currentUser; quien = (u2 && (u2.email || u2.uid)) || ''; } catch(e){}
+  await firebase.firestore().collection('appState').doc('config').set({ minSyncVersion: n, minSyncSubidoPor: quien, minSyncSubidoTs: Date.now() }, { merge: true });
+  console.log('%c[minSync] LISTO: mínimo en ' + n, 'color:#047857;font-weight:700');
+  return true;
+};
 function _mostrarBloqueoVersion(minVer){
   try {
     if (document.getElementById('verBloqueoOverlay')) return;
@@ -9490,9 +9538,19 @@ const CloudSync = {
     if (this._lastSyncErrorReported || !this._lastSyncErrorPurgado) {
       this._lastSyncErrorPurgado = true;
       this._lastSyncErrorReported = false;
+      /* v1171: ya NO se BORRA el error — se marca como RESUELTO. El 11-ago Antonio tuvo el chip
+         rojo, recargó, y esa recarga borró la única evidencia del episodio: cuando fui a leer
+         users/ no había nada y quedamos sin saber qué lo causó. El registro no puede
+         autodestruirse justo cuando el problema se está investigando.
+         Además se sella la VERSIÓN de este equipo y cuándo se lo vio: sin ese dato, subir el
+         mínimo era a ciegas — no había forma de saber a cuánta gente iba a dejar parada. */
       try {
         const u = firebase.auth().currentUser;
-        if (u && typeof saveUserDoc === 'function') saveUserDoc(u.uid, { lastSyncError: firebase.firestore.FieldValue.delete() }).catch(function(){});
+        if (u && typeof saveUserDoc === 'function') saveUserDoc(u.uid, {
+          lastSyncErrorResuelto: Date.now(),
+          appVer: (typeof APP_SYNC_VERSION !== 'undefined') ? APP_SYNC_VERSION : 0, // guard: los tests extraen _chipDone aislada
+          lastSeen: Date.now()
+        }).catch(function(){});
       } catch(e){}
     }
     this._lastSyncError = null;

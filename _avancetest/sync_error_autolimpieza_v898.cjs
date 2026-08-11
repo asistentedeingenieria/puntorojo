@@ -24,7 +24,16 @@ if (srcDone) {
   };
   const s1 = { uploadingNow:false, _asistUploading:false, _lastSyncErrorReported:true, _lastSyncError:{code:'permission-denied'}, _retryDelay:5000 };
   const t1 = mk(s1); t1.run();
-  ok('reportado + subida OK → borra lastSyncError en users', t1.cap.length===1 && t1.cap[0].uid==='u1' && t1.cap[0].data.lastSyncError==='__DELETE__');
+  /* ⚠️ CONDUCTA CAMBIADA A PROPÓSITO EN v1171. Antes se BORRABA lastSyncError al primer sync
+     exitoso. El 11-ago eso se comió la única evidencia del chip rojo de Antonio: recargó, la
+     app sincronizó bien, y el registro se autodestruyó antes de que yo pudiera leerlo — nos
+     quedamos sin saber qué lo causó. Ahora se MARCA COMO RESUELTO y el rastro queda.
+     De paso se sella appVer/lastSeen: sin saber en qué versión está cada equipo, subir el
+     minSyncVersion era a ciegas (y así fue como Antonio se bloqueó a sí mismo). */
+  ok('subida OK → marca el error como RESUELTO (ya no lo borra)', t1.cap.length===1 && t1.cap[0].uid==='u1' && !!t1.cap[0].data.lastSyncErrorResuelto && t1.cap[0].data.lastSyncError !== '__DELETE__');
+  /* la CLAVE tiene que viajar; su valor es 0 acá porque el stub extrae _chipDone aislada y no
+     tiene APP_SYNC_VERSION en el scope (por eso el guard typeof en la app) */
+  ok('y sella la versión del equipo para el aviso previo', ('appVer' in t1.cap[0].data) && !!t1.cap[0].data.lastSeen);
   ok('resetea flag, error local y backoff', s1._lastSyncErrorReported===false && s1._lastSyncError===null && s1._retryDelay===0);
   const t1b = mk(s1); t1b.run();
   ok('segunda subida OK: NO vuelve a escribir users', t1b.cap.length===0);
@@ -32,7 +41,10 @@ if (srcDone) {
   // (los del 06-jul quedaron pegados); después de esa purga única, ya no toca users.
   const s2 = { uploadingNow:false, _asistUploading:false, _lastSyncErrorReported:false, _lastSyncError:null };
   const t2 = mk(s2); t2.run();
-  ok('v902: primera subida de la sesión purga errores viejos', t2.cap.length===1 && t2.cap[0].data.lastSyncError==='__DELETE__' && s2._lastSyncErrorPurgado===true);
+  /* v1171: la primera subida de la sesión SIGUE tocando users/ una sola vez (eso no cambió,
+     era el fix v902 para los errores pegados del 06-jul), pero ahora escribe el sello de
+     resuelto en vez de borrar el registro. */
+  ok('v902: la primera subida de la sesión sigue sellando una sola vez', t2.cap.length===1 && !!t2.cap[0].data.lastSyncErrorResuelto && s2._lastSyncErrorPurgado===true);
   const s2b = { uploadingNow:false, _asistUploading:false, _lastSyncErrorReported:false, _lastSyncErrorPurgado:true };
   const t2b = mk(s2b); t2b.run();
   ok('ya purgado en la sesión: no repite', t2b.cap.length===0);
