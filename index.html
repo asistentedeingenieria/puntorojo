@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1173</span>
+    <span style="opacity:.5;font-size:9px">v1174</span>
   </footer>
 
 </div>
@@ -9624,7 +9624,7 @@ const CloudSync = {
         this.uploadingNow = false;
         try { asistNeedsResync = true; } catch(e){}
         console.warn('[v1139] la subida no confirmó en ' + ((this._UPLOAD_GUARD_MS||45000)/1000) + 's — se libera el candado para poder RECIBIR; la escritura sigue encolada');
-        try { this._chipError(new Error('sync lento')); } catch(e){}
+        try { this._chipError(_errLento()); } catch(e){}
         try { this.scheduleSave(); } catch(e){}   // reintento
       }, (this._UPLOAD_GUARD_MS || 45000));
       this.uploadCurrent().then((_r) => {
@@ -9673,7 +9673,7 @@ const CloudSync = {
       if (!this.uploadingNow) return;
       this.uploadingNow = false;
       console.warn('[v1139] forceUploadNow no confirmó en ' + ((this._UPLOAD_GUARD_MS||45000)/1000) + 's — candado liberado');
-      try { this._chipError(new Error('sync lento')); } catch(e){}
+      try { this._chipError(_errLento()); } catch(e){}
     }, (this._UPLOAD_GUARD_MS || 45000));
     this._forceInFlight = (async () => {
       try {
@@ -10007,7 +10007,7 @@ const CloudSync = {
         if (!this._asistUploading) return;
         this._asistUploading = false;
         console.warn('[v1139] la asistencia no confirmó en ' + ((this._UPLOAD_GUARD_MS||45000)/1000) + 's — candado liberado; la escritura sigue encolada');
-        try { this._chipError(new Error('sync lento')); } catch(e){}
+        try { this._chipError(_errLento()); } catch(e){}
       }, (this._UPLOAD_GUARD_MS || 45000));
       this.uploadAsistencia().then(() => { clearTimeout(_guardA); this._asistUploading = false; this._chipDone(); })
         .catch((e) => { clearTimeout(_guardA); this._asistUploading = false; console.warn('CloudSync uploadAsistencia:', e); this._chipError(e); });
@@ -11957,10 +11957,18 @@ function updateSplashStatus(msg){
    automático lo resuelve solo, no es culpa del usuario ni de los datos) vs FATAL (permisos,
    datos inválidos o un bug propio: reintentar no sirve, hay que verlo). Sin código = FATAL
    a propósito: un TypeError nuestro debe salir a la luz, no esconderse en reintentos. */
+/* v1174: el error que reportan los guards de 45 s LLEVA CÓDIGO. Antes era
+   `new Error('sync lento')` pelado: sin `.code`, `_syncErrReintentable('')` daba false y el chip
+   se pintaba ROJO "ERROR DE SYNC" — el mismo rojo que un rechazo de permisos. Pero "la subida va
+   lenta" es lo MÁS reintentable que hay: la escritura sigue encolada y se completa sola.
+   Ese rojo asustó a Antonio el 11-ago y me mandó a perseguir tres causas equivocadas en un día
+   (el candado de versión, la partición de gastos, la asistencia). Ninguna era: era esto. */
+function _errLento(){ var e = new Error('sync lento'); e.code = 'sync-lento'; return e; }
 function _syncErrReintentable(code){
   code = String(code || '').toLowerCase();
   return code === 'resource-exhausted' || code === 'unavailable' || code === 'deadline-exceeded'
-      || code === 'aborted' || code === 'cancelled' || code === 'unknown' || code === 'internal';
+      || code === 'aborted' || code === 'cancelled' || code === 'unknown' || code === 'internal'
+      || code === 'sync-lento';   // v1174: lentitud ≠ fallo. Muestra REINTENTANDO, no rojo.
 }
 /* v896: diff POR DÍA de la asistencia contra el último estado conocido de la nube. PURO.
    baseline = {fecha: json} (null = sin baseline → todo es cambio); payload = asistenciaGlobal.
