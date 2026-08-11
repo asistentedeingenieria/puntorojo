@@ -17,7 +17,11 @@ const iApply = html.indexOf('applyRemote(remoteData');
 const zApply = html.slice(iApply, iApply + 40000);
 const iBlq = zApply.indexOf('v972');
 ok('bloque v972 en applyRemote', iBlq > -1);
-const zB = zApply.slice(iBlq, iBlq + 2600);
+/* v1169: la ventana era de 2600 chars y el bloque creció (se sumó el merge del contador de
+   numeración), así que el merge de ÓRDENES quedó fuera del recorte y el test se puso rojo sin
+   que nada estuviera roto. Ventanas de caracteres fijas ya mordieron tres veces (v959, v983,
+   acá). Se amplía; si vuelve a pasar, hay que dejar de recortar por longitud. */
+const zB = zApply.slice(iBlq, iBlq + 4200);
 ok('mergea pedidos por proyecto', /_mergeById\([^)]*\.pedidos/.test(zB.replace(/\n/g, ' ')));
 ok('mergea ordenes por proyecto', /_mergeById\([^)]*\.ordenes/.test(zB.replace(/\n/g, ' ')));
 ok('tombstones de ambos', /pedidosEliminados/.test(zB) && /ordenesEliminadas/.test(zB));

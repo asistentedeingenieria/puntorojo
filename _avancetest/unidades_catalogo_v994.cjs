@@ -12,7 +12,12 @@ function ex(marker, from){ let m=html.indexOf(marker, from||0); if(m<0) return '
 let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
 // ── 1. correlativos sin ceros ──
-ok('el pedido ya NO se rellena con ceros', /return `\$\{prefix\} – \$\{_primerNumeroLibre\(usados\)\}`/.test(html));
+/* v1169: esta aserción tenía congelado el TEXTO EXACTO de la línea que emite el número, así
+   que se puso roja al cambiar la fuente del correlativo (ahora sale de un contador reservado,
+   no de _primerNumeroLibre). Lo que de verdad importa acá es que el número NO lleve ceros a la
+   izquierda — eso se verifica por la PROPIEDAD, no copiando la implementación. */
+const _npcSrc = ex('window.nextPedidoCode = function(');
+ok('el pedido ya NO se rellena con ceros', !!_npcSrc && !/padStart/.test(_npcSrc) && /\$\{prefix\} – \$\{/.test(_npcSrc));
 ok('la OC/DESP/OP tampoco', html.includes('const numero = `${pd.numero} - ${serie} ${folio}`'));
 ok('el campo No. del modal tampoco', html.includes('`${_seriePrev} ${nextNum} · DEL PEDIDO ${pd.numero}`'));
 ok('bodega central tampoco', html.includes("'BODEGA – ' + String(_bodegaNextNum(b.pedidos))"));

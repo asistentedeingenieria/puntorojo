@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1168</span>
+    <span style="opacity:.5;font-size:9px">v1169</span>
   </footer>
 
 </div>
@@ -9283,7 +9283,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 932; // v1166: gastos historicos importados en doc propio (gastosimp_) + vigilancia de peso
+const APP_SYNC_VERSION = 933; // v1166: gastos historicos importados en doc propio (gastosimp_) + vigilancia de peso
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10313,6 +10313,12 @@ const CloudSync = {
           const _mpd = _mergeById((lp && lp.materiales && lp.materiales.pedidos) || [], rp.materiales.pedidos || [], _tpd);
           rp.materiales.pedidos = _mpd.list;
           if (_mpd.changed) needsResync = true;
+          /* v1169: el contador de numeración se une con GANA EL MAYOR — monótono, así que es
+             idempotente y conmutativo. A PROPÓSITO no enciende needsResync: un merge que marca
+             "cambió" en cada pasada es exactamente lo que provoca los bucles de re-subida que
+             ya costaron dos incidentes. Si un equipo queda atrasado no pasa nada, porque el
+             número visible siempre empuja el contador hacia adelante (auto-sanación). */
+          rp.materiales.pedidoSeq = _mergePedidoSeq((lp && lp.materiales && lp.materiales.pedidoSeq) || {}, rp.materiales.pedidoSeq || {});
           // v997: las ENTREGAS de un pedido se unen por OC (ver _mergeRecepciones)
           if (_mergeRecepciones((lp && lp.materiales && lp.materiales.pedidos) || [], rp.materiales.pedidos)) needsResync = true;
           /* v1136: las DEVOLUCIONES por trasiego (lo que se descargó de un área) viajan como
@@ -10508,6 +10514,7 @@ const CloudSync = {
           _bmR.pedidosEliminados = _bpTomb;
           const _mBp = _mergeById(_bmL.pedidos || [], _bmR.pedidos || [], _bpTomb);
           _bmR.pedidos = _mBp.list; if (_mBp.changed) needsResync = true;
+          _bmR.pedidoSeq = _mergePedidoSeq(_bmL.pedidoSeq || {}, _bmR.pedidoSeq || {}); // v1169: gana el mayor
           const _boTomb = Object.assign({}, _bmL.ordenesEliminadas || {}, _bmR.ordenesEliminadas || {});
           _bmR.ordenesEliminadas = _boTomb;
           const _mBo = _mergeById(_bmL.ordenes || [], _bmR.ordenes || [], _boTomb);
@@ -10532,6 +10539,7 @@ const CloudSync = {
           _vmR.pedidosEliminados = _vpTomb;
           const _mVp = _mergeById(_vmL.pedidos || [], _vmR.pedidos || [], _vpTomb);
           _vmR.pedidos = _mVp.list; if (_mVp.changed) needsResync = true;
+          _vmR.pedidoSeq = _mergePedidoSeq(_vmL.pedidoSeq || {}, _vmR.pedidoSeq || {}); // v1169: gana el mayor
           if (_mergeRecepciones(_vmL.pedidos || [], _vmR.pedidos)) needsResync = true;
           const _voTomb = Object.assign({}, _vmL.ordenesEliminadas || {}, _vmR.ordenesEliminadas || {});
           _vmR.ordenesEliminadas = _voTomb;
@@ -15063,6 +15071,59 @@ function _primerNumeroLibre(usados){
   while (set[i]) i++;
   return i;
 }
+/* ══════ v1169 — EL NÚMERO DE PEDIDO SE RESERVA Y NO SE REPARTE DOS VECES ══════
+   EL CASO (11-ago): RONY creó el pedido ESSENZA F2 – 10 en su equipo, lo imprimió con firma y
+   lo mandó por WhatsApp. Ese pedido nunca llegó a la nube. Como el número se DERIVA contando
+   los pedidos VISIBLES, el 10 seguía "libre" para los demás: SUSANA hizo el suyo, recibió el
+   MISMO 10 y le generó OC. Ya había pasado (dos VLA-11, incidente v1139).
+
+   Antonio decidió: "que ya no se reutilicen" los números. Revierte la regla de v992 (rellenar
+   huecos), que además era otra vía para repartir dos veces el mismo número — bastaba con que
+   un pedido se borrara, o no llegara, para que el suyo volviera al ruedo.
+
+   El contador es MONÓTONO por prefijo (materiales.pedidoSeq[prefijo]): solo puede subir.
+   · Sobrevive al borrado: se elimina el 7, el contador sigue en 7 y el próximo es el 8.
+   · Se auto-sana: si el contador se pierde o llega atrasado, lo VISIBLE manda.
+   · Su merge es GANA EL MAYOR: idempotente, conmutativo y monótono. Eso NO es decorativo —
+     esta app ya tuvo dos incidentes por merges que no convergen (encienden needsResync en
+     cada pasada y disparan bucles de re-subida). Un máximo no puede oscilar.
+
+   ALCANCE: solo la serie de PEDIDOS. Los folios de OC/DESP/OP siguen con _primerNumeroLibre
+   (otras reglas, v992/v994) — Antonio no pidió cambiarlos.
+   HONESTO: esto reduce muchísimo el choque pero NO lo vuelve imposible; dos personas sin
+   conexión entre sí siguen pudiendo emitir el mismo número. La garantía de ENTREGA va aparte;
+   esto es la mitad del blindaje que no depende de la red. */
+function _pedidoSeqSiguiente(seqGuardado, usados){
+  var maxUsado = 0;
+  (usados || []).forEach(function(n){ var v = parseInt(n, 10); if (v > maxUsado) maxUsado = v; });
+  var seq = parseInt(seqGuardado, 10); if (!(seq > 0)) seq = 0;
+  return Math.max(seq, maxUsado) + 1;
+}
+function _mergePedidoSeq(a, b){
+  var out = {};
+  [a || {}, b || {}].forEach(function(src){
+    if (!src || typeof src !== 'object') return;
+    Object.keys(src).forEach(function(k){
+      var v = parseInt(src[k], 10); if (!(v > 0)) return;
+      if (!(out[k] >= v)) out[k] = v;      // gana el mayor
+    });
+  });
+  return out;
+}
+/* Sella la reserva al CREAR el pedido (no al mirarlo: si sellara en nextPedidoCode, cada
+   vista consumiría un número). Recibe el contenedor dueño (materiales del proyecto, bodega o
+   varios) y el número completo ya emitido. */
+function _pedidoSeqSellar(cont, numeroCompleto){
+  if (!cont || !numeroCompleto) return;
+  var m = String(numeroCompleto).match(/^(.*?)\s*[–-]\s*(\d+)\s*$/);
+  if (!m) return;
+  var prefix = m[1].trim(), n = parseInt(m[2], 10) || 0;
+  if (!prefix || !(n > 0)) return;
+  if (!cont.pedidoSeq || typeof cont.pedidoSeq !== 'object') cont.pedidoSeq = {};
+  var cur = parseInt(cont.pedidoSeq[prefix], 10) || 0;
+  if (n > cur) cont.pedidoSeq[prefix] = n;   // MONÓTONO: nunca baja
+}
+try { window._pedidoSeqSiguiente = _pedidoSeqSiguiente; window._mergePedidoSeq = _mergePedidoSeq; window._pedidoSeqSellar = _pedidoSeqSellar; } catch(e){}
 /* v1036 — EL TECHO DE LO QUE SE PUEDE PEDIR DE UN MATERIAL. PURA.
    Antonio: "NO debe de poder pedir más de lo que la receta le permite". El atributo max del
    input se saltea escribiendo, así que el techo de verdad vive acá, del lado del generador.
@@ -21184,6 +21245,10 @@ async function submitPedido(){
     ? { materiales: { pedidos: _variosPedidosTodos(), ordenes: (_variosMatStore().ordenes || []).concat(((p.materiales || {}).ordenes) || []) }, name: p.name, pedidoPrefix: p.pedidoPrefix }
     : p;
   const numero = nextPedidoCode(_contNum, proyectoTipo === 'MANUAL' ? proyectoPedido : '');
+  /* v1169: RESERVAR el número apenas se emite, en el contenedor que es dueño de la serie (los
+     manuales viven en PROYECTOS VARIOS desde v1002). Si el pedido después se cae, el número
+     queda quemado — es el precio correcto: mejor un hueco que dos pedidos con el mismo número. */
+  try { _pedidoSeqSellar(proyectoTipo === 'MANUAL' ? _variosMatStore() : p.materiales, numero); } catch(e){ try { _pedidoSeqSellar(p.materiales, numero); } catch(_e){} }
 
   const n = new Date();
   const fecha = `${String(n.getDate()).padStart(2,'0')}/${String(n.getMonth()+1).padStart(2,'0')}/${n.getFullYear()}`;
@@ -38677,7 +38742,17 @@ function _autoAligerarProyectos(projects){
         avisos.push({ obra: p.name || p.id, kb: Math.round(n / 1024), pct: Math.round(n / LIMITE * 100) });
       }
     });
-    if (avisos.length) console.warn('[PESO] proyectos sobre el 75% del límite:', avisos);
+    /* v1169: el aviso salía en CADA subida y llenaba la consola — Antonio lo leyó como una
+       alarma de que la app se iba a caer, y con razón: repetido veinte veces parece grave.
+       Ahora habla UNA vez por sesión y solo vuelve a hablar si ENTRA una obra nueva a la
+       lista. El texto además aclara que es un aviso interno, no un error. */
+    if (avisos.length) {
+      var _firma = avisos.map(function(a){ return a.obra; }).sort().join('|');
+      if (window._pesoAvisoFirma !== _firma) {
+        window._pesoAvisoFirma = _firma;
+        console.warn('[PESO · aviso interno, NO es un error] obras sobre el 75% del doc — hay que aligerarlas:', avisos);
+      }
+    }
   } catch(e){}
   return avisos;
 }
@@ -40771,6 +40846,7 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
   // Generar el pedido
   p.materiales.pedidoCounter = (p.materiales.pedidoCounter || 0) + 1;
   const numero = nextPedidoCode(p);
+  try { _pedidoSeqSellar(p.materiales, numero); } catch(e){}   // v1169: el número queda RESERVADO
 
   const n = new Date();
   const fecha = `${String(n.getDate()).padStart(2,'0')}/${String(n.getMonth()+1).padStart(2,'0')}/${n.getFullYear()}`;
@@ -41440,7 +41516,18 @@ window.DELETION_EXECUTORS['proveedor'] = (payload) => _doDeleteCurrentProveedor(
     const _mismoPrefijo = s => String(s || '').toUpperCase().indexOf(prefix + ' ') === 0;
     const usados = (_mat.pedidos || []).filter(x => _mismoPrefijo(x && x.numero)).map(x => _num(x && x.numero))
       .concat((_mat.ordenes || []).filter(o => _mismoPrefijo(o && o.pedidoNumero)).map(o => _num(o && o.pedidoNumero)));
-    return `${prefix} – ${_primerNumeroLibre(usados)}`;
+    /* v1169: ya NO se rellenan huecos (revierte v992, decisión de Antonio 11-ago). El próximo
+       número sale del contador MONÓTONO reservado, y lo visible solo lo empuja hacia adelante
+       (auto-sanación si el contador viene atrasado o se perdió). Un pedido borrado —o uno que
+       nunca llegó a la nube, como el de Rony— ya no devuelve su número al ruedo. */
+    const _seqPrev = (_mat.pedidoSeq && _mat.pedidoSeq[prefix]) || 0;
+    /* guard typeof: varios tests extraen esta función AISLADA y la evalúan con new Function,
+       sin las auxiliares en el scope (ya mordió en v1153 y v1161). El fallback calcula LO
+       MISMO inline — no vuelve a la regla vieja, que sería mentirle al test. */
+    const _sig = (typeof _pedidoSeqSiguiente === 'function')
+      ? _pedidoSeqSiguiente(_seqPrev, usados)
+      : (function(){ var mx = 0; (usados || []).forEach(function(n){ var v = parseInt(n, 10); if (v > mx) mx = v; }); var s = parseInt(_seqPrev, 10); if (!(s > 0)) s = 0; return Math.max(s, mx) + 1; })();
+    return `${prefix} – ${_sig}`;
   };
 
   window.isErlinUser = function(){

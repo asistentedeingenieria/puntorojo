@@ -31,7 +31,15 @@ if (fN) {
   const P = n => ({ numero: 'VICINIA LAS AMÉRICAS – ' + String(n).padStart(5,'0') });
   /* v994 (pedido de Antonio: "eliminemos los ceros"): los pedidos VIEJOS conservan su
      formato con ceros — el parseo los sigue leyendo — y el número NUEVO sale pelado. */
-  ok('caso de Antonio: 00001, 00002, 00004 → sale el 3', f(mk([P(1),P(2),P(4)], [])) === 'VICINIA LAS AMÉRICAS – 3');
+  /* ⚠️ REGLA REVERTIDA POR ANTONIO (11-ago, v1169). Antes (v992) el pedido RELLENABA el hueco:
+     con 1, 2 y 4 usados salía el 3. Eso se cambió porque era una vía para repartir dos veces el
+     mismo número: bastaba con que un pedido se borrara —o que no llegara a la nube, como el de
+     RONY— para que el suyo volviera al ruedo y otra persona lo recibiera. Ahora la serie de
+     PEDIDOS solo avanza. (Los folios de OC SÍ siguen rellenando huecos: ver la aserción de
+     _primerNumeroLibre acá arriba, que sigue viva y pasando.) */
+  ok('regla NUEVA: 00001, 00002, 00004 → sale el 5 (ya no rellena el hueco)', f(mk([P(1),P(2),P(4)], [])) === 'VICINIA LAS AMÉRICAS – 5');
+  ok('un pedido borrado no devuelve su número: contador 7, nada visible → 8',
+    f({ name:'VICINIA LAS AMÉRICAS', materiales:{ pedidos: [], ordenes: [], pedidoSeq: { 'VICINIA LAS AMÉRICAS': 7 } } }) === 'VICINIA LAS AMÉRICAS – 8');
   ok('consecutivos → sigue la serie', f(mk([P(1),P(2),P(3)], [])) === 'VICINIA LAS AMÉRICAS – 4');
   // el hueco NO se reusa si una OC viva todavía cita ese pedido
   const ocs = [{ pedidoNumero: 'VICINIA LAS AMÉRICAS – 00003' }];

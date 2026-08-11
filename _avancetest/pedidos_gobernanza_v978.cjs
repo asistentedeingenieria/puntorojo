@@ -21,7 +21,10 @@ try { fN = new Function(ex('function _primerNumeroLibre(') + '\nreturn (' + zNum
 if (fN) {
   const mk = pedidos => ({ name:'VICINIA LAS AMÉRICAS', materiales:{ pedidoCounter: 7, pedidos, ordenes: [] } });
   // v994: el número nuevo sale SIN ceros (1, 2, 3…); los viejos se siguen leyendo igual
-  ok('rellena el hueco (ignora el contador)', fN(mk([{numero:'VICINIA LAS AMÉRICAS – 00001'},{numero:'VICINIA LAS AMÉRICAS – 00003'}])) === 'VICINIA LAS AMÉRICAS – 2');
+  /* v1169: Antonio revirtió el relleno de huecos (v992) — era una vía para repartir dos veces
+     el mismo número. Ahora la serie de pedidos solo avanza: con 1 y 3 usados sale el 4, no el 2.
+     Sigue ignorando pedidoCounter, que es un vestigio y no es confiable. */
+  ok('ya NO rellena el hueco: 1 y 3 usados → sale el 4', fN(mk([{numero:'VICINIA LAS AMÉRICAS – 00001'},{numero:'VICINIA LAS AMÉRICAS – 00003'}])) === 'VICINIA LAS AMÉRICAS – 4');
   ok('si se borra el 00003, el siguiente ES el 2 (sin saltos)', fN(mk([{numero:'VICINIA LAS AMÉRICAS – 00001'}])) === 'VICINIA LAS AMÉRICAS – 2');
   ok('proyecto sin pedidos arranca en 1', fN(mk([])) === 'VICINIA LAS AMÉRICAS – 1');
 } else ok('nextPedidoCode evaluable', false);
