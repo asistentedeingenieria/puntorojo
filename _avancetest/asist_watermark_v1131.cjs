@@ -146,7 +146,10 @@ SITIOS.forEach(([nombre, re]) => ok(nombre + ' pasa el corte', re.test(code)));
    pasan el corte; cualquier llamada extra tiene que ser del archivador y llevar (null, ''). */
 const _llamadas = (code.match(/_mergeAsistencia\(/g) || []).length - 1;  // menos la definición
 ok('tres sitios de sync + dos del archivador (v1148)', _llamadas === 5);
-const _zArch = (function(){ let m=code.indexOf('window._asistArchivarViejo'); if(m<0) return ''; let i=code.indexOf('{',m),d=0; for(;i<code.length;i++){ if(code[i]==='{')d++; else if(code[i]==='}'){ d--; if(d===0) return code.slice(m,i+1); } } return ''; })();
+/* v1175: anclar en la DEFINICIÓN, no en el nombre suelto — desde que existe el archivado
+   automático hay una LLAMADA a window._asistArchivarViejo({auto:true}) que aparece antes en el
+   archivo, y el extractor se traía ese bloque en vez de la función. */
+const _zArch = (function(){ let m=code.indexOf('window._asistArchivarViejo = async function'); if(m<0) return ''; let i=code.indexOf('{',m),d=0; for(;i<code.length;i++){ if(code[i]==='{')d++; else if(code[i]==='}'){ d--; if(d===0) return code.slice(m,i+1); } } return ''; })();
 ok('las del archivador van SIN tombstones y SIN corte (unión pura)',
   (_zArch.match(/_mergeAsistencia\([^)]*\bnull,\s*''\)/g) || []).length === 2);
 

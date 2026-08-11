@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1174</span>
+    <span style="opacity:.5;font-size:9px">v1175</span>
   </footer>
 
 </div>
@@ -10763,6 +10763,15 @@ const CloudSync = {
     try { delete merged._recetaEmbebidaIds; } catch(e){}
     try { delete merged._pagosArchEmbebidaIds; } catch(e){}
     try { delete merged._gastosImpEmbebidaIds; } catch(e){}
+    /* v1175: una sola vez por sesión y con retraso —la app ya cargó y no compite con el
+       arranque— se intenta el archivado automático de la asistencia vieja. Adentro decide si
+       corresponde (material suficiente, no corrió hoy) y solo lo hace un administrador. */
+    try {
+      if (!this._archAutoLanzado) {
+        this._archAutoLanzado = true;
+        setTimeout(function(){ try { _asistArchAutoIntentar(); } catch(e){} }, 45000);
+      }
+    } catch(e){}
     // v235: restaurar el proyecto activo LOCAL del usuario (no compartir entre sesiones).
     if (localActivePID && (state.projects||[]).some(pp => pp.id === localActivePID)) {
       state.activeProjectId = localActivePID;
@@ -39318,8 +39327,44 @@ function _asistDiaArchivado(fecha, cutoffOpt){
   if (!/^\d{4}-\d{2}-\d{2}$/.test(_cut)) return false;
   return fecha < _cut;
 }
-window._asistArchivarViejo = async function(){
-  if (typeof can !== 'function' || !can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE ARCHIVAR', 'red');
+/* ══ v1175 — EL ARCHIVADO SE HACE SOLO ══
+   El archivado de v1148 funciona perfecto, pero hay que APRETAR UN BOTÓN cada mes. Nadie lo
+   apretó desde el 6 de julio y el 11-ago el doc caliente llevaba 32 días (507 KB por JSON,
+   ~1 MB en el formato real de Firestore). Ese payload es el que satura la cola y hace que las
+   subidas pasen de 45 s — el aviso de lentitud que asustó a todos.
+   Yo mismo dejé escrito en v1148 que "el botón se re-aprieta cada mes". Un mantenimiento que
+   depende de que alguien se acuerde no es un mantenimiento. Y Antonio lo pidió textual:
+   "no quiero que me avises, quiero que lo vayas corrigiendo vos". */
+function _asistArchAutoDebe(diasViejos, ultimoAutoTs, ahora){
+  var d = parseInt(diasViejos, 10);
+  if (!(d >= 20)) return false;                       // hay material suficiente que mudar
+  var t = parseInt(ultimoAutoTs, 10); if (!(t > 0)) t = 0;
+  var n = parseInt(ahora, 10) || 0;
+  if (t > n) return false;                            // sello del futuro (reloj torcido): no correr
+  return (n - t) >= 20 * 3600000;                     // como mucho una vez al día
+}
+/* Lo dispara SOLO un administrador: si los 50 archivaran a la vez sería un desastre. Los admin
+   son pocos, y el sello asistArchAutoTs en la nube evita que dos coincidan. Sin toasts: esto
+   pasa por debajo, sin interrumpir a nadie. */
+async function _asistArchAutoIntentar(){
+  try {
+    if (typeof can !== 'function' || !can('users.manage')) return;
+    var db = firebase.firestore();
+    var _cfg = await db.collection('appState').doc('config').get();
+    var _d = (_cfg.exists && _cfg.data()) || {};
+    var _cut = _asistCutoffMax(_asistCutoffVigente(), _asistCutoffObjetivo(todayKey(), 30));
+    var _asis = (typeof state !== 'undefined' && state && state.asistenciaGlobal) || {};
+    var _dias = _asistArchAgruparMes(_asis, _cut).dias;
+    if (!_asistArchAutoDebe(_dias, _d.asistArchAutoTs, Date.now())) return;
+    console.log('[v1175] archivando asistencia vieja en automático:', _dias, 'días');
+    await db.collection('appState').doc('config').set({ asistArchAutoTs: Date.now() }, { merge: true });
+    await window._asistArchivarViejo({ auto: true });
+  } catch(e){ console.warn('[v1175] archivado automático:', e && (e.code || e.message)); }
+}
+try { window._asistArchAutoIntentar = _asistArchAutoIntentar; } catch(e){}
+window._asistArchivarViejo = async function(opts){
+  var _auto = !!(opts && opts.auto);   // v1175: en automático no hay modal que confirmar
+  if (typeof can !== 'function' || !can('users.manage')) { if (!_auto) showToast('SOLO EL ADMINISTRADOR PUEDE ARCHIVAR', 'red'); return; }
   var db;
   try { db = firebase.firestore(); } catch(e){ return showToast('SIN CONEXIÓN A LA NUBE', 'red'); }
   try {
@@ -39334,7 +39379,7 @@ window._asistArchivarViejo = async function(){
     var grp = _asistArchAgruparMes(_fuente, _cutNuevo);
     var _mesesK = Object.keys(grp.meses).sort();
     if (!grp.dias || !_mesesK.length) return showToast('NADA QUE ARCHIVAR — TODO LO VIEJO YA ESTÁ EN EL ARCHIVO', 'ok');
-    var okc = await window.prConfirm({
+    var okc = _auto ? true : await window.prConfirm({
       title: 'ARCHIVAR ASISTENCIA VIEJA',
       bodyHTML: '<div style="font-size:12px;color:#444;line-height:1.7">Se mudan <b>' + grp.dias + ' días</b> (' + _mesesK.join(', ') + ') al archivo permanente. '
         + 'Quedan calientes los días desde el <b>' + _cutNuevo + '</b> (31 días).<br>'
