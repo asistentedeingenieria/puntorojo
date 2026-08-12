@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1183</span>
+    <span style="opacity:.5;font-size:9px">v1184</span>
   </footer>
 
 </div>
@@ -27072,8 +27072,11 @@ function printOrdenCompra(ocId, isDraft){
     </tr>
   `).join('');
 
-  const w = window.open('', '_blank');
-  w.document.write(`
+  /* v1184: el MISMO builder sirve para IMPRIMIR y para COMPARTIR como imagen (regla v980:
+     un solo builder, cero drift entre el papel y la foto). Con soloHTML devuelve el documento
+     sin abrir ventana — lo captura compartirOcImg en un iframe oculto. */
+  const _soloHTML = !!(arguments.length > 2 && arguments[2] && arguments[2].soloHTML);
+  const _docHTML = (`
 <!DOCTYPE html>
 <html><head>${_docHeadMeta()}<title>Orden de Compra No. ${_numLimpio(oc.numero)}</title>
 <style>
@@ -27423,8 +27426,40 @@ ${showDraft ? '<div class="no-print" style="background:var(--red-soft);padding:1
 </div>
 </body></html>
   `);
+  if (_soloHTML) return _docHTML;   // v1184: el compartir lo captura sin abrir ventana
+  const w = window.open('', '_blank');
+  w.document.write(_docHTML);
   w.document.close();
 }
+/* v1184 (Antonio: "en vez de imprimir mejor COMPARTIR OC una vez autorizada por finanzas").
+   Mismo patrón que compartirSolicitudImg (v980): el documento REAL de la OC se pinta en un
+   iframe oculto, html2canvas lo captura adentro (cero choques de estilos) y sale por la
+   escalera nativa (_imgCompartir: app Android → hoja del celular → descarga en compu). */
+window.compartirOcImg = async function(ocId){
+  const _hit = _bodegaFindOc(ocId);
+  const oc = _hit && _hit.oc;
+  if (!oc) return showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red');
+  try { showToast('GENERANDO IMAGEN…', 'info'); } catch(e){}
+  const fr = document.createElement('iframe');
+  fr.style.cssText = 'position:fixed;left:-10000px;top:0;width:920px;height:1500px;border:0;visibility:hidden';
+  document.body.appendChild(fr);
+  try {
+    const cargado = new Promise(res => { fr.onload = res; });
+    fr.srcdoc = printOrdenCompra(ocId, false, { soloHTML: true });
+    await cargado;
+    const idoc = fr.contentDocument, iwin = fr.contentWindow;
+    await new Promise((res, rej) => { const s = idoc.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'; s.onload = res; s.onerror = rej; idoc.head.appendChild(s); });
+    try { idoc.querySelectorAll('.no-print').forEach(el => el.remove()); } catch(e){}   // los botones VOLVER/IMPRIMIR no van en la foto
+    const canvas = await iwin.html2canvas(idoc.body, { scale: 2, backgroundColor: '#ffffff' });
+    const M = 72;
+    const c2 = document.createElement('canvas'); c2.width = canvas.width + M * 2; c2.height = canvas.height + M * 2;
+    const cx = c2.getContext('2d'); cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, c2.width, c2.height); cx.drawImage(canvas, M, M);
+    const blob = await new Promise(res => c2.toBlob(res, 'image/png'));
+    const desc = ('ORDEN DE COMPRA ' + _numLimpio(oc.numero) + ' - ' + (oc.proveedorNombre || '')).replace(/\s+/g, ' ').trim();
+    await _imgCompartir(blob, c2.toDataURL('image/png'), desc.replace(/[\\/:*?"<>|]/g, '-') + '.png', desc);
+  } catch(e){ try { showToast('NO SE PUDO GENERAR LA IMAGEN', 'red'); } catch(_e){} try { console.warn('compartirOcImg', e); } catch(_e){} }
+  finally { try { fr.remove(); } catch(e){} }
+};
 
 function formatFechaLarga(fechaDDMMYYYY, conDia){
   if (!fechaDDMMYYYY) return '';
@@ -27532,8 +27567,11 @@ function renderOrdenesList(){
       ? `<div style="font-size:9px;color:var(--mute);margin-top:3px">POR ${oc.autorizadoPor}</div>`
       : '';
 
+    /* v1184 (Antonio): en la tarjeta, la OC autorizada se COMPARTE (imagen por WhatsApp/correo,
+       escalera nativa v980) en vez de imprimirse. En compu la escalera cae a descargar el PNG,
+       que también se puede imprimir. */
     const printBtn = isAuth
-      ? `<button class="btn sm" onclick="printOrdenCompra('${oc.id}')" title="Imprimir orden autorizada">IMPRIMIR</button>`
+      ? `<button class="btn sm" onclick="compartirOcImg('${oc.id}')" title="Compartir la orden autorizada como imagen (WhatsApp, correo). En computadora la descarga.">COMPARTIR OC</button>`
       : `<button class="btn ghost sm" disabled title="Necesita autorización de finanzas" style="opacity:.5;cursor:not-allowed">IMPRIMIR</button>`;
 
     /* v1017: el circuito de la ORDEN DE PRODUCCIÓN. Es un aviso al proveedor para que fabrique,
