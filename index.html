@@ -3388,7 +3388,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1196</span>
+    <span style="opacity:.5;font-size:9px">v1197</span>
   </footer>
 
 </div>
@@ -9350,7 +9350,11 @@ window._syncDiag = function(){
     minimoNube: (typeof CloudSync !== 'undefined' && CloudSync._minSyncVersion) || 0,
     bloqueado: false,
     subiendo: (typeof CloudSync !== 'undefined' && !!CloudSync.uploadingNow),
-    ultimoError: window._syncUltimoError || null
+    ultimoError: window._syncUltimoError || null,
+    /* v1197: salud del canal de RECEPCIÓN — cuánto hace del último snapshot (los ecos
+       propios también cuentan: prueban que el canal vive) y cuántas reconexiones lleva */
+    ultimoSnapshotHace: (typeof CloudSync !== 'undefined' && CloudSync._lastSnapTs) ? (Math.round((Date.now() - CloudSync._lastSnapTs) / 1000) + ' s') : 'nunca',
+    reconexiones: (typeof CloudSync !== 'undefined' && CloudSync._resubTotal) || 0
   };
   try { d.bloqueado = _versionBloqueada(APP_SYNC_VERSION, d.minimoNube); } catch(e){}
   try { console.log('%c[SYNC]', 'font-weight:700', d); } catch(e){}
@@ -9504,26 +9508,26 @@ const CloudSync = {
 
       // v491: UN listener sobre TODA la coleccion appState (core + proj_*). Maneja
       // alta/baja de proyectos automaticamente, sin re-suscribir nada.
-      this.unsubscribe = db.collection('appState').onSnapshot(
-        (snap) => {
-          if (snap.metadata.hasPendingWrites) return; // eco de NUESTRA escritura
-          // v668: coalescer la tormenta de snapshots (con ~30 usuarios llega una escritura ajena por
-          // cada cambio). Guardamos el snap MÁS NUEVO y aplicamos UNA vez cada ~300ms, reensamblando
-          // EN EL FLUSH (nunca un intermedio viejo) para que los guards (pendingWrite/isUserBusy) y la
-          // siembra de _asistHash se evalúen contra lo ÚLTIMO. Mata el storm de renders. Los merges son
-          // UNIÓN, así que coalescer solo DEMORA aplicar, nunca pierde una marca/registro.
-          this._latestSnap = snap;
-          if (this._snapCoalesce) return;
-          this._snapCoalesce = setTimeout(() => {
-            this._snapCoalesce = null;
-            const _s = this._latestSnap; this._latestSnap = null;
-            if (!_s) return;
-            const d = this._assembleFromSnap(_s);
-            if (d) this.applyRemote(d, { initial: false });
-          }, 300);
-        },
-        (err) => { console.error('CloudSync onSnapshot error:', err); }
-      );
+      // v1197: la suscripción vive en _suscribir() — re-armable. Antes el err handler solo
+      // hacía console.error y el canal MUERTO dejaba la app SORDA hasta recargar (las
+      // divergencias del 12-ago: Susana sin ver el proveedor autorizado, Rony con su
+      // pedido atrapado). Ahora: error ⇒ re-suscribir con espera creciente; latido cada
+      // minuto (silencio >5 min con red = canal sospechoso ⇒ re-suscribir); y al VOLVER
+      // a la pestaña con snapshot viejo, reenganche inmediato.
+      this._suscribir();
+      if (!this._latidoTimer) this._latidoTimer = setInterval(() => {
+        try {
+          if (!this.enabled || !this._lastSnapTs) return;
+          if (navigator.onLine === false) return; // sin red no hay nada que vigilar
+          if (Date.now() - this._lastSnapTs > 5 * 60000) this._resuscribirConEspera('latido: >5 min sin señal con red');
+        } catch(e){}
+      }, 60000);
+      document.addEventListener('visibilitychange', () => {
+        try {
+          if (document.visibilityState !== 'visible' || !this.enabled) return;
+          if (this._lastSnapTs && Date.now() - this._lastSnapTs > 60000) this._resuscribirConEspera('volví a la pestaña con snapshot viejo', true);
+        } catch(e){}
+      });
 
       // Si el usuario "se libera" (cierra modal, sale de input), aplicar cambios pendientes
       document.addEventListener('focusout', () => this.flushPendingRender(), true);
@@ -9535,6 +9539,52 @@ const CloudSync = {
     }
   },
 
+  /* v1197: la suscripción, re-armable. Corta la vieja SIEMPRE antes de armar (sin
+     listeners dobles) y sella el latido en CADA snapshot — también en los ecos propios,
+     que igual prueban que el canal está vivo. Solo ciclo de vida: los merges y la forma
+     canónica no se tocan (por eso v1197 no sube APP_SYNC). */
+  _suscribir(motivo){
+    try { if (this.unsubscribe) this.unsubscribe(); } catch(e){}
+    this.unsubscribe = null;
+    if (motivo) { try { console.warn('[v1197] re-suscripción:', motivo, '· total:', (this._resubTotal || 0)); } catch(e){} }
+    this.unsubscribe = db.collection('appState').onSnapshot(
+      (snap) => {
+        this._lastSnapTs = Date.now(); // v1197: latido — el canal vive
+        this._resubEspera = 0;         // v1197: señal buena resetea la espera del backoff
+        if (snap.metadata.hasPendingWrites) return; // eco de NUESTRA escritura
+        // v668: coalescer la tormenta de snapshots (con ~30 usuarios llega una escritura ajena por
+        // cada cambio). Guardamos el snap MÁS NUEVO y aplicamos UNA vez cada ~300ms, reensamblando
+        // EN EL FLUSH (nunca un intermedio viejo) para que los guards (pendingWrite/isUserBusy) y la
+        // siembra de _asistHash se evalúen contra lo ÚLTIMO. Mata el storm de renders. Los merges son
+        // UNIÓN, así que coalescer solo DEMORA aplicar, nunca pierde una marca/registro.
+        this._latestSnap = snap;
+        if (this._snapCoalesce) return;
+        this._snapCoalesce = setTimeout(() => {
+          this._snapCoalesce = null;
+          const _s = this._latestSnap; this._latestSnap = null;
+          if (!_s) return;
+          const d = this._assembleFromSnap(_s);
+          if (d) this.applyRemote(d, { initial: false });
+        }, 300);
+      },
+      (err) => {
+        console.error('CloudSync onSnapshot error:', err);
+        try { window._syncUltimoError = { code: (err && err.code) || '', msg: String((err && err.message) || err), ts: Date.now(), donde: 'onSnapshot' }; } catch(e){}
+        this._resuscribirConEspera('error del canal: ' + ((err && err.code) || 'desconocido'));
+      }
+    );
+  },
+  /* v1197: re-suscribir con espera creciente (5s→60s tope). inmediato=true la salta
+     (volver a la pestaña). Un solo timer: llamadas repetidas no apilan. */
+  _resuscribirConEspera(motivo, inmediato){
+    if (this._resubTimer) return;
+    this._resubEspera = inmediato ? 0 : Math.min((this._resubEspera || 0) * 2 || 5000, 60000);
+    this._resubTimer = setTimeout(() => {
+      this._resubTimer = null;
+      this._resubTotal = (this._resubTotal || 0) + 1;
+      try { this._suscribir(motivo); } catch(e){ console.error('[v1197] re-suscripción falló:', e); this._resuscribirConEspera('reintento tras fallo'); }
+    }, this._resubEspera);
+  },
   /* v664: el chip de sync NO se prende en cada cambio. El dato queda guardado local
      al instante; solo mostramos "SINCRONIZANDO" si una subida REAL lleva >2.5s en
      curso (cola real con muchos usuarios). Así el chip dice la verdad y no parece
