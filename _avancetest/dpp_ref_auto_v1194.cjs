@@ -40,6 +40,11 @@ ok('el despacho nace con su REF', /refOcMadre: _madreE\.id, refOcMadreNumero: _m
 
 console.log('\n— el impreso la muestra como No. (v1151 intacto) —');
 ok('con refExterna el No. grande del impreso es la REF', /oc\.esPrepago && oc\.refExterna \? esc\(String\(oc\.refExterna\)\.toUpperCase\(\)\)/.test(code));
+/* v1195 (Antonio): "el número alineado con la línea como en todas las OC" — el bloque del
+   No. del despacho es más corto (sin línea de PEDIDO) y el align-items:center del grid lo
+   dejaba flotando arriba. align-self:end lo ASIENTA sobre la línea roja; en las OC normales
+   el bloque ya define la altura de la fila, así que no cambian. */
+ok('el bloque del No. se asienta sobre la línea (align-self:end)', /\.oc-num-col\{[^}]*align-self:end/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
