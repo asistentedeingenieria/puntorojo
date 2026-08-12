@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1186</span>
+    <span style="opacity:.5;font-size:9px">v1187</span>
   </footer>
 
 </div>
@@ -21978,6 +21978,12 @@ function _ocItemMemKey(name){
   // los largos en pies (regla 7' ≡ regla 8') y para existencias son stock distinto.
   let s = String(name == null ? '' : name)
     .replace(/[“”″]/g, '"').replace(/[‘’′´]/g, "'")
+    /* v1187: ½ ≡ 1/2 (y ¼, ¾, ⅜, ⅝, ⅛). El pedido decía TABLA ULTRALIGHT ½" y la COMPRA
+       ANTICIPADA decía 1/2" — claves distintas ⇒ el saldo pre-pago nunca matcheaba y la
+       opción no aparecía en el picker. Se canoniza a la fracción unicode (la dirección que
+       ya entiende la regla de abajo). \b evita comerse un 11/2. */
+    .replace(/\b1\/2\b/g, '½').replace(/\b1\/4\b/g, '¼').replace(/\b3\/4\b/g, '¾')
+    .replace(/\b3\/8\b/g, '⅜').replace(/\b5\/8\b/g, '⅝').replace(/\b1\/8\b/g, '⅛')
     .replace(/(\d)\s+([½¼¾⅝⅜⅛])/g, '$1$2');
   if (/\(MEDIDA ESPECIAL/i.test(s)) {
     s = s.replace(/\s*\(MEDIDA ESPECIAL[^)]*\)/i, '').replace(/X\s*[\d.]+\s*'/i, "X 10'");
@@ -25017,6 +25023,73 @@ function _provPickerItems(primeraOpcion){
     .concat(_getProveedores().map(pr => ({ id: pr.id, label: pr.nombre }))
       .sort((a, b) => String(a.label).localeCompare(String(b.label), 'es', { sensitivity: 'base' })));
 }
+/* ══ v1187 (Antonio) — DOS FUENTES NUEVAS AL ASIGNAR EN LA OC ══
+   1. BODEGA DE HERRAMIENTA: si el material eventual en realidad es una herramienta que ya
+      está cargada (cubetas, extensiones), se elige de la lista POR NOMBRE y el renglón se
+      convierte en herramienta del pedido — sale del circuito de compra (v1155) y se despacha
+      con el botón del pedido (v1179). El renglón queda en itemsQuitados (mecanismo v1153)
+      para que no reaparezca al reabrir el modal.
+   2. PRODUCTO DEL CATÁLOGO: al asignarle proveedor a un EVENTUAL, si ese proveedor tiene
+      catálogo se ofrece elegir CUÁL de sus productos es — y el renglón adopta nombre y
+      precio. (El caso real: "PINTURA GLS BLANCO - MARCA MUNDIAL" tipeado a mano vs "CUBETA
+      5 GLS BLANCO 500-4/…" en el catálogo de MUNDIAL: nombres genuinamente distintos que
+      ningún match automático debe igualar solo — lo decide compras, con un clic.) */
+function _herrOpcionPicker(){
+  try {
+    var h = (typeof _herrDisponibles === 'function') ? _herrDisponibles() : [];
+    if (h.length) return [{ id: '_herr', label: 'BODEGA DE HERRAMIENTA (SIN COSTO · CON DEVOLUCIÓN)' }];
+  } catch(e){}
+  return [];
+}
+window._ocElegirHerramienta = function(btn, idx){
+  var it = ocWorkingItems[idx]; if (!it) return;
+  if (!(_puedeGestionarBodega() || can('compras.autorizar') || can('users.manage'))) return showToast('SIN PERMISO', 'red');
+  var disp = _herrDisponibles();
+  if (!disp.length) return showToast('NO HAY HERRAMIENTAS CON SALDO EN BODEGA', 'red');
+  _abrirPicker(btn, {
+    items: disp.map(function(n){ return { id: n, label: n }; }),
+    selectedId: '',
+    onPick: function(nombre){
+      if (!nombre) return;
+      var ctx = _findPedidoGlobal(currentPedidoDetalleId);
+      if (!ctx || !ctx.pd) return showToast('EL PEDIDO YA NO EXISTE — RECARGÁ', 'red');
+      var pd2 = ctx.pd, u = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+      if (!Array.isArray(pd2.herramientas)) pd2.herramientas = [];
+      pd2.herramientas.push({ name: nombre, qty: Number(it.qty) || 1 });
+      if (!Array.isArray(pd2.itemsQuitados)) pd2.itemsQuitados = [];
+      pd2.itemsQuitados.push({ sourceKey: it.sourceKey || '', name: it.name, qty: it.qty, por: String(u.displayName || u.username || ''), motivo: 'ES HERRAMIENTA DE BODEGA: ' + nombre, ts: Date.now() });
+      pd2._ts = Date.now();
+      ocWorkingItems = ocWorkingItems.filter(function(x){ return (x.sourceKey || '') !== (it.sourceKey || ''); });
+      saveState();
+      try { CloudSync.forceUploadNow(); } catch(e){}
+      showToast('AHORA ES HERRAMIENTA DEL PEDIDO: ' + nombre + ' ×' + (Number(it.qty) || 1) + ' — DESPACHALA CON EL BOTÓN DEL PEDIDO', 'green');
+      renderOcItems();
+    }
+  });
+};
+window._ocOfrecerProductoCatalogo = function(btn, idx, provId){
+  var it = ocWorkingItems[idx];
+  if (!it || !it.eventual) return;                                     // solo eventuales: los del catálogo ya traen su nombre
+  if (!provId || provId === '_bodega' || provId === '_herr' || /^_(dpp|tras):/.test(String(provId))) return;
+  var prv = (_getProveedores() || []).find(function(x){ return x && x.id === provId; });
+  var prods = (prv && prv.productos || []).filter(function(pr){ return pr && pr.nombre && Number(pr.precio) > 0; });
+  if (!prods.length) return;
+  _abrirPicker(btn, {
+    items: [{ id: '', label: '— DEJAR EL NOMBRE TIPEADO (' + String(it.name).slice(0, 40) + ') —' }]
+      .concat(prods.map(function(pr, i){ return { id: 'p' + i, label: pr.nombre + '  ·  Q' + fmtQ(pr.precio) }; })),
+    selectedId: '',
+    onPick: function(pid){
+      if (!pid) return;
+      var pr = prods[parseInt(String(pid).slice(1), 10)];
+      if (!pr) return;
+      it.name = pr.nombre;                        // adopta la identidad del catálogo
+      it.precio = Number(pr.precio) || 0;
+      it.eventual = false; it.autoAssigned = true;
+      showToast('TOMADO DEL CATÁLOGO: ' + pr.nombre + ' · Q' + fmtQ(it.precio), 'green');
+      renderOcItems();
+    }
+  });
+};
 function _abrirPickerProveedor(btn, idx){
   const it = ocWorkingItems[idx]; if (!it) return;
   // v978: pedido DE RECETA — compras solo alterna PROVEEDOR DEL CATÁLOGO ↔ BODEGA CENTRAL
@@ -25045,9 +25118,13 @@ function _abrirPickerProveedor(btn, idx){
     // sin proveedor auto (no hubo match en el catálogo): se deja elegir para no trabar la OC
   }
   _abrirPicker(btn, {
-    items: _provPickerItems('— ASIGNAR —').concat(_dppOpcionesDeItem(it.name)).concat(_trasOpcionesDeItem(it.name)), // v1068
+    items: _provPickerItems('— ASIGNAR —').concat(_herrOpcionPicker()).concat(_dppOpcionesDeItem(it.name)).concat(_trasOpcionesDeItem(it.name)), // v1068 · v1187: + bodega de herramienta
     selectedId: it.proveedorId || '',
-    onPick: function(id){ updateOcItemProveedor(idx, id); }
+    onPick: function(id){
+      if (id === '_herr') return window._ocElegirHerramienta(btn, idx);   // v1187: elegir la herramienta por nombre
+      updateOcItemProveedor(idx, id);
+      try { window._ocOfrecerProductoCatalogo(btn, idx, id); } catch(e){} // v1187: eventual + proveedor con catálogo ⇒ elegir el producto real
+    }
   });
 }
 function _abrirPickerProveedorTodos(btn){

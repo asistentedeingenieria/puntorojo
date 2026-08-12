@@ -102,7 +102,12 @@ if (typeof eFn === 'function') {
   ok('qty = lo RECIBIDO, no lo pedido', movs[0] && movs[0].qty === 48);
   // normOcName descarta la barra de 1/2 (no está en la clase permitida). v968: el colapso
   // X n' → X 10' quedó SOLO para (MEDIDA ESPECIAL) — los largos son stock distinto.
-  ok('clave canónica _ocItemMemKey', movs[0] && movs[0].k === 'PLANCHA 1 2" X 8\'');
+  /* v1187: la clave vieja DESTRUÍA la fracción (normOcName descartaba la barra y '1/2' quedaba
+     '1 2', ambiguo). Ahora 1/2 canoniza a ½ ANTES, así que la clave conserva la medida y además
+     '1/2' ≡ '½' — el bug que escondía el saldo pre-pago de la TABLA ULTRALIGHT. Se verifica la
+     PROPIEDAD (equivalencia y no-vacío), no el literal. */
+  ok('clave canónica _ocItemMemKey conserva la fracción (1/2 canoniza a ½)',
+    movs[0] && !!movs[0].k && /½/.test(movs[0].k) && !/1 2/.test(movs[0].k));
   ok('mov nace sellado con _ts', movs[0] && typeof movs[0]._ts === 'number' && movs[0]._ts > 0);
 }
 
