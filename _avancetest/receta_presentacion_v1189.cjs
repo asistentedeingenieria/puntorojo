@@ -31,6 +31,12 @@ if (srcPf) {
   const f = new Function(srcPf + '\nreturn _presFactor;')();
   ok('CIENTO DE → factor 100', f('CIENTO DE TORNILLO DE 1" PUNTA FINA').factor === 100);
   ok('material suelto → null', f('CLAVO CON ROLDANA 1"') === null);
+  /* v1190 (Antonio): "cada tira trae 10" — 100 fulminantes pedidos a mano = 10 tiras en la OC.
+     Mismo 10 que la receta usa desde v978. La receta NO se re-convierte (puerta v1189). */
+  const _fu = f('FULMINANTE TIRA CAL. 27 AMARILLO');
+  ok('FULMINANTE TIRA → factor 10 (v1190)', _fu && _fu.factor === 10 && /TIRA/.test(_fu.etiqueta));
+  ok('100 fulminantes manuales → 10 tiras', Math.ceil(100 / _fu.factor) === 10);
+  ok('otro material con TIRA en el nombre pero sin FULMINANTE no se toca', f('TIRA DE MADERA 8\'') === null);
 }
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
