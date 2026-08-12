@@ -44,7 +44,8 @@ ok('fuerza la subida', /forceUploadNow/.test(eleg));
 
 console.log('\n— elegir el producto del catálogo al asignar proveedor a un eventual —');
 const ofr = ex(code, 'window._ocOfrecerProductoCatalogo = function(');
-ok('SOLO para eventuales (los del catálogo ya traen su nombre)', /if \(!it \|\| !it\.eventual\) return;/.test(ofr));
+/* v1188: la firma ganó eraEventual (capturada ANTES de asignar — la asignación quita la marca) */
+ok('SOLO para eventuales (los del catálogo ya traen su nombre)', /if \(!it \|\| !\(eraEventual \|\| it\.eventual\)\) return;/.test(ofr));
 ok('nunca para bodega/herramienta/pre-pago/trasiego', /_bodega/.test(ofr) && /_herr/.test(ofr) && /_\(dpp\|tras\)/.test(ofr));
 ok('lista los productos REALES del proveedor con su precio', /prv\.productos/.test(ofr) && /fmtQ\(pr\.precio\)/.test(ofr));
 ok('siempre se puede DEJAR el nombre tipeado (no obliga)', /DEJAR EL NOMBRE TIPEADO/.test(ofr));
@@ -54,7 +55,8 @@ console.log('\n— el enganche en el picker genérico —');
 const pkr = ex(code, 'function _abrirPickerProveedor(');
 ok('la opción de herramienta está en la lista', /_herrOpcionPicker\(\)/.test(pkr));
 ok('elegir _herr abre el selector por nombre', /id === '_herr'/.test(pkr) && /_ocElegirHerramienta\(btn, idx\)/.test(pkr));
-ok('tras asignar proveedor se ofrece el producto del catálogo', /_ocOfrecerProductoCatalogo\(btn, idx, id\)/.test(pkr));
+/* v1188: el ofrecimiento corre tras el repintado, con la marca capturada y el botón fresco */
+ok('tras asignar proveedor se ofrece el producto del catálogo', /_ocOfrecerProductoCatalogo\(_ocBtnProvDe\(idx\) \|\| btn, idx, id, true\)/.test(pkr));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1187</span>
+    <span style="opacity:.5;font-size:9px">v1188</span>
   </footer>
 
 </div>
@@ -23118,6 +23118,39 @@ window._herrDespacharDePedido = async function(pdId){
   });
   pd2.herrDespacho = { ts: _t, por: String(_u.displayName || _u.username || '').toUpperCase(), fecha: (typeof _dateALatam === 'function') ? _dateALatam(new Date()) : '' };
   pd2._ts = _t;   /* el contenedor viaja por union-merge (v972) */
+  /* ══ v1188 (Antonio): "cuando se despacha herramienta necesito que quede una ORDEN DE
+     DESPACHO para que quede registro". Se emite un documento serie DESP en el contenedor del
+     pedido: sin dinero (precio 0, el impreso esDespacho ya omite montos, v921), AUTORIZADA de
+     inmediato (el despacho de bodega ES la autorización — no hay plata que firmar), numerada
+     en la serie DESP del contenedor y SIN pedidoId a propósito: si contara como OC del pedido
+     cambiaría sus contadores y su estado (v1005/v1155). Imprimible y compartible como
+     cualquier orden (COMPARTIR OC, v1184). */
+  try {
+    const _contD = pd2.esVarios ? _variosMatStore() : (pd2.esBodega ? _bodegaMatStore() : (((state.projects || []).find(x => x && x.id === pd2.proyectoId)) || activeProj() || {}).materiales);
+    if (_contD && Array.isArray(_contD.ordenes)) {
+      const _folioD = _primerNumeroLibre(_contD.ordenes.filter(o => _ocSerieDe(o) === 'DESP').map(o => Number(o.folio) || 0));
+      const _n = new Date();
+      _contD.ordenes.push({
+        id: 'hd-' + _t.toString(36) + Math.random().toString(36).slice(2, 7),
+        numero: (pd2.numero || 'PEDIDO') + ' - DESP ' + _folioD,
+        folio: _folioD,
+        esDespacho: true, esHerramientas: true,
+        proveedorId: '_bodega', proveedorNombre: 'BODEGA CENTRAL · HERRAMIENTAS',
+        proyecto: String(pd2.proyectoPedido || '').toUpperCase(), area: '',
+        pedidoNumero: pd2.numero || '',
+        items: (pd2.herramientas || []).map(h => ({ name: _herrKey(h.name), qty: Number(h.qty) || 0, precio: 0 })),
+        total: 0, ivaIncluido: false,
+        status: 'AUTORIZADA',
+        autorizadoPor: String(_u.displayName || _u.username || '').toUpperCase(), autorizadoTs: _t,
+        generadoPor: String(_u.displayName || _u.username || '').toUpperCase(), generadoPorUsername: String(_u.username || ''),
+        fecha: `${String(_n.getDate()).padStart(2,'0')}/${String(_n.getMonth()+1).padStart(2,'0')}/${_n.getFullYear()}`,
+        fechaEntrega: `${String(_n.getDate()).padStart(2,'0')}/${String(_n.getMonth()+1).padStart(2,'0')}/${_n.getFullYear()}`,
+        observaciones: 'DESPACHO DE HERRAMIENTAS · CON DEVOLUCIÓN · SIN COSTO PARA LA OBRA',
+        ts: _t, _ts: _t
+      });
+      _contD._ts = _t;
+    }
+  } catch(e){ console.warn('[v1188] orden de despacho de herramienta:', e); }
   /* un pedido de SOLO herramientas jamás genera OC y sin OC no hay RECIBIDO (hallazgo del
      mapeo) — al despachar queda cumplido de verdad, así que cierra acá mismo */
   const _soloHerr = !Object.keys(pd2.items || {}).length && !(pd2.extras || []).length && !(pd2.metalMedida || []).length;
@@ -25067,9 +25100,15 @@ window._ocElegirHerramienta = function(btn, idx){
     }
   });
 };
-window._ocOfrecerProductoCatalogo = function(btn, idx, provId){
+/* v1188: el botón de anclaje se re-crea al repintar la fila — buscar el fresco por su onclick */
+function _ocBtnProvDe(idx){
+  try { return document.querySelector('#ocItemsList [onclick="_abrirPickerProveedor(this, ' + idx + ')"]'); } catch(e){ return null; }
+}
+window._ocOfrecerProductoCatalogo = function(btn, idx, provId, eraEventual){
   var it = ocWorkingItems[idx];
-  if (!it || !it.eventual) return;                                     // solo eventuales: los del catálogo ya traen su nombre
+  /* v1188: updateOcItemProveedor ya corrió y pudo QUITARLE la marca eventual al renglón — por
+     eso el selector nunca se abría. El llamador captura la marca ANTES y la pasa acá. */
+  if (!it || !(eraEventual || it.eventual)) return;                    // solo eventuales: los del catálogo ya traen su nombre
   if (!provId || provId === '_bodega' || provId === '_herr' || /^_(dpp|tras):/.test(String(provId))) return;
   var prv = (_getProveedores() || []).find(function(x){ return x && x.id === provId; });
   var prods = (prv && prv.productos || []).filter(function(pr){ return pr && pr.nombre && Number(pr.precio) > 0; });
@@ -25122,8 +25161,9 @@ function _abrirPickerProveedor(btn, idx){
     selectedId: it.proveedorId || '',
     onPick: function(id){
       if (id === '_herr') return window._ocElegirHerramienta(btn, idx);   // v1187: elegir la herramienta por nombre
+      var _eraEv = !!(ocWorkingItems[idx] && ocWorkingItems[idx].eventual); // v1188: capturar ANTES — la asignación puede quitar la marca
       updateOcItemProveedor(idx, id);
-      try { window._ocOfrecerProductoCatalogo(btn, idx, id); } catch(e){} // v1187: eventual + proveedor con catálogo ⇒ elegir el producto real
+      if (_eraEv) setTimeout(function(){ try { window._ocOfrecerProductoCatalogo(_ocBtnProvDe(idx) || btn, idx, id, true); } catch(e){} }, 60); // v1188: tras el repintado, con el botón fresco
     }
   });
 }
