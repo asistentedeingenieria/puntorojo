@@ -45,6 +45,14 @@ ok('con refExterna el No. grande del impreso es la REF', /oc\.esPrepago && oc\.r
    dejaba flotando arriba. align-self:end lo ASIENTA sobre la línea roja; en las OC normales
    el bloque ya define la altura de la fila, así que no cambian. */
 ok('el bloque del No. se asienta sobre la línea (align-self:end)', /\.oc-num-col\{[^}]*align-self:end/.test(html));
+/* v1196 (Antonio: "lo necesito más a la izquierda"): el subtítulo nowrap del despacho
+   (v1151) inflaba la columna central del grid — min-content de un nowrap > 1fr hace
+   crecer el track — y la rejilla se SALÍA de la hoja: el No. terminaba ~30px a la
+   derecha del final de la línea roja. minmax(0,1fr) impide el desborde (el borde
+   derecho del No. = el final de la línea, por especificación de grid) y el subtítulo
+   se apretó para caber en su columna sin pisar a los vecinos. */
+ok('la columna central no puede inflar la rejilla (minmax(0,1fr))', /\.oc-hd\{[^}]*grid-template-columns:180px minmax\(0,1fr\) 165px/.test(html));
+ok('el subtítulo del despacho quedó apretado para caber', /font-size:9px;color:#555;letter-spacing:\.6px[^"]*white-space:nowrap">LIBERACIÓN DE MATERIAL YA PAGADO/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
