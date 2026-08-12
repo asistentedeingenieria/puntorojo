@@ -49,7 +49,9 @@ ok('bloque No.: sigla del proyecto + " - APP"', /\$\{_obraSigla\(_ocNumeroPartes
    "OFICINA CENTRAL — ABASTECIMIENTO"). La línea de Área se quitó: no hay torre ni apto. */
 ok('fila Proyecto: usa la etiqueta (sigla o BODEGA CENTRAL)', /<dt>Proyecto:<\/dt><dd>\$\{_ocProyectoLabel\(oc\)\}<\/dd>/.test(sheet));
 ok('la sigla sigue viva para los proyectos', /_projSiglas\(p\)/.test(html));
-ok('ENTREGAR A pasa por el formato de teléfono', /\$\{_ocTelGuiones\(oc\.entregarA\)\}/.test(html.slice(iSheet, iSheet + 8000)));
+/* v1196: ventana 8000→14000 — los comentarios del fix del encabezado empujaron el uso
+   más allá del corte (la trampa de siempre: ventana fija, no el comportamiento) */
+ok('ENTREGAR A pasa por el formato de teléfono', /\$\{_ocTelGuiones\(oc\.entregarA\)\}/.test(html.slice(iSheet, iSheet + 14000)));
 
 // ── 4. captura y lista ──
 const apl = extractFn('applyOcDireccion');

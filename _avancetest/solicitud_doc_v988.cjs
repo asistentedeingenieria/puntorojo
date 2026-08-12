@@ -36,7 +36,10 @@ ok('tope mínimo de letra (no desaparece)', /minPx|>= *5/.test(z));
    tiene código. La propiedad sigue siendo la misma: el número de la OC manda, grande y rojo. */
 ok('el número de la OC manda (grande y rojo)', /font-size:16px;font-weight:800;color:#C8141C[^>]*>\$\{oc\.esPrepago && oc\.refExterna \?[\s\S]{0,400}?_ocNumeroPartes\(oc\)\.oc/.test(html));
 ok('el pedido origen y la sigla van en chico debajo', /font-size:10\.5px[^>]*>\$\{_ocNumeroPartes\(oc\)\.pedido \? 'PEDIDO '/.test(html) && /font-size:9\.5px[^>]*>\$\{_obraSigla\(_ocNumeroPartes\(oc\)\.proyecto\)\} - APP/.test(html));
-ok('la columna del número no se desborda (nowrap + más ancho)', /\.oc-num-col\{[^}]*white-space:nowrap/.test(html) && /\.oc-hd\{display:grid;grid-template-columns:180px 1fr 165px/.test(html));
+/* v1196: el track central pasó a minmax(0,1fr) — MISMO propósito de esta aserción
+   (que nada se desborde) pero garantizado por especificación: un nowrap largo ya no
+   puede inflar la rejilla y empujar el No. más allá de la línea. */
+ok('la columna del número no se desborda (nowrap + rejilla que no crece)', /\.oc-num-col\{[^}]*white-space:nowrap/.test(html) && /\.oc-hd\{display:grid;grid-template-columns:180px minmax\(0,1fr\) 165px/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
