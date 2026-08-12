@@ -47,6 +47,18 @@ ok('re-lee p tras el await del prompt (regla v769/v770)', /activeProj\(\)[\s\S]*
    con 6 y 14 lbs, cantidades que el proveedor no despacha, y no se podía configurar.
    Sigue rechazando basura y el 1 (que no es un múltiplo, es "de uno en uno"). */
 ok('múltiplo mínimo 2 (permite el de 5; sigue rechazando basura y el 1)', /mult >= 2/.test(zTg));
+/* v1191: el LECTOR también acepta desde 2 — v1177 bajó solo el toggle y el múltiplo 5 se
+   guardaba bien pero _recetaMilesMult lo descartaba en silencio (>= 10) y caía a 1000.
+   Las dos puntas aceptan lo mismo, y queda probado con el valor real de Antonio. */
+const zMu = ex('function _recetaMilesMult(');
+ok('el lector acepta el múltiplo 5 (las dos puntas iguales)', /Number\(v\.mult\) >= 2/.test(zMu) && !/Number\(v\.mult\) >= 10/.test(zMu));
+try {
+  const fMu = new Function(zMu + '\nreturn _recetaMilesMult;')();
+  const pP = { materiales: { recetaMiles: { 'ALAMBRE # 18': { on: true, ts: 1, mult: 5 } } } };
+  ok('mult 5 guardado → 5 leído (el caso del alambre)', fMu(pP, 'Alambre # 18') === 5);
+  ok('sin entrada → default 1000', fMu(pP, 'OTRO MATERIAL') === 1000);
+  ok('basura en mult → default 1000 (no rompe)', fMu({ materiales: { recetaMiles: { 'X': { on: true, mult: 'z' } } } }, 'X') === 1000);
+} catch(e){ ok('el lector evalúa aislado', false); }
 
 // ── 4. TODOS los sitios de aplicación usan el múltiplo del material ──
 const iR = html.indexOf('// v949: el admin APLICA cambios directo');
