@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1182</span>
+    <span style="opacity:.5;font-size:9px">v1183</span>
   </footer>
 
 </div>
@@ -9283,7 +9283,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 936; // v1166: gastos historicos importados en doc propio (gastosimp_) + vigilancia de peso
+const APP_SYNC_VERSION = 937; // v1166: gastos historicos importados en doc propio (gastosimp_) + vigilancia de peso
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10627,6 +10627,10 @@ const CloudSync = {
           /* v1180: el registro de códigos de obra (VARIOS) se une con gana-el-MENOR por nombre
              y resolución determinista de colisiones — idempotente, jamás enciende needsResync */
           merged.obraCodigos = _mergeObraCodigos((state && state.obraCodigos) || {}, merged.obraCodigos || {});
+          /* v1183: el libro de saldos a favor es PLATA — unión por id, jamás se pierde un
+             movimiento (append-only: registro/aplicación/reversa; sin tombstones a propósito) */
+          const _msp = _mergeById((state && state.saldosProv) || [], merged.saldosProv || [], {});
+          merged.saldosProv = _msp.list; if (_msp.changed) needsResync = true;
           if (_mergeRecepciones(_vmL.pedidos || [], _vmR.pedidos)) needsResync = true;
           const _voTomb = Object.assign({}, _vmL.ordenesEliminadas || {}, _vmR.ordenesEliminadas || {});
           _vmR.ordenesEliminadas = _voTomb;
@@ -26776,6 +26780,105 @@ var OBRA_CODIGOS_FIJOS = {
 };
 /* v1182 (Antonio): siglas FIJAS que mandan sobre _projSiglas — "ESSENZA FASE 2 = EF2,
    TORELO = TOR. Las demás están bien" (la automática daría "T" para TORELO). */
+/* ══ v1183 — SALDOS A FAVOR DE PROVEEDORES (Antonio, 11-ago) ══
+   "Se le paga de más a los proveedores y queda un saldo a favor." Registro por proveedor,
+   aplicación en la OC bajo el GRAN TOTAL con TOPE obligatorio, y renglones SALDO A FAVOR +
+   GRAN TOTAL APLICADO. Decisiones de Antonio: el GASTO de la obra cuenta el total COMPLETO
+   (el saldo es forma de pago ⇒ ningún cálculo de gasto se toca) y al ELIMINAR la OC el saldo
+   VUELVE SOLO al registro.
+   LIBRO de movimientos (state.saldosProv), no balance mutable — patrón bodegaMovs v959:
+   REGISTRO (+) · APLICACION (−, con su ocId) · REVERSA (+). Nunca se borra un movimiento de
+   plata; el saldo se DERIVA sumando. Union-merge por id (v972) + forceUploadNow (regla). */
+function _saldoProvDe(movs, provId){
+  var s = 0;
+  (Array.isArray(movs) ? movs : []).forEach(function(m){
+    if (!m || m.provId !== provId) return;
+    var v = Number(m.monto); if (isFinite(v)) s += v;
+  });
+  return Math.round(s * 100) / 100;
+}
+function _saldoAplicarValida(disponible, monto, granTotal){
+  var m = Number(monto);
+  if (!isFinite(m) || !(m > 0)) return { ok: false, motivo: 'EL MONTO TIENE QUE SER MAYOR QUE CERO' };
+  if (m > Number(disponible)) return { ok: false, motivo: 'NO SE PUEDE PASAR DEL SALDO DEL PROVEEDOR (Q ' + disponible + ')' };
+  if (m > Number(granTotal)) return { ok: false, motivo: 'NO SE PUEDE APLICAR MÁS QUE EL TOTAL DE LA ORDEN (Q ' + granTotal + ')' };
+  return { ok: true, motivo: '' };
+}
+function _saldoProvMov(tipo, provId, provNombre, monto, extra){
+  var u = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  return Object.assign({ id: 'sp-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+    tipo: tipo, provId: provId, provNombre: provNombre || '', monto: Number(monto) || 0,
+    ts: Date.now(), _ts: Date.now(), by: String(u.username || '') }, extra || {});
+}
+function _ocBuscarGlobal(id){
+  var conts = [];
+  ((typeof state !== 'undefined' && state && state.projects) || []).forEach(function(p){ if (p && p.materiales) conts.push(p.materiales); });
+  if (state && state.bodegaMat) conts.push(state.bodegaMat);
+  if (state && state.variosMat) conts.push(state.variosMat);
+  for (var i = 0; i < conts.length; i++) {
+    var oc = (conts[i].ordenes || []).find(function(o){ return o && o.id === id; });
+    if (oc) return oc;
+  }
+  return null;
+}
+window._saldoProvRegistrar = async function(provId, provNombre){
+  if (!(can('compras.autorizar') || can('users.manage'))) return showToast('SIN PERMISO', 'red');
+  var v = await window.prPrompt({ title: 'REGISTRAR SALDO A FAVOR', body: 'Proveedor: ' + (provNombre || provId) + '\n¿De cuánto es el saldo a favor (lo que se pagó de más)?', placeholder: 'Q', required: true });
+  if (v === null) return;
+  var m = Number(String(v).replace(/[^\d.]/g, ''));
+  if (!(m > 0)) return showToast('MONTO INVÁLIDO', 'red');
+  if (!Array.isArray(state.saldosProv)) state.saldosProv = [];
+  state.saldosProv.push(_saldoProvMov('REGISTRO', provId, provNombre, m, { motivo: 'SALDO A FAVOR REGISTRADO' }));
+  try { logActivity('create', 'SALDO A FAVOR REGISTRADO', (provNombre || provId) + ' · Q ' + fmtQ(m)); } catch(e){}
+  saveState();
+  try { await CloudSync.forceUploadNow(); } catch(e){}
+  showToast('SALDO REGISTRADO — ' + (provNombre || '') + ' TIENE Q ' + fmtQ(_saldoProvDe(state.saldosProv, provId)) + ' A FAVOR', 'green');
+};
+window._ocAplicarSaldo = async function(ocId){
+  if (!(can('compras.autorizar') || can('users.manage'))) return showToast('SIN PERMISO', 'red');
+  var oc = _ocBuscarGlobal(ocId);
+  if (!oc) return showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red');
+  if ((Number(oc.saldoAplicado) || 0) > 0) return showToast('ESTA ORDEN YA TIENE SALDO APLICADO — QUITALO PRIMERO', 'red');
+  var disp = _saldoProvDe(state.saldosProv, oc.proveedorId);
+  if (!(disp > 0)) {
+    var okReg = await window.prConfirm({ title: 'SIN SALDO A FAVOR', bodyHTML: '<div style="font-size:12px;line-height:1.7"><b>' + (oc.proveedorNombre || '') + '</b> no tiene saldo a favor registrado.<br>¿Querés registrarle uno ahora?</div>', okText: 'REGISTRAR SALDO', cancelText: 'CANCELAR' });
+    if (okReg) await window._saldoProvRegistrar(oc.proveedorId, oc.proveedorNombre);
+    return;
+  }
+  var v = await window.prPrompt({ title: 'APLICAR SALDO A FAVOR', body: (oc.proveedorNombre || '') + ' tiene Q ' + fmtQ(disp) + ' a favor.\nEsta orden es de Q ' + fmtQ(oc.total) + '.\n¿Cuánto se aplica?', placeholder: 'Q', required: true });
+  if (v === null) return;
+  var m = Number(String(v).replace(/[^\d.]/g, ''));
+  var val = _saldoAplicarValida(disp, m, Number(oc.total) || 0);
+  if (!val.ok) return showToast(val.motivo, 'red');
+  oc.saldoAplicado = m;
+  oc._ts = Date.now();   // sella para el union-merge (regla v972)
+  if (!Array.isArray(state.saldosProv)) state.saldosProv = [];
+  state.saldosProv.push(_saldoProvMov('APLICACION', oc.proveedorId, oc.proveedorNombre, -m, { ocId: oc.id, motivo: 'APLICADO A ' + (oc.numero || 'OC') }));
+  try { logActivity('update', 'SALDO A FAVOR APLICADO', _numLimpio(oc.numero) + ' · Q ' + fmtQ(m) + ' de ' + (oc.proveedorNombre || '')); } catch(e){}
+  saveState();
+  try { await CloudSync.forceUploadNow(); } catch(e){}
+  showToast('APLICADO Q ' + fmtQ(m) + ' — GRAN TOTAL APLICADO: Q ' + fmtQ(Math.max(0, (Number(oc.total) || 0) - m)), 'green');
+  try { if (typeof renderOrdenesCompra === 'function') renderOrdenesCompra(); } catch(e){}
+};
+window._ocQuitarSaldo = async function(ocId){
+  if (!(can('compras.autorizar') || can('users.manage'))) return showToast('SIN PERMISO', 'red');
+  var oc = _ocBuscarGlobal(ocId);
+  if (!oc) return showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red');
+  var m = Number(oc.saldoAplicado) || 0;
+  if (!(m > 0)) return showToast('ESTA ORDEN NO TIENE SALDO APLICADO', 'red');
+  var okc = await window.prConfirm({ title: 'QUITAR SALDO APLICADO', bodyHTML: '<div style="font-size:12px;line-height:1.7">Se quitan <b>Q ' + fmtQ(m) + '</b> de esta orden y <b>vuelven al saldo a favor</b> de ' + (oc.proveedorNombre || '') + '.</div>', okText: 'QUITAR', cancelText: 'CANCELAR' });
+  if (!okc) return;
+  oc.saldoAplicado = 0;
+  oc._ts = Date.now();
+  if (!Array.isArray(state.saldosProv)) state.saldosProv = [];
+  state.saldosProv.push(_saldoProvMov('REVERSA', oc.proveedorId, oc.proveedorNombre, m, { ocId: oc.id, motivo: 'REVERSA DE ' + (oc.numero || 'OC') }));
+  try { logActivity('update', 'SALDO A FAVOR DEVUELTO', _numLimpio(oc.numero) + ' · Q ' + fmtQ(m)); } catch(e){}
+  saveState();
+  try { await CloudSync.forceUploadNow(); } catch(e){}
+  showToast('EL SALDO VOLVIÓ AL PROVEEDOR — DISPONIBLE: Q ' + fmtQ(_saldoProvDe(state.saldosProv, oc.proveedorId)), 'green');
+  try { if (typeof renderOrdenesCompra === 'function') renderOrdenesCompra(); } catch(e){}
+};
+try { window._saldoProvDe = _saldoProvDe; } catch(e){}
 var OBRA_SIGLAS_FIJAS = { 'ESSENZA F2': 'EF2', 'TORELO': 'TOR' };
 function _obraSigla(nombre){
   var k = _obraCodigoNorm(nombre);
@@ -27239,6 +27342,13 @@ ${showDraft ? '<div class="no-print" style="background:var(--red-soft);padding:1
         <td style="border:1px solid #888;text-align:right;padding:8px 14px" colspan="3">${oc.ivaIncluido ? 'GRAN TOTAL (CON IVA)' : 'TOTAL'}</td>
         <td style="border:1px solid #888;text-align:right;padding:8px 14px;white-space:nowrap">Q ${fmtQ(oc.total)}</td>
       </tr>`}
+      ${(Number(oc.saldoAplicado) || 0) > 0 ? `<tr style="font-weight:700">
+        <td style="border:1px solid #888;text-align:right;padding:8px 14px;color:#166534" colspan="3">SALDO A FAVOR</td>
+        <td style="border:1px solid #888;text-align:right;padding:8px 14px;white-space:nowrap;color:#166534">− Q ${fmtQ(oc.saldoAplicado)}</td>
+      </tr><tr style="font-weight:800;background:#F0FDF4">
+        <td style="border:1px solid #888;text-align:right;padding:8px 14px" colspan="3">GRAN TOTAL APLICADO</td>
+        <td style="border:1px solid #888;text-align:right;padding:8px 14px;white-space:nowrap">Q ${fmtQ(Math.max(0, (Number(oc.total) || 0) - (Number(oc.saldoAplicado) || 0)))}</td>
+      </tr>` : ''}
     </tbody>
   </table>
 
@@ -27487,9 +27597,16 @@ function renderOrdenesList(){
        fabricar. La factura va en la ORDEN DE COMPRA que nace de ella. */
     /* v1068: el DPP tampoco se factura — la factura del pre-pago vive en la OC madre (mismo
        argumento que la OP: el documento que respalda el gasto real es otro) */
-    const facturaBtn = (isAuth && canFactura && !oc.facturaUrl && _ocSerieDe(oc) !== 'OP' && _ocSerieDe(oc) !== 'DPP')
-      ? `<button class="btn ghost sm" onclick="_ocAbrirSubirFactura('${oc.id}')" title="Subir la factura que generó el proveedor">SUBIR FACTURA</button>`
+    /* v1183: SALDO A FAVOR — solo OC de compra real, autorizada, con proveedor de verdad.
+       Con saldo aplicado el botón lo muestra y permite quitarlo (vuelve al registro). */
+    const saldoBtn = (isAuth && (canAuthorize || can('users.manage')) && _ocSerieDe(oc) === 'OC' && oc.proveedorId && oc.proveedorId !== '_bodega')
+      ? ((Number(oc.saldoAplicado) || 0) > 0
+        ? `<button class="btn ghost sm" onclick="_ocQuitarSaldo('${oc.id}')" style="color:#166534;border-color:#86EFAC" title="Aplicados Q ${fmtQ(oc.saldoAplicado)} — tocá para quitarlos (vuelven al proveedor)">SALDO − Q ${fmtQ(oc.saldoAplicado)}</button>`
+        : `<button class="btn ghost sm" onclick="_ocAplicarSaldo('${oc.id}')" title="Aplicar saldo a favor de este proveedor a esta orden">SALDO A FAVOR</button>`)
       : '';
+    const facturaBtn = ((isAuth && canFactura && !oc.facturaUrl && _ocSerieDe(oc) !== 'OP' && _ocSerieDe(oc) !== 'DPP')
+      ? `<button class="btn ghost sm" onclick="_ocAbrirSubirFactura('${oc.id}')" title="Subir la factura que generó el proveedor">SUBIR FACTURA</button>`
+      : '') + saldoBtn; /* v1183: viaja pegado al de factura para no tocar la plantilla de la tarjeta */
 
     // v959: OC de abastecimiento AUTORIZADA y sin ENTRADA registrada → MARCAR RECIBIDO
     // (suma existencias a la bodega central con la cantidad que llegó de verdad).
@@ -28040,7 +28157,17 @@ function _doDeleteOrden(id){
         if (delta) _bodegaMovsList().push(_bodegaMov('AJUSTE', mv.name, delta, { ocId: oc.id, motivo: 'REVERSA POR ELIMINACIÓN DE ' + (oc.numero || 'OC') }));
       });
     }
-  } catch (e) {}
+  } catch(e){ console.warn('[v959] reversa de bodega:', e); }
+  /* v1183 (decisión de Antonio): si la OC tenía saldo a favor aplicado, VUELVE SOLO al
+     registro del proveedor — nada de plata olvidada. Guard de idempotencia por ocId. */
+  try {
+    var _mSf = Number(oc.saldoAplicado) || 0;
+    if (_mSf > 0 && !((state.saldosProv || []).some(function(x){ return x && x.ocId === oc.id && x.tipo === 'REVERSA'; }))) {
+      if (!Array.isArray(state.saldosProv)) state.saldosProv = [];
+      state.saldosProv.push(_saldoProvMov('REVERSA', oc.proveedorId, oc.proveedorNombre, _mSf, { ocId: oc.id, motivo: 'REVERSA POR ELIMINACIÓN DE ' + (oc.numero || 'OC') }));
+      try { logActivity('update', 'SALDO A FAVOR DEVUELTO', _numLimpio(oc.numero) + ' · Q ' + fmtQ(_mSf) + ' → ' + (oc.proveedorNombre || '')); } catch(e2){}
+    }
+  } catch(e){ console.warn('[v1183] reversa de saldo a favor:', e); }
 
   if (_esDeVarios) {
     /* v1002: sin esta rama la OC de PROYECTOS VARIOS caía al else, se filtraba sobre el
