@@ -16,7 +16,7 @@ ok('el span APP junto al logo se eliminó (v948)', !/<span style="[^"]*">APP<\/s
 const logoLine = (src.match(/<div[^>]*><img src="\$\{_LOGO_PR\}"[^>]*>[^\n]*/) || [''])[0];
 ok('el div del logo ya no incluye "APP"', !!logoLine && !/>APP</.test(logoLine));
 // "APP" vive ahora en el bloque del No., como "<sigla> - APP"
-ok('APP se movió al bloque del No. como "- APP"', /_projSiglas\(_ocNumeroPartes\(oc\)\.proyecto\)\} - APP/.test(src));
+ok('APP se movió al bloque del No. como "- APP"', /_obraSigla\(_ocNumeroPartes\(oc\)\.proyecto\)\} - APP/.test(src));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

@@ -70,7 +70,7 @@ if (srcS) {
 }
 ok('los botones cortos usan la etiqueta corta (ya no .pop() del formateado)',
   (code.match(/_serieFolioCorto\(o\.numero\)/g) || []).length >= 2);
-ok('los PEDIDOS se muestran con la SIGLA de la obra (VLA – 19)', /_projSiglas\(/.test(ex(code, 'function _numLimpio(')));
+ok('los PEDIDOS se muestran con la SIGLA de la obra (VLA – 19)', /_obraSigla\(/.test(ex(code, 'function _numLimpio(')));
 ok('el No. GRANDE del impreso lleva el formato nuevo', /_docNumNuevo\(oc\.numero\)/.test(code));
 ok('un prefijo desconocido queda igual (no se inventa código)', F.fmt('CASA X – 1 - OC 2') === 'CASA X – 1 - OC 2');
 ok('basura y vacío pasan sin romper', F.fmt('') === '' && F.fmt(null) === '' && F.fmt('cualquier cosa') === 'cualquier cosa');

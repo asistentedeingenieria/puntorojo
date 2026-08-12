@@ -43,7 +43,7 @@ const iSheet = html.indexOf('class="oc-sheet"');
 const sheet = iSheet > -1 ? html.slice(iSheet, iSheet + 4000) : '';
 const logoLine = (sheet.match(/<div[^>]*><img src="\$\{_LOGO_PR\}"[^>]*>[^\n]*/) || [''])[0];
 ok('el texto APP ya no está al lado del logo', !!logoLine && !/>APP</.test(logoLine));
-ok('bloque No.: sigla del proyecto + " - APP"', /\$\{_projSiglas\(_ocNumeroPartes\(oc\)\.proyecto\)\} - APP/.test(sheet));
+ok('bloque No.: sigla del proyecto + " - APP"', /\$\{_obraSigla\(_ocNumeroPartes\(oc\)\.proyecto\)\} - APP/.test(sheet));
 /* v1001: la fila pasa por _ocProyectoLabel — sigue dando la SIGLA para los proyectos, pero
    una orden de abastecimiento imprime BODEGA CENTRAL en vez de "OC—A" (las siglas de
    "OFICINA CENTRAL — ABASTECIMIENTO"). La línea de Área se quitó: no hay torre ni apto. */
@@ -55,7 +55,7 @@ ok('ENTREGAR A pasa por el formato de teléfono', /\$\{_ocTelGuiones\(oc\.entreg
 const apl = extractFn('applyOcDireccion');
 ok('applyOcDireccion formatea el teléfono al armar la línea', /_telFmt\(d\.telefono\)/.test(apl));
 const lst = extractFn('renderOrdenesList');
-ok('la lista de OCs muestra la sigla en el No.', /ocn-proy">\$\{_projSiglas\(_np\.proyecto\)\}/.test(lst));
+ok('la lista de OCs muestra la sigla en el No.', /ocn-proy">\$\{_obraSigla\(_np\.proyecto\)\}/.test(lst));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
