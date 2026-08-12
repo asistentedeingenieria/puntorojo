@@ -69,8 +69,11 @@ ok('en pausa se esconden las acciones del flujo (cotizar/autorizar/entregar)', (
 
 // ── 6. header de bodega más ordenado y bonito (grid de tarjetitas) ──
 const zVista = extractFrom('function _abrirPanelBodega(');
-ok('header de bodega en grid de tarjetitas (no párrafo)', /grid-template-columns:repeat\(auto-fit,minmax\(/.test(zVista) && /CÓMO LEER LA TABLA/.test(zVista));
-ok('conserva las 3 definiciones (cargar/abastecer/ajuste-correcciones)', /ya hay físicamente/.test(zVista) && /compra stock al proveedor/.test(zVista) && /correcciones puntuales/.test(zVista));
+/* v1192 (Antonio, 12-ago): las tarjetitas explicativas SE QUITARON de la vista de bodega —
+   el equipo ya sabe usarla y comían pantalla. Lo que v976 protegía (que el párrafo denso
+   no volviera) sigue en pie: ni párrafo ni tarjetas. */
+ok('las tarjetitas explicativas ya NO están (v1192)', !/CÓMO LEER LA TABLA/.test(zVista) && !/compra stock al proveedor/.test(zVista));
+ok('el párrafo denso de antes tampoco volvió', !/Para el conteo inicial o correcciones poné el AJUSTE/.test(zVista));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

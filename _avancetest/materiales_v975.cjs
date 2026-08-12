@@ -47,8 +47,9 @@ ok('setMatTab salta a la primera visible', /_v975MatTabsOcultas/.test(extractFro
 
 // ── 5. texto de bodega reformulado (pedido: el ajuste ya no es el conteo inicial) ──
 const zVista = extractFrom('function _abrirPanelBodega(');
-// v976: el header pasó a tarjetitas (pedido de Antonio: más ordenado y bonito) — las 3 definiciones siguen
-ok('el header de bodega explica CARGAR/ABASTECER/AJUSTE-correcciones', /ya hay físicamente/.test(zVista) && /correcciones puntuales/.test(zVista) && !/Para el conteo inicial o correcciones poné el AJUSTE/.test(zVista));
+// v976: el header pasó a tarjetitas; v1192 (Antonio): las tarjetitas SE QUITARON del todo.
+// Lo que v975 protege es que el párrafo denso original no vuelva — y no volvió.
+ok('ni el párrafo denso ni las tarjetitas en la vista de bodega (v1192)', !/Para el conteo inicial o correcciones poné el AJUSTE/.test(zVista) && !/correcciones puntuales/.test(zVista));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

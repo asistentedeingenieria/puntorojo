@@ -68,7 +68,10 @@ console.log('\n— 4. la tarjeta de la OP, como la pidió Antonio —');
    no flotando junto al total; el botón queda en la columna de acciones, arriba de la ✕ */
 ok('el estado de la OP vive junto al badge', /\$\{statusBadge\}\$\{autorizInfo\}\$\{_opEstado\}/.test(zBtn) || /_opEstado[\s\S]{0,200}?statusBadge|statusBadge\}[^`]{0,80}\$\{_opEstado\}/.test(zBtn));
 ok('el botón quedó separado del rótulo', /_opBtn/.test(zBtn));
-ok('en la columna: botón y abajo la ✕', /\$\{_opBtn\}\s*\$\{canDeleteOC/.test(zBtn));
+/* v1192: los botones ya no van sueltos en la columna — viven dentro del menú ⋮
+   (pedido de Antonio 12-ago). Lo que v1039 protege sigue: el botón de la OP (_opBtn)
+   y el eliminar existen como ACCIONES de la tarjeta, ahora dentro de _accionesMenu. */
+ok('en el menú ⋮: el botón de la OP y el eliminar siguen como acciones', /_accionesMenu = \[[^\]]*_opBtn/.test(zBtn) && /_accionesMenu = \[[\s\S]{0,600}?deleteOrden/.test(zBtn));
 ok('ya no está el bloque mezclado', !/\$\{_opBloque\}/.test(zBtn));
 
 console.log('\n— 5. clientes viejos —');

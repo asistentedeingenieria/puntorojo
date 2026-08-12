@@ -22,10 +22,10 @@ ok('las 2 columnas del modal de OC pasan a 1', /\.oc-grid-2\{grid-template-colum
 ok('el resumen por proveedor también', /\.oc-multi-summary\{grid-template-columns:1fr/.test(z));
 
 // ── 2. bodega central ──
-ok('marcado: header, toggle, grid de info y tabla con scroll', /class="bodega-hd"/.test(html) && /bodega-info-toggle/.test(html) && /id="_bodegaInfoGrid"/.test(html) && /class="bodega-tabla-scroll"/.test(html));
-ok('el toggle CÓMO FUNCIONA no existe en desktop', /\.bodega-info-toggle\{display:none\}/.test(html));
-ok('en celular el toggle aparece y las tarjetas se esconden', /\.bodega-info-toggle\{display:inline-flex/.test(z) && /\.bodega-info-grid\{display:none!important\}/.test(z));
-ok('abiertas con .open vuelven a mostrarse', /\.bodega-info-grid\.open\{display:grid!important\}/.test(z));
+/* v1192 (Antonio): las tarjetas de info y su toggle CÓMO FUNCIONA se ELIMINARON del todo
+   (markup y CSS) — lo mobile que v987 protege ahora es solo header + tabla con scroll. */
+ok('marcado: header y tabla con scroll (las tarjetas ya no existen)', /class="bodega-hd"/.test(html) && /class="bodega-tabla-scroll"/.test(html) && !/id="_bodegaInfoGrid"/.test(html));
+ok('el CSS de las tarjetas se fue con ellas (sin reglas huérfanas)', !/\.bodega-info-toggle\{display/.test(html) && !/\.bodega-info-grid\{display/.test(html));
 ok('los botones del header van a lo ancho en su fila', /\.bodega-hd \.btn\{flex:1 1 100%/.test(z));
 ok('la tabla de bodega scrollea de lado', /\.bodega-tabla-scroll\{overflow-x:auto/.test(z) && /\.bodega-tabla-min\{min-width:560px\}/.test(z));
 
