@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1185</span>
+    <span style="opacity:.5;font-size:9px">v1186</span>
   </footer>
 
 </div>
@@ -9283,7 +9283,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 937; // v1166: gastos historicos importados en doc propio (gastosimp_) + vigilancia de peso
+const APP_SYNC_VERSION = 938; // v1166: gastos historicos importados en doc propio (gastosimp_) + vigilancia de peso
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9604,6 +9604,14 @@ const CloudSync = {
     if (this.pendingWrite) clearTimeout(this.pendingWrite);
     this.pendingWrite = setTimeout(() => {
       this.pendingWrite = null;
+      /* ═══ v1186 · ESPERAR, NO APILAR ═══
+         Si hay una subida AÚN SIN CONFIRMAR (la del debounce o una forzada), despachar otra
+         re-encolaba LOS MISMOS documentos sobre la pila del SDK — los hashes solo se aplican
+         al confirmar, así que el reintento veía todo "cambiado" y sumaba ~1 MB cada 45 s hasta
+         el resource-exhausted. Probado el 11-ago con CERO usuarios conectados: un solo cliente
+         se saturaba solo. Ahora se levanta la bandera y la re-subida sale UNA vez, al
+         confirmar, cuando el hash-skip la vuelve barata. */
+      if (this._subidaEnVuelo || this._forceInFlight) { this._reintentarAlConfirmar = true; return; }
       this.uploadingNow = true;
       this._armSyncingChip();
       /* ═══ v1139 · EL CANDADO SE LIBERA SOLO ═══
@@ -9625,20 +9633,46 @@ const CloudSync = {
         try { asistNeedsResync = true; } catch(e){}
         console.warn('[v1139] la subida no confirmó en ' + ((this._UPLOAD_GUARD_MS||45000)/1000) + 's — se libera el candado para poder RECIBIR; la escritura sigue encolada');
         try { this._chipError(_errLento()); } catch(e){}
-        try { this.scheduleSave(); } catch(e){}   // reintento
+        /* v1186: acá vivía `this.scheduleSave()` — el reintento inmediato que APILABA el
+           payload completo sobre las escrituras aún encoladas (probado: un solo cliente se
+           saturaba solo). Ahora solo se levanta la bandera; la re-subida sale al CONFIRMAR. */
+        this._reintentarAlConfirmar = true;
+        /* RED DE SEGURIDAD contra la promesa colgada PARA SIEMPRE (el incidente v1139
+           original): si 90 s después de este guard la MISMA subida sigue sin confirmar, se
+           abandona esa promesa y se permite UN reintento. Peor caso: un duplicado cada
+           135 s — no uno cada 45. */
+        const _p0 = this._subidaEnVuelo;
+        if (this._guardAbandono) clearTimeout(this._guardAbandono);
+        this._guardAbandono = setTimeout(() => {
+          if (this._subidaEnVuelo && this._subidaEnVuelo === _p0) {
+            console.warn('[v1186] la subida sigue sin confirmar 90 s después del guard — se ABANDONA esa promesa y se reintenta UNA vez');
+            this._subidaEnVuelo = null;
+            try { this.scheduleSave(); } catch(e){}
+          }
+        }, 90000);
       }, (this._UPLOAD_GUARD_MS || 45000));
-      this.uploadCurrent().then((_r) => {
+      const _p = this.uploadCurrent().then((_r) => {
         clearTimeout(_guard);
+        if (this._guardAbandono) { clearTimeout(this._guardAbandono); this._guardAbandono = null; }
+        if (this._subidaEnVuelo === _p) this._subidaEnVuelo = null;
+        const _re = this._reintentarAlConfirmar; this._reintentarAlConfirmar = false;
         this.uploadingNow = false;
         // v1170: sin escritura real no se pinta EN LÍNEA ni se limpian los pendientes
         if (_r === false) return;
         this._chipDone();
         try { if (typeof _fotosPendClear === 'function') _fotosPendClear(); } catch(e2){} // v899: la nube confirmó → chip POR COMPARTIR fuera
         try { if (typeof _pedPendClear === 'function') _pedPendClear(); } catch(e2){} // v1170: ídem para los pedidos POR ENVIAR
+        /* v1186: lo que se acumuló mientras la subida confirmaba sale AHORA, una sola vez —
+           con los hashes ya aplicados, el hash-skip la vuelve barata (solo lo que cambió) */
+        if (_re) { try { this.scheduleSave(); } catch(e2){} }
       }).catch((e) => {
         clearTimeout(_guard);
+        if (this._guardAbandono) { clearTimeout(this._guardAbandono); this._guardAbandono = null; }
+        if (this._subidaEnVuelo === _p) this._subidaEnVuelo = null;
+        this._reintentarAlConfirmar = false;   // el backoff de _chipError ya reintenta solo
         this.uploadingNow = false; console.error('CloudSync auto-save error:', e); this._chipError(e);
       });
+      this._subidaEnVuelo = _p;
     }, 1200);
   },
 
@@ -9665,6 +9699,12 @@ const CloudSync = {
       }
       return this._forceQueued;
     }
+    /* v1186: si la subida del debounce AÚN no confirmó, la plata se ENCADENA detrás — antes
+       despachaba en paralelo y re-encolaba los mismos documentos sobre la pila saturada */
+    if (this._subidaEnVuelo) {
+      const _pv = this._subidaEnVuelo;
+      return _pv.catch(() => {}).then(() => this.forceUploadNow());
+    }
     this.uploadingNow = true;
     this._armSyncingChip();
     /* v1139: mismo guard que en la subida con debounce — forceUploadNow también se cuelga
@@ -9687,6 +9727,8 @@ const CloudSync = {
         this._chipDone();
         try { if (typeof _fotosPendClear === 'function') _fotosPendClear(); } catch(e2){} // v899: la nube confirmó → chip POR COMPARTIR fuera
         try { if (typeof _pedPendClear === 'function') _pedPendClear(); } catch(e2){} // v1170: ídem para los pedidos POR ENVIAR
+        /* v1186: lo que el debounce dejó en bandera mientras esta subida confirmaba */
+        if (this._reintentarAlConfirmar) { this._reintentarAlConfirmar = false; try { this.scheduleSave(); } catch(e2){} }
         return true;
       } catch(e) {
         clearTimeout(_guardF);
