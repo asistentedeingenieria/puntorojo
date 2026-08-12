@@ -3381,7 +3381,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1179</span>
+    <span style="opacity:.5;font-size:9px">v1180</span>
   </footer>
 
 </div>
@@ -9283,7 +9283,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 935; // v1166: gastos historicos importados en doc propio (gastosimp_) + vigilancia de peso
+const APP_SYNC_VERSION = 936; // v1166: gastos historicos importados en doc propio (gastosimp_) + vigilancia de peso
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10624,6 +10624,9 @@ const CloudSync = {
           const _mVp = _mergeById(_vmL.pedidos || [], _vmR.pedidos || [], _vpTomb);
           _vmR.pedidos = _mVp.list; if (_mVp.changed) needsResync = true;
           _vmR.pedidoSeq = _mergePedidoSeq(_vmL.pedidoSeq || {}, _vmR.pedidoSeq || {}); // v1169: gana el mayor
+          /* v1180: el registro de códigos de obra (VARIOS) se une con gana-el-MENOR por nombre
+             y resolución determinista de colisiones — idempotente, jamás enciende needsResync */
+          merged.obraCodigos = _mergeObraCodigos((state && state.obraCodigos) || {}, merged.obraCodigos || {});
           if (_mergeRecepciones(_vmL.pedidos || [], _vmR.pedidos)) needsResync = true;
           const _voTomb = Object.assign({}, _vmL.ordenesEliminadas || {}, _vmR.ordenesEliminadas || {});
           _vmR.ordenesEliminadas = _voTomb;
@@ -21389,6 +21392,9 @@ async function submitPedido(){
      manuales viven en PROYECTOS VARIOS desde v1002). Si el pedido después se cae, el número
      queda quemado — es el precio correcto: mejor un hueco que dos pedidos con el mismo número. */
   try { _pedidoSeqSellar(proyectoTipo === 'MANUAL' ? _variosMatStore() : p.materiales, numero); } catch(e){ try { _pedidoSeqSellar(p.materiales, numero); } catch(_e){} }
+  /* v1180: una obra de VARIOS toma su código único (OC7, OC8…) la primera vez que pide, y se
+     lo queda para siempre — los fijos (OC1-OC6) no pasan por acá. */
+  if (proyectoTipo === 'MANUAL') { try { _obraCodigoAsegurar(proyectoPedido); } catch(e){} }
 
   const n = new Date();
   const fecha = `${String(n.getDate()).padStart(2,'0')}/${String(n.getMonth()+1).padStart(2,'0')}/${n.getFullYear()}`;
@@ -26749,7 +26755,91 @@ function _projSiglas(name){
    OCs emitidos ANTES de v994 quedaron GUARDADOS con ceros. Se limpian al MOSTRAR — el dato
    no se toca, así que el vínculo pedido↔OC sigue intacto y no hace falta migrar nada.
    PURA. */
+/* ══ v1180 — CÓDIGO ÚNICO DE OBRA EN TODOS LOS DOCUMENTOS (Antonio, 11-ago) ══
+   Cada obra tiene un número que va DELANTE del correlativo: "OC1 - 000017" es la orden 17 de
+   ESSENZA. Las CINCO series lo llevan (OC, DESP, OP, DPP, TRAS → "DPP1 - 000001"). Decisiones
+   de Antonio, preguntadas explícitamente: renumerar TODAS (incluidas las ya enviadas a
+   proveedores) y CON ceros a 6 dígitos (revierte v992 a sabiendas).
+   DERIVADO, NO MIGRADO: el numero guardado no se toca — el formato se calcula acá, en el
+   embudo de display. Así el histórico entero se ve con el formato nuevo y ningún vínculo
+   (facturas, pedidoNumero, DPP→madre) se reescribe. BODEGA CENTRAL no tiene código asignado
+   (Antonio no la mapeó): sus documentos conservan el formato viejo hasta que decida. */
+var OBRA_CODIGOS_FIJOS = {
+  'ESSENZA F2': 1,               // 'ESSENZA FASE 2' normaliza a esto (FASE n → Fn)
+  'VICINIA DEL CARMEN': 2,
+  'TORELO': 3,
+  'VICINIA LAS AMERICAS': 4,     // sin acento: la norma los quita
+  'LAS CUMBRES - JADE': 5,
+  'LA CUMBRES - JADE': 5,        // así figura la obra en el dashboard
+  'LOS ARCOS': 6
+};
+function _obraCodigoNorm(s){
+  return String(s == null ? '' : s).toUpperCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/FASE\s*(\d+)/g, 'F$1').replace(/\s+/g, ' ').trim();
+}
+function _obraCodigoDe(nombre, registro){
+  var k = _obraCodigoNorm(nombre);
+  if (!k) return 0;
+  if (OBRA_CODIGOS_FIJOS[k]) return OBRA_CODIGOS_FIJOS[k];
+  var reg = registro || (typeof state !== 'undefined' && state && state.obraCodigos) || {};
+  var v = parseInt(reg[k], 10);
+  return (v > 0) ? v : 0;
+}
+/* PURA: "ESSENZA F2 – 13 - OC 17" → "OC1 - 000017". Lo que no matchea (pedidos, bodega,
+   prefijos sin código) pasa INTACTO — nunca se inventa un código. */
+function _docNumNuevo(numero){
+  var s = String(numero == null ? '' : numero);
+  var m = s.match(/^(.+?)\s*[–-]\s*\d+\s*-\s*(OC|DESP|OP|DPP|TRAS)\s*0*(\d+)\s*$/i);
+  if (!m) return s;
+  var cod = _obraCodigoDe(m[1]);
+  if (!(cod > 0)) return s;
+  var folio = String(parseInt(m[3], 10) || 0);
+  while (folio.length < 6) folio = '0' + folio;
+  return m[2].toUpperCase() + cod + ' - ' + folio;
+}
+/* Merge del registro de VARIOS: gana el MENOR por nombre (el primero que asignó); una
+   colisión (dos obras nuevas offline con el mismo código) se resuelve determinista por orden
+   alfabético — idempotente y conmutativo, jamás enciende needsResync. */
+function _mergeObraCodigos(a, b){
+  var out = {};
+  [a || {}, b || {}].forEach(function(src){
+    if (!src || typeof src !== 'object') return;
+    Object.keys(src).forEach(function(k){
+      var v = parseInt(src[k], 10); if (!(v > 0)) return;
+      if (!(out[k] > 0) || v < out[k]) out[k] = v;
+    });
+  });
+  /* el resultado se reconstruye en orden alfabético: así dos dispositivos que unieron en
+     distinto orden producen EXACTAMENTE el mismo objeto (hasta el orden de claves — la huella
+     del breaker compara por JSON.stringify y un orden distinto contaría como "cambió") */
+  var usados = {}, fin = {};
+  Object.keys(out).sort().forEach(function(k){
+    var v = out[k];
+    while (usados[v]) v++;
+    usados[v] = true; fin[k] = v;
+  });
+  return fin;
+}
+/* Asigna el siguiente código libre a una obra de PROYECTOS VARIOS y se lo deja para siempre.
+   Corre al CREAR el pedido manual (no al mostrar: el render jamás escribe). */
+function _obraCodigoAsegurar(nombre){
+  var k = _obraCodigoNorm(nombre);
+  if (!k || OBRA_CODIGOS_FIJOS[k]) return _obraCodigoDe(nombre);
+  if (typeof state === 'undefined' || !state) return 0;
+  if (!state.obraCodigos || typeof state.obraCodigos !== 'object') state.obraCodigos = {};
+  if (parseInt(state.obraCodigos[k], 10) > 0) return parseInt(state.obraCodigos[k], 10);
+  var max = 0;
+  Object.keys(OBRA_CODIGOS_FIJOS).forEach(function(x){ if (OBRA_CODIGOS_FIJOS[x] > max) max = OBRA_CODIGOS_FIJOS[x]; });
+  Object.keys(state.obraCodigos).forEach(function(x){ var v = parseInt(state.obraCodigos[x], 10) || 0; if (v > max) max = v; });
+  state.obraCodigos[k] = max + 1;
+  return max + 1;
+}
+try { window._docNumNuevo = _docNumNuevo; window._obraCodigoDe = _obraCodigoDe; window._obraCodigoAsegurar = _obraCodigoAsegurar; } catch(e){}
 function _numLimpio(numero){
+  /* v1180: si el número es de un documento con serie y su obra tiene código, el formato nuevo
+     MANDA en todo lo que se muestra e imprime. Lo demás sigue el camino de siempre. */
+  try { var _nv = _docNumNuevo(numero); if (_nv !== String(numero == null ? '' : numero)) return _nv; } catch(e){}
   /* Los ceros se quitan SOLO del correlativo, nunca del nombre del proyecto: el nombre de un
      proyecto manual puede tener ceros propios ('CASA 007') y va delante del guion largo. Por
      eso el primer replace corre una sola vez y anclado al ÚLTIMO ' – ' de la cadena. */
