@@ -57,7 +57,21 @@ ok('DESP y OP y TRAS también llevan código', /^DESP3 - 000002$/.test(F.fmt('TO
 
 console.log('\n— lo que NO se toca —');
 ok('un número de PEDIDO queda igual (solo los documentos llevan código)', F.fmt('ESSENZA F2 – 13') === 'ESSENZA F2 – 13');
-ok('BODEGA CENTRAL queda igual (Antonio no le asignó código)', F.fmt('BODEGA – 9 - OC 9') === 'BODEGA – 9 - OC 9');
+/* v1181: Antonio decidió que BODEGA CENTRAL también lleva código — se le dio el 7 (el
+   siguiente libre; 1-6 son las obras) y los VARIOS nuevos siguen en 8+. */
+ok('BODEGA CENTRAL = OC7 (v1181)', F.fmt('BODEGA – 9 - OC 9') === 'OC7 - 000009');
+const srcS = ex(code, 'function _serieFolioCorto(');
+ok('existe _serieFolioCorto (la etiqueta corta de los botones)', !!srcS);
+if (srcS) {
+  const corto = new Function(srcS + '\nreturn _serieFolioCorto;')();
+  ok('el botón dice "OC 10", del numero CRUDO', corto('BODEGA – 9 - OC 00010') === 'OC 10');
+  ok('también para las otras series', corto('ESSENZA F2 – 4 - DPP 1') === 'DPP 1');
+  ok('sin serie devuelve el numero tal cual', corto('ESSENZA F2 – 13') === 'ESSENZA F2 – 13');
+}
+ok('los botones cortos usan la etiqueta corta (ya no .pop() del formateado)',
+  (code.match(/_serieFolioCorto\(o\.numero\)/g) || []).length >= 2);
+ok('los PEDIDOS se muestran con la SIGLA de la obra (VLA – 19)', /_projSiglas\(/.test(ex(code, 'function _numLimpio(')));
+ok('el No. GRANDE del impreso lleva el formato nuevo', /_docNumNuevo\(oc\.numero\)/.test(code));
 ok('un prefijo desconocido queda igual (no se inventa código)', F.fmt('CASA X – 1 - OC 2') === 'CASA X – 1 - OC 2');
 ok('basura y vacío pasan sin romper', F.fmt('') === '' && F.fmt(null) === '' && F.fmt('cualquier cosa') === 'cualquier cosa');
 

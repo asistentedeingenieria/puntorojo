@@ -31,7 +31,10 @@ ok('tope mínimo de letra (no desaparece)', /minPx|>= *5/.test(z));
 // ── 4. bloque No. de la OC (pregunta de Antonio: se desbordaba sobre el título) ──
 /* v1151: la línea grande es condicional — el DESPACHO PRE-PAGO muestra su REF (8273-12) y
    todo lo demás sigue con el número de la OC. La propiedad v988 se conserva. */
-ok('el número de la OC manda (grande y rojo)', /font-size:16px;font-weight:800;color:#C8141C[^>]*>\$\{oc\.esPrepago && oc\.refExterna \? [^:]+ : _ocNumeroPartes\(oc\)\.oc\}/.test(html));
+/* v1181: la aserción anclaba el TEXTO literal del bloque; ahora el No. grande deriva el
+   formato nuevo (OC4 - 000009) vía _docNumNuevo y cae a _ocNumeroPartes(oc).oc si la obra no
+   tiene código. La propiedad sigue siendo la misma: el número de la OC manda, grande y rojo. */
+ok('el número de la OC manda (grande y rojo)', /font-size:16px;font-weight:800;color:#C8141C[^>]*>\$\{oc\.esPrepago && oc\.refExterna \?[\s\S]{0,400}?_ocNumeroPartes\(oc\)\.oc/.test(html));
 ok('el pedido origen y la sigla van en chico debajo', /font-size:10\.5px[^>]*>\$\{_ocNumeroPartes\(oc\)\.pedido \? 'PEDIDO '/.test(html) && /font-size:9\.5px[^>]*>\$\{_projSiglas\(_ocNumeroPartes\(oc\)\.proyecto\)\} - APP/.test(html));
 ok('la columna del número no se desborda (nowrap + más ancho)', /\.oc-num-col\{[^}]*white-space:nowrap/.test(html) && /\.oc-hd\{display:grid;grid-template-columns:180px 1fr 165px/.test(html));
 
