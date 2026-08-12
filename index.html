@@ -3388,7 +3388,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1192</span>
+    <span style="opacity:.5;font-size:9px">v1193</span>
   </footer>
 
 </div>
@@ -20280,9 +20280,13 @@ function _reestamparPedidosProyecto(p, nombreViejo, nombreNuevo){
   return n;
 }
 function renderPedidosList(){
-  const p = activeProj();
+  /* v1193: con el selector de COMPRAS en ABASTECIMIENTO o PROYECTOS VARIOS la lista lee
+     del store correspondiente (proxy con forma de proyecto). Ahí el contenedor ES la
+     unidad: no se filtra por obra (en varios cada pedido trae su proyectito encima). */
+  const _esp = (typeof _comprasFuenteEspecial === 'function') ? _comprasFuenteEspecial() : null;
+  const p = _esp ? _esp.proxy : activeProj();
   const _todos = (p.materiales.pedidos || []).slice().sort((a,b) => (b.ts||0) - (a.ts||0));
-  const pedidos = _todos.filter(pd => _pedidoEsDeEstaObra(pd, p));
+  const pedidos = _esp ? _todos : _todos.filter(pd => _pedidoEsDeEstaObra(pd, p));
   const _ajenos = _todos.length - pedidos.length;
   if (_healPedidosRecibidos(pedidos)) { try { saveState(); } catch(e){} }
 
@@ -20433,7 +20437,7 @@ function renderPedidoCard(pd, p){
 
   return `<div class="pedido-card">
     <div class="pedido-hd">
-      <div class="pedido-num">${_numLimpio(pd.numero)}<small>PEDIDO N°</small>${(typeof _pedidoEstaPendiente === 'function' && _pedidoEstaPendiente(pd.id)) ? `<div style="margin-top:6px;display:inline-block;background:#B45309;color:#fff;font-size:9px;font-weight:800;letter-spacing:.6px;padding:3px 7px;border-radius:999px" title="Guardado en este equipo; la nube todavía no lo confirmó. No lo imprimas ni lo mandes hasta que salga.">POR ENVIAR</div>` : ''}</div><!-- v1170: mismo chip que las fotos (v899) -->
+      <div class="pedido-num">${_numLimpio(pd.numero)}<small>PEDIDO N°</small>${(String((p || {}).id) === '_varios' && pd.proyectoPedido) ? `<div style="margin-top:4px;font-size:9px;font-weight:800;letter-spacing:.6px;color:#1D4ED8">${esc(String(pd.proyectoPedido).toUpperCase())}</div>` : ''}${(typeof _pedidoEstaPendiente === 'function' && _pedidoEstaPendiente(pd.id)) ? `<div style="margin-top:6px;display:inline-block;background:#B45309;color:#fff;font-size:9px;font-weight:800;letter-spacing:.6px;padding:3px 7px;border-radius:999px" title="Guardado en este equipo; la nube todavía no lo confirmó. No lo imprimas ni lo mandes hasta que salga.">POR ENVIAR</div>` : ''}</div><!-- v1170: mismo chip que las fotos (v899) · v1193: en PROYECTOS VARIOS cada tarjeta lleva su proyectito -->
       <dl class="pedido-meta">
         <div><dt>Proyecto</dt><dd>${esc(pd.proyectoPedido || p.name)}${pd.proyectoManual ? ' · MANUAL' : ''}</dd></div>
         <div><dt>Solicitante</dt><dd>${pd.solicitante || '—'}</dd></div>
@@ -24127,10 +24131,32 @@ function _comprasBarraHTML(){
 /* selector de proyecto de las secciones 2-5: select data-nativo (el picker v925 lo respeta).
    Cambia el proyecto ACTIVO — que es local del dispositivo, jamás se sincroniza (v235) — para
    que toda la cadena de renders funcione tal cual, sin parametrizar nada. */
-function _comprasSelectorHTML(){
+/* v1193 (Antonio: "para que no tengamos todo regado en diferentes lados"): PEDIDOS y
+   ÓRDENES DE COMPRA también muestran el ABASTECIMIENTO (store de bodega v964) y los
+   PROYECTOS VARIOS (store v1002) desde el mismo selector. Los datos NO se mueven de sus
+   contenedores: es un MODO local (_comprasProyEspecial) que cambia la FUENTE de las dos
+   listas vía un proxy con forma de proyecto. Solo muerde con el panel de COMPRAS abierto
+   — las vistas de obra no cambian. Las acciones ya eran globales (_findPedidoGlobal /
+   _bodegaFindOc), así que abrir/generar OC/autorizar funcionan tal cual. */
+function _comprasFuenteEspecial(){
+  try {
+    var m = String(window._comprasProyEspecial || '');
+    if (!m) return null;
+    if (!document.getElementById('_bodegaPanelModal')) return null;
+    if (m === '_abasto') return { modo: '_abasto', proxy: { id: '_abasto', name: 'ABASTECIMIENTO', materiales: _bodegaMatStore() } };
+    if (m === '_varios') return { modo: '_varios', proxy: { id: '_varios', name: 'PROYECTOS VARIOS', materiales: _variosMatStore() } };
+  } catch(e){}
+  return null;
+}
+function _comprasSelectorHTML(conEspeciales){
+  var esp = String(window._comprasProyEspecial || '');
   var pid = String((state && state.activeProjectId) || '');
   var opts = (((state || {}).projects) || []).filter(function(p){ return p && p.id; })
-    .map(function(p){ return '<option value="' + escapeAttr(p.id) + '"' + (String(p.id) === pid ? ' selected' : '') + '>' + String(p.name || '').replace(/</g, '&lt;') + '</option>'; }).join('');
+    .map(function(p){ return '<option value="' + escapeAttr(p.id) + '"' + (String(p.id) === pid && !(conEspeciales && esp) ? ' selected' : '') + '>' + String(p.name || '').replace(/</g, '&lt;') + '</option>'; }).join('');
+  if (conEspeciales) {
+    opts += '<option value="_abasto"' + (esp === '_abasto' ? ' selected' : '') + '>ABASTECIMIENTO</option>'
+          + '<option value="_varios"' + (esp === '_varios' ? ' selected' : '') + '>PROYECTOS VARIOS</option>';
+  }
   /* v1052: la clase .pr-obra-sel es EL selector de proyecto de toda la app — chico y parejo */
   return '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
     + '<span style="font-size:8.5px;letter-spacing:1.5px;color:#78716C;font-weight:700">PROYECTO</span>'
@@ -24139,18 +24165,18 @@ function _comprasSelectorHTML(){
 function _comprasSeccionesHTML(){
   return `
     <div id="_comprasSecPedidos" style="display:none">
-      ${_comprasSelectorHTML()}
+      ${_comprasSelectorHTML(true)}
       <!-- v1041 (Antonio): sin PEDIR DE RECETA ni NUEVO PEDIDO acá — eso se hace en la obra.
            Queda la LISTA y el COSTO DE LA RECETA con montos (visible a todo el que entra). -->
       <div class="mat-tabs ped-tabs-bar" style="margin-bottom:12px">
         <button class="mat-tab active" data-comprasped="lista" onclick="_comprasPedSub('lista')">LISTA DE PEDIDOS</button>
-        <button class="mat-tab" data-comprasped="costo" onclick="_comprasPedSub('costo')">COSTO DE LA RECETA</button>
+        ${window._comprasProyEspecial ? '' : `<button class="mat-tab" data-comprasped="costo" onclick="_comprasPedSub('costo')">COSTO DE LA RECETA</button>`}
       </div>
       <div id="_comprasHostPedidos"></div>
       <div id="_comprasRecetaCosto" style="display:none"></div>
     </div>
     <div id="_comprasSecOrdenes" style="display:none">
-      ${_comprasSelectorHTML()}
+      ${_comprasSelectorHTML(true)}
       <div id="_comprasHostOrdenes"></div>
     </div>
     <div id="_comprasSecInventarios" style="display:none">
@@ -24347,7 +24373,13 @@ window._bodegaMovsToggle = function(){
 };
 window._comprasCambiarProyecto = function(id){
   if (!id) return;
-  try { setActiveProject(id); } catch(e){ console.warn('[v1040] cambiar proyecto', e); }
+  /* v1193: las entradas especiales NO tocan el proyecto activo — solo prenden el modo */
+  if (id === '_abasto' || id === '_varios') {
+    window._comprasProyEspecial = id;
+  } else {
+    window._comprasProyEspecial = '';
+    try { setActiveProject(id); } catch(e){ console.warn('[v1040] cambiar proyecto', e); }
+  }
   /* repintado completo: cae en la MISMA sección (window._comprasTab) con el selector al día */
   try { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } catch(e){}
 };
@@ -27654,7 +27686,9 @@ function capitalizar(txt){
 }
 
 function renderOrdenesList(){
-  const p = activeProj();
+  /* v1193: misma fuente especial que renderPedidosList (ABASTECIMIENTO / PROYECTOS VARIOS) */
+  const _esp = (typeof _comprasFuenteEspecial === 'function') ? _comprasFuenteEspecial() : null;
+  const p = _esp ? _esp.proxy : activeProj();
   const cont = document.getElementById('ordenesListContainer');
   if (!cont) return;
   /* v999 (corrección de Antonio): las órdenes de ABASTECIMIENTO NO se mezclan acá — no son
@@ -27664,7 +27698,8 @@ function renderOrdenesList(){
      la obra anfitriona y mostraban el nombre de OTRA obra en su columna PROYECTO/ÁREA. Se
      filtran por el pedido que las originó — el mismo criterio que la lista de pedidos. */
   const _ordTodas = [...(p.materiales.ordenes || [])].sort((a,b) => (b.ts || 0) - (a.ts || 0));
-  const _ordPropias = _ordTodas.filter(o => {
+  /* v1193: en modo especial van TODAS las del contenedor — la unidad es el store, no la obra */
+  const _ordPropias = _esp ? _ordTodas : _ordTodas.filter(o => {
     if (!o) return false;
     const _pdo = (p.materiales.pedidos || []).find(x => x && x.id === o.pedidoId);
     return _pdo ? _pedidoEsDeEstaObra(_pdo, p) : true; // sin pedido origen se muestra igual
@@ -27674,7 +27709,7 @@ function renderOrdenesList(){
      esta obra, así que se suman ACÁ — después del filtro de arriba y a propósito: heredan el
      pedidoId de la madre (un pedido de abastecimiento) y _pedidoEsDeEstaObra los rechazaría
      como "DE OTRO CLIENTE". La pertenencia se decide por destino, igual que en GASTOS. */
-  const _ordDpp = (typeof _despachosHaciaProyecto === 'function') ? _despachosHaciaProyecto(p) : [];
+  const _ordDpp = (_esp || typeof _despachosHaciaProyecto !== 'function') ? [] : _despachosHaciaProyecto(p); // v1193: los DPP por destino son de las OBRAS
   const ordenes = _ordPropias.concat(_ordDpp).sort((a,b) => (b.ts || 0) - (a.ts || 0));
 
   const countLbl = document.getElementById('ocCountLabel');
@@ -37379,6 +37414,11 @@ window._adminFiltroPersonal = function(id){
    can() INLINE y no con data-perm: applyPermissions corre UNA vez al abrir el panel y este
    HTML se re-inyecta en cada cambio de pestaña. */
 function _adminPdfBotonesHTML(){
+  /* v1193 (Antonio): "de admin también quitá esto — lo puedo descargar en cada proyecto".
+     La fila entera (PDF SEMANAL/MENSUAL conjuntos + ARCHIVAR) sale de ADMINISTRACIÓN:
+     los PDF viven en la barra de asistencia de cada obra, y el archivado es AUTOMÁTICO
+     desde v1175 (si un día urge a mano: window._asistArchivarViejo() en la consola). */
+  return '';
   try {
     const btns = [];
     if (can('personal.asistenciaPdf') || can('users.manage')) btns.push('<button class="btn olive sm" onclick="abrirPdfSemanal(true)">PDF SEMANAL</button>');
