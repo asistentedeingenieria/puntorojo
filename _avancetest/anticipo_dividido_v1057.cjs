@@ -76,6 +76,16 @@ if (pctDe) {
   ok('112 de 1120 → 10%', pctDe({ vp_ci: 112 }, p) === 10);
   ok('sin total → cae al pct global', pctDe({ vp_ci: 280 }, { totalSinIva: 0, anticipoPct: 0.35 }) === 35);
 }
+/* v1203 (Antonio: "sí quiero que diga 30%"): la base del rótulo es el CONTRATADO NETO
+   (mismo totalRef de los KPIs) — antes dividía contra el total SIN descuento y el anticipo
+   del 30% de VLA rotulaba 29%. Acá se evalúa CON totalProyectoNeto en scope (stub). */
+try {
+  const mk = new Function('totalProyectoNeto', 'return (' + zP + ')');
+  const fNeto = mk(function(){ return 6098986.32; }); // el neto real de VLA (con descuento)
+  ok('EL CASO VLA: Q1,829,695.90 sobre el NETO → 30% (ya no 29)', fNeto({ vp_ci: 1829695.90 }, { totalSinIva: 5629644.15, ivaPct: 0.12 }) === 30);
+  const fCero = mk(function(){ return 0; });
+  ok('si el neto da 0, cae a la base vieja (no divide por cero)', fCero({ vp_ci: 280 }, { totalSinIva: 1000, ivaPct: 0.12 }) === 25);
+} catch(e){ ok('v1203 evalúa con stub', false); }
 ok('renderCobroRow lo usa (ya no el global a secas)', /_v1057PctAnticipoFila\(r,\s*p\)/.test(ex('function renderCobroRow(')));
 
 console.log('\n— 4. updateAnticipoPct no pisa un anticipo dividido —');
