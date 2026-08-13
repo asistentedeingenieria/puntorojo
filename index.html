@@ -3388,7 +3388,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1203</span>
+    <span style="opacity:.5;font-size:9px">v1204</span>
   </footer>
 
 </div>
@@ -9586,6 +9586,17 @@ const CloudSync = {
               this._asistHash = JSON.stringify(d._asistDocOnly);
             }
           } catch(e){}
+          /* v1204: ALARMA DE RELOJ TORCIDO — si los stamps remotos vienen más de 24 h "en el
+             futuro", ESTE aparato tiene la fecha atrasada (los demás no ven nada raro: cero
+             falsos positivos). Sella con fecha vieja ⇒ pierde merges en silencio (Erlin,
+             13-ago). Re-avisa cada 10 min mientras persista. */
+          try {
+            if (this._maxStampVisto && this._maxStampVisto > Date.now() + 24 * 3600e3
+                && (!this._relojAvisadoTs || Date.now() - this._relojAvisadoTs > 600e3)) {
+              this._relojAvisadoTs = Date.now();
+              showToast('LA FECHA/HORA DE ESTE DISPOSITIVO ESTÁ ATRASADA — CORREGILA EN AJUSTES (FECHA AUTOMÁTICA). TUS CAMBIOS PUEDEN PERDERSE MIENTRAS TANTO.', 'red');
+            }
+          } catch(e){}
           if (d) this.applyRemote(d, { initial: false });
         }, 300);
       },
@@ -10157,6 +10168,10 @@ const CloudSync = {
     const pagosArchById = {}; // v931
     const gastosImpById = {}; // v1166
     snap.forEach(doc => {
+      /* v1204 (incidente del reloj de Erlin: aparato 9 días atrás sellando "4-8-26" en OCs
+         del 13-ago y perdiendo merges en silencio): registrar el stamp remoto MÁS NUEVO.
+         El dispositivo ATRASADO es el único que los ve llegar "del futuro" — el flush avisa. */
+      try { const _lu = doc.data() && doc.data()._lastUpdate; if (_lu && Number(_lu.ts) > (this._maxStampVisto || 0)) this._maxStampVisto = Number(_lu.ts); } catch(e){}
       if (doc.id === 'core') core = doc.data();
       else if (doc.id === 'faces') { const d = doc.data(); facesData = (d && d.faces && typeof d.faces==='object') ? d.faces : null; }
       else if (doc.id === 'asistencia') { const d = doc.data(); asistData = (d && d.asistencia && typeof d.asistencia==='object') ? d.asistencia : null; } // v649
@@ -20421,16 +20436,38 @@ function renderPedidosList(){
      al final. No se borra nada — se guardan y se muestran cuando se pide. */
   /* v1162: los CANCELADOS bajan al historial junto con los recibidos — salen de la vista
      activa pero se pueden consultar con su número y su motivo. */
-  const _act = pedidos.filter(pd => pd && pd.status !== 'RECIBIDO' && pd.status !== 'CANCELADO');
+  const _act0 = pedidos.filter(pd => pd && pd.status !== 'RECIBIDO' && pd.status !== 'CANCELADO');
   const _hist = pedidos.filter(pd => pd && (pd.status === 'RECIBIDO' || pd.status === 'CANCELADO'));
+  /* v1204 (Antonio, decidió POR ESTADO): subpestañas TODOS · SOLICITADOS · EN COMPRA/
+     APROBADOS · RECIBIDOS. En TODOS el historial colapsable de siempre; en RECIBIDOS el
+     historial sale DIRECTO; en las otras dos, solo lo suyo. */
+  const _nSol = _act0.filter(pd => pd.status === 'SOLICITADO').length;
+  const _nCom = _act0.filter(pd => pd.status === 'EN COMPRA' || pd.status === 'APROBADO').length;
+  const _fPed = String(window._pedEstadoFiltro || '');
+  const _pedBar = (pedidos.length ? `<div class="mat-tabs ped-tabs-bar" style="margin:0 0 12px">`
+    + `<button class="mat-tab${!_fPed ? ' active' : ''}" onclick="window._pedEstadoSub('')">TODOS · ${_act0.length}</button>`
+    + `<button class="mat-tab${_fPed === 'SOL' ? ' active' : ''}" onclick="window._pedEstadoSub('SOL')">SOLICITADOS · ${_nSol}</button>`
+    + `<button class="mat-tab${_fPed === 'COMPRA' ? ' active' : ''}" onclick="window._pedEstadoSub('COMPRA')">EN COMPRA / APROBADOS · ${_nCom}</button>`
+    + `<button class="mat-tab${_fPed === 'REC' ? ' active' : ''}" onclick="window._pedEstadoSub('REC')">RECIBIDOS · ${_hist.length}</button>`
+    + `</div>` : '');
+  const _act = _fPed === 'SOL' ? _act0.filter(pd => pd.status === 'SOLICITADO')
+    : _fPed === 'COMPRA' ? _act0.filter(pd => pd.status === 'EN COMPRA' || pd.status === 'APROBADO')
+    : _fPed === 'REC' ? [] : _act0;
   const _hKey = 'pedidos_historial_visible_' + ((p && p.id) || 'def');
   const _hVis = _histVisible(_hKey); // v1067: cerrado por default en cada entrada
-  let _html = _avisoAjenos;
+  let _html = _pedBar + _avisoAjenos;
   _html += _act.map(pd => renderPedidoCard(pd, p)).join('');
-  if (!_act.length && _hist.length) {
+  if (_fPed === 'REC') {
+    _html += _hist.length
+      ? _hist.map(pd => renderPedidoCard(pd, p)).join('')
+      : `<div class="empty" style="padding:22px 12px"><p style="margin:0">No hay pedidos recibidos todavía.</p></div>`;
+  } else if (_fPed && !_act.length) {
+    _html += `<div class="empty" style="padding:22px 12px"><p style="margin:0">No hay pedidos en este estado.</p></div>`;
+  }
+  if (!_fPed && !_act.length && _hist.length) {
     _html += `<div class="empty" style="padding:22px 12px"><p style="margin:0">No hay pedidos activos — todos fueron recibidos en obra.</p></div>`;
   }
-  if (_hist.length) {
+  if (!_fPed && _hist.length) {
     _html += `<div style="border-top:2px solid #ddd;margin-top:8px;background:#FAFAFA">
       <div onclick="window.togglePedidosHistorial()" style="padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:nowrap">
         <strong style="font-size:11px;letter-spacing:.3px;color:#444;white-space:nowrap">HISTORIAL DE PEDIDOS RECIBIDOS</strong>
@@ -20442,6 +20479,9 @@ function renderPedidosList(){
   list.innerHTML = _html;
   applyPermissions();
 }
+/* v1204: los clicks de las subpestañas — setean el filtro local (no se sincroniza) y repintan */
+window._ocSerieSub = function(s){ window._ocSerieFiltro = String(s || ''); try { renderOrdenesList(); } catch(e){} };
+window._pedEstadoSub = function(s){ window._pedEstadoFiltro = String(s || ''); try { renderPedidosList(); } catch(e){} };
 window.togglePedidosHistorial = function(){
   const p = activeProj();
   const k = 'pedidos_historial_visible_' + ((p && p.id) || 'def');
@@ -27862,16 +27902,30 @@ function renderOrdenesList(){
      pedidoId de la madre (un pedido de abastecimiento) y _pedidoEsDeEstaObra los rechazaría
      como "DE OTRO CLIENTE". La pertenencia se decide por destino, igual que en GASTOS. */
   const _ordDpp = (_esp || typeof _despachosHaciaProyecto !== 'function') ? [] : _despachosHaciaProyecto(p); // v1193: los DPP por destino son de las OBRAS
-  const ordenes = _ordPropias.concat(_ordDpp).sort((a,b) => (b.ts || 0) - (a.ts || 0));
+  const _ordTodasSeries = _ordPropias.concat(_ordDpp).sort((a,b) => (b.ts || 0) - (a.ts || 0));
+  /* v1204 (Antonio: "más ordenado... OC - DESP - OP etc y que en esas pestañas estén
+     únicamente los que correspondan"): subpestañas por SERIE. Solo se ofrecen las series
+     PRESENTES (con su conteo); un filtro que quedó apuntando a una serie que este
+     contenedor no tiene (cambio de proyecto) se auto-resetea a TODAS. */
+  const _serCounts = {}; _ordTodasSeries.forEach(o => { const s = _ocSerieDe(o); _serCounts[s] = (_serCounts[s] || 0) + 1; });
+  if (window._ocSerieFiltro && !_serCounts[window._ocSerieFiltro]) window._ocSerieFiltro = '';
+  const _fSer = String(window._ocSerieFiltro || '');
+  const _serOrdenTabs = ['OC','DESP','OP','DPP','TRAS'].filter(s => _serCounts[s]);
+  const _serBar = (_ordTodasSeries.length ? `<div class="mat-tabs ped-tabs-bar" style="margin:0 0 12px">`
+    + `<button class="mat-tab${!_fSer ? ' active' : ''}" onclick="window._ocSerieSub('')">TODAS · ${_ordTodasSeries.length}</button>`
+    + _serOrdenTabs.map(s => `<button class="mat-tab${_fSer === s ? ' active' : ''}" onclick="window._ocSerieSub('${s}')">${s} · ${_serCounts[s]}</button>`).join('')
+    + `</div>` : '');
+  const ordenes = _fSer ? _ordTodasSeries.filter(o => _ocSerieDe(o) === _fSer) : _ordTodasSeries;
 
   const countLbl = document.getElementById('ocCountLabel');
   if (countLbl) countLbl.textContent = `— ${ordenes.length} ÓRDEN${ordenes.length !== 1 ? 'ES' : ''}`
     + (_ordAjenas ? ` · ${_ordAjenas} DE OTRO CLIENTE` : ''); // v1012: nada desaparece en silencio
 
   if (ordenes.length === 0) {
-    cont.innerHTML = `<div class="empty" style="padding:40px 20px;text-align:center;color:var(--mute)">
+    /* v1204: la barra sale también vacía — sin ella no habría cómo volver a TODAS */
+    cont.innerHTML = _serBar + `<div class="empty" style="padding:40px 20px;text-align:center;color:var(--mute)">
       <div style="font-family:'Familjen Grotesk',sans-serif;font-size:36px;color:var(--line);margin-bottom:10px">◈</div>
-      <p style="font-size:12px;letter-spacing:.5px">No hay órdenes de compra generadas todavía.</p>
+      <p style="font-size:12px;letter-spacing:.5px">No hay órdenes${_fSer ? ' de la serie ' + _fSer : ' de compra generadas todavía'}.</p>
       <p style="font-size:10px;margin-top:8px;letter-spacing:1px;text-transform:uppercase;color:var(--mute)">Las órdenes se generan desde el detalle de un pedido.</p>
     </div>`;
     return;
@@ -28096,7 +28150,7 @@ function renderOrdenesList(){
       ${_hVisOc ? `<div style="padding:4px 0 12px">${_ocRecib.map(_filaOc).join('')}</div>` : ''}
     </div>`;
   }
-  cont.innerHTML = _htmlOc;
+  cont.innerHTML = _serBar + _htmlOc; // v1204: subpestañas por serie arriba de la lista
   /* v1041: VER OC desde GASTOS — la orden exacta se trae a la vista y se resalta */
   try {
     if (window._comprasIrAOcId) {
