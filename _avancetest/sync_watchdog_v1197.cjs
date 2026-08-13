@@ -25,6 +25,14 @@ const code = html.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g
 let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
 console.log('— la suscripción es re-armable —');
+/* v1200 HOTFIX: db era LOCAL de init — _suscribir extraída murió con "db is not defined"
+   y el init entero caía a "SIN SYNC DE NUBE" (¡sin sincronizar NADA!). La regla del
+   andamiaje: la función extraída declara lo suyo. Esta aserción evalúa el cuerpo real. */
+(function(){
+  const i = code.indexOf('_suscribir(motivo){');
+  const z = code.slice(i, i + 400);
+  ok('_suscribir declara su PROPIO db (no hereda el local de init)', i > 0 && /const db = firebase\.firestore\(\)/.test(z));
+})();
 ok('_suscribir existe como método', /_suscribir\(\)\{/.test(code) || /_suscribir\(motivo\)\{/.test(code) || /_suscribir: function/.test(code) || /_suscribir\(motivo\)\s*\{/.test(code));
 ok('antes de re-armar, corta la suscripción vieja (sin listeners dobles)', /this\.unsubscribe\(\)/.test(code));
 ok('init pasa por _suscribir (no arma el onSnapshot a mano)', /this\._suscribir\(/.test(code));
