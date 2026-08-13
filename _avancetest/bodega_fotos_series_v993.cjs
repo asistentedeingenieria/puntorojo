@@ -22,7 +22,7 @@ if (fS) {
   ok('compra → OC', fS({}) === 'OC');
   ok('respeta la serie ya guardada', fS({ serie:'DESP' }) === 'DESP');
 } else ok('_ocSerieDe evaluable', false);
-const zGen = html.slice(html.indexOf('providerIds.forEach((provId, idx)'), html.indexOf('providerIds.forEach((provId, idx)') + 2500);
+const zGen = html.slice(html.indexOf('providerIds.forEach((provId, idx)'), html.indexOf('providerIds.forEach((provId, idx)') + 5000)/* v1201: +2500→5000, el filtro de herramientas empujó la serie fuera de la ventana fija */;
 ok('el folio se toma de la serie que corresponde', /_primerNumeroLibre\(_usadosSerie\[serie\] \|\| \[\]\)/.test(zGen));
 ok('cada OC guarda su serie', /serie, \/\/ v993/.test(html));
 ok('el número usa la serie', zGen.includes('${pd.numero} - ${serie} ${folio}')); // v994: sin ceros

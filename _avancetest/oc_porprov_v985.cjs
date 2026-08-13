@@ -20,7 +20,7 @@ ok('el despacho de BODEGA no lleva controles', /_bodega/.test(zR));
 
 // ── al generar, cada OC toma lo suyo con fallback a lo general ──
 const iGen = html.indexOf('providerIds.forEach((provId, idx)');
-const zGen = html.slice(iGen, iGen + 3000);
+const zGen = html.slice(iGen, iGen + 5500)/* v1201: ventana ampliada — el filtro de herramientas en la rama esBodega corrió la fecha/pago */;
 ok('fecha de entrega por proveedor con fallback', /_pp\.fechaEntrega \? _fechaInputALatam\(_pp\.fechaEntrega\) : fechaEntregaNueva/.test(zGen));
 ok('forma de pago por proveedor con fallback', /_pp\.formaPago \|\| formaPago/.test(zGen));
 
