@@ -53,7 +53,9 @@ ok('al elegir adopta nombre y precio del catálogo', /it\.name = pr\.nombre/.tes
 
 console.log('\n— el enganche en el picker genérico —');
 const pkr = ex(code, 'function _abrirPickerProveedor(');
-ok('la opción de herramienta está en la lista', /_herrOpcionPicker\(\)/.test(pkr));
+/* v1198: la opción ahora recibe el nombre del renglón (para el match) y con coincidencias
+   sube arriba — lo que v1187 protege (que la opción ESTÉ en la lista) sigue en pie */
+ok('la opción de herramienta está en la lista (con el nombre para el match, v1198)', /_herrOpcionPicker\(it\.name\)/.test(pkr));
 ok('elegir _herr abre el selector por nombre', /id === '_herr'/.test(pkr) && /_ocElegirHerramienta\(btn, idx\)/.test(pkr));
 /* v1188: el ofrecimiento corre tras el repintado, con la marca capturada y el botón fresco */
 ok('tras asignar proveedor se ofrece el producto del catálogo', /_ocOfrecerProductoCatalogo\(_ocBtnProvDe\(idx\) \|\| btn, idx, id, true\)/.test(pkr));

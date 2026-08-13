@@ -3388,7 +3388,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1197</span>
+    <span style="opacity:.5;font-size:9px">v1198</span>
   </footer>
 
 </div>
@@ -25154,10 +25154,38 @@ function _provPickerItems(primeraOpcion){
       precio. (El caso real: "PINTURA GLS BLANCO - MARCA MUNDIAL" tipeado a mano vs "CUBETA
       5 GLS BLANCO 500-4/…" en el catálogo de MUNDIAL: nombres genuinamente distintos que
       ningún match automático debe igualar solo — lo decide compras, con un clic.) */
-function _herrOpcionPicker(){
+/* v1198 (Antonio): la pistola de calafateo salió como material de BODEGA CENTRAL porque
+   nadie notó la opción de herramienta. Ahora el nombre tipeado se MATCHEA contra las
+   herramientas con saldo: fichas del nombre (sin DE/LA/PARA…, singular≈plural por
+   prefijo). Con coincidencias, la opción avisa y sube arriba; elegir CUÁL de las
+   coincidencias es la presentación (CUBETA 1GL vs 5GL). Nunca automático. */
+function _herrFichasNombre(s){
+  return String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^A-Z0-9 ]/g, ' ').split(/\s+/)
+    .filter(function(t){ return t.length >= 2 && ['DE','LA','EL','LOS','LAS','DEL','PARA','CON','SIN','UN','UNA','EN','Y','O','USO','MARCA'].indexOf(t) < 0; });
+}
+function _herrMatchesDeNombre(nombre){
+  try {
+    var fichas = _herrFichasNombre(nombre);
+    if (!fichas.length) return [];
+    var out = [];
+    (_herrDisponibles() || []).forEach(function(h){
+      var fh = _herrFichasNombre(h);
+      var score = 0;
+      fichas.forEach(function(a){ if (fh.some(function(b){ return a === b || a.indexOf(b) === 0 || b.indexOf(a) === 0; })) score++; });
+      /* 2+ fichas compartidas = match; con nombres de UNA ficha basta esa */
+      if (score >= 2 || (score >= 1 && (fichas.length === 1 || fh.length === 1))) out.push({ name: h, score: score });
+    });
+    return out.sort(function(a, b){ return b.score - a.score || (a.name < b.name ? -1 : 1); });
+  } catch(e){ return []; }
+}
+function _herrOpcionPicker(nombreItem){
   try {
     var h = (typeof _herrDisponibles === 'function') ? _herrDisponibles() : [];
-    if (h.length) return [{ id: '_herr', label: 'BODEGA DE HERRAMIENTA (SIN COSTO · CON DEVOLUCIÓN)' }];
+    if (!h.length) return [];
+    var m = _herrMatchesDeNombre(nombreItem || '');
+    if (m.length) return [{ id: '_herr', label: 'BODEGA DE HERRAMIENTA · ' + m.length + ' COINCIDE' + (m.length === 1 ? '' : 'N') + ' CON ESTE NOMBRE' }];
+    return [{ id: '_herr', label: 'BODEGA DE HERRAMIENTA (SIN COSTO · CON DEVOLUCIÓN)' }];
   } catch(e){}
   return [];
 }
@@ -25166,8 +25194,12 @@ window._ocElegirHerramienta = function(btn, idx){
   if (!(_puedeGestionarBodega() || can('compras.autorizar') || can('users.manage'))) return showToast('SIN PERMISO', 'red');
   var disp = _herrDisponibles();
   if (!disp.length) return showToast('NO HAY HERRAMIENTAS CON SALDO EN BODEGA', 'red');
+  /* v1198: las que COINCIDEN con el nombre tipeado van primero, marcadas con ≈ —
+     elegir entre ellas es escoger la presentación (1GL vs 5GL). El resto sigue abajo. */
+  var _mNames = _herrMatchesDeNombre(it.name).map(function(x){ return x.name; });
+  var _orden = _mNames.concat(disp.filter(function(n){ return _mNames.indexOf(n) < 0; }));
   _abrirPicker(btn, {
-    items: disp.map(function(n){ return { id: n, label: n }; }),
+    items: _orden.map(function(n){ return { id: n, label: (_mNames.indexOf(n) >= 0 ? '≈ ' : '') + n }; }),
     selectedId: '',
     onPick: function(nombre){
       if (!nombre) return;
@@ -25244,7 +25276,15 @@ function _abrirPickerProveedor(btn, idx){
     // sin proveedor auto (no hubo match en el catálogo): se deja elegir para no trabar la OC
   }
   _abrirPicker(btn, {
-    items: _provPickerItems('— ASIGNAR —').concat(_herrOpcionPicker()).concat(_dppOpcionesDeItem(it.name)).concat(_trasOpcionesDeItem(it.name)), // v1068 · v1187: + bodega de herramienta
+    items: (function(){
+      /* v1198: con coincidencias de nombre la opción de herramienta sube ARRIBA (justo
+         después de — ASIGNAR —); sin coincidencias queda al fondo como siempre */
+      var _base = _provPickerItems('— ASIGNAR —');
+      var _ho = _herrOpcionPicker(it.name);
+      var _hoArriba = _ho.length && _ho[0].label.indexOf('COINCIDE') >= 0;
+      var _lista = _hoArriba ? [_base[0]].concat(_ho).concat(_base.slice(1)) : _base.concat(_ho);
+      return _lista.concat(_dppOpcionesDeItem(it.name)).concat(_trasOpcionesDeItem(it.name)); // v1068 · v1187: + bodega de herramienta
+    })(),
     selectedId: it.proveedorId || '',
     onPick: function(id){
       if (id === '_herr') return window._ocElegirHerramienta(btn, idx);   // v1187: elegir la herramienta por nombre
