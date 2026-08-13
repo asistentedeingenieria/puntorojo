@@ -3388,7 +3388,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1201</span>
+    <span style="opacity:.5;font-size:9px">v1202</span>
   </footer>
 
 </div>
@@ -9505,6 +9505,11 @@ const CloudSync = {
       if (data) this.applyRemote(data, { initial: true });
       this.enabled = true;
       try { setSyncStatus('synced'); } catch(e){}
+      /* v1202: el archivador automático (v1175) colgaba SOLO de applyRemote+45s — que se
+         saltea con escritura pendiente, o sea nunca corre cuando el canal está ocupado,
+         justo cuando más falta hace. También al ARRANCAR (solo admin; el sello en config
+         evita repetirlo). 30 s para no competir con el primer ensamblado. */
+      try { setTimeout(function(){ try { _asistArchAutoIntentar(); } catch(e){} }, 30000); } catch(e){}
 
       // v491: UN listener sobre TODA la coleccion appState (core + proj_*). Maneja
       // alta/baja de proyectos automaticamente, sin re-suscribir nada.
@@ -9569,6 +9574,18 @@ const CloudSync = {
           const _s = this._latestSnap; this._latestSnap = null;
           if (!_s) return;
           const d = this._assembleFromSnap(_s);
+          /* v1202 (el círculo vicioso): el baseline de asistencia se siembra ACÁ, desde lo
+             BAJADO, ANTES del pendingWrite-skip de applyRemote. Era la pieza que nunca
+             llegaba: sin baseline, el early-exit "sin cambios → no escribir" no ahorraba
+             transacciones y cada marca abría una contra el doc gordo. Solo-lectura, misma
+             semántica que la siembra de applyRemote (lo del DOC, no la unión). */
+          try {
+            if (d && d._asistDocOnly && typeof d._asistDocOnly === 'object') {
+              const _adj = {}; Object.keys(d._asistDocOnly).forEach(f => { _adj[f] = JSON.stringify(d._asistDocOnly[f]); });
+              this._asistDayHashes = _adj;
+              this._asistHash = JSON.stringify(d._asistDocOnly);
+            }
+          } catch(e){}
           if (d) this.applyRemote(d, { initial: false });
         }, 300);
       },
@@ -10053,6 +10070,15 @@ const CloudSync = {
      marca se pierde en NINGÚN orden de subidas. Sin conexión la transacción falla rápido
      (unavailable) → el chip REINTENTANDO (v896) se encarga. */
   async _asistUploadSmart(db, stamp){
+    /* v1202 (el círculo vicioso, cerrado): UNA transacción de asistencia a la vez. El guard
+       de 45 s libera el CHIP pero no la disciplina — antes cada marca despachaba OTRA
+       transacción sobre la cola aún saturada (resource-exhausted en la hora pico;
+       falsificado el 11-ago con CERO usuarios: un solo cliente se apila solo). Si hay una
+       en vuelo, bandera y afuera; al confirmar se corre UNA más con el estado fresco
+       (mismo patrón v1186 del core). */
+    if (this._asistTxEnVuelo) { this._asistReSave = true; return; }
+    this._asistTxEnVuelo = true;
+    try {
     /* v1152: podar la copia local ANTES de armar el payload — rompe el ciclo del payload
        gordo en el único punto que no depende de que un snapshot logre aplicarse */
     try { if (typeof _asistPodarLocal === 'function') _asistPodarLocal(); } catch(e){}
@@ -10094,6 +10120,12 @@ const CloudSync = {
     // local aún no tiene, el próximo snapshot las trae vía applyRemote (la unión local las respeta)
     const _dj = {}; Object.keys(_mergedFinal).forEach(function(f){ _dj[f] = JSON.stringify(_mergedFinal[f]); });
     this._asistHash = JSON.stringify(_mergedFinal); this._asistDayHashes = _dj;
+    } finally {
+      /* v1202: pase lo que pase (confirmó, chocó o tiró resource-exhausted), la bandera se
+         suelta y si quedó algo pendiente se corre UNA vez más — nunca en paralelo */
+      this._asistTxEnVuelo = false;
+      if (this._asistReSave) { this._asistReSave = false; try { this.scheduleAsistenciaSave(); } catch(e){} }
+    }
   },
 
   /* v649: debounce del guardado liviano de asistencia (espeja scheduleSave pero solo asistencia). */
