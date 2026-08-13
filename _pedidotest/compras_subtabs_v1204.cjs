@@ -23,7 +23,10 @@ const ro = ex(code, 'function renderOrdenesList(');
 ok('el filtro vive en window._ocSerieFiltro', /_ocSerieFiltro/.test(ro));
 ok('filtra por la serie real (_ocSerieDe)', /_ocSerieDe\(o\) === _fSer/.test(ro));
 ok('solo series PRESENTES, con conteo', /\['OC','DESP','OP','DPP','TRAS'\]\.filter\(s => _serCounts\[s\]\)/.test(ro));
-ok('TODAS con el total', /TODAS · \$\{/.test(ro));
+/* v1205 (Antonio: "NO debe decir ningún número en el título"): las subpestañas van SIN
+   conteo — solo el nombre. Los conteos internos (_serCounts) siguen, pero solo para
+   decidir qué series ofrecer. */
+ok('las subpestañas van SIN números (v1205)', /window\._ocSerieSub\(''\)">TODAS<\/button>/.test(ro) && !/TODAS · \$\{/.test(ro) && /window\._pedEstadoSub\('REC'\)">RECIBIDOS<\/button>/.test(code));
 ok('filtro huérfano se auto-resetea (cambio de proyecto)', /!_serCounts\[window\._ocSerieFiltro\]\) window\._ocSerieFiltro = ''/.test(ro));
 ok('la barra también sale con la lista vacía (para poder volver)', (ro.match(/_serBar/g) || []).length >= 2);
 ok('el click re-renderiza', /window\._ocSerieSub = function/.test(code) && /renderOrdenesList\(\)/.test(ex(code, 'window._ocSerieSub = function')));
