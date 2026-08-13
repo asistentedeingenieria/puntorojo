@@ -49,7 +49,12 @@ if (srcPred && mkCtx) {
   ok('PRE-APP sigue congelando (sin contexto, compat v931)', pred({ _preApp:true }) === true);
   ok('real: cerrada hace 90d + retención pagada ⇒ CONGELA', pred({ planillaId:'pl-vieja', retencion:64.75, retencionPagada:true, bruto:647 }, ctx) === true);
   ok('real: cerrada hace 90d + SIN retención ⇒ CONGELA', pred({ planillaId:'pl-vieja', retencion:0, bruto:100 }, ctx) === true);
-  ok('retención pendiente ⇒ NO congela (plata viva)', pred({ planillaId:'pl-vieja', retencion:64.75, retencionPagada:false }, ctx) === false);
+  /* v1199 (medición de Antonio: 400 pagos = 332 KB retenidos SOLO por esto, con VDC a 887
+     de 1,000 KB): la retención pendiente YA NO retiene al pago — la mutación posterior
+     (pagarla) está cubierta por diseño: el pago sigue EN MEMORIA por la unión y el doc
+     pagosarch_ se reescribe solo cuando su hash cambie. Criterio en las DOS puntas
+     (APP_SYNC 939). La aserción se INVIERTE a propósito. */
+  ok('retención pendiente ⇒ SÍ congela (v1199 — la mutación futura la cubre el archivo)', pred({ planillaId:'pl-vieja', retencion:64.75, retencionPagada:false }, ctx) === true);
   ok('cerrada hace 10d ⇒ NO congela todavía', pred({ planillaId:'pl-recien', retencion:0 }, ctx) === false);
   ok('archivada SIN fechaCierre ⇒ NO congela (no es pagada)', pred({ planillaId:'pl-mod', retencion:0 }, ctx) === false);
   ok('sin planilla ⇒ NO congela (disponible para armar)', pred({ bruto:100, retencion:0 }, ctx) === false);
