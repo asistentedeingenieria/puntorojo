@@ -3388,7 +3388,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1208</span>
+    <span style="opacity:.5;font-size:9px">v1209</span>
   </footer>
 
 </div>
@@ -24410,7 +24410,7 @@ function _comprasSetTab(t){
     if (t === 'gastos') {
       setMatTab('gastos');
       var r = document.getElementById('_comprasResumenGastos');
-      if (r) r.innerHTML = _puedeVerGastos() ? (_comprasGastosDashHTML() + _comprasCxpHTML() + _comprasGastosResumenHTML()) : ''; // v1042: dashboard arriba · v1059: + cuentas por pagar
+      if (r) r.innerHTML = _puedeVerGastos() ? (_comprasGastosDashHTML() + _variosGastosHTML() + _comprasCxpHTML() + _comprasGastosResumenHTML()) : ''; // v1042: dashboard arriba · v1059: + cuentas por pagar
     }
   } catch(e){ console.warn('[v1040] despachar sección', e); }
   /* setMatTab pisa los .active de TODOS los .mat-tab — el activo de la barra de secciones se
@@ -24563,6 +24563,76 @@ function _gastoTileHTML(accento, lbl, valorHTML, sub, subColor){
     + '<div style="font-size:15px;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums">' + valorHTML + '</div>'
     + '<div style="font-size:8.5px;color:' + (subColor || '#9CA3AF') + ';font-weight:600;margin-top:1px">' + sub + '</div></div>';
 }
+/* v1209 (Antonio): GASTOS también muestra los PROYECTOS VARIOS, desglosado por proyectito.
+   TODO DERIVADO, cero escritura (regla v1042): se agrupa en vivo desde el store de varios
+   (v1002) — gasto = órdenes AUTORIZADAS (la OP no es gasto, v1017) — y se suman los
+   DPP/TRAS cuyo destino es un proyectito (viven en el contenedor de la madre). Un
+   proyectito nuevo aparece SOLO en el próximo render. */
+function _variosGastosDatos(){
+  var v = null; try { v = _variosMatStore(); } catch(e){}
+  if (!v) return { proys: [], compra: 0, despacho: 0, total: 0 };
+  var por = {}, orden = [];
+  var add = function(nom, oc, tipo){
+    nom = String(nom || 'SIN PROYECTO').toUpperCase().trim() || 'SIN PROYECTO';
+    if (!por[nom]) { por[nom] = { nombre: nom, total: 0, compra: 0, despacho: 0, ordenes: [] }; orden.push(nom); }
+    var m = Number(oc.total) || 0;
+    por[nom].total += m; por[nom][tipo] += m;
+    por[nom].ordenes.push({ numero: String(oc.numero || ''), proveedor: String(oc.proveedorNombre || ''), fecha: String(oc.fecha || ''), monto: m, tipo: tipo });
+  };
+  (v.ordenes || []).forEach(function(oc){
+    if (!oc || oc.status !== 'AUTORIZADA') return;
+    if (_ocSerieDe(oc) === 'OP') return;
+    add(oc.proyecto, oc, (oc.esDespacho || oc.esPrepago || oc.esTrasiego) ? 'despacho' : 'compra');
+  });
+  var nombres = {};
+  orden.forEach(function(n){ nombres[n] = 1; });
+  (v.pedidos || []).forEach(function(pd){ var n = String((pd && pd.proyectoPedido) || '').toUpperCase().trim(); if (n) nombres[n] = 1; });
+  try {
+    (_dppOrdenesGlobal() || []).forEach(function(o){
+      if (!o || o.status !== 'AUTORIZADA' || !(o.esPrepago || o.esTrasiego)) return;
+      var dest = String(o.destinoProyectoNombre || o.proyecto || '').toUpperCase().trim();
+      if (!dest || !nombres[dest]) return;
+      if (por[dest] && por[dest].ordenes.some(function(x){ return x.numero === String(o.numero || ''); })) return;
+      add(dest, o, 'despacho');
+    });
+  } catch(e){}
+  var proys = orden.map(function(n){ return por[n]; }).filter(function(x){ return x.total > 0.009; })
+    .sort(function(a, b){ return b.total - a.total; });
+  var tc = 0, td = 0; proys.forEach(function(x){ tc += x.compra; td += x.despacho; });
+  return { proys: proys, compra: +tc.toFixed(2), despacho: +td.toFixed(2), total: +(tc + td).toFixed(2) };
+}
+function _variosGastosHTML(){
+  var d = _variosGastosDatos();
+  if (!d.proys.length) return '';
+  var money = function(x){ return 'Q ' + Number(x || 0).toLocaleString('es-GT', { minimumFractionDigits: 2 }); };
+  var esc2 = function(s){ return String(s || '').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+  var max = d.proys[0].total || 1;
+  var barras = d.proys.map(function(x, i){
+    var wC = Math.round(x.compra / max * 100), wD = Math.round(x.despacho / max * 100);
+    var det = x.ordenes.map(function(o){
+      return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:10px;color:#57534E;padding:2px 0">'
+        + '<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc2(_numLimpio(o.numero)) + (o.proveedor ? ' · ' + esc2(o.proveedor) : '') + (o.fecha ? ' · ' + esc2(o.fecha) : '') + '</span>'
+        + '<span style="font-variant-numeric:tabular-nums;flex-shrink:0;color:' + (o.tipo === 'compra' ? '#1D4ED8' : '#166534') + '">' + money(o.monto) + '</span></div>';
+    }).join('');
+    return '<div style="padding:8px 0;border-top:1px solid #F1F5F9">'
+      + '<div onclick="var d=document.getElementById(\'_vgd' + i + '\'); if(d) d.style.display = d.style.display===\'none\' ? \'block\' : \'none\'" style="cursor:pointer">'
+      + '<div style="display:flex;justify-content:space-between;gap:10px;font-size:11.5px;margin-bottom:4px"><b>' + esc2(x.nombre) + '</b><span style="font-weight:700;font-variant-numeric:tabular-nums">' + money(x.total) + '</span></div>'
+      + '<div style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:#F5F5F4">'
+      + (x.compra > 0 ? '<div style="width:' + wC + '%;background:#1D4ED8"></div>' : '')
+      + (x.compra > 0 && x.despacho > 0 ? '<div style="width:2px;background:#fff;flex-shrink:0"></div>' : '')
+      + (x.despacho > 0 ? '<div style="width:' + wD + '%;background:#166534"></div>' : '')
+      + '</div></div>'
+      + '<div id="_vgd' + i + '" style="display:none;margin-top:6px;padding:6px 10px;background:#FAFAF9;border-radius:8px">' + det + '</div>'
+      + '</div>';
+  }).join('');
+  return '<div class="card" style="padding:14px 18px;margin-bottom:14px">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">'
+    + '<b style="font-size:12px;letter-spacing:.5px">GASTOS · PROYECTOS VARIOS</b>'
+    + '<span style="font-size:10px;color:#78716C">' + d.proys.length + ' proyecto' + (d.proys.length !== 1 ? 's' : '') + ' · <span style="color:#1D4ED8;font-weight:700">■</span> COMPRA ' + money(d.compra) + ' · <span style="color:#166534;font-weight:700">■</span> DESPACHO ' + money(d.despacho) + ' · <b>' + money(d.total) + '</b></span>'
+    + '</div>' + barras
+    + '<div style="font-size:9px;color:#A8A29E;margin-top:6px;letter-spacing:.5px">TOCÁ UN PROYECTO PARA VER SUS ÓRDENES · SE ACTUALIZA SOLO CON CADA ORDEN AUTORIZADA Y CADA PROYECTO NUEVO</div>'
+    + '</div>';
+}
 function _comprasGastosDashDatos(){
   var filas = [], provs = {}, prods = {};
   var totC = 0, totD = 0, cxpTotal = 0, cxpVenc = 0;
@@ -24586,6 +24656,9 @@ function _comprasGastosDashDatos(){
   try { var _cxpAll = _cuentasPorPagar(''); cxpTotal = (_cxpAll && _cxpAll.total) || 0; cxpVenc = (_cxpAll && _cxpAll.totalVencido) || 0; } catch(e){}
   /* v1067 (Antonio): el dinero PREPAGADO sin despachar aparece como fila BODEGA CENTRAL —
      antes era invisible en GASTOS hasta despacharse; la fila baja sola con cada despacho */
+  /* v1209: los PROYECTOS VARIOS entran al total de la empresa como fila agregada;
+     el desglose por proyectito vive en su bloque (_variosGastosHTML) */
+  try { var _vg = _variosGastosDatos(); if (_vg.total > 0.009) { filas.push({ nombre: 'PROYECTOS VARIOS (' + _vg.proys.length + ')', compra: _vg.compra, despacho: _vg.despacho, total: _vg.total }); totC += _vg.compra; totD += _vg.despacho; } } catch(e){}
   try {
     var _pp = _prepagoSinDespachar();
     if (_pp.total > 0.009) { filas.push({ nombre: 'BODEGA CENTRAL · PRE-PAGO POR LIBERAR', compra: _pp.total, despacho: 0, total: _pp.total }); totC += _pp.total; }
@@ -38931,7 +39004,7 @@ window._registrarPagoProv = async function(ocId){
      también — renderGastos solo refresca el detalle por obra */
   try {
     const _r = document.getElementById('_comprasResumenGastos');
-    if (_r) _r.innerHTML = _puedeVerGastos() ? (_comprasGastosDashHTML() + _comprasCxpHTML() + _comprasGastosResumenHTML()) : '';
+    if (_r) _r.innerHTML = _puedeVerGastos() ? (_comprasGastosDashHTML() + _variosGastosHTML() + _comprasCxpHTML() + _comprasGastosResumenHTML()) : '';
   } catch(e){}
 };
 /* v1059 (Antonio: "En gastos NO veo el tema de cuentas por pagar… saber cuándo se paga y
