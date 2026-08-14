@@ -17,16 +17,15 @@ ok('el título rojo usa sigla + número', /class="num-lg">\$\{_projSiglas\(pd\.p
 ok('el campo PROYECTO usa la sigla', /<dt>Proyecto<\/dt><dd>\$\{_projSiglas\(pd\.proyectoPedido \|\| p\.name\)\}<\/dd>/.test(z));
 ok('helper _solNum extrae el correlativo del número del pedido', /function _solNum\(/.test(html) && /\(\\d\+\)\\s\*\$/.test(html.replace(/\\\\/g,'\\')));
 
-// ── 3: observaciones en UNA fila ──
-ok('las observaciones van en una sola línea (nowrap)', /class="obs-1linea"/.test(z) && /\.obs-1linea\{[^}]*white-space:nowrap/.test(z));
-ok('con auto-shrink por JS (no corta el texto)', /_obsFit/.test(z) && /scrollWidth/.test(z));
-ok('el auto-shrink corre TAMBIÉN en la captura de imagen', (() => {
-  // el script de ajuste no debe estar dentro del ternario que omite cosas en captura
-  const i = z.indexOf('_obsFit');
-  const zz = z.slice(Math.max(0, i - 400), i + 400);
-  return !/paraCaptura \?/.test(zz);
-})());
-ok('tope mínimo de letra (no desaparece)', /minPx|>= *5/.test(z));
+// ── 3: observaciones COMPLETAS ──
+/* v988 las quería en UNA fila con letra encogible; v1211 (Antonio, 14-ago: "no se puede
+   ver las observaciones completas") lo revirtió: en el compartido como imagen el
+   encogedor JS no siempre corría y el texto salía CORTADO. Ahora QUIEBRAN por CSS puro
+   (funciona igual en pantalla, impreso e imagen) y lo que v988 protegía de verdad —
+   que el texto nunca se pierda — se cumple mejor. */
+ok('las observaciones QUIEBRAN completas (sin nowrap ni overflow que corte)', /class="obs-1linea"/.test(z) && /\.obs-1linea\{[^}]*white-space:normal/.test(z) && !/\.obs-1linea\{[^}]*white-space:nowrap/.test(z));
+ok('con quiebre de palabra por si un token es larguísimo', /\.obs-1linea\{[^}]*overflow-wrap:break-word/.test(z));
+ok('el encogedor viejo quedó neutralizado (no corta nada)', /function _obsFit\(\)\{\}/.test(z));
 
 // ── 4. bloque No. de la OC (pregunta de Antonio: se desbordaba sobre el título) ──
 /* v1151: la línea grande es condicional — el DESPACHO PRE-PAGO muestra su REF (8273-12) y
