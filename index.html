@@ -3388,7 +3388,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1209</span>
+    <span style="opacity:.5;font-size:9px">v1210</span>
   </footer>
 
 </div>
@@ -25213,8 +25213,12 @@ function _pickerGeom(anclaBottom, altoVentana){
    La fila ahora lleva su POSICIÓN (un número: ningún carácter lo puede romper) y el id se
    resuelve del arreglo en memoria. El label además se escapa — antes se inyectaba crudo. */
 function _pickerFilas(items, filtro, selectedId){
-  var f = String(filtro || '').toUpperCase();
-  var its = (items || []).filter(function(x){ return !f || String(x.label).toUpperCase().includes(f); });
+  /* v1210 (Antonio: buscar "PRE PAGO" daba SIN RESULTADOS con "COMPRA PRE-PAGO" en la
+     lista): el filtro normaliza las DOS puntas — guiones, espacios y símbolos fuera —
+     así "PRE PAGO", "prepago" y "PRE-PAGO" son lo mismo. */
+  var N = function(s){ return String(s || '').toUpperCase().replace(/[^A-Z0-9ÁÉÍÓÚÜÑ]/g, ''); };
+  var f = N(filtro);
+  var its = (items || []).filter(function(x){ return !f || N(x.label).includes(f); });
   if (!its.length) return '<div style="padding:14px;text-align:center;color:#9CA3AF;font-size:11px">SIN RESULTADOS</div>';
   var esc = (typeof _escTxt === 'function') ? _escTxt : function(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); };
   return its.map(function(x, i){
@@ -25410,6 +25414,40 @@ window._ocElegirHerramienta = function(btn, idx){
 function _ocBtnProvDe(idx){
   try { return document.querySelector('#ocItemsList [onclick="_abrirPickerProveedor(this, ' + idx + ')"]'); } catch(e){ return null; }
 }
+/* v1210 (Antonio: "tengo el material en bodega YA cargado y al despachar dice 0 de 100" —
+   el NYLON del pedido se llama distinto que el de bodega): al elegir BODEGA CENTRAL, si la
+   clave del renglón NO tiene existencias, se pregunta CUÁL producto de la bodega es y el
+   renglón ADOPTA su nombre/clave (mismo circuito que las herramientas v1187) — el saldo y
+   la SALIDA casan. Es la prevención definitiva del incidente microondas/escalera (salidas
+   fantasma en negativo por nombre tipeado). */
+window._ocOfrecerProductoBodega = function(btn, idx){
+  try {
+    var it = ocWorkingItems[idx];
+    if (!it || it.proveedorId !== '_bodega') return;
+    var saldos = window._bodegaSaldos((state || {}).bodegaMovs) || {};
+    var kIt = _ocItemMemKey(it.name);
+    if (saldos[kIt] && Number(saldos[kIt].saldo) > 0) return;   // la clave ya casa: nada que preguntar
+    var rows = Object.keys(saldos).map(function(k){ return saldos[k]; })
+      .filter(function(x){ return x && Number(x.saldo) > 0; })
+      .sort(function(a, b){ return String(a.name).localeCompare(String(b.name), 'es'); });
+    if (!rows.length) return;
+    _abrirPicker(btn, {
+      items: [{ id: '', label: '— DEJAR EL NOMBRE TIPEADO (' + String(it.name).slice(0, 40) + ') · LA BODEGA NO LO RECONOCE —' }]
+        .concat(rows.map(function(x, i){ return { id: 'b' + i, label: x.name + '  ·  HAY ' + x.saldo }; })),
+      selectedId: '',
+      onPick: function(pid){
+        if (!pid) return;
+        var x = rows[parseInt(String(pid).slice(1), 10)];
+        var it2 = ocWorkingItems[idx];
+        if (!x || !it2) return;
+        it2.name = x.name;   // adopta la identidad de la bodega — el saldo y la salida casan
+        it2.precio = 0;
+        showToast('TOMADO DE BODEGA: ' + x.name + ' · HAY ' + x.saldo, 'green');
+        renderOcItems();
+      }
+    });
+  } catch(e){ console.warn('[v1210] producto de bodega:', e); }
+};
 window._ocOfrecerProductoCatalogo = function(btn, idx, provId, eraEventual){
   var it = ocWorkingItems[idx];
   /* v1188: updateOcItemProveedor ya corrió y pudo QUITARLE la marca eventual al renglón — por
@@ -25660,7 +25698,13 @@ window.updateOcItemVariante = function(idx, valor){
   item.name = _base + _spec;
   /* Los materiales que salen de BODEGA CENTRAL (despacho, v921/v936) no se compran: elegir
      presentación no puede convertirlos en una compra al proveedor. */
-  if (item.esBodega || item.proveedorId === '_bodega') { renderOcItems(); return; }
+  if (item.esBodega || item.proveedorId === '_bodega') {
+    renderOcItems();
+    /* v1210: recién asignada la bodega, preguntar CUÁL producto es si la clave no casa —
+       tras el repintado y con el botón fresco (lección v1188) */
+    if (item.proveedorId === '_bodega') setTimeout(function(){ try { window._ocOfrecerProductoBodega(_ocBtnProvDe(idx), idx); } catch(e){} }, 60);
+    return;
+  }
   // el precio y el proveedor se recalculan con el nombre REAL de compra
   const best = findBestProviderForItem(item.name);
   if (best) {
