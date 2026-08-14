@@ -3388,7 +3388,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1205</span>
+    <span style="opacity:.5;font-size:9px">v1206</span>
   </footer>
 
 </div>
@@ -9304,6 +9304,36 @@ function _versionBloqueada(appVer, minVer){
    (menos las FOTOS, v993: si no, 50 dispositivos re-descargan todo) y recarga con
    cache-bust. GUARD ANTI-BUCLE de 90 s en sessionStorage — sin él, un despliegue a medias
    haría girar a la flota en recargas infinitas (la lección del 8-jul). */
+/* v1206 (Antonio: "que automáticamente se actualice en TODOS cuando lo abran"): al ABRIR
+   (+8 s) y al VOLVER a la pestaña (máx. 1 vez cada 10 min) se baja sw.js SIN caché y se
+   compara su CACHE_VERSION contra la versión que corre (el chip). Si hay una más nueva:
+   con la app quieta (sin modal) se dispara _autoActualizar (v1165). Antes actualizarse
+   dependía del doble ciclo del service worker o de chocar con el candado al escribir.
+   Un intento fallido para ESA versión no se repite en la sesión (SW trabado ⇒ no ciclar;
+   el candado de versión sigue de respaldo). */
+async function _chequearVersionPublicada(motivo){
+  try {
+    if (window._verChequeoUlt && Date.now() - window._verChequeoUlt < 600e3) return;
+    window._verChequeoUlt = Date.now();
+    const r = await fetch('sw.js?nocache=' + Date.now(), { cache: 'no-store' });
+    const t = await r.text();
+    const m = t.match(/CACHE_VERSION = 'v(\d+)/);
+    if (!m) return;
+    const remota = parseInt(m[1], 10);
+    let local = 0;
+    document.querySelectorAll('span').forEach(s => { const x = (s.textContent || '').trim().match(/^v(\d{3,4})$/); if (x) local = parseInt(x[1], 10); });
+    if (!local || !(remota > local)) return;
+    if (String(sessionStorage.getItem('_verIntento') || '') === String(remota)) return;
+    console.log('[v1206] publicada v' + remota + ' > corriendo v' + local + ' (' + motivo + ') — actualizando…');
+    if (typeof isUserBusy === 'function' && isUserBusy()) { window._verChequeoUlt = 0; return; }
+    try { sessionStorage.setItem('_verIntento', String(remota)); } catch(e){}
+    _autoActualizar('versión nueva publicada (v' + remota + ')');
+  } catch(e){}
+}
+try {
+  setTimeout(function(){ _chequearVersionPublicada('al abrir'); }, 8000);
+  document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'visible') _chequearVersionPublicada('volviste a la pestaña'); });
+} catch(e){}
 function _autoActualizar(forzar){
   try {
     var K = 'pr_autoupd_ts';
