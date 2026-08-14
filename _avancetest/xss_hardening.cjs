@@ -17,7 +17,9 @@ ok('colab telefono escapado', html.indexOf('esc(c.telefono') >= 0);
 ok('colab nombre crudo eliminado', html.indexOf('>${c.nombre||\'\'}') < 0);
 
 // ── B) Observaciones / orden de cambio de pedidos (3 renders + print) ──
-ok('observaciones escapado (>=3 sitios)', count('esc(pd.observaciones)') >= 3);
+/* v1212: las observaciones pasan por _obsSinEco (quita el eco "ETAPA 2 · 2DA ETAPA")
+   ANTES de esc — la propiedad protegida es la misma: lo que se pinta va escapado. */
+ok('observaciones escapado (>=3 sitios)', count('esc(_obsSinEco(pd.observaciones))') >= 3 && count('esc(pd.observaciones)') === 0);
 ok('ordenCambio escapado (>=2 sitios)',   count('esc(pd.ordenCambio)') >= 2);
 ok('observaciones crudo eliminado', html.indexOf('"${pd.observaciones}"') < 0);
 
