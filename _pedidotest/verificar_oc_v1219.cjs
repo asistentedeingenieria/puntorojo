@@ -61,6 +61,13 @@ ok('el QR se genera LOCAL con qrcodejs (nada viaja a servicios externos)',
    funciona sin internet de terceros, en el impreso y en la imagen compartida. */
 ok('v1222: qrcodejs viaja DENTRO de la app (ya no del CDN)',
   /var QRCode;!function\(\)/.test(html) && !/cdnjs\.cloudflare\.com\/ajax\/libs\/qrcodejs/.test(html));
+/* v1224: el bug UTF-8 de qrcodejs — el buffer `b` se declaraba UNA vez fuera del bucle y
+   tras el primer carácter no-ASCII (el · del texto) cada letra siguiente arrastraba bytes
+   basura ⇒ "code length overflow" ⇒ QR NO DISPONIBLE. Reproducido en navegador real:
+   "HOLA MUNDO" OK, el texto con · reventaba. El parche mueve b=[] ADENTRO del bucle. */
+ok('v1224: el parche UTF-8 está aplicado (b=[] nace en cada vuelta del bucle)',
+  /for\(var d=0,e=this\.data\.length;e>d;d\+\+\)\{var b=\[\],f=this\.data\.charCodeAt\(d\)/.test(html)
+  && !/for\(var b=\[\],d=0,e=this\.data\.length/.test(html));
 ok('v1222: si aún así no hay QR, el documento LO DICE (nada de silencio)',
   /QR NO DISPONIBLE/.test(html));
 
