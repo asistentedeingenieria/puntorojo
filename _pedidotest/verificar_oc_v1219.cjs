@@ -62,8 +62,23 @@ ok('la franja de verificación está en el doc', /SELLO DE INTEGRIDAD · \$\{/.t
 ok('avisa cómo verificar', /VERIFICAR OC/.test(zP.slice(0, 30000)));
 
 console.log('\n— 4. el verificador: la nube es la fuente de verdad —');
+/* v1221 (Antonio): VERIFICAR OC solo para ÉL (admin) y SIBILA (csibila, gerente
+   financiero) — ni compras ni quien autoriza lo ven (el verificador vigila justamente a
+   quienes tocan las OC; no puede estar en manos de los vigilados). */
+const zG = ex(code, 'function _puedeVerificarOc(');
+ok('el candado es una lista cerrada: admin + csibila', !!zG && /users\.manage/.test(zG) && /csibila/.test(zG));
+try {
+  const mkG = (esAdmin, username, email) => new Function('can', 'getCurrentUser', 'return (' + zG + ')')(
+    perm => esAdmin && perm === 'users.manage', () => ({ username: username, email: email }));
+  ok('el admin puede', mkG(true, 'antonio', '')() === true);
+  ok('SIBILA puede (por usuario)', mkG(false, 'csibila', '')() === true);
+  ok('SIBILA puede (por correo)', mkG(false, '', 'CSIBILA@PUNTOROJOSA.COM')() === true);
+  ok('compras NO puede', mkG(false, 'susana', 'susana@puntorojosa.com')() === false);
+  ok('quien AUTORIZA tampoco (Erlin no está en la lista)', mkG(false, 'erlin', 'erlin@puntorojosa.com')() === false);
+} catch(e){ ok('el candado evalúa', false); console.log('  ' + e.message); }
 const zU = ex(code, 'window._verificarOcUI = function(');
-ok('existe con candado de permiso', !!zU && /can\('compras\.autorizar'\)/.test(zU) && /can\('users\.manage'\)/.test(zU));
+ok('existe y usa el candado nuevo (ya no compras.autorizar)', !!zU && /_puedeVerificarOc\(\)/.test(zU) && !/compras\.autorizar/.test(zU));
+ok('el botón también usa el candado nuevo', /_puedeVerificarOc\(\)[\s\S]{0,200}VERIFICAR OC<\/button>/.test(html));
 const zB = ex(code, 'window._verificarOcBuscar = function(');
 ok('busca en LOS TRES contenedores (obras + bodega + varios)',
   /state\.projects/.test(zB) && /bodegaMat/.test(zB) && /variosMat/.test(zB));
