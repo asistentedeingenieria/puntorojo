@@ -109,6 +109,14 @@ ok('verificar.html pide la clave (input password) y avisa si es incorrecta',
 ok('v1229: el texto de la pantalla de clave es el pedido, en mayúscula',
   /PARA PODER VER EL DOCUMENTO VERIFICADO INGRESA LA CLAVE\./.test(vh2)
   && /placeholder="CLAVE"/.test(vh2) && !/Este resumen está protegido/.test(vh2));
+/* v1230 (Antonio): símbolo ® junto a PUNTO ROJO; fondo color institucional (rojo, no
+   beige); botón blanco con letras rojas que se INVIERTE (rojo con letras blancas) al
+   pasar el mouse o enfocarlo. */
+ok('v1230: PUNTO ROJO lleva el símbolo de marca', /PUNTO ROJO<sup/.test(vh2) && /®/.test(vh2));
+ok('v1230: el fondo es el rojo institucional (no beige)', /body \{[^}]*background: #C8141C/.test(vh2) && !/background: #F5F3EE/.test(vh2));
+ok('v1230: botón blanco/rojo que se invierte al hover y focus',
+  /\.clave-btn \{[^}]*background: #fff;[^}]*color: #C8141C/.test(vh2)
+  && /\.clave-btn:hover, \.clave-btn:focus \{[^}]*background: #C8141C;[^}]*color: #fff/.test(vh2));
 ok('la app tiene _qrClaveSet (solo admin) y lee la clave del doc config',
   /window\._qrClaveSet = /.test(code) && /can\('users\.manage'\)/.test(ex(code, 'window._qrClaveSet = ')) && /window\._qrClave = String\(\(s && s\.exists && \(s\.data\(\)\|\|\{\}\)\.qrClave \|\| ''\)\)/.test(code));
 console.log('\n— 2d. v1228: el diseño de la página (pedidos de Antonio) —');
