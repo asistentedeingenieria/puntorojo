@@ -64,10 +64,18 @@ ok('v1222: qrcodejs viaja DENTRO de la app (ya no del CDN)',
 ok('v1222: si aún así no hay QR, el documento LO DICE (nada de silencio)',
   /QR NO DISPONIBLE/.test(html));
 
-console.log('\n— 3. el documento de la OC lleva el sello y el QR (impreso Y compartido) —');
-const zP = code.slice(code.indexOf('function printOrdenCompra('));
-ok('la franja de verificación está en el doc', /SELLO DE INTEGRIDAD · \$\{/.test(html) && /_ocQrDataUrl\(_ocQrTexto\(oc\)\)/.test(html));
-ok('avisa cómo verificar', /VERIFICAR OC/.test(zP.slice(0, 30000)));
+console.log('\n— 3. el documento: SOLO el QR, discreto, encima de las firmas (v1223) —');
+/* v1223 (Antonio): "no quiero que las personas crean que estoy desconfiando de ellas".
+   Nada de sello impreso ni advertencias en el documento — solo el QR, abajo-izquierda,
+   encima de las firmas. El escaneo muestra datos NEUTROS (sin "fue alterado"); la
+   lectura de auditoría vive únicamente en VERIFICAR OC (admin + Sibila). */
+const _doc = html.slice(html.indexOf('function printOrdenCompra('), html.indexOf('window.compartirOcImg'));
+ok('el QR está en el doc', /_ocQrDataUrl\(_ocQrTexto\(oc\)\)/.test(_doc));
+ok('el QR va ANTES de las firmas (encima, no al pie)',
+  _doc.indexOf('_ocQrDataUrl(_ocQrTexto(oc))') >= 0 && _doc.indexOf('_ocQrDataUrl(_ocQrTexto(oc))') < _doc.indexOf('<div class="oc-firmas">'));
+ok('SIN sello impreso ni textos de advertencia en el documento',
+  !/SELLO DE INTEGRIDAD · \$\{/.test(_doc) && !/FUE ALTERADO/.test(_doc) && !/EL QR MUESTRA/.test(_doc));
+ok('el ESCANEO tampoco acusa (la frase "fue alterado" salió del QR)', !/FUE ALTERADO/.test(zQ));
 
 console.log('\n— 4. el verificador: la nube es la fuente de verdad —');
 /* v1221 (Antonio): VERIFICAR OC solo para ÉL (admin) y SIBILA (csibila, gerente
