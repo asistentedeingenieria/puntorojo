@@ -3388,7 +3388,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1219</span>
+    <span style="opacity:.5;font-size:9px">v1220</span>
   </footer>
 
 </div>
@@ -27752,17 +27752,32 @@ function _selloHash32(s, seed){
 function _ocSelloIntegridad(oc){
   try {
     var items = (oc.items || []).map(function(it){ return [String(it.name||''), Number(it.qty)||0, Number(it.precio)||0].join(':'); }).join(';');
-    var base = [_numLimpio(oc.numero||''), String(oc.proveedorNombre||''), String(oc.fecha||''), (Number(oc.total)||0).toFixed(2), items].join('|').toUpperCase();
+    /* v1220: el sello CUBRE LA AUTORIZACIÓN (cuenta + hora exacta). Una OC pendiente con
+       la firma de finanzas pegada en Paint ya no puede dar el sello de la autorizada, y
+       autorizar cambia el sello — el documento firmado tiene OTRO sello que el borrador. */
+    var aut = 'AUT:' + String(oc.autorizadoPorUsername || oc.autorizadoPor || 'SIN-AUTORIZAR') + ':' + (Number(oc.autorizadoTs) || 0);
+    var base = [_numLimpio(oc.numero||''), String(oc.proveedorNombre||''), String(oc.fecha||''), (Number(oc.total)||0).toFixed(2), items, aut].join('|').toUpperCase();
     var a = _selloHash32(base, 2166136261), b = _selloHash32(base, 40009);
     var hex = (('00000000' + a.toString(16)).slice(-8) + ('00000000' + b.toString(16)).slice(-8)).toUpperCase();
     return hex.slice(0, 4) + '-' + hex.slice(4, 8) + '-' + hex.slice(8, 12);
   } catch(e){ return '—'; }
 }
 function _ocQrTexto(oc){
+  /* v1220: el QR DICE la autorización real — quién, desde qué CUENTA y cuándo. Una firma
+     pegada en Paint sobre una OC pendiente queda desmentida por el propio QR del documento. */
+  var autLinea;
+  if (oc.autorizadoPor || oc.autorizadoPorUsername) {
+    var d = oc.autorizadoTs ? new Date(Number(oc.autorizadoTs)) : null;
+    autLinea = 'AUTORIZADA POR: ' + String(oc.autorizadoPor || '') + (oc.autorizadoPorUsername ? ' (@' + oc.autorizadoPorUsername + ')' : '')
+      + (d ? ' · ' + d.toLocaleDateString('es-GT') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0') : '');
+  } else {
+    autLinea = 'SIN AUTORIZAR — NO VALIDA PARA COMPRA';
+  }
   return 'PUNTO ROJO · ORDEN ' + _numLimpio(oc.numero||'') + '\n'
     + 'PROVEEDOR: ' + String(oc.proveedorNombre||'') + '\n'
     + 'FECHA: ' + String(oc.fecha||'') + '\n'
     + 'TOTAL: Q ' + (Number(oc.total)||0).toFixed(2) + '\n'
+    + autLinea + '\n'
     + 'SELLO: ' + _ocSelloIntegridad(oc) + '\n'
     + 'SI EL DOCUMENTO NO COINCIDE CON ESTOS DATOS, FUE ALTERADO.';
 }
@@ -27829,8 +27844,11 @@ window._verificarOcBuscar = function(){
       + '<span style="font-size:10px;letter-spacing:1px;align-self:center">TOTAL</span><b style="font-size:14px">' + fmt(o.total) + '</b></div>'
       + '<table style="width:100%;border-collapse:collapse;font-size:10.5px"><tr style="color:#78716C;text-align:left"><th style="padding:3px 6px">PRODUCTO</th><th style="padding:3px 6px;text-align:right">CANT.</th><th style="padding:3px 6px;text-align:right">PRECIO U</th><th style="padding:3px 6px;text-align:right">TOTAL</th></tr>' + filas + '</table>'
       + '<div style="font-size:10px;color:#78716C;margin-top:8px;line-height:1.7">'
-      + 'GENERADA POR <b>' + _esc(o.generadoPor || '—') + '</b>' + (o.generadoTs ? ' · ' + _esc(fecha(o.generadoTs)) : '')
-      + (o.autorizadoPor ? '<br>AUTORIZADA POR <b>' + _esc(o.autorizadoPor) + '</b>' + (o.autorizadoTs ? ' · ' + _esc(fecha(o.autorizadoTs)) : '') : '<br>SIN AUTORIZAR')
+      + 'GENERADA POR <b>' + _esc(o.generadoPor || '—') + '</b>' + (o.generadoPorUsername ? ' <span style="color:#0F172A;font-weight:700">(@' + _esc(o.generadoPorUsername) + ')</span>' : '') + (o.generadoTs ? ' · ' + _esc(fecha(o.generadoTs)) : '')
+      + (o.autorizadoPor
+        ? '<br>AUTORIZADA POR <b>' + _esc(o.autorizadoPor) + '</b>' + (o.autorizadoPorUsername ? ' <span style="color:#0F172A;font-weight:700">(@' + _esc(o.autorizadoPorUsername) + ')</span>' : '') + (o.autorizadoTs ? ' · ' + _esc(fecha(o.autorizadoTs)) : '')
+        : '<br><b style="color:#B91C1C">SIN AUTORIZAR</b> — si la imagen trae firma de autorización, la firma fue PEGADA')
+      + '<br><span style="font-size:9px">La autorización solo puede hacerla una cuenta con permiso de revisor, y quien la genera no puede autorizarla (control v919). La cuenta y la hora quedan selladas al autorizar.</span>'
       + '</div>'
       + '<div style="font-size:10px;color:#7C5800;background:#FFF8E1;border-left:3px solid #F4D040;padding:6px 10px;border-radius:4px;margin-top:8px">Compará TODO contra la imagen recibida: renglones, cantidades, precios, total y sello. <b>Si un solo dato difiere, la imagen NO es la orden legítima.</b></div>'
       + '</div>';
@@ -28237,7 +28255,7 @@ ${showDraft ? '<div class="no-print" style="background:var(--red-soft);padding:1
     ${(function(){ try { var _q = _ocQrDataUrl(_ocQrTexto(oc)); return _q ? '<img src="' + _q + '" style="width:88px;height:88px;flex-shrink:0">' : ''; } catch(e){ return ''; } })()}
     <div style="font-size:8.5px;color:#555;line-height:1.9;letter-spacing:.4px">
       <div style="font-size:10.5px;font-weight:800;color:#1a1a1a;letter-spacing:2px">SELLO DE INTEGRIDAD · ${_ocSelloIntegridad(oc)}</div>
-      <div>EL QR MUESTRA EL No., PROVEEDOR, TOTAL Y SELLO LEGÍTIMOS DE ESTA ORDEN — ESCANEALO CON CUALQUIER TELÉFONO.</div>
+      <div>EL QR MUESTRA EL No., PROVEEDOR, TOTAL, AUTORIZACIÓN (QUIÉN, CUENTA Y HORA) Y SELLO LEGÍTIMOS — ESCANEALO CON CUALQUIER TELÉFONO.</div>
       <div>VERIFICABLE EN LA APP (COMPRAS → VERIFICAR OC). SI CUALQUIER DATO NO COINCIDE, EL DOCUMENTO FUE ALTERADO.</div>
     </div>
   </div>

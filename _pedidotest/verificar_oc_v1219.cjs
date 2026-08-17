@@ -35,12 +35,23 @@ try {
   ok('un precio cambia el sello', fS(pr) !== s1);
   const n = OC(); n.numero = 'OC4 - 000017';
   ok('el número cambia el sello', fS(n) !== s1);
+  /* v1220 (Antonio: "que no esté compras poniendo la firma de finanzas... que se corrobore
+     que eso se hizo desde el usuario de finanzas"): el sello CUBRE LA AUTORIZACIÓN. Una OC
+     pendiente con la firma pegada en Paint ya no puede dar el sello de la autorizada. */
+  const a1 = OC(); a1.autorizadoPorUsername = 'erlin'; a1.autorizadoTs = 1755400000000;
+  ok('v1220: AUTORIZAR cambia el sello (la firma pegada en Paint no puede fingirlo)', fS(a1) !== s1);
+  const a2 = OC(); a2.autorizadoPorUsername = 'otra'; a2.autorizadoTs = 1755400000000;
+  ok('v1220: la CUENTA que autoriza es parte del sello', fS(a2) !== fS(a1));
+  const a3 = OC(); a3.autorizadoPorUsername = 'erlin'; a3.autorizadoTs = 1755400000001;
+  ok('v1220: la HORA de autorización es parte del sello', fS(a3) !== fS(a1));
 } catch(e){ ok('evalúa aislado', false); console.log('  ' + e.message); }
 
 console.log('\n— 2. el QR: local y con los datos legítimos —');
 const zQ = ex(code, 'function _ocQrTexto(');
 ok('el texto del QR lleva número, proveedor, total y sello',
   /PROVEEDOR: /.test(zQ) && /TOTAL: Q /.test(zQ) && /SELLO: /.test(zQ) && /_ocSelloIntegridad\(oc\)/.test(zQ));
+ok('v1220: el QR DICE la autorización real — quién, desde qué cuenta y cuándo, o SIN AUTORIZAR',
+  /AUTORIZADA POR: /.test(zQ) && /SIN AUTORIZAR/.test(zQ) && /autorizadoPorUsername/.test(zQ));
 const zD = ex(code, 'function _ocQrDataUrl(');
 ok('el QR se genera LOCAL con qrcodejs (nada viaja a servicios externos)',
   /new QRCode\(/.test(zD) && /toDataURL/.test(zD) && !/qrserver|googleapis/.test(zD));
@@ -58,6 +69,10 @@ ok('busca en LOS TRES contenedores (obras + bodega + varios)',
   /state\.projects/.test(zB) && /bodegaMat/.test(zB) && /variosMat/.test(zB));
 ok('normaliza el número buscado (espacios/guiones fuera)', /replace\(/.test(zB) && /toUpperCase\(\)/.test(zB));
 ok('muestra quién la generó y quién la autorizó', /generadoPor/.test(zB) && /autorizadoPor/.test(zB));
+ok('v1220: muestra LA CUENTA (@usuario) que autorizó — no solo el nombre en letras',
+  /autorizadoPorUsername/.test(zB) && /generadoPorUsername/.test(zB));
+ok('v1220: explica el candado (solo cuenta revisora; quien genera no autoriza)',
+  /quien la genera no puede autorizarla|QUIEN LA GENERA NO PUEDE AUTORIZARLA/i.test(zB));
 ok('todo lo pintado va escapado (regla XSS v849)', /_esc\(|esc\(/.test(zB));
 
 console.log('\n— 5. el botón en COMPRAS —');
