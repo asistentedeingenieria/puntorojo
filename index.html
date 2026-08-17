@@ -3388,7 +3388,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1215</span>
+    <span style="opacity:.5;font-size:9px">v1216</span>
   </footer>
 
 </div>
@@ -25441,6 +25441,7 @@ window._ocOfrecerProductoBodega = function(btn, idx){
         var it2 = ocWorkingItems[idx];
         if (!x || !it2) return;
         it2.name = x.name;   // adopta la identidad de la bodega — el saldo y la salida casan
+        try { _ocLineaAUnidadDeBodega(it2, x.u); } catch(e){}  // v1216: cantidad en la unidad de la bodega
         it2.precio = 0;
         showToast('TOMADO DE BODEGA: ' + x.name + ' · HAY ' + x.saldo, 'green');
         renderOcItems();
@@ -25817,7 +25818,10 @@ function updateOcItemProveedor(idx, provId, opts){
      El check va ANTES de mutar nada: si se pregunta, la línea queda intacta hasta la
      respuesta. Saldo CERO no pregunta (no hay nada que partir): sigue el aviso de siempre.
      La re-entrada tras partir pasa {sinPreguntar:true} para no preguntar en bucle. */
-  if (provId === '_bodega' && !(opts && opts.sinPreguntar)) {
+  /* v1216: los renglones convertidos a presentación de compra (factorPres) no se parten —
+     su cantidad está en OTRA unidad que la bodega; siguen el camino normal (la adopción
+     los pasa a la unidad de la bodega y avisa si no alcanza). */
+  if (provId === '_bodega' && !(opts && opts.sinPreguntar) && !item.factorPres) {
     const _resB = _bodegaBuscarMaterial(item.name);
     if (_resB && _resB.saldo > 0 && (Number(item.qty) || 0) > _resB.saldo + 0.0001) {
       _ocPreguntarParticionBodega(idx, _resB);
@@ -25836,6 +25840,7 @@ function updateOcItemProveedor(idx, provId, opts){
     const _res = _bodegaBuscarMaterial(item.name);
     if (_res && _res.saldo > 0) {
       if (_res.name && _res.name !== item.name) item.name = _res.name;  // el nombre de la bodega manda
+      _ocLineaAUnidadDeBodega(item, _res.u);  // v1216: la cantidad, en la unidad de la bodega
       item.precio = _res.precio || 0;
       item.autoAssigned = true;
       item.esBodega = true;
@@ -25858,6 +25863,7 @@ function updateOcItemProveedor(idx, provId, opts){
       let _avisoCerrar = '';
       if (_res) {
         if (_res.name && _res.name !== item.name) item.name = _res.name;
+        _ocLineaAUnidadDeBodega(item, _res.u);  // v1216
         item.precio = _res.precio || 0;
         item.autoAssigned = true;
         item.esBodega = true;
@@ -25932,6 +25938,29 @@ async function _ocPreguntarParticionBodega(idx, resB){
   updateOcItemProveedor(idx, '_bodega', { sinPreguntar: true });
   showToast('PARTIDO: ' + b + ' DE BODEGA + ' + _p.resto.qty + ' AL PROVEEDOR', 'ok');
 }
+/* v1216 (VDC-38, "¿cómo despachamos este poco de clavos y tornillos de bodega?"): el
+   catálogo convierte los renglones chicos a presentación de COMPRA (1 CIENTO = 20 UND,
+   v1189) — pero la bodega cuenta en SU unidad. Al despachar de bodega la cantidad se pasa
+   a la unidad de la FILA: si es la misma presentación (TIRA ≈ TIRA DE 10) se queda; si no
+   (UND vs CIENTO), vuelven las unidades del pedido. PURA. */
+function _ocQtyEnUnidadDeBodega(item, u){
+  var q = Number(item && item.qty) || 0;
+  if (!item || !item.factorPres || !(Number(item.qtyUnidades) > 0)) return q;
+  var uu = _bodegaUFmt(u);
+  var pe = _bodegaUFmt(String(item.presEtiqueta || '').trim().split(/\s+/)[0]);
+  if (uu && pe && uu === pe) return q;              // la bodega cuenta en la MISMA presentación
+  return Number(item.qtyUnidades) || q;             // la bodega cuenta piezas: vuelven las unidades
+}
+/* muta la línea al adoptar el producto de bodega: si la cantidad cambió de unidad, las
+   marcas de presentación se limpian (el render ya no debe decir CIENTO/CAJA) */
+function _ocLineaAUnidadDeBodega(item, u){
+  if (!item) return;
+  var q = _ocQtyEnUnidadDeBodega(item, u);
+  if (q !== (Number(item.qty) || 0)) {
+    item.qty = q;
+    delete item.factorPres; delete item.presEtiqueta; delete item.qtyUnidades;
+  }
+}
 function _bodegaBuscarMaterial(nombre){
   const saldos = (typeof window._bodegaSaldos === 'function') ? window._bodegaSaldos((state || {}).bodegaMovs) : {};
   const k0 = (function(){ try { return _ocItemMemKey(nombre); } catch(e){ return ''; } })();
@@ -25955,7 +25984,7 @@ function _bodegaBuscarMaterial(nombre){
   for (const k of claves) {
     const s = saldos[k];
     if (!s) continue;
-    const r = { key: k, name: s.name || nombre, saldo: Number(s.saldo) || 0, precio: _precioEntradaBodega(k) };
+    const r = { key: k, name: s.name || nombre, u: s.u || '', saldo: Number(s.saldo) || 0, precio: _precioEntradaBodega(k) };
     if (r.saldo > 0) return r;
     if (!_muerta) _muerta = r;
   }
