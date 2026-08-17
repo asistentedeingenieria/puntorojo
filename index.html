@@ -3388,7 +3388,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1216</span>
+    <span style="opacity:.5;font-size:9px">v1217</span>
   </footer>
 
 </div>
@@ -53242,8 +53242,33 @@ window.addEventListener('load', () => {
     p.planilla._etapasPlanillaOficiales5 = true;
   }
   function stageTotal5(p,a,idx){ const mo=modeloObj5(p,p.planilla?.aptoModelMap?.[a.id] || 'GENERAL'); return Number(mo?.costos?.[idx] || 0); }
-  function paidPct5(p,aid,idx){ const list=(p.planilla?.pagos||[]).filter(x=>x.tipo==='ETAPA' && x.aptoId===aid && Number(x.stageIdx)===Number(idx)); return list.length ? Math.max(...list.map(x=>Number(x.targetPct||100))) : 0; }
+  /* v1217: los ABONOS (esAbono, VLA — plata adelantada SIN precio de etapa) no cuentan como
+     % pagado. Traen targetPct:0, y el `targetPct||100` de siempre volvía ese 0 falsy en un
+     100%: la etapa aparecía PAGADA COMPLETA y la app se negaba a pagar el resto. */
+  function paidPct5(p,aid,idx){ const list=(p.planilla?.pagos||[]).filter(x=>x.tipo==='ETAPA' && !x.esAbono && x.aptoId===aid && Number(x.stageIdx)===Number(idx)); return list.length ? Math.max(...list.map(x=>Number(x.targetPct||100))) : 0; }
   try{ window.paidPct5 = paidPct5; }catch(e){} // v846: exponer para _avAptoMetric (PDF de avance de pago, otro alcance)
+  /* v1217 — LA RESTA DE ABONOS (plan de Antonio, 14-ago): VLA arrancó pagando abonos sin
+     precios de etapa ("que la app calcule cuánto se le puede pagar después con base a lo
+     que hemos ido agregando"). Al pagar por %, lo ya abonado del MISMO apto+etapa se
+     descuenta del NETO y el pago registra `abonoAplicado`. El pool es DERIVADO
+     (Σ bruto esAbono − Σ abonoAplicado): eliminar un pago lo devuelve solo (regla v1064). */
+  window._abonoPendienteAptoEtapa = function(p, aptoId, stageIdx){
+    try {
+      var dado = 0, usado = 0;
+      (((p || {}).planilla || {}).pagos || []).forEach(function(pg){
+        if (!pg || pg.tipo !== 'ETAPA' || pg.aptoId !== aptoId || Number(pg.stageIdx) !== Number(stageIdx)) return;
+        if (pg.esAbono) dado += Number(pg.bruto) || 0;
+        else usado += Number(pg.abonoAplicado) || 0;
+      });
+      return Math.max(0, +(dado - usado).toFixed(2));
+    } catch(e){ return 0; }
+  };
+  window._abonoAplicarANeto = function(p, aptoId, stageIdx, neto){
+    var n = Number(neto) || 0;
+    var pool = window._abonoPendienteAptoEtapa(p, aptoId, stageIdx);
+    var aplica = +(Math.min(n, pool)).toFixed(2);
+    return { abonoAplicado: aplica, neto: +((n - aplica)).toFixed(2) };
+  };
   function pctOptions5(current){ return PLANILLA_PCTS_5.filter(x=>x>current); }
   function nextPct5(current){ return pctOptions5(current)[0] || ''; }
 
@@ -53875,7 +53900,11 @@ window.addEventListener('load', () => {
     const total=stageTotal5(p,a,stageIdx); if(total<=0) return showToast('ESTE MODELO NO TIENE MONTO PARA ESA ETAPA','red');
     const current=paidPct5(p,aid,stageIdx); const sel=document.getElementById(`pct-${aid}-${stageIdx}`); const target=Number(sel?.value || nextPct5(current) || 0);
     if(!PLANILLA_PCTS_5.includes(target) || target<=current) return showToast('ELEGIR UN PORCENTAJE MAYOR AL PAGADO','red');
-    const pctDelta=target-current; const bruto=+(total*pctDelta/100).toFixed(2); const retencion=+(bruto*0.10).toFixed(2); const neto=+(bruto-retencion).toFixed(2); const mo=modeloObj5(p,p.planilla.aptoModelMap?.[aid]||'GENERAL'); const etapa=ETAPAS_PROJ[stageIdx];
+    const pctDelta=target-current; const bruto=+(total*pctDelta/100).toFixed(2); const retencion=+(bruto*0.10).toFixed(2);
+    // v1217: lo ya ABONADO de este apto+etapa (VLA) se descuenta del neto — sin esto habría doble pago
+    const _ab=window._abonoAplicarANeto(p, aid, stageIdx, +(bruto-retencion).toFixed(2));
+    const neto=_ab.neto; const abonoAplicado=_ab.abonoAplicado;
+    const mo=modeloObj5(p,p.planilla.aptoModelMap?.[aid]||'GENERAL'); const etapa=ETAPAS_PROJ[stageIdx];
 
     // v224: BLOQUEO POR ACUSE DESACTIVADO. El admin pidio poder pagar sin necesidad
     // de tener el acuse firmado mientras el sistema de acuses no esté en funcionamiento.
@@ -53915,7 +53944,7 @@ window.addEventListener('load', () => {
       bodyHTML: window._buildGenerarPagoBodyHTML({
         trabajador: colab.nombre, apto: a.name,
         etapaIdx: stageIdx, etapaName: etapa.name,
-        current, target, bruto, retencion, neto
+        current, target, bruto, retencion, neto, abonoAplicado // v1217
       }),
       okText: 'GENERAR PAGO'
     });
@@ -53934,7 +53963,7 @@ window.addEventListener('load', () => {
       aptoName:a.name,towerName:t.name,levelName:l.name,
       stageIdx,stageName:etapa.name,
       detalle:`${t.name} · ${a.name} · ETAPA ${stageIdx+1} · ${etapa.name}`,
-      bruto,retencion,neto,
+      bruto,retencion,neto,abonoAplicado, // v1217: cuánto del abono previo absorbió este pago
       colaborador:upper(colab.nombre),colaboradorId:colab.id,colaboradorRol:rol,
       autorizado:false,retencionPagada:false,
       targetPct:target,pctDelta,stageTotal:total,
@@ -53991,7 +54020,9 @@ window.addEventListener('load', () => {
     const total = stageTotal5(p,a,stageIdx); if(total<=0) return null;
     const current = paidPct5(p,aid,stageIdx); target = Number(target)||0;
     if(!(target>current)) return null;
-    const pctDelta=target-current; const bruto=+(total*pctDelta/100).toFixed(2); const retencion=+(bruto*0.10).toFixed(2); const neto=+(bruto-retencion).toFixed(2);
+    const pctDelta=target-current; const bruto=+(total*pctDelta/100).toFixed(2); const retencion=+(bruto*0.10).toFixed(2);
+    const _abS=window._abonoAplicarANeto(p, aid, stageIdx, +(bruto-retencion).toFixed(2)); // v1217
+    const neto=_abS.neto; const abonoAplicado=_abS.abonoAplicado;
     const mo=modeloObj5(p,(p.planilla&&p.planilla.aptoModelMap&&p.planilla.aptoModelMap[aid])||'GENERAL');
     const rol = (typeof normalizeRole==='function' ? normalizeRole(colab.rol) : (colab.rol||'')) || 'PERSONAL';
     const pagoId='plp-'+uid();
@@ -54001,7 +54032,7 @@ window.addEventListener('load', () => {
       aptoName:a.name,towerName:t.name,levelName:l.name,
       stageIdx:Number(stageIdx),stageName:etapa.name,
       detalle:t.name+' · '+a.name+' · ETAPA '+(Number(stageIdx)+1)+' · '+etapa.name,
-      bruto,retencion,neto,
+      bruto,retencion,neto,abonoAplicado, // v1217
       colaborador:upper(colab.nombre),colaboradorId:colab.id,colaboradorRol:rol,
       autorizado:false,retencionPagada:false,
       targetPct:target,pctDelta,stageTotal:total,
@@ -56636,6 +56667,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       +   '<div style="margin-top:4px;padding-top:8px;border-top:1px solid #E5E5E5">Bruto</div>'
       +   '<div style="margin-top:4px;padding-top:8px;border-top:1px solid #E5E5E5;text-align:right;font-weight:600">'+fqFn(opts.bruto||0)+'</div>'
       +   '<div style="color:#888">Retención 10%</div><div style="text-align:right;font-weight:600;color:#888">- '+fqFn(opts.retencion||0)+'</div>'
+      +   ((Number(opts.abonoAplicado)||0) > 0 ? '<div style="color:#B45309">Abono previo (ya entregado)</div><div style="text-align:right;font-weight:600;color:#B45309">- '+fqFn(opts.abonoAplicado)+'</div>' : '')
       +   '<div style="padding-top:6px;border-top:1px solid #E5E5E5;font-weight:700">Neto</div>'
       +   '<div style="padding-top:6px;border-top:1px solid #E5E5E5;text-align:right;font-weight:800;color:#1a1a1a">'+fqFn(opts.neto||0)+'</div>'
       + '</div>'
@@ -58975,8 +59007,9 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       return Number(mo?.costos?.[idx] || 0);
     };
     const _paidPct = (aptoId, idx) => {
+      // v1217: los abonos (esAbono, targetPct:0) no cuentan como % — ver paidPct5
       const list = (p.planilla?.pagos||[]).filter(x =>
-        x.tipo==='ETAPA' && x.aptoId===aptoId && Number(x.stageIdx)===Number(idx));
+        x.tipo==='ETAPA' && !x.esAbono && x.aptoId===aptoId && Number(x.stageIdx)===Number(idx));
       return list.length ? Math.max(...list.map(x => Number(x.targetPct||100))) : 0;
     };
     const _moneda = (n) => (typeof money === 'function') ? money(n) : ('Q '+Number(n||0).toFixed(2));
@@ -59117,12 +59150,15 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       const pctDelta = target - currentPaid;
       const bruto = +(total * pctDelta / 100).toFixed(2);
       const retencion = +(bruto * 0.10).toFixed(2);
-      const neto = +(bruto - retencion).toFixed(2);
+      // v1217: el preview enseña el descuento del abono previo — el neto que se ve ES el que se crea
+      const _abPrev = window._abonoAplicarANeto(p, aptoId, etapaIdx, +(bruto - retencion).toFixed(2));
+      const neto = _abPrev.neto;
       previewEl.style.color = '#444';
       previewEl.innerHTML =
         '<span style="color:#666">Abono '+currentPaid+'% → '+target+'%</span>'
       + ' · <span>Bruto '+_moneda(bruto)+'</span>'
       + ' · <span>Ret '+_moneda(retencion)+'</span>'
+      + (_abPrev.abonoAplicado > 0 ? ' · <span style="color:#B45309;font-weight:700">ABONO PREVIO −'+_moneda(_abPrev.abonoAplicado)+'</span>' : '')
       + ' · <strong style="color:#1a1a1a">Neto '+_moneda(neto)+'</strong>';
     }
 
@@ -59143,7 +59179,8 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         const pctDelta = target - currentPaid;
         const bruto = +(total * pctDelta / 100).toFixed(2);
         const retencion = +(bruto * 0.10).toFixed(2);
-        const neto = +(bruto - retencion).toFixed(2);
+        // v1217: el total refleja el descuento de abonos — lo que se ve es lo que se paga
+        const neto = window._abonoAplicarANeto(p, aptoId, etapaIdx, +(bruto - retencion).toFixed(2)).neto;
         count++; totalNeto += neto; totalBruto += bruto; totalRet += retencion;
       }
       const totalsEl = document.getElementById('v328Totals');
@@ -59292,7 +59329,11 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       const pctDelta = pc.target - pc.currentPaid;
       pc.bruto = +(pc.total * pctDelta / 100).toFixed(2);
       pc.retencion = +(pc.bruto * 0.10).toFixed(2);
-      pc.neto = +(pc.bruto - pc.retencion).toFixed(2);
+      // v1217: el abono previo del apto+etapa se descuenta del neto (el keySet de arriba
+      // garantiza UNA fila por apto+etapa — el pool no se consume dos veces en un lote)
+      const _abV = window._abonoAplicarANeto(p, pc.aptoId, pc.etapaIdx, +(pc.bruto - pc.retencion).toFixed(2));
+      pc.neto = _abV.neto;
+      pc.abonoAplicado = _abV.abonoAplicado;
       pc.pctDelta = pctDelta;
     }
 
@@ -59325,6 +59366,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
         bruto: pc.bruto,
         retencion: pc.retencion,
         neto: pc.neto,
+        abonoAplicado: pc.abonoAplicado || 0, // v1217
         colaborador: String(colab.nombre||'').toUpperCase(),
         colaboradorId: colab.id,
         colaboradorRol: colabRol,
