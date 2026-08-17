@@ -21,7 +21,8 @@ ok('el camino de imprimir sigue intacto (window.open + write)', /window\.open\('
 console.log('\n— el compartir usa el documento real —');
 const cmp = ex(code, 'window.compartirOcImg = async function(');
 ok('existe compartirOcImg', !!cmp);
-ok('pinta el builder real en el iframe', /printOrdenCompra\(ocId, false, \{ soloHTML: true \}\)/.test(cmp));
+/* v1242: el compartir pide además sinMalla:true — al proveedor la hoja va limpia */
+ok('pinta el builder real en el iframe', /printOrdenCompra\(ocId, false, \{ soloHTML: true, sinMalla: true \}\)/.test(cmp));
 ok('sale por la escalera nativa de v980', /_imgCompartir\(/.test(cmp));
 ok('los botones de la app no van en la foto', /no-print[\s\S]{0,80}remove/.test(cmp));
 ok('el nombre del archivo lleva el número nuevo y el proveedor', /_numLimpio\(oc\.numero\)/.test(cmp) && /proveedorNombre/.test(cmp));

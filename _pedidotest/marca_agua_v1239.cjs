@@ -33,5 +33,14 @@ ok('cubre toda la hoja y no estorba (absolute + pointer-events none + overflow h
 ok('cruza ENCIMA del contenido (z-index positivo) y va rotada', /z-index/.test(zCss) && /rotate\(/.test(zCss));
 ok('tinta roja institucional casi transparente (no tapa la lectura ni el QR)', /rgba\(200,20,28,\.0/.test(zCss));
 
+console.log('— v1242: el COMPARTIR al proveedor va LIMPIO —');
+/* Antonio (17-ago, con el DESP4-000013 compartido): "cuando se le da compartir OC desde la
+   aplicación quiero que ahí sí sea una orden limpia sin la marca de agua". La malla queda
+   para lo IMPRESO/DESCARGADO (su idea original); en el canal oficial al proveedor la
+   garantía es el QR con la copia sellada en la nube (v1240). */
+const zComp = (function(){ let m=html.indexOf('window.compartirOcImg = async function'); if(m<0) return ''; let i=html.indexOf('{',m),d=0; for(;i<html.length;i++){ if(html[i]==='{')d++; else if(html[i]==='}'){ d--; if(d===0) return html.slice(m,i+1); } } return ''; })();
+ok('compartirOcImg pide la hoja SIN malla', /soloHTML: true, sinMalla: true/.test(zComp));
+ok('printOrdenCompra respeta el pedido (gate && !_sinMalla)', /opts\.sinMalla/.test(zP) && /&& !_sinMalla/.test(zP));
+
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

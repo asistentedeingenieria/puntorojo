@@ -25,7 +25,9 @@ ok('cifrado con la MISMA clave del admin (x/k/t)', /window\._qrClave/.test(zQ) &
 ok('el doc dibuja el QR con las 4 esquinas, SIN firma de marca y con el numero separado',
   (zDoc.match(/2\.5px solid #C8141C/g) || []).length === 8 && /_pedQrTexto\(pd, p\)/.test(zDoc)
   && !/>PUNTO ROJO</.test(zDoc) && /gap:16px/.test(zDoc));
-ok('con el número del pedido en vertical', /writing-mode:vertical-rl/.test(zDoc));
+/* v1242: writing-mode:vertical-rl salia FATAL en la imagen compartida (html2canvas apila
+   las letras deformes) — ahora rotate(90deg), que pinta igual en pantalla, papel e imagen */
+ok('con el número del pedido en vertical', /transform:rotate\(90deg\)/.test(zDoc));
 /* v1238: la firma salio del TODO de la hoja — vive en la confirmacion del QR (verificar.html) */
 ok('v1238: NINGUNA firma en la hoja del pedido',
   !/height:64px;display:flex;align-items:flex-end;justify-content:center/.test(zDoc)

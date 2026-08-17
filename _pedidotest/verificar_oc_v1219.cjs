@@ -170,7 +170,8 @@ ok('v1226: el QR está condicionado a oc.autorizadoPor (sin firma de finanzas, s
 const _qrBlk = (_doc.match(/\$\{oc\.autorizadoPor \? \(function\(\)[\s\S]{0,2600}?\)\(\) : ''\}/) || [''])[0];
 ok('v1227: las CUATRO esquinas de escaneo rojas', (_qrBlk.match(/2\.5px solid #C8141C/g) || []).length === 8);
 ok('v1227: la firma de marca PUNTO ROJO debajo del QR', /letter-spacing:2\.5px[^>]*>PUNTO ROJO</.test(_qrBlk));
-ok('v1227: el número de la orden en vertical al costado', /writing-mode:vertical-rl/.test(_qrBlk) && /_numLimpio\(oc\.numero/.test(_qrBlk));
+/* v1242: writing-mode → rotate(90deg) (html2canvas apilaba las letras deformes en la foto) */
+ok('v1227: el número de la orden en vertical al costado', /transform:rotate\(90deg\)/.test(_qrBlk) && /_numLimpio\(oc\.numero/.test(_qrBlk));
 ok('el QR va ANTES de las firmas (encima, no al pie)',
   _doc.indexOf('_ocQrDataUrl(_u)') >= 0 && _doc.indexOf('_ocQrDataUrl(_u)') < _doc.indexOf('<div class="oc-firmas">'));
 ok('SIN sello impreso ni textos de advertencia en el documento',
