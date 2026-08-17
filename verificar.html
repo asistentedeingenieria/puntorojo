@@ -120,8 +120,10 @@
      con esto, es falsa. Un fallo de red deja el resumen del QR tal como está. */
   var _firmaImg = function(src, nombre, cargo){
     if (!src || String(src).indexOf('data:image/') !== 0) return '';
+    /* v1243: mix-blend-mode:multiply funde el blanco del JPEG con la tarjeta — la firma
+       queda como TINTA sobre el documento, nunca con fondo */
     return '<div style="text-align:center;flex:1;min-width:150px">'
-      + '<img src="' + src + '" style="height:52px;max-width:190px;object-fit:contain;display:block;margin:0 auto" alt="">'
+      + '<img src="' + src + '" style="height:52px;max-width:190px;object-fit:contain;display:block;margin:0 auto;mix-blend-mode:multiply" alt="">'
       + '<div style="border-top:1px solid #1a1a1a;max-width:200px;margin:5px auto 0;padding-top:5px;font-size:11px;font-weight:700">' + _esc(nombre || '') + '</div>'
       + '<div style="font-size:8.5px;letter-spacing:1.5px;color:#888;margin-top:2px">' + _esc(cargo || '') + '</div>'
       + '</div>';
@@ -132,17 +134,31 @@
     var esPed = d.d === 'p';
     var conDinero = !esPed && !d.sinDinero;
     var _q = function(v){ return (Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
-    var filas = (d.items || []).map(function(it){
-      return '<tr><td style="padding:5px 8px;border-top:1px solid #F1EFE9;font-size:11.5px">' + _esc(it.n) + '</td>'
+    /* v1243: el mensaje verde nombra el documento (tipo viaja en el payload; los QRs de la
+       primera hora no lo traen — se deduce) y SOLO dice que fue leído en vivo. */
+    var tipo = String(d.tipo || (esPed ? 'PEDIDO DE MATERIALES' : (d.sinDinero ? 'ORDEN DE DESPACHO' : 'ORDEN DE COMPRA')));
+    var leido = tipo.indexOf('ORDEN') === 0 ? 'LEÍDA' : 'LEÍDO';
+    /* v1243: listados largos — los primeros renglones a la vista, el resto tras VER DETALLE */
+    var _tr = function(cs, oculta){
+      return '<tr' + (oculta ? ' class="xtra" style="display:none"' : '') + '>' + cs + '</tr>';
+    };
+    var todas = (d.items || []).map(function(it){
+      return '<td style="padding:5px 8px;border-top:1px solid #F1EFE9;font-size:11.5px;overflow-wrap:anywhere">' + _esc(it.n) + '</td>'
         + '<td style="padding:5px 8px;border-top:1px solid #F1EFE9;text-align:center;font-size:11.5px;font-weight:700">' + _esc(it.q) + '</td>'
         + (conDinero ? '<td style="padding:5px 8px;border-top:1px solid #F1EFE9;text-align:right;font-size:11.5px;white-space:nowrap">Q ' + _q(it.pu) + '</td>'
-          + '<td style="padding:5px 8px;border-top:1px solid #F1EFE9;text-align:right;font-size:11.5px;white-space:nowrap;font-weight:700">Q ' + _q((Number(it.q) || 0) * (Number(it.pu) || 0)) + '</td>' : '')
-        + '</tr>';
-    }).join('');
-    var herr = (d.herramientas || []).map(function(h){
-      return '<tr><td style="padding:5px 8px;border-top:1px solid #F1EFE9;font-size:11.5px;color:#1D4ED8">' + _esc(h.n) + '</td>'
-        + '<td style="padding:5px 8px;border-top:1px solid #F1EFE9;text-align:center;font-size:11.5px;font-weight:700;color:#1D4ED8">' + _esc(h.q) + '</td></tr>';
-    }).join('');
+          + '<td style="padding:5px 8px;border-top:1px solid #F1EFE9;text-align:right;font-size:11.5px;white-space:nowrap;font-weight:700">Q ' + _q((Number(it.q) || 0) * (Number(it.pu) || 0)) + '</td>' : '');
+    }).concat((d.herramientas || []).map(function(h){
+      return '<td style="padding:5px 8px;border-top:1px solid #F1EFE9;font-size:11.5px;color:#1D4ED8;overflow-wrap:anywhere">' + _esc(h.n) + '</td>'
+        + '<td style="padding:5px 8px;border-top:1px solid #F1EFE9;text-align:center;font-size:11.5px;font-weight:700;color:#1D4ED8">' + _esc(h.q) + '</td>'
+        + (conDinero ? '<td style="border-top:1px solid #F1EFE9"></td><td style="border-top:1px solid #F1EFE9"></td>' : '');
+    }));
+    var LIM = 8, corte = todas.length > LIM ? 6 : todas.length;
+    var filas = todas.map(function(cs, i){ return _tr(cs, i >= corte); }).join('');
+    var verMas = todas.length > corte
+      ? '<tr id="verMasTr"><td colspan="4" style="padding:8px;border-top:1px solid #F1EFE9;text-align:center">'
+        + '<button id="verMasBtn" style="padding:8px 16px;border-radius:8px;background:#fff;color:#C8141C;border:1.5px solid #C8141C;font:inherit;font-size:11px;font-weight:700;letter-spacing:1px;cursor:pointer">VER DETALLE · ' + (todas.length - corte) + ' RENGLONES MÁS</button>'
+        + '</td></tr>'
+      : '';
     var firmas = '';
     if (esPed) {
       firmas = _firmaImg(d.firmaSol, d.solicitante, 'FIRMA REGISTRADA DEL SOLICITANTE');
@@ -150,16 +166,24 @@
       firmas = _firmaImg(d.firmaGen, d.generadoPor, 'GENERADO POR — REGISTRADA') + _firmaImg(d.firmaAut, d.autorizadoPor, 'AUTORIZADO POR — REGISTRADA');
     }
     el.innerHTML =
-      '<div style="margin-top:16px;background:#F0FDF4;border:1px solid #16A34A;border-radius:8px;padding:8px 12px;font-size:10px;letter-spacing:1.5px;color:#166534;font-weight:700;text-align:center">DOCUMENTO LEÍDO EN VIVO DE LA NUBE — SI LA IMAGEN NO CUADRA CON ESTO, ES FALSA</div>'
+      '<div style="margin-top:16px;background:#F0FDF4;border:1px solid #16A34A;border-radius:8px;padding:8px 12px;font-size:10px;letter-spacing:1.5px;color:#166534;font-weight:700;text-align:center">' + _esc(tipo) + ' · ' + leido + ' EN VIVO EN LA NUBE</div>'
       + '<table style="width:100%;border-collapse:collapse;margin-top:10px"><thead><tr>'
       + '<th style="text-align:left;font-size:9px;letter-spacing:1.5px;color:#888;padding:4px 8px">DESCRIPCIÓN</th>'
       + '<th style="text-align:center;font-size:9px;letter-spacing:1.5px;color:#888;padding:4px 8px">CANT</th>'
       + (conDinero ? '<th style="text-align:right;font-size:9px;letter-spacing:1.5px;color:#888;padding:4px 8px">PRECIO U</th><th style="text-align:right;font-size:9px;letter-spacing:1.5px;color:#888;padding:4px 8px">TOTAL</th>' : '')
-      + '</tr></thead><tbody>' + filas + herr + '</tbody></table>'
+      + '</tr></thead><tbody>' + filas + verMas + '</tbody></table>'
       + (conDinero ? '<div class="total" style="margin-top:10px"><span>TOTAL</span><b>Q ' + _q(d.total) + '</b></div>' : '')
       + (conDinero && (Number(d.saldoAplicado) || 0) > 0 ? '<div class="fila"><span class="k">SALDO A FAVOR APLICADO</span><span class="v">− Q ' + _q(d.saldoAplicado) + '</span></div>' : '')
       + (firmas ? '<div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:18px">' + firmas + '</div>' : '');
     if (firmas) { try { var fc = document.getElementById('firmaCal'); if (fc) fc.style.display = 'none'; } catch(e){} }
+    try {
+      var b = document.getElementById('verMasBtn');
+      if (b) b.onclick = function(){
+        var xs = el.querySelectorAll('.xtra');
+        for (var i = 0; i < xs.length; i++) xs[i].style.display = '';
+        var t = document.getElementById('verMasTr'); if (t) t.remove();
+      };
+    } catch(e){}
   };
   var _nube = function(tok, clave){
     if (!tok || !clave) return;
