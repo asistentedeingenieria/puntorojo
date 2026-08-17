@@ -20,7 +20,8 @@ if (m) {
 // ── 2. hoja de PEDIDO: logo en vez del texto ──
 const srcPed = extractFn('_solicitudDocHTML') /* v980: el doc vive en el builder */;
 ok('printPedido ya no dice PUNTO ROJO en texto', !/PUNTO<br>ROJO/.test(srcPed));
-ok('printPedido usa el logo incrustado', /\$\{_LOGO_PR\}/.test(srcPed));
+/* v1236 (Antonio): el logo SALIO de los pedidos — solo la OC lo conserva */
+ok('v1236: la solicitud va SIN logo', !/_LOGO_PR/.test(srcPed));
 
 // ── 3. ORDEN DE COMPRA: logo en el encabezado (impresión y borrador comparten plantilla) ──
 const srcOc = extractFn('printOrdenCompra');

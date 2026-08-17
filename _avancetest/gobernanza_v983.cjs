@@ -36,7 +36,8 @@ if (fU) {
 } else ok('_invUnidadDe evaluable', false);
 
 // ── 3. solicitud ──
-ok('sin línea ARRIBA de la firma', /margin-bottom:4px;border-top:none/.test(html));
+/* v1236: la firma grande del centro se fue — queda chiquita al pie, sin linea encima (Antonio) */
+ok('v1236: firma chiquita al pie de la solicitud', /SOLICITANTE · \$\{pd\.solicitante\}/.test(html));
 const iBtns = html.indexOf('pedDetalleOCBtn');
 const zBtns = html.slice(iBtns - 800, iBtns + 800);
 ok('el detalle tiene UN solo botón COMPARTIR SOLICITUD', /COMPARTIR SOLICITUD/.test(zBtns) && !/printPedido\(\)/.test(zBtns) && !/COMPARTIR IMAGEN</.test(zBtns));

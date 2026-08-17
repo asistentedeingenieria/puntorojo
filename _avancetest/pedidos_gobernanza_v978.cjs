@@ -42,7 +42,7 @@ ok('la dirección vieja solo queda en el self-heal (matcher + comentario)', (htm
 // ── 4. impresión de la SOLICITUD: solo SOLICITANTE + compartir como imagen ──
 const iSol = html.indexOf('FORMATO DE SOLICITUD');
 const zSol = html.slice(iSol - 7000, iSol + 9000);
-ok('la solicitud ya NO lleva RECIBIDO POR (es solo una solicitud)', !/RECIBIDO POR/.test(zSol) && /SOLICITANTE<br>/.test(zSol));
+ok('la solicitud ya NO lleva RECIBIDO POR (es solo una solicitud)', !/RECIBIDO POR/.test(zSol) && /SOLICITANTE · /.test(zSol));
 // v980: el compartir se movió A LA APP (en Android la ventana de impresión no tiene share)
 ok('botón COMPARTIR IMAGEN en el detalle del pedido (app)', /compartirSolicitudImg\(\)"/.test(html));
 ok('comparte con la escalera de asistencia y html2canvas', /_imgCompartir/.test(html) && /html2canvas/.test(html));
