@@ -92,7 +92,8 @@ ok('los proj_ con evidencia embebida quedan fuera del hash-skip (migración auto
   /\(merged\._evidEmbebidaIds \|\| \[\]\)\.forEach\(id => \{ delete _nh\[id\]; \}\)/.test(code) && /delete merged\._evidEmbebidaIds/.test(code));
 
 console.log('\n— 6. el candado —');
-ok('APP_SYNC_VERSION subió a 940', /const APP_SYNC_VERSION = 940;/.test(html));
+/* v1240 subio a 941 (escudo verifTok) — la propiedad v1218 es que el minimo sea AL MENOS 940 */
+ok('APP_SYNC_VERSION subió a 940 o más', (function(){ const m = html.match(/const APP_SYNC_VERSION = (\d+);/); return !!m && Number(m[1]) >= 940; })());
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

@@ -105,20 +105,86 @@
       + fila('FECHA DE AUTORIZACIÓN', ps.get('h'))
       + (ps.get('t') ? '<div class="total"><span>TOTAL</span><b>Q ' + _esc(_fmtTotal(ps.get('t'))) + '</b></div>' : '')
       /* v1238 (Antonio): la firma salió de la hoja del pedido y vive ACÁ, en la confirmación
-         del QR. La imagen de la firma no viaja en un QR (pesa demasiado) — se muestra el
-         nombre del solicitante en trazo caligráfico sobre su línea de firma. */
-      + (esPed && ps.get('so') ? '<div style="margin-top:18px;text-align:center">'
+         del QR. v1240: si el QR trae v=<token>, la firma REGISTRADA real llega de la nube y
+         reemplaza este trazo caligráfico (que queda de respaldo sin conexión). */
+      + (esPed && ps.get('so') ? '<div id="firmaCal" style="margin-top:18px;text-align:center">'
           + '<div style="font-family:\'Brush Script MT\',\'Segoe Script\',\'Snell Roundhand\',cursive;font-size:27px;color:#1a1a1a;transform:rotate(-2deg)">' + _esc(ps.get('so')) + '</div>'
           + '<div style="border-top:1px solid #1a1a1a;max-width:230px;margin:7px auto 0;padding-top:6px;font-size:9.5px;letter-spacing:1.5px;color:#888">FIRMA DEL SOLICITANTE</div>'
         + '</div>' : '')
+      + '<div id="vivo"></div>'
       + (ps.get('s') ? '<div class="sello">SELLO · ' + _esc(ps.get('s')) + '</div>' : '');
+  };
+  /* v1240: COPIA SELLADA EN LA NUBE. El QR trae v=<token>; el documento COMPLETO (renglones
+     y firmas registradas reales) vive CIFRADO en ocVerif/<token> y se lee por REST — sin
+     backend propio, directo de Firestore. La imagen compartida es cortesía: si no cuadra
+     con esto, es falsa. Un fallo de red deja el resumen del QR tal como está. */
+  var _firmaImg = function(src, nombre, cargo){
+    if (!src || String(src).indexOf('data:image/') !== 0) return '';
+    return '<div style="text-align:center;flex:1;min-width:150px">'
+      + '<img src="' + src + '" style="height:52px;max-width:190px;object-fit:contain;display:block;margin:0 auto" alt="">'
+      + '<div style="border-top:1px solid #1a1a1a;max-width:200px;margin:5px auto 0;padding-top:5px;font-size:11px;font-weight:700">' + _esc(nombre || '') + '</div>'
+      + '<div style="font-size:8.5px;letter-spacing:1.5px;color:#888;margin-top:2px">' + _esc(cargo || '') + '</div>'
+      + '</div>';
+  };
+  var _renderNube = function(d){
+    var el = document.getElementById('vivo');
+    if (!el || !d) return;
+    var esPed = d.d === 'p';
+    var conDinero = !esPed && !d.sinDinero;
+    var _q = function(v){ return (Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    var filas = (d.items || []).map(function(it){
+      return '<tr><td style="padding:5px 8px;border-top:1px solid #F1EFE9;font-size:11.5px">' + _esc(it.n) + '</td>'
+        + '<td style="padding:5px 8px;border-top:1px solid #F1EFE9;text-align:center;font-size:11.5px;font-weight:700">' + _esc(it.q) + '</td>'
+        + (conDinero ? '<td style="padding:5px 8px;border-top:1px solid #F1EFE9;text-align:right;font-size:11.5px;white-space:nowrap">Q ' + _q(it.pu) + '</td>'
+          + '<td style="padding:5px 8px;border-top:1px solid #F1EFE9;text-align:right;font-size:11.5px;white-space:nowrap;font-weight:700">Q ' + _q((Number(it.q) || 0) * (Number(it.pu) || 0)) + '</td>' : '')
+        + '</tr>';
+    }).join('');
+    var herr = (d.herramientas || []).map(function(h){
+      return '<tr><td style="padding:5px 8px;border-top:1px solid #F1EFE9;font-size:11.5px;color:#1D4ED8">' + _esc(h.n) + '</td>'
+        + '<td style="padding:5px 8px;border-top:1px solid #F1EFE9;text-align:center;font-size:11.5px;font-weight:700;color:#1D4ED8">' + _esc(h.q) + '</td></tr>';
+    }).join('');
+    var firmas = '';
+    if (esPed) {
+      firmas = _firmaImg(d.firmaSol, d.solicitante, 'FIRMA REGISTRADA DEL SOLICITANTE');
+    } else {
+      firmas = _firmaImg(d.firmaGen, d.generadoPor, 'GENERADO POR — REGISTRADA') + _firmaImg(d.firmaAut, d.autorizadoPor, 'AUTORIZADO POR — REGISTRADA');
+    }
+    el.innerHTML =
+      '<div style="margin-top:16px;background:#F0FDF4;border:1px solid #16A34A;border-radius:8px;padding:8px 12px;font-size:10px;letter-spacing:1.5px;color:#166534;font-weight:700;text-align:center">DOCUMENTO LEÍDO EN VIVO DE LA NUBE — SI LA IMAGEN NO CUADRA CON ESTO, ES FALSA</div>'
+      + '<table style="width:100%;border-collapse:collapse;margin-top:10px"><thead><tr>'
+      + '<th style="text-align:left;font-size:9px;letter-spacing:1.5px;color:#888;padding:4px 8px">DESCRIPCIÓN</th>'
+      + '<th style="text-align:center;font-size:9px;letter-spacing:1.5px;color:#888;padding:4px 8px">CANT</th>'
+      + (conDinero ? '<th style="text-align:right;font-size:9px;letter-spacing:1.5px;color:#888;padding:4px 8px">PRECIO U</th><th style="text-align:right;font-size:9px;letter-spacing:1.5px;color:#888;padding:4px 8px">TOTAL</th>' : '')
+      + '</tr></thead><tbody>' + filas + herr + '</tbody></table>'
+      + (conDinero ? '<div class="total" style="margin-top:10px"><span>TOTAL</span><b>Q ' + _q(d.total) + '</b></div>' : '')
+      + (conDinero && (Number(d.saldoAplicado) || 0) > 0 ? '<div class="fila"><span class="k">SALDO A FAVOR APLICADO</span><span class="v">− Q ' + _q(d.saldoAplicado) + '</span></div>' : '')
+      + (firmas ? '<div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:18px">' + firmas + '</div>' : '');
+    if (firmas) { try { var fc = document.getElementById('firmaCal'); if (fc) fc.style.display = 'none'; } catch(e){} }
+  };
+  var _nube = function(tok, clave){
+    if (!tok || !clave) return;
+    var url = 'https://firestore.googleapis.com/v1/projects/punto-rojo-3fcf1/databases/(default)/documents/ocVerif/' + encodeURIComponent(tok) + '?key=AIzaSyCbfWmw9kAFG73tv94H2Dg-uqHwu6vFaAE';
+    fetch(url).then(function(r){ return r.ok ? r.json() : null; }).then(function(j){
+      try {
+        var f = j && j.fields;
+        if (!f) return;
+        var x = (f.x && f.x.stringValue) || '', k = (f.k && f.k.stringValue) || '', tg = (f.t && f.t.stringValue) || '';
+        if (!x) return;
+        var plano = _qrDescifrar(x, clave, k);
+        /* mismo tag de 6 hex (seed 777) que el QR: sin la clave correcta no hay documento */
+        if (('000000' + ((_selloHash32(plano, 777) >>> 0).toString(16))).slice(-6) !== tg) return;
+        _renderNube(JSON.parse(plano));
+      } catch(e){}
+    }).catch(function(){});
   };
   var _intentar = function(ps0, clave){
     try {
       var plano = _qrDescifrar(ps0.get('x'), clave, ps0.get('k') || '');
       if (('000000' + ((_selloHash32(plano, 777) >>> 0).toString(16))).slice(-6) !== ps0.get('t')) return false;
       try { sessionStorage.setItem('prQrClave', clave); } catch(e){}
-      _render(new URLSearchParams(plano));
+      var psP = new URLSearchParams(plano);
+      _render(psP);
+      try { _nube(psP.get('v'), clave); } catch(e){} /* v1240: el doc completo llega de la nube, fire-and-forget */
       return true;
     } catch(e){ return false; }
   };
