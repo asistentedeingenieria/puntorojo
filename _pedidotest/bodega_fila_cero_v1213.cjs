@@ -48,9 +48,17 @@ try {
 console.log('\n— 2. elegir BODEGA con fila SIN existencia también pregunta "¿cuál es?" —');
 const zP = ex(code, 'function updateOcItemProveedor(');
 ok('la rama del match exitoso exige saldo > 0', /_res && _res\.saldo > 0/.test(zP));
-ok('el camino sin existencia (fila muerta O nada) abre el modal de parecidos', /_bodegaPedirMatch\(idx, item\.name\)/.test(zP));
-ok('la fila muerta conserva el aviso "SE DESPACHA LO QUE HAYA" (cerrar el modal no bloquea)',
-  (zP.match(/SE DESPACHA LO QUE HAYA/g) || []).length >= 1 && /_bodegaPedirMatch/.test(zP.slice(zP.indexOf('SE DESPACHA LO QUE HAYA'))));
+ok('el camino sin existencia (fila muerta O nada) abre el modal de parecidos', /_bodegaPedirMatch\(idx, item\.name/.test(zP));
+/* v1215 (Antonio: "¿Pero porque me sigue saliendo ese mensaje?"): el aviso rojo sonaba
+   ENCIMA del modal que pregunta "¿cuál es?" — contradictorio. Ahora el aviso viaja al
+   modal y suena SOLO al CERRAR sin elegir (elegir producto no necesita regaño). */
+ok('el aviso ya no grita encima del modal: viaja como aviso-al-cerrar',
+  /_avisoCerrar = `BODEGA TIENE \$\{_res\.saldo\} DE \$\{item\.qty\} — SE DESPACHA LO QUE HAYA`/.test(zP)
+  && /_bodegaPedirMatch\(idx, item\.name, _avisoCerrar\)/.test(zP));
+const zC = ex(code, 'window._bodegaMatchCerrar = function(');
+ok('CERRAR muestra el aviso pendiente (cerrar sin elegir no bloquea, avisa)', !!zC && /showToast\(/.test(zC));
+ok('elegir un producto NO regaña (la equivalencia limpia el aviso)',
+  /_bodegaMatchAviso = ''/.test(ex(code, 'window._bodegaUnirYUsar = function(')));
 
 console.log('\n— 3. el título del modal es cierto en los dos casos (no está ≡ no hay existencia) —');
 ok('título honesto', /NO HAY EXISTENCIA CON ESE NOMBRE EN BODEGA/.test(html));
