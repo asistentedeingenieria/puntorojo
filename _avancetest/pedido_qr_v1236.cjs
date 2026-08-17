@@ -20,19 +20,24 @@ const zQ = ex(code, 'function _pedQrTexto(');
 ok('_pedQrTexto existe: enlace a verificar.html tipo pedido, con fecha y hora del pedido',
   /verificar\.html#/.test(zQ) && /'d', 'p'/.test(zQ) && /_qrFechaHora\(pd\.ts\)/.test(zQ));
 ok('cifrado con la MISMA clave del admin (x/k/t)', /window\._qrClave/.test(zQ) && /_qrCifrar\(_payload/.test(zQ));
-ok('el doc dibuja el QR con las 4 esquinas y la firma de marca',
-  (zDoc.match(/2\.5px solid #C8141C/g) || []).length === 8 && /_pedQrTexto\(pd, p\)/.test(zDoc) && />PUNTO ROJO</.test(zDoc));
+/* v1238 (Antonio): el QR del PEDIDO va SIN la palabra PUNTO ROJO (solo la OC la lleva)
+   y el numero vertical va mas separado del QR (gap 16px, quedaba muy junto). */
+ok('el doc dibuja el QR con las 4 esquinas, SIN firma de marca y con el numero separado',
+  (zDoc.match(/2\.5px solid #C8141C/g) || []).length === 8 && /_pedQrTexto\(pd, p\)/.test(zDoc)
+  && !/>PUNTO ROJO</.test(zDoc) && /gap:16px/.test(zDoc));
 ok('con el número del pedido en vertical', /writing-mode:vertical-rl/.test(zDoc));
-ok('la firma GRANDE del centro ya no está (queda chiquita al pie)',
+/* v1238: la firma salio del TODO de la hoja — vive en la confirmacion del QR (verificar.html) */
+ok('v1238: NINGUNA firma en la hoja del pedido',
   !/height:64px;display:flex;align-items:flex-end;justify-content:center/.test(zDoc)
-  && /SOLICITANTE · \$\{pd\.solicitante\}|SOLICITANTE · ' \+/.test(zDoc));
-ok('el QR va ANTES de la firma del pie (izquierda, arriba del cierre)',
+  && !/_miFirmaImg\(pd\.solicitanteUsername\)/.test(zDoc) && !/SOLICITANTE · /.test(zDoc));
+ok('el QR va antes del cierre de la hoja',
   zDoc.indexOf('_pedQrTexto(pd, p)') > 0 && zDoc.indexOf('_pedQrTexto(pd, p)') < zDoc.indexOf('GUATEMALA'));
 
 console.log('\n— 3. verificar.html entiende pedidos —');
 const vh = (() => { try { return fs.readFileSync(path.join(__dirname, '..', 'verificar.html'), 'utf8'); } catch(e){ return ''; } })();
 ok('título dinámico PEDIDO DE MATERIALES', /PEDIDO DE MATERIALES/.test(vh));
 ok('filas de pedido: solicitante, nivel y entrega', /SOLICITANTE/.test(vh) && /NIVEL/.test(vh) && /ENTREGA DESEADA/.test(vh));
+ok('v1238: la CONFIRMACION del QR muestra la firma caligrafica del solicitante', /FIRMA DEL SOLICITANTE/.test(vh) && /cursive/.test(vh));
 ok('el TOTAL solo se pinta cuando viene (los pedidos no llevan dinero)', /ps\.get\('t'\) \?/.test(vh));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);

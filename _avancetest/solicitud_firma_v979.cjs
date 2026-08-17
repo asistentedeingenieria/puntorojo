@@ -22,7 +22,9 @@ ok('el modal de firma explica cómo (hoja en blanco, lapicero negro)', /hoja en 
 // ── 2. la solicitud impresa pinta la FIRMA del solicitante (como las OCs) ──
 const iSol = html.indexOf('FORMATO DE SOLICITUD');
 const zSol = html.slice(iSol - 8000, iSol + 10000);
-ok('la solicitud incrusta la firma del solicitante', /_miFirmaImg\(pd\.solicitanteUsername\)/.test(zSol));
+/* v1238 (Antonio): "La firma NO la quiero en el pedido" — salió de la hoja; la confirmación
+   del QR (verificar.html) muestra FIRMA DEL SOLICITANTE en trazo caligráfico. */
+ok('v1238: la solicitud ya NO incrusta la firma del solicitante', !/_miFirmaImg\(pd\.solicitanteUsername\)/.test(zSol));
 
 // ── 3. compartir DESDE LA APP (v980: como asistencia — compu/Android/iPhone/tablet) ──
 ok('descripción SOLICITUD DE PEDIDO - SIGLAS - Nº - FECHA DE ENTREGA DESEADA', /'SOLICITUD DE PEDIDO - ' \+ _projSiglas\(/.test(html) && /FECHA DE ENTREGA DESEADA/.test(html));

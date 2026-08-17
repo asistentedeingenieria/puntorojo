@@ -28,9 +28,11 @@ ok('y multiply para que el blanco desaparezca contra la hoja', !!mDef && /mix-bl
 
 console.log('\n— aplicada en los CINCO documentos —');
 const usos = (html.match(/\$\{_FIRMA_TINTA\}/g) || []).length;
-ok('cinco firmas la interpolan (OC ×2, solicitud, recibo, acuse)', usos === 5);
-ok('la firma del SOLICITANTE de la solicitud (la de la captura de Antonio)',
-  /_miFirmaImg\(pd\.solicitanteUsername\)[\s\S]{0,220}\$\{_FIRMA_TINTA\}/.test(html));
+/* v1238 (Antonio): la firma salió de la hoja del pedido (vive en verificar.html) —
+   quedan CUATRO interpolaciones: OC ×2, recibo, acuse. */
+ok('cuatro firmas la interpolan (OC ×2, recibo, acuse)', usos === 4);
+ok('v1238: la solicitud ya no interpola la firma del solicitante',
+  !/_miFirmaImg\(pd\.solicitanteUsername\)[\s\S]{0,220}\$\{_FIRMA_TINTA\}/.test(html));
 ok('las dos firmas de la OC', /_miFirmaImg\(oc\.generadoPorUsername\)[\s\S]{0,260}\$\{_FIRMA_TINTA\}/.test(html)
   && /_firmaUsernameAutoriza\(oc\)[\s\S]{0,300}\$\{_FIRMA_TINTA\}/.test(html));
 /* v1160: los src ahora pasan por _firmaTintaSrc(...) — el filtro CSS sigue en el style

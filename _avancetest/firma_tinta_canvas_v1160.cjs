@@ -45,10 +45,13 @@ const zS = ex(code, 'function _firmaTintaSrc(');
 ok('_firmaTintaSrc es SYNC para los templates (hit → procesada, miss → original + proceso en background)',
   zS.length > 100 && /_firmaTintaCache/.test(zS) && /_firmaTintaProcesar/.test(zS));
 
-console.log('\n— aplicada en los CINCO documentos —');
+console.log('\n— aplicada en los documentos con firma —');
+/* v1238 (Antonio): la firma del SOLICITANTE salió de la hoja del pedido — la confirmación
+   del QR (verificar.html) la muestra en trazo caligráfico. Quedan CUATRO firmas de imagen:
+   OC ×2, recibo, acuse. La propiedad v1160 (todas pasan por el procesador) se conserva. */
 const usos = (code.match(/_firmaTintaSrc\(/g) || []).length;
-ok('las cinco firmas pasan por el procesador (OC ×2, solicitud, recibo, acuse) + definición', usos >= 6);
-ok('la del SOLICITANTE de la solicitud', /_firmaTintaSrc\(_miFirmaImg\(pd\.solicitanteUsername\)\)/.test(code));
+ok('las cuatro firmas pasan por el procesador (OC ×2, recibo, acuse) + definición', usos >= 5);
+ok('v1238: la hoja del pedido ya no incrusta firma', !/_firmaTintaSrc\(_miFirmaImg\(pd\.solicitanteUsername\)\)/.test(code));
 ok('las dos de la OC', /_firmaTintaSrc\(_miFirmaImg\(oc\.generadoPorUsername\)\)/.test(code) && /_firmaTintaSrc\(_miFirmaImg\(_firmaUsernameAutoriza\(oc\)\)\)/.test(code));
 ok('la del recibo y la del acuse', /_firmaTintaSrc\(firma\)/.test(code) && /_firmaTintaSrc\(firmaUrl\)/.test(code));
 ok('el filtro CSS v1154 queda de FALLBACK mientras el proceso corre', /_FIRMA_TINTA/.test(code));

@@ -36,8 +36,9 @@ if (fU) {
 } else ok('_invUnidadDe evaluable', false);
 
 // ── 3. solicitud ──
-/* v1236: la firma grande del centro se fue — queda chiquita al pie, sin linea encima (Antonio) */
-ok('v1236: firma chiquita al pie de la solicitud', /SOLICITANTE · \$\{pd\.solicitante\}/.test(html));
+/* v1236: la firma grande del centro se fue. v1238: la firma salio del TODO de la hoja
+   (Antonio) — ahora vive en la confirmacion del QR (verificar.html, FIRMA DEL SOLICITANTE). */
+ok('v1238: la hoja del pedido va sin firma', !/SOLICITANTE · \$\{pd\.solicitante\}/.test(html));
 const iBtns = html.indexOf('pedDetalleOCBtn');
 const zBtns = html.slice(iBtns - 800, iBtns + 800);
 ok('el detalle tiene UN solo botón COMPARTIR SOLICITUD', /COMPARTIR SOLICITUD/.test(zBtns) && !/printPedido\(\)/.test(zBtns) && !/COMPARTIR IMAGEN</.test(zBtns));

@@ -32,7 +32,10 @@ if (fS) {
 // ── 2. sincronización (mismo régimen que bodegaMat) ──
 ok('variosMat se une por id + tombstones en applyRemote', /_vmL|variosMat/.test(html) && /merged\.variosMat/.test(html));
 const iM = html.indexOf('merged.variosMat');
-const zM = iM > 0 ? html.slice(iM - 700, iM + 1500) : '';
+/* v1238: la ventana de 1500 quedó corta (el merge de ordenes terminaba en +1513 y la
+   aserción fallaba con el código CORRECTO). Regla de la casa: si vuelve a quedar corta,
+   extraer el bloque por llaves en vez de ampliar otra vez. */
+const zM = iM > 0 ? html.slice(iM - 700, iM + 2600) : '';
 ok('pedidos con union-merge', /_mergeById\(_vmL\.pedidos/.test(zM));
 ok('órdenes con union-merge', /_mergeById\(_vmL\.ordenes/.test(zM));
 ok('tombstones de pedidos y órdenes', /pedidosEliminados/.test(zM) && /ordenesEliminadas/.test(zM));
