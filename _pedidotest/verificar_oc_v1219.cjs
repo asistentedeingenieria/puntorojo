@@ -112,7 +112,10 @@ ok('v1229: el texto de la pantalla de clave es el pedido, en mayúscula',
 /* v1230 (Antonio): símbolo ® junto a PUNTO ROJO; fondo color institucional (rojo, no
    beige); botón blanco con letras rojas que se INVIERTE (rojo con letras blancas) al
    pasar el mouse o enfocarlo. */
-ok('v1230: PUNTO ROJO lleva el símbolo de marca', /PUNTO ROJO<sup/.test(vh2) && /®/.test(vh2));
+/* v1231: ™ mientras Antonio registra la marca (usar ® sin registro puede sancionarse);
+   cuando tenga el registro se cambia a ®. */
+ok('v1230/31: PUNTO ROJO lleva el símbolo de marca ™ (no ® hasta tener el registro)',
+  /PUNTO ROJO<sup/.test(vh2) && /™/.test(vh2) && !/®/.test(vh2));
 ok('v1230: el fondo es el rojo institucional (no beige)', /body \{[^}]*background: #C8141C/.test(vh2) && !/background: #F5F3EE/.test(vh2));
 ok('v1230: botón blanco/rojo que se invierte al hover y focus',
   /\.clave-btn \{[^}]*background: #fff;[^}]*color: #C8141C/.test(vh2)
