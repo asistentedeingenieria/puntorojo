@@ -194,7 +194,10 @@ try {
 } catch(e){ ok('el candado evalúa', false); console.log('  ' + e.message); }
 const zU = ex(code, 'window._verificarOcUI = function(');
 ok('existe y usa el candado nuevo (ya no compras.autorizar)', !!zU && /_puedeVerificarOc\(\)/.test(zU) && !/compras\.autorizar/.test(zU));
-ok('el botón también usa el candado nuevo', /_puedeVerificarOc\(\)[\s\S]{0,200}VERIFICAR OC<\/button>/.test(html));
+/* v1234 (Antonio): "este botón ya no sirve — se verifica escaneando el QR". El botón se
+   quitó de la barra; el panel sigue existiendo con su candado (consola, caso raro de una
+   imagen sin QR que haya que cruzar contra la nube). */
+ok('v1234: el botón VERIFICAR OC ya NO está en la barra', !/VERIFICAR OC<\/button>/.test(html) && !/_verifBtn/.test(html));
 const zB = ex(code, 'window._verificarOcBuscar = function(');
 ok('busca en LOS TRES contenedores (obras + bodega + varios)',
   /state\.projects/.test(zB) && /bodegaMat/.test(zB) && /variosMat/.test(zB));
@@ -206,8 +209,8 @@ ok('v1220: explica el candado (solo cuenta revisora; quien genera no autoriza)',
   /quien la genera no puede autorizarla|QUIEN LA GENERA NO PUEDE AUTORIZARLA/i.test(zB));
 ok('todo lo pintado va escapado (regla XSS v849)', /_esc\(|esc\(/.test(zB));
 
-console.log('\n— 5. el botón en COMPRAS —');
-ok('la barra de órdenes ofrece VERIFICAR OC', /VERIFICAR OC<\/button>/.test(html) && /_verificarOcUI\(\)/.test(html));
+console.log('\n— 5. el panel de verificación (por consola desde v1234) —');
+ok('el panel _verificarOcUI sigue existiendo con su candado', /window\._verificarOcUI = function/.test(html));
 
 console.log('\n— 7. v1232: las hojas son CARTA en cualquier aparato + QR tocable —');
 /* Antonio (17-ago, capturas del celular): el doc se REACOMODABA a lo angosto (las hojas
