@@ -59,7 +59,8 @@ El README documenta la convención original de 3 archivos (web `puntorojo.html` 
    en `appState/config` (comando de consola) — eso bloquea a los clientes con código viejo
    antes de que puedan escribir (v892). Y recordá: toda mutación de `pl`/`pg`/`retpl` sella
    `._ts=Date.now()`; todo borrado escribe su tombstone (`pagosEliminados`/`planillasEliminadas`).
-3. Validá: `node _recetatest/valjs.js` → **baseline esperado `blocks=27 errs=1`**;
+3. Validá: `node _recetatest/valjs.js` → **baseline esperado `blocks=28 errs=1`**
+   (28 desde v1222: qrcodejs viaja embebida en su propio `<script>`);
    el `PARSE ERR block#13` es un **falso positivo conocido** (= PASS).
 4. Corré los `.cjs` relevantes de la feature (p. ej. `node _avancetest/flujoanticipos.cjs`).
 5. Commit a `main` (footer `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`),

@@ -55,6 +55,14 @@ ok('v1220: el QR DICE la autorización real — quién, desde qué cuenta y cuá
 const zD = ex(code, 'function _ocQrDataUrl(');
 ok('el QR se genera LOCAL con qrcodejs (nada viaja a servicios externos)',
   /new QRCode\(/.test(zD) && /toDataURL/.test(zD) && !/qrserver|googleapis/.test(zD));
+/* v1222 (Antonio: "no veo el código QR"): el sello salía pero el QR no — la librería venía
+   de un CDN externo con defer y al armar el documento aún no estaba (los acuses ya tenían
+   guardas de undefined por esta MISMA razón). La librería ahora viaja DENTRO de la app:
+   funciona sin internet de terceros, en el impreso y en la imagen compartida. */
+ok('v1222: qrcodejs viaja DENTRO de la app (ya no del CDN)',
+  /var QRCode;!function\(\)/.test(html) && !/cdnjs\.cloudflare\.com\/ajax\/libs\/qrcodejs/.test(html));
+ok('v1222: si aún así no hay QR, el documento LO DICE (nada de silencio)',
+  /QR NO DISPONIBLE/.test(html));
 
 console.log('\n— 3. el documento de la OC lleva el sello y el QR (impreso Y compartido) —');
 const zP = code.slice(code.indexOf('function printOrdenCompra('));
