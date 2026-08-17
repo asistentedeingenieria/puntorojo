@@ -3388,7 +3388,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1212</span>
+    <span style="opacity:.5;font-size:9px">v1213</span>
   </footer>
 
 </div>
@@ -25834,7 +25834,7 @@ function updateOcItemProveedor(idx, provId, opts){
      lo reciba antes de despachar. */
   if (provId === '_bodega') {
     const _res = _bodegaBuscarMaterial(item.name);
-    if (_res) {
+    if (_res && _res.saldo > 0) {
       if (_res.name && _res.name !== item.name) item.name = _res.name;  // el nombre de la bodega manda
       item.precio = _res.precio || 0;
       item.autoAssigned = true;
@@ -25847,7 +25847,18 @@ function updateOcItemProveedor(idx, provId, opts){
     } else {
       /* v1017: casi siempre es un problema de NOMBRE, no de existencia. Se ofrecen los
          parecidos que sí tienen existencia para que Antonio diga cuál es; su respuesta queda
-         declarada como equivalencia y no la vuelve a contestar. */
+         declarada como equivalencia y no la vuelve a contestar.
+         v1213: encontrar una fila SIN existencia tampoco es encontrar el material — casi
+         siempre es la fila huérfana que dejó una salida por nombre tipeado (el NYLON en 0
+         tapando al de 260). También se pregunta; y si de verdad es el mismo producto agotado,
+         CERRAR deja el despacho asignado como siempre (se despacha lo que haya al llegar). */
+      if (_res) {
+        if (_res.name && _res.name !== item.name) item.name = _res.name;
+        item.precio = _res.precio || 0;
+        item.autoAssigned = true;
+        item.esBodega = true;
+        showToast(`BODEGA TIENE ${_res.saldo} DE ${item.qty} — SE DESPACHA LO QUE HAYA`, 'red');
+      }
       _bodegaPedirMatch(idx, item.name);
     }
     renderOcItems();
@@ -25931,11 +25942,20 @@ function _bodegaBuscarMaterial(nombre){
     const mapa = _matAliasMap();
     Object.keys(mapa).forEach(k => { if (_matAliasCanon(k) === ck && claves.indexOf(k) < 0) claves.push(k); });
   } catch(e){}
+  /* v1213: entre las claves equivalentes GANA la que sí tiene existencia. El incidente de
+     salidas por nombre tipeado dejó filas huérfanas en 0 (p. ej. "METRO DE NYLON DELGADO
+     26" en 0 tapando al "NYLON DELGADO 26" METROS (TRANSPARENTE)" con 260) — y como la
+     clave propia se prueba primero, la fila muerta escondía al producto real. La fila sin
+     saldo queda de último recurso (un producto agotado de verdad se sigue reportando). */
+  let _muerta = null;
   for (const k of claves) {
     const s = saldos[k];
-    if (s) return { key: k, name: s.name || nombre, saldo: Number(s.saldo) || 0, precio: _precioEntradaBodega(k) };
+    if (!s) continue;
+    const r = { key: k, name: s.name || nombre, saldo: Number(s.saldo) || 0, precio: _precioEntradaBodega(k) };
+    if (r.saldo > 0) return r;
+    if (!_muerta) _muerta = r;
   }
-  return null;
+  return _muerta;
 }
 /* v1017: cuando el material NO aparece en bodega, casi siempre es porque está guardado con
    OTRO NOMBRE (el caso del agua: "AGUA PURA SALVAVIDAS GARRAFON" en el pedido y "AGUA
@@ -25980,7 +26000,7 @@ function _bodegaPedirMatch(idx, nombre){
   w.id = '_bodegaMatchModal';
   w.style.cssText = 'position:fixed;inset:0;z-index:100090;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
   w.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:560px;width:100%;padding:18px;max-height:86vh;overflow:auto">
-    <b style="font-size:13px;letter-spacing:.5px">ESE MATERIAL NO ESTÁ CON ESE NOMBRE EN BODEGA</b>
+    <b style="font-size:13px;letter-spacing:.5px">NO HAY EXISTENCIA CON ESE NOMBRE EN BODEGA</b>
     <div style="font-size:11px;color:#78716C;margin:6px 0 12px;line-height:1.6">El pedido dice <b>${_esc(nombre)}</b>. ${cands.length ? 'En la bodega hay estos parecidos — si es el mismo, tocalo y queda guardado para siempre.' : 'Y no hay nada parecido con existencia. Cargá la existencia en bodega o elegí otro proveedor.'}</div>
     ${cands.map(c => `<button class="btn ghost" style="width:100%;text-align:left;margin-bottom:6px;padding:10px 12px" onclick="window._bodegaUnirYUsar(${idx}, '${_esc(c.key)}', '${_esc(c.name)}')">
       <div style="font-size:11.5px;font-weight:600">${_esc(c.name)}</div>
