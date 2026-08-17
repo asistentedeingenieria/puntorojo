@@ -46,12 +46,30 @@ try {
   ok('v1220: la HORA de autorización es parte del sello', fS(a3) !== fS(a1));
 } catch(e){ ok('evalúa aislado', false); console.log('  ' + e.message); }
 
-console.log('\n— 2. el QR: local y con los datos legítimos —');
+console.log('\n— 2. el QR: un ENLACE a la página de verificación (v1225) —');
+/* v1225 (Antonio: "cuando lo escaneo NO me sale nada"): un QR de TEXTO PLANO el teléfono
+   lo manda a Google como búsqueda. El QR ahora lleva un ENLACE a verificar.html — el
+   teléfono abre el navegador y ve los datos formateados, sin login. Los datos viajan en
+   el #fragmento (no llegan a ningún servidor). */
 const zQ = ex(code, 'function _ocQrTexto(');
-ok('el texto del QR lleva número, proveedor, total y sello',
-  /PROVEEDOR: /.test(zQ) && /TOTAL: Q /.test(zQ) && /SELLO: /.test(zQ) && /_ocSelloIntegridad\(oc\)/.test(zQ));
-ok('v1220: el QR DICE la autorización real — quién, desde qué cuenta y cuándo, o SIN AUTORIZAR',
-  /AUTORIZADA POR: /.test(zQ) && /SIN AUTORIZAR/.test(zQ) && /autorizadoPorUsername/.test(zQ));
+ok('el QR es un enlace a puntorojo.app/verificar.html con los datos en el fragmento',
+  /https:\/\/puntorojo\.app\/verificar\.html#/.test(zQ) && /_ocSelloIntegridad\(oc\)/.test(zQ) && /autorizadoPorUsername/.test(zQ));
+try {
+  const fH2 = new Function('return (' + ex(code, 'function _selloHash32(') + ')')();
+  const fS2 = new Function('_numLimpio', '_selloHash32', 'return (' + ex(code, 'function _ocSelloIntegridad(') + ')')(s => String(s||''), fH2);
+  const fQ2 = new Function('_numLimpio', '_ocSelloIntegridad', 'return (' + zQ + ')')(s => String(s||''), fS2);
+  const url = fQ2({ numero:'OC4 - 000023', proveedorNombre:'PANEL PERFECTO, S.A.', fecha:'2026-08-17', total:8120,
+    autorizadoPor:'ERLIN TRIGUEROS', autorizadoPorUsername:'erlin', autorizadoTs:1755500000000 });
+  const psv = new URLSearchParams(url.split('#')[1] || '');
+  ok('los datos viajan completos y decodificables', psv.get('n') === 'OC4 - 000023' && psv.get('p') === 'PANEL PERFECTO, S.A.'
+    && psv.get('t') === '8120.00' && psv.get('u') === 'erlin' && /^[0-9A-F]{4}-/.test(psv.get('s') || ''));
+  const url2 = fQ2({ numero:'OC4 - 000024', proveedorNombre:'X', fecha:'2026-08-17', total:5 });
+  ok('sin autorizar, los params de autorización simplemente NO van (neutro)', (new URLSearchParams(url2.split('#')[1])).get('a') === null);
+} catch(e){ ok('la URL evalúa', false); console.log('  ' + e.message); }
+const vhtml = (() => { try { return fs.readFileSync(path.join(__dirname, '..', 'verificar.html'), 'utf8'); } catch(e){ return ''; } })();
+ok('verificar.html existe y lee el fragmento', /URLSearchParams/.test(vhtml) && /location\.hash/.test(vhtml));
+ok('verificar.html ESCAPA todo lo que pinta (el fragmento lo escribe quien llega)', /replace\(\/\[&<>"'\]\/g/.test(vhtml) && /textContent|createTextNode|_esc\(/.test(vhtml));
+ok('verificar.html es neutra (sin frases de sospecha)', vhtml && !/FUE ALTERADO|DESCONF/i.test(vhtml));
 const zD = ex(code, 'function _ocQrDataUrl(');
 ok('el QR se genera LOCAL con qrcodejs (nada viaja a servicios externos)',
   /new QRCode\(/.test(zD) && /toDataURL/.test(zD) && !/qrserver|googleapis/.test(zD));
