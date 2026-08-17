@@ -46,7 +46,10 @@ if (srcStrip) {
 }
 
 console.log('\n— la punta que faltaba: applyRemote hashea con la MISMA forma canónica —');
-const hashLine = (code.match(/const _nh = \{\};[\s\S]{0,420}?this\._projHashes = _nh;/) || [''])[0];
+/* v1218: la línea creció — la forma canónica ganó su CUARTO strip (_projSinEvidencia) y el
+   descuento de _evidEmbebidaIds. La propiedad protegida es la misma: misma forma en las dos
+   puntas. Ventana ampliada (la trampa de las ventanas fijas, documentada en v948/v993). */
+const hashLine = (code.match(/const _nh = \{\};[\s\S]{0,700}?this\._projHashes = _nh;/) || [''])[0];
 ok('la línea del hash existe', !!hashLine);
 ok('descuenta la receta (v930)', /_projSinReceta/.test(hashLine));
 ok('descuenta los pagos congelados (v931)', /_projSinPagosCongelados/.test(hashLine));

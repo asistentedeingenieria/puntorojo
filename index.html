@@ -3388,7 +3388,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1217</span>
+    <span style="opacity:.5;font-size:9px">v1218</span>
   </footer>
 
 </div>
@@ -9290,7 +9290,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 939; // v1199: la retención pendiente ya no retiene al pago en el doc caliente (las dos puntas deben congelar IGUAL)
+const APP_SYNC_VERSION = 940; // v1218: la EVIDENCIA (fotos+acuses) se parte a evid_<obra>__<nivel> — las dos puntas deben strippear IGUAL o el proj_ rebota de tamaño
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9614,6 +9614,14 @@ const CloudSync = {
               const _adj = {}; Object.keys(d._asistDocOnly).forEach(f => { _adj[f] = JSON.stringify(d._asistDocOnly[f]); });
               this._asistDayHashes = _adj;
               this._asistHash = JSON.stringify(d._asistDocOnly);
+            }
+          } catch(e){}
+          /* v1218: la evidencia sigue el mismo patrón v1202 — el baseline se siembra acá,
+             desde lo BAJADO, aunque applyRemote luego se salte la aplicación. */
+          try {
+            if (d && d._evidDocOnly && typeof d._evidDocOnly === 'object') {
+              const _vhj = {}; Object.keys(d._evidDocOnly).forEach(k => { if (d._evidDocOnly[k]) _vhj[k] = JSON.stringify(d._evidDocOnly[k]); });
+              this._evidHashes = _vhj;
             }
           } catch(e){}
           /* v1204: ALARMA DE RELOJ TORCIDO — si los stamps remotos vienen más de 24 h "en el
@@ -10018,6 +10026,45 @@ const CloudSync = {
       }
       projects[_xi] = _projSinGastosImp(_xp); // confirmado: el proj_ sube SIN los importados
     }
+    /* ═══ v1218 · PARTICIÓN DE EVIDENCIA (fotos + acuses) ═══
+       Un doc por NIVEL (evid_<obra>__<nivel>) en appState: el onSnapshot único los trae
+       solos y los mergers v897 corren igual sobre el árbol re-armado. Mismo orden SEGURO
+       que receta/pagos/gastos: doc confirmado → recién ahí se adelgaza el proj_.
+       TRAMPA 2 (auditoría 11-ago): si un doc falla, el proyecto viaja embebido ESTA VEZ —
+       salvo que ya esté al borde del techo, donde re-embeber tumbaría el batch COMPLETO
+       de todos los proyectos: ahí se adelgaza igual (el doc viejo queda en la nube y la
+       evidencia nueva reintenta en la próxima subida; sigue viva en memoria). */
+    if (!this._evidHashes) this._evidHashes = {};
+    for (let _vi = 0; _vi < projects.length; _vi++) {
+      const _vp = projects[_vi];
+      if (!_vp || !_vp.id || !Array.isArray(_vp.towers)) continue;
+      let _falloNivel = false;
+      for (const _vt of (_vp.towers || [])) {
+        for (const _vl of ((_vt && _vt.levels) || [])) {
+          if (!_vl || !_vl.id) continue;
+          const _vk = _vp.id + '__' + _vl.id;
+          const _ev = _evidDeNivel(_vl);
+          if (_ev) {
+            const _vjson = JSON.stringify(_ev);
+            if (_vjson.length > 900000) console.warn('[SIZE] evidencia de "'+(_vp.name||_vp.id)+'" nivel '+(_vl.name||_vl.id)+': '+Math.round(_vjson.length/1024)+' KB (límite Firestore 1 MB)');
+            if (this._evidHashes[_vk] !== _vjson) {
+              try { await db.collection('appState').doc('evid_' + _vk).set({ ev: _ev, _lastUpdate: stamp }); this._evidHashes[_vk] = _vjson; }
+              catch(e){ console.warn('Doc de evidencia no se subió (ese proyecto viaja embebido esta vez):', e && e.message); _falloNivel = true; }
+            }
+          } else if (this._evidHashes[_vk]) {
+            try { await db.collection('appState').doc('evid_' + _vk).delete(); delete this._evidHashes[_vk]; }
+            catch(e){ console.warn('Doc de evidencia no se pudo borrar:', e && e.message); }
+          }
+        }
+      }
+      if (!_falloNivel) { projects[_vi] = _projSinEvidencia(_vp); continue; }
+      try {
+        if (JSON.stringify(_vp).length > 900000) {
+          console.warn('[v1218] la evidencia de "'+(_vp.name||_vp.id)+'" NO se re-embebe (el proyecto pasaría el techo y tumbaría el batch) — queda el doc anterior y reintenta en la próxima subida');
+          projects[_vi] = _projSinEvidencia(_vp);
+        }
+      } catch(e){}
+    }
     try { _autoAligerarProyectos(projects); } catch(e){} // v1166: vigilancia de peso, sin molestar
     const seen = {};
     projects.forEach(p => {
@@ -10052,6 +10099,12 @@ const CloudSync = {
       if (seen[id]) return;
       const _cs = this;
       db.collection('appState').doc('gastosimp_' + id).delete().then(() => { delete _cs._gastosImpHashes[id]; }).catch(()=>{});
+    });
+    Object.keys(this._evidHashes || {}).forEach(k => {          // v1218: ídem para la evidencia (la llave es obra__nivel)
+      const pid = String(k).split('__')[0];
+      if (seen[pid]) return;
+      const _cs = this;
+      db.collection('appState').doc('evid_' + k).delete().then(() => { delete _cs._evidHashes[k]; }).catch(()=>{});
     });
     const CHUNK = 450;
     for (let i = 0; i < ops.length; i += CHUNK) {
@@ -10197,6 +10250,7 @@ const CloudSync = {
     let core = null, facesData = null, asistData = null; const projById = {}; const recetaById = {}; // v930
     const pagosArchById = {}; // v931
     const gastosImpById = {}; // v1166
+    const evidByKey = {}; // v1218: evidencia por obra__nivel
     snap.forEach(doc => {
       /* v1204 (incidente del reloj de Erlin: aparato 9 días atrás sellando "4-8-26" en OCs
          del 13-ago y perdiendo merges en silencio): registrar el stamp remoto MÁS NUEVO.
@@ -10208,6 +10262,7 @@ const CloudSync = {
       else if (doc.id.indexOf('receta_') === 0) { const d = doc.data(); if (d && d.recetaV2 && typeof d.recetaV2==='object') recetaById[doc.id.slice(7)] = d.recetaV2; } // v930
       else if (doc.id.indexOf('pagosarch_') === 0) { const d = doc.data(); if (d && Array.isArray(d.pagos)) pagosArchById[doc.id.slice(10)] = d.pagos; } // v931
       else if (doc.id.indexOf('gastosimp_') === 0) { const d = doc.data(); if (d && Array.isArray(d.gastos)) gastosImpById[doc.id.slice(10)] = d.gastos; } // v1166
+      else if (doc.id.indexOf('evid_') === 0) { const d = doc.data(); if (d && d.ev && typeof d.ev === 'object') evidByKey[doc.id.slice(5)] = d.ev; } // v1218
       else if (doc.id.indexOf('proj_') === 0) { const d = doc.data(); if (d && d.p) projById[doc.id.slice(5)] = d.p; }
     });
     if (!core) return null;
@@ -10284,6 +10339,36 @@ const CloudSync = {
       });
       data._gastosImpDocOnly = gastosImpById;
       data._gastosImpEmbebidaIds = _impEmbIds;
+    }
+    /* v1218: re-adjuntar la EVIDENCIA (fotos + acuses) desde sus docs evid_<obra>__<nivel>.
+       En memoria la app SIEMPRE ve todo (ningún lector cambia). La unión doc ∪ embebido va
+       con LOS MISMOS mergers del blindaje v897 (tombstones incluidos): durante la migración
+       un proj_ viejo puede traer evidencia adentro y nada se pierde.
+       TRAMPA 1 (auditoría 11-ago): _evidDocOnly = SOLO lo bajado de los docs — los hashes
+       se siembran de ahí y NUNCA del árbol mergeado (una foto rescatada por _mergeFotosApto
+       igualaría el hash, no se subiría nunca y moriría al recargar: el v897 silencioso). */
+    {
+      const _evEmbIds = [];
+      data.projects.forEach(p => {
+        if (!p || !p.id || !Array.isArray(p.towers)) return;
+        let _emb = false;
+        (p.towers || []).forEach(t => ((t && t.levels) || []).forEach(l => {
+          if (!l || !l.id) return;
+          if (!_emb && (l.aptos || []).some(a => a && _aptoTieneEvidencia(a))) _emb = true;
+          const _ev = evidByKey[p.id + '__' + l.id];
+          if (!_ev || !_ev.aptos) return;
+          (l.aptos || []).forEach(a => {
+            if (!a || !a.id || !_ev.aptos[a.id]) return;
+            const _doc = JSON.parse(JSON.stringify(_ev.aptos[a.id]));
+            try { if (typeof _mergeFotosApto === 'function') _mergeFotosApto(a, _doc); } catch(e){}
+            try { if (typeof _mergeAcusesApto === 'function') _mergeAcusesApto(a, _doc, (p.acusesEliminados || {}), a.id); } catch(e){}
+            _EVID_KEYS.forEach(k => { if (_doc[k] !== undefined && _doc[k] !== null) a[k] = _doc[k]; });
+          });
+        }));
+        if (_emb) _evEmbIds.push(p.id);
+      });
+      data._evidDocOnly = evidByKey;
+      data._evidEmbebidaIds = _evEmbIds;
     }
     // v633: re-adjuntar las caras desde el doc appState/faces a cada persona (el core ya no las trae).
     if (facesData && Array.isArray(data.personalGlobal)) {
@@ -10457,6 +10542,10 @@ const CloudSync = {
     // Sin esto, la primera subida de CADA sesión reescribía el doc de gastos importados entero.
     try { const _xdo = merged._gastosImpDocOnly || {}; const _xh = {}; Object.keys(_xdo).forEach(id => { if (_xdo[id]) _xh[id] = JSON.stringify(_xdo[id]); }); this._gastosImpHashes = _xh; } catch(e){ this._gastosImpHashes = {}; }
     try { delete merged._gastosImpDocOnly; } catch(e){}
+    /* v1218: sembrar los hashes de evidencia con lo BAJADO DE LOS DOCS — TRAMPA 1: jamás
+       del árbol mergeado (la foto rescatada igualaría el hash y no se subiría nunca). */
+    try { const _vdo = merged._evidDocOnly || {}; const _vh = {}; Object.keys(_vdo).forEach(k => { if (_vdo[k]) _vh[k] = JSON.stringify(_vdo[k]); }); this._evidHashes = _vh; } catch(e){ this._evidHashes = {}; }
+    try { delete merged._evidDocOnly; } catch(e){}
     try {
       if (typeof _mergeAsistencia === 'function') {
         // v666: unir los tombstones de ausencia (local ∪ remoto, conservando el _ts más nuevo por llave)
@@ -10947,10 +11036,13 @@ const CloudSync = {
        subida de cada usuario, hasta desbordar la cola de escrituras de Firestore
        (resource-exhausted, 11-ago). Es exactamente lo que advierte el comentario de v930 acá
        arriba, cometido de nuevo. */
-    { const _nh = {}; (remoteData.projects || []).forEach(pp => { if (pp && pp.id) _nh[pp.id] = JSON.stringify(_projSinGastosImp(_projSinPagosCongelados(_projSinReceta(pp)))); }); (merged._recetaEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._pagosArchEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._gastosImpEmbebidaIds || []).forEach(id => { delete _nh[id]; }); this._projHashes = _nh; }
+    /* v1218: la forma canónica ganó su cuarto strip — la EVIDENCIA. Misma regla v1168:
+       las DOS puntas deben producir EXACTAMENTE el mismo string o el hash-skip muere. */
+    { const _nh = {}; (remoteData.projects || []).forEach(pp => { if (pp && pp.id) _nh[pp.id] = JSON.stringify(_projSinEvidencia(_projSinGastosImp(_projSinPagosCongelados(_projSinReceta(pp))))); }); (merged._recetaEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._pagosArchEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._gastosImpEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._evidEmbebidaIds || []).forEach(id => { delete _nh[id]; }); this._projHashes = _nh; }
     try { delete merged._recetaEmbebidaIds; } catch(e){}
     try { delete merged._pagosArchEmbebidaIds; } catch(e){}
     try { delete merged._gastosImpEmbebidaIds; } catch(e){}
+    try { delete merged._evidEmbebidaIds; } catch(e){}
     /* v1175: una sola vez por sesión y con retraso —la app ya cargó y no compite con el
        arranque— se intenta el archivado automático de la asistencia vieja. Adentro decide si
        corresponde (material suficiente, no corrió hoy) y solo lo hace un administrador. */
@@ -39624,6 +39716,64 @@ function _mergeAcusesApto(la, ra, tomb, aptoId){
     }
   });
   return chg;
+}
+/* ═══ v1218 · PARTICIÓN DE EVIDENCIA — las puras ═══
+   El techo real de una obra son las FOTOS (auditoría 11-ago: VDC 100% documentada ≈ 2.8 MB
+   contra 1 MB por doc). La evidencia (fotos + acuses + sus tombstones) se muda a UN DOC POR
+   NIVEL (evid_<obra>__<nivel>) en la misma colección appState. Estas tres funciones son la
+   forma canónica compartida por las DOS puntas (regla v1168). */
+var _EVID_KEYS = ['photos','photoTs','photoHashes','photoPHashes','fotosEliminadas','acuseRecepcion','acuseRecepciones'];
+function _aptoTieneEvidencia(a){
+  if (!a) return false;
+  for (var i = 0; i < _EVID_KEYS.length; i++) {
+    var v = a[_EVID_KEYS[i]];
+    if (v && (typeof v !== 'object' || Object.keys(v).length)) return true;
+  }
+  return false;
+}
+function _evidDeApto(a){
+  if (!a) return null;
+  var out = null;
+  _EVID_KEYS.forEach(function(k){
+    var v = a[k];
+    if (v && (typeof v !== 'object' || Object.keys(v).length)) { out = out || {}; out[k] = v; }
+  });
+  return out;
+}
+function _evidDeNivel(l){
+  if (!l || !Array.isArray(l.aptos)) return null;
+  var aptos = null;
+  l.aptos.forEach(function(a){
+    if (!a || !a.id) return;
+    var ev = _evidDeApto(a);
+    if (ev) { aptos = aptos || {}; aptos[a.id] = ev; }
+  });
+  return aptos ? { aptos: aptos } : null;
+}
+/* PURA: clona solo el camino que toca (patrón _projSinPagosCongelados); sin evidencia
+   devuelve el MISMO objeto para que el hash-skip no pague clones de más. */
+function _projSinEvidencia(p){
+  if (!p || !Array.isArray(p.towers)) return p;
+  var hay = p.towers.some(function(t){ return t && (t.levels || []).some(function(l){ return l && (l.aptos || []).some(_aptoTieneEvidencia); }); });
+  if (!hay) return p;
+  var c = Object.assign({}, p);
+  c.towers = p.towers.map(function(t){
+    if (!t || !(t.levels || []).some(function(l){ return l && (l.aptos || []).some(_aptoTieneEvidencia); })) return t;
+    var ct = Object.assign({}, t);
+    ct.levels = t.levels.map(function(l){
+      if (!l || !(l.aptos || []).some(_aptoTieneEvidencia)) return l;
+      var cl = Object.assign({}, l);
+      cl.aptos = l.aptos.map(function(a){
+        if (!_aptoTieneEvidencia(a)) return a;
+        var ca = Object.assign({}, a);
+        _EVID_KEYS.forEach(function(k){ delete ca[k]; });
+        return ca;
+      });
+      return cl;
+    });
+    return ct;
+  });
+  return c;
 }
 function _mergeFotosProyecto(lp, rp){
   if (!lp || !rp || !Array.isArray(lp.towers) || !Array.isArray(rp.towers)) return 0;
