@@ -102,6 +102,13 @@ ok('el QR está en el doc', /_ocQrDataUrl\(_ocQrTexto\(oc\)\)/.test(_doc));
    exacta de ESA autorización — el de otra orden muestra otros datos al escanear). */
 ok('v1226: el QR está condicionado a oc.autorizadoPor (sin firma de finanzas, sin QR)',
   /\$\{oc\.autorizadoPor \? [\s\S]{0,80}_ocQrDataUrl\(_ocQrTexto\(oc\)\)/.test(_doc));
+/* v1227 (Antonio eligió mezclar D+E+H): esquinas de escaneo ROJAS en las 4 puntas,
+   "PUNTO ROJO" en letras espaciadas debajo del QR, y el número de la orden en vertical
+   al costado (identifica la orden aunque la imagen se recorte). */
+const _qrBlk = (_doc.match(/\$\{oc\.autorizadoPor \? \(function\(\)[\s\S]{0,2600}?\)\(\) : ''\}/) || [''])[0];
+ok('v1227: las CUATRO esquinas de escaneo rojas', (_qrBlk.match(/2\.5px solid #C8141C/g) || []).length === 8);
+ok('v1227: la firma de marca PUNTO ROJO debajo del QR', /letter-spacing:2\.5px[^>]*>PUNTO ROJO</.test(_qrBlk));
+ok('v1227: el número de la orden en vertical al costado', /writing-mode:vertical-rl/.test(_qrBlk) && /_numLimpio\(oc\.numero/.test(_qrBlk));
 ok('el QR va ANTES de las firmas (encima, no al pie)',
   _doc.indexOf('_ocQrDataUrl(_ocQrTexto(oc))') >= 0 && _doc.indexOf('_ocQrDataUrl(_ocQrTexto(oc))') < _doc.indexOf('<div class="oc-firmas">'));
 ok('SIN sello impreso ni textos de advertencia en el documento',
