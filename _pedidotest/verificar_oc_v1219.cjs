@@ -96,6 +96,12 @@ console.log('\n— 3. el documento: SOLO el QR, discreto, encima de las firmas (
    lectura de auditoría vive únicamente en VERIFICAR OC (admin + Sibila). */
 const _doc = html.slice(html.indexOf('function printOrdenCompra('), html.indexOf('window.compartirOcImg'));
 ok('el QR está en el doc', /_ocQrDataUrl\(_ocQrTexto\(oc\)\)/.test(_doc));
+/* v1226 (Antonio): el QR aparece SOLO cuando finanzas YA firmó — es la MARCA de
+   autorización. Un borrador o pendiente no lleva QR: compras no puede producir un
+   documento con QR por su cuenta, y cada QR es único (nace de los datos + cuenta + hora
+   exacta de ESA autorización — el de otra orden muestra otros datos al escanear). */
+ok('v1226: el QR está condicionado a oc.autorizadoPor (sin firma de finanzas, sin QR)',
+  /\$\{oc\.autorizadoPor \? [\s\S]{0,80}_ocQrDataUrl\(_ocQrTexto\(oc\)\)/.test(_doc));
 ok('el QR va ANTES de las firmas (encima, no al pie)',
   _doc.indexOf('_ocQrDataUrl(_ocQrTexto(oc))') >= 0 && _doc.indexOf('_ocQrDataUrl(_ocQrTexto(oc))') < _doc.indexOf('<div class="oc-firmas">'));
 ok('SIN sello impreso ni textos de advertencia en el documento',
