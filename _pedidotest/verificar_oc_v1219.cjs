@@ -157,13 +157,13 @@ console.log('\n— 3. el documento: SOLO el QR, discreto, encima de las firmas (
    encima de las firmas. El escaneo muestra datos NEUTROS (sin "fue alterado"); la
    lectura de auditoría vive únicamente en VERIFICAR OC (admin + Sibila). */
 const _doc = html.slice(html.indexOf('function printOrdenCompra('), html.indexOf('window.compartirOcImg'));
-ok('el QR está en el doc', /_ocQrDataUrl\(_ocQrTexto\(oc\)\)/.test(_doc));
+ok('el QR está en el doc', /var _u = _ocQrTexto\(oc\); var _q = _ocQrDataUrl\(_u\)/.test(_doc));
 /* v1226 (Antonio): el QR aparece SOLO cuando finanzas YA firmó — es la MARCA de
    autorización. Un borrador o pendiente no lleva QR: compras no puede producir un
    documento con QR por su cuenta, y cada QR es único (nace de los datos + cuenta + hora
    exacta de ESA autorización — el de otra orden muestra otros datos al escanear). */
 ok('v1226: el QR está condicionado a oc.autorizadoPor (sin firma de finanzas, sin QR)',
-  /\$\{oc\.autorizadoPor \? [\s\S]{0,80}_ocQrDataUrl\(_ocQrTexto\(oc\)\)/.test(_doc));
+  /\$\{oc\.autorizadoPor \? [\s\S]{0,80}_ocQrTexto\(oc\)/.test(_doc));
 /* v1227 (Antonio eligió mezclar D+E+H): esquinas de escaneo ROJAS en las 4 puntas,
    "PUNTO ROJO" en letras espaciadas debajo del QR, y el número de la orden en vertical
    al costado (identifica la orden aunque la imagen se recorte). */
@@ -172,7 +172,7 @@ ok('v1227: las CUATRO esquinas de escaneo rojas', (_qrBlk.match(/2\.5px solid #C
 ok('v1227: la firma de marca PUNTO ROJO debajo del QR', /letter-spacing:2\.5px[^>]*>PUNTO ROJO</.test(_qrBlk));
 ok('v1227: el número de la orden en vertical al costado', /writing-mode:vertical-rl/.test(_qrBlk) && /_numLimpio\(oc\.numero/.test(_qrBlk));
 ok('el QR va ANTES de las firmas (encima, no al pie)',
-  _doc.indexOf('_ocQrDataUrl(_ocQrTexto(oc))') >= 0 && _doc.indexOf('_ocQrDataUrl(_ocQrTexto(oc))') < _doc.indexOf('<div class="oc-firmas">'));
+  _doc.indexOf('_ocQrDataUrl(_u)') >= 0 && _doc.indexOf('_ocQrDataUrl(_u)') < _doc.indexOf('<div class="oc-firmas">'));
 ok('SIN sello impreso ni textos de advertencia en el documento',
   !/SELLO DE INTEGRIDAD · \$\{/.test(_doc) && !/FUE ALTERADO/.test(_doc) && !/EL QR MUESTRA/.test(_doc));
 ok('el ESCANEO tampoco acusa (la frase "fue alterado" salió del QR)', !/FUE ALTERADO/.test(zQ));
@@ -208,6 +208,16 @@ ok('todo lo pintado va escapado (regla XSS v849)', /_esc\(|esc\(/.test(zB));
 
 console.log('\n— 5. el botón en COMPRAS —');
 ok('la barra de órdenes ofrece VERIFICAR OC', /VERIFICAR OC<\/button>/.test(html) && /_verificarOcUI\(\)/.test(html));
+
+console.log('\n— 7. v1232: las hojas son CARTA en cualquier aparato + QR tocable —');
+/* Antonio (17-ago, capturas del celular): el doc se REACOMODABA a lo angosto (las hojas
+   copian adentro las media queries de la app, v1053). Viewport FIJO de hoja: el teléfono
+   escala la carta completa (como un PDF), no la reacomoda — las queries ≤768 mueren. */
+const zHead = ex(code, 'function _docHeadMeta(');
+ok('v1232: viewport fijo de hoja carta (820) en la cabecera compartida de las TRES hojas',
+  /width=820/.test(zHead) && !/device-width/.test(zHead));
+ok('v1232: el QR del documento es TOCABLE (abre el enlace de verificación)',
+  /<a href="' \+ _u\.replace\(/.test(_doc) && /_ocQrDataUrl\(_u\)/.test(_doc));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

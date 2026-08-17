@@ -19,7 +19,10 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
 console.log('\n— 1. el head compartido con viewport —');
 const zH = ex('function _docHeadMeta(');
-ok('existe y trae el viewport', /name="viewport" content="width=device-width,initial-scale=1"/.test(zH));
+/* v1232 (Antonio, capturas del celular): el viewport pasó de device-width (reacomodar) a
+   FIJO width=820 (hoja carta escalada como PDF). La PROPIEDAD que v1053 protegía — que
+   nada se corte en Android — se conserva: 820 escala a cualquier pantalla. */
+ok('existe y trae el viewport de hoja carta (820 fijo, v1232)', /name="viewport" content="width=820"/.test(zH) && !/device-width/.test(zH));
 ok('y conserva only light (docs de impresión, regla v979)', /color-scheme" content="only light"/.test(zH));
 ok('la hoja de OC lo usa', /\$\{_docHeadMeta\(\)\}/.test(ex('function printOrdenCompra(')));
 ok('la solicitud lo usa', /\$\{_docHeadMeta\(\)\}/.test(ex('function _solicitudDocHTML(')));
