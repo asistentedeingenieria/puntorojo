@@ -104,6 +104,11 @@ ok('el _qrKs de verificar.html es IDÉNTICO al del index (byte a byte, sin comen
   !!ksIdx && ksVer.replace(/\s+/g, '') === ksIdx.replace(/\s+/g, ''));
 ok('verificar.html pide la clave (input password) y avisa si es incorrecta',
   /type="password"/.test(vh2) && /Clave incorrecta/.test(vh2) && /sessionStorage/.test(vh2));
+/* v1229 (Antonio): la pantalla de la clave dice ÚNICAMENTE, en mayúscula:
+   "PARA PODER VER EL DOCUMENTO VERIFICADO INGRESA LA CLAVE." y el campo dice CLAVE. */
+ok('v1229: el texto de la pantalla de clave es el pedido, en mayúscula',
+  /PARA PODER VER EL DOCUMENTO VERIFICADO INGRESA LA CLAVE\./.test(vh2)
+  && /placeholder="CLAVE"/.test(vh2) && !/Este resumen está protegido/.test(vh2));
 ok('la app tiene _qrClaveSet (solo admin) y lee la clave del doc config',
   /window\._qrClaveSet = /.test(code) && /can\('users\.manage'\)/.test(ex(code, 'window._qrClaveSet = ')) && /window\._qrClave = String\(\(s && s\.exists && \(s\.data\(\)\|\|\{\}\)\.qrClave \|\| ''\)\)/.test(code));
 console.log('\n— 2d. v1228: el diseño de la página (pedidos de Antonio) —');
