@@ -53,19 +53,65 @@ console.log('\n— 2. el QR: un ENLACE a la página de verificación (v1225) —
    el #fragmento (no llegan a ningún servidor). */
 const zQ = ex(code, 'function _ocQrTexto(');
 ok('el QR es un enlace a puntorojo.app/verificar.html con los datos en el fragmento',
-  /https:\/\/puntorojo\.app\/verificar\.html#/.test(zQ) && /_ocSelloIntegridad\(oc\)/.test(zQ) && /autorizadoPorUsername/.test(zQ));
+  /https:\/\/puntorojo\.app\/verificar\.html#/.test(zQ) && /_ocSelloIntegridad\(oc\)/.test(zQ) && /_qrFechaHora/.test(zQ));
+/* v1228 diseño (Antonio): f = FECHA DE SOLICITUD (generadoTs, cuando compras la mandó a
+   autorización) con hora 24h "LUNES 17/08/2026 -- 07:30"; solo el NOMBRE del autorizador
+   (la cuenta sigue en el sello y en VERIFICAR OC); total con comas lo pone la página. */
+ok('v1228: la fecha de solicitud sale de generadoTs y el usuario ya no viaja',
+  /oc\.generadoTs \|\| oc\.ts/.test(zQ) && !/ps\.set\('u'/.test(zQ));
 try {
   const fH2 = new Function('return (' + ex(code, 'function _selloHash32(') + ')')();
   const fS2 = new Function('_numLimpio', '_selloHash32', 'return (' + ex(code, 'function _ocSelloIntegridad(') + ')')(s => String(s||''), fH2);
-  const fQ2 = new Function('_numLimpio', '_ocSelloIntegridad', 'return (' + zQ + ')')(s => String(s||''), fS2);
-  const url = fQ2({ numero:'OC4 - 000023', proveedorNombre:'PANEL PERFECTO, S.A.', fecha:'2026-08-17', total:8120,
-    autorizadoPor:'ERLIN TRIGUEROS', autorizadoPorUsername:'erlin', autorizadoTs:1755500000000 });
+  const fKs = new Function('_selloHash32', 'return (' + ex(code, 'function _qrKs(') + ')')(fH2);
+  const fCif = new Function('_qrKs', 'btoa', 'return (' + ex(code, 'function _qrCifrar(') + ')')(fKs, s => Buffer.from(s, 'binary').toString('base64'));
+  const fFH = new Function('return (' + ex(code, 'function _qrFechaHora(') + ')')();
+  ok('v1228: el formato de fecha es "DÍA 17/08/2026 -- 07:30" en 24 horas',
+    /^[A-ZÁÉÍÓÚ]+ \d{2}\/\d{2}\/\d{4} -- \d{2}:\d{2}$/.test(fFH(1755443400000)));
+  const mkQ = (win) => new Function('window', '_numLimpio', '_ocSelloIntegridad', '_selloHash32', '_qrCifrar', '_qrFechaHora', 'return (' + zQ + ')')(win, s => String(s||''), fS2, fH2, fCif, fFH);
+  const OCQ = { numero:'OC4 - 000023', proveedorNombre:'PANEL PERFECTO, S.A.', fecha:'2026-08-17', total:8120,
+    generadoTs:1755440000000, autorizadoPor:'ERLIN TRIGUEROS', autorizadoPorUsername:'erlin', autorizadoTs:1755500000000 };
+  const url = mkQ({})(OCQ);
   const psv = new URLSearchParams(url.split('#')[1] || '');
-  ok('los datos viajan completos y decodificables', psv.get('n') === 'OC4 - 000023' && psv.get('p') === 'PANEL PERFECTO, S.A.'
-    && psv.get('t') === '8120.00' && psv.get('u') === 'erlin' && /^[0-9A-F]{4}-/.test(psv.get('s') || ''));
-  const url2 = fQ2({ numero:'OC4 - 000024', proveedorNombre:'X', fecha:'2026-08-17', total:5 });
+  ok('SIN clave configurada: los datos viajan planos (como hasta hoy)', psv.get('n') === 'OC4 - 000023' && psv.get('p') === 'PANEL PERFECTO, S.A.'
+    && psv.get('t') === '8120.00' && / -- \d{2}:\d{2}$/.test(psv.get('f') || '') && / -- /.test(psv.get('h') || '')
+    && psv.get('u') === null && /^[0-9A-F]{4}-/.test(psv.get('s') || ''));
+  const url2 = mkQ({})({ numero:'OC4 - 000024', proveedorNombre:'X', fecha:'2026-08-17', total:5 });
   ok('sin autorizar, los params de autorización simplemente NO van (neutro)', (new URLSearchParams(url2.split('#')[1])).get('a') === null);
+
+  console.log('\n— 2b. v1228: CON clave, el QR va CIFRADO y solo la clave lo abre —');
+  /* v1228 (Antonio: "debe pedir una contraseña que yo voy a crear"): con window._qrClave
+     configurada, el payload viaja cifrado (keystream derivado de la clave + salt por
+     orden) — sin la clave el contenido es ILEGIBLE, no solo escondido. La página
+     verificar.html pide la clave y verifica el tag antes de mostrar nada. */
+  const urlC = mkQ({ _qrClave: 'MI-CLAVE-2026' })(OCQ);
+  const psc = new URLSearchParams(urlC.split('#')[1] || '');
+  ok('con clave: viaja x (cifrado) + k (salt) + t (tag) y NADA en claro',
+    !!psc.get('x') && !!psc.get('k') && !!psc.get('t') && psc.get('n') === null && urlC.indexOf('PANEL') < 0);
+  const fDes = new Function('_qrKs', 'atob', 'return (' + (() => { try { return (require('fs').readFileSync(require('path').join(__dirname, '..', 'verificar.html'), 'utf8').match(/function _qrDescifrar\([\s\S]*?\n  \}/) || [''])[0]; } catch(e){ return ''; } })() + ')')(fKs, s => Buffer.from(s, 'base64').toString('binary'));
+  const plano = fDes(psc.get('x'), 'MI-CLAVE-2026', psc.get('k'));
+  const psd = new URLSearchParams(plano);
+  ok('LA VUELTA REDONDA: con la clave correcta se recupera todo', psd.get('n') === 'OC4 - 000023' && psd.get('t') === '8120.00');
+  ok('el tag confirma la clave correcta', ('000000' + ((fH2(plano, 777) >>> 0).toString(16))).slice(-6) === psc.get('t'));
+  const mal = fDes(psc.get('x'), 'CLAVE-EQUIVOCADA', psc.get('k'));
+  ok('con clave equivocada NO se recupera nada legible (el tag no cuadra)',
+    ('000000' + ((fH2(mal, 777) >>> 0).toString(16))).slice(-6) !== psc.get('t') && (new URLSearchParams(mal)).get('n') !== 'OC4 - 000023');
 } catch(e){ ok('la URL evalúa', false); console.log('  ' + e.message); }
+console.log('\n— 2c. v1228: las DOS puntas comparten el MISMO keystream (regla v1168) —');
+const vh2 = (() => { try { return require('fs').readFileSync(require('path').join(__dirname, '..', 'verificar.html'), 'utf8'); } catch(e){ return ''; } })();
+const ksIdx = ex(code, 'function _qrKs(');
+const ksVer = (vh2.replace(/\/\*[\s\S]*?\*\//g, '').match(/function _qrKs\([\s\S]*?\n  \}/) || [''])[0];
+ok('el _qrKs de verificar.html es IDÉNTICO al del index (byte a byte, sin comentarios)',
+  !!ksIdx && ksVer.replace(/\s+/g, '') === ksIdx.replace(/\s+/g, ''));
+ok('verificar.html pide la clave (input password) y avisa si es incorrecta',
+  /type="password"/.test(vh2) && /Clave incorrecta/.test(vh2) && /sessionStorage/.test(vh2));
+ok('la app tiene _qrClaveSet (solo admin) y lee la clave del doc config',
+  /window\._qrClaveSet = /.test(code) && /can\('users\.manage'\)/.test(ex(code, 'window._qrClaveSet = ')) && /window\._qrClave = String\(\(s && s\.exists && \(s\.data\(\)\|\|\{\}\)\.qrClave \|\| ''\)\)/.test(code));
+console.log('\n— 2d. v1228: el diseño de la página (pedidos de Antonio) —');
+ok('FECHA DE SOLICITUD y FECHA DE AUTORIZACIÓN como etiquetas', /FECHA DE SOLICITUD/.test(vh2) && /FECHA DE AUTORIZACIÓN/.test(vh2));
+ok('AUTORIZADA POR muestra SOLO el nombre (sin @usuario)', /fila\('AUTORIZADA POR', ps\.get\('a'\)\)/.test(vh2) && !/\(@/.test(vh2));
+ok('el total lleva comas de miles y dos decimales', /toLocaleString\('en-US', \{ minimumFractionDigits: 2/.test(vh2));
+ok('el pie dice EMITIDO POR LA APP PUNTOROJO.APP (todo mayúscula, sin extras)',
+  /EMITIDO POR LA APP PUNTOROJO\.APP</.test(vh2) && !/Emitido por la app/.test(vh2));
 const vhtml = (() => { try { return fs.readFileSync(path.join(__dirname, '..', 'verificar.html'), 'utf8'); } catch(e){ return ''; } })();
 ok('verificar.html existe y lee el fragmento', /URLSearchParams/.test(vhtml) && /location\.hash/.test(vhtml));
 ok('verificar.html ESCAPA todo lo que pinta (el fragmento lo escribe quien llega)', /replace\(\/\[&<>"'\]\/g/.test(vhtml) && /textContent|createTextNode|_esc\(/.test(vhtml));

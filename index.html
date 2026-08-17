@@ -3392,7 +3392,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1227</span>
+    <span style="opacity:.5;font-size:9px">v1228</span>
   </footer>
 
 </div>
@@ -9514,6 +9514,8 @@ const CloudSync = {
             this._asistCutoff = _asistCutoffMax(this._asistCutoff, (s && s.exists && (s.data()||{}).asistCutoff) || '');
             if (this._asistCutoff) { try { localStorage.setItem(_ASIST_CUT_KEY, this._asistCutoff); } catch(e){} }
           } catch(e){}
+          /* v1228: la clave del QR viaja en el mismo doc config (listener vivo, chiquito) */
+          try { window._qrClave = String((s && s.exists && (s.data()||{}).qrClave || '')); } catch(e){}
           if (_versionBloqueada(APP_SYNC_VERSION, this._minSyncVersion)) _mostrarBloqueoVersion(this._minSyncVersion);
         } catch(e){}
       }, (e) => { console.warn('[v892] listener config:', e && e.message); });
@@ -27766,27 +27768,90 @@ function _ocSelloIntegridad(oc){
     return hex.slice(0, 4) + '-' + hex.slice(4, 8) + '-' + hex.slice(8, 12);
   } catch(e){ return '—'; }
 }
+/* v1228 (Antonio: "para acceder debe pedir una contraseña que yo voy a crear"): el payload
+   del QR viaja CIFRADO con la clave del admin (keystream derivado de clave+salt por orden,
+   XOR byte a byte). Sin la clave el contenido es ILEGIBLE — no un simple candado de vista.
+   REGLA v1168: _qrKs debe ser IDÉNTICA acá y en verificar.html (las dos puntas iguales). */
+function _qrKs(clave, salt, n){
+  var s0 = (_selloHash32(clave + '|' + salt, 2166136261) || 1) >>> 0;
+  var s1 = (_selloHash32(salt + '|' + clave, 40009) || 2) >>> 0;
+  var s2 = (_selloHash32(clave + salt + clave, 8887) || 3) >>> 0;
+  var s3 = (_selloHash32(salt + clave + salt, 123457) || 4) >>> 0;
+  var out = [];
+  for (var i = 0; i < n; i++) {
+    var t = (s1 << 9) >>> 0;
+    s2 = (s2 ^ s0) >>> 0; s3 = (s3 ^ s1) >>> 0; s1 = (s1 ^ s2) >>> 0; s0 = (s0 ^ s3) >>> 0;
+    s2 = (s2 ^ t) >>> 0;
+    s3 = ((s3 << 11) | (s3 >>> 21)) >>> 0;
+    out.push(((s0 + s1) >>> 0) & 0xFF);
+  }
+  return out;
+}
+function _qrCifrar(texto, clave, salt){
+  var by = [];
+  for (var i = 0; i < texto.length; i++) {
+    var c = texto.charCodeAt(i);
+    if (c < 128) by.push(c);
+    else if (c < 2048) by.push(192 | (c >> 6), 128 | (c & 63));
+    else by.push(224 | (c >> 12), 128 | ((c >> 6) & 63), 128 | (c & 63));
+  }
+  var ks = _qrKs(clave, salt, by.length), s = '';
+  for (var j = 0; j < by.length; j++) s += String.fromCharCode(by[j] ^ ks[j]);
+  /* base64url con split/join: la secuencia regex de la barra rompe el stripper de
+     comentarios de los tests (misma trampa de siempre) */
+  return btoa(s).replace(/\+/g, '-').split('/').join('_').replace(/=+$/, '');
+}
+/* el admin crea/cambia la clave: window._qrClaveSet('MI-CLAVE') en la consola */
+window._qrClaveSet = async function(clave){
+  if (!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR', 'red');
+  clave = String(clave || '').trim();
+  if (clave.length < 4) return showToast('LA CLAVE VA DE 4 CARACTERES PARA ARRIBA', 'red');
+  try {
+    await firebase.firestore().collection('appState').doc('config').set({ qrClave: clave, qrClaveTs: Date.now(), qrClavePor: String(((typeof getCurrentUser === 'function' && getCurrentUser()) || {}).username || '') }, { merge: true });
+    window._qrClave = clave;
+    showToast('CLAVE DEL QR GUARDADA — LOS QR NUEVOS SALEN CIFRADOS', 'green');
+    return 'LISTO: los QR que se generen desde ahora piden esta clave al escanear.';
+  } catch(e){ showToast('NO SE PUDO GUARDAR: ' + (e && e.message), 'red'); }
+};
+/* v1228 (Antonio): formato de fechas del resumen — "LUNES 17/08/2026 -- 07:30", 24 horas */
+function _qrFechaHora(ts){
+  var d = new Date(Number(ts));
+  if (!ts || isNaN(d.getTime())) return '';
+  var DIAS = ['DOMINGO','LUNES','MARTES','MIÉRCOLES','JUEVES','VIERNES','SÁBADO'];
+  var p = function(n){ return String(n).padStart(2, '0'); };
+  return DIAS[d.getDay()] + ' ' + p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear() + ' -- ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
 function _ocQrTexto(oc){
   /* v1225 (Antonio: "cuando lo escaneo NO me sale nada"): un QR de TEXTO PLANO el teléfono
      lo manda a Google como búsqueda. El QR lleva un ENLACE a verificar.html: el teléfono
      abre el navegador y ve el resumen formateado, sin login. Los datos viajan en el
      #fragmento (no llegan a ningún servidor). Tono neutro (v1223): sin autorizar, los
-     params de autorización simplemente no van — la página lo muestra sin regaños. */
+     params de autorización simplemente no van — la página lo muestra sin regaños.
+     v1228 (Antonio): f = FECHA DE SOLICITUD (cuando compras la mandó a autorización =
+     generadoTs) con hora; solo el NOMBRE de quien autoriza (la cuenta sigue amarrada en
+     el sello y en VERIFICAR OC); el total viaja crudo y la página le pone las comas. */
   var ps = new URLSearchParams();
   ps.set('n', _numLimpio(oc.numero || ''));
   ps.set('p', String(oc.proveedorNombre || ''));
-  ps.set('f', String(oc.fecha || ''));
+  ps.set('f', _qrFechaHora(oc.generadoTs || oc.ts) || String(oc.fecha || ''));
   ps.set('t', (Number(oc.total) || 0).toFixed(2));
   if (oc.autorizadoPor || oc.autorizadoPorUsername) {
     ps.set('a', String(oc.autorizadoPor || ''));
-    if (oc.autorizadoPorUsername) ps.set('u', String(oc.autorizadoPorUsername));
-    if (oc.autorizadoTs) {
-      var d = new Date(Number(oc.autorizadoTs));
-      ps.set('h', d.toLocaleDateString('es-GT') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0'));
-    }
+    if (oc.autorizadoTs) ps.set('h', _qrFechaHora(oc.autorizadoTs));
   }
   ps.set('s', _ocSelloIntegridad(oc));
-  return 'https://puntorojo.app/verificar.html#' + ps.toString();
+  /* v1228: con la clave del admin configurada, el payload va CIFRADO (x) + salt (k) +
+     tag de verificación (t) — verificar.html pide la clave y solo con la correcta
+     descifra y muestra. Sin clave configurada, plano como hasta hoy. */
+  var _payload = ps.toString();
+  var _clave = '';
+  try { _clave = String(window._qrClave || ''); } catch(e){}
+  if (_clave) {
+    var _salt = ((_selloHash32(_numLimpio(oc.numero || '') + '|' + (Number(oc.autorizadoTs) || 0), 99991)) >>> 0).toString(16);
+    var _tag = ('000000' + ((_selloHash32(_payload, 777) >>> 0).toString(16))).slice(-6);
+    return 'https://puntorojo.app/verificar.html#x=' + _qrCifrar(_payload, _clave, _salt) + '&k=' + _salt + '&t=' + _tag;
+  }
+  return 'https://puntorojo.app/verificar.html#' + _payload;
 }
 function _ocQrDataUrl(texto){
   try {

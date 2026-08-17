@@ -5,10 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex">
 <title>PUNTO ROJO · Orden de compra</title>
-<!-- v1225: página ESTÁTICA de verificación — el QR de cada orden de compra trae un enlace
-     acá con los datos en el #fragmento (no llegan a ningún servidor, no hay login).
-     Quien escanea ve el resumen legítimo de la orden con formato. Tono NEUTRO a propósito
-     (decisión de Antonio): es un resumen digital, no una advertencia. -->
+<!-- v1225: página ESTÁTICA de verificación — el QR de cada orden trae un enlace acá con
+     los datos en el #fragmento (no llegan a ningún servidor, no hay login). Tono NEUTRO
+     a propósito (decisión de Antonio): es un resumen digital, no una advertencia.
+     v1228: con la clave del admin, los datos viajan CIFRADOS (x/k/t) — la página pide la
+     clave y solo con la correcta descifra (el tag t confirma). _selloHash32 y _qrKs deben
+     ser IDÉNTICAS a las del index (regla v1168: las dos puntas iguales).
+     v1228 diseño: FECHA DE SOLICITUD con hora, solo el NOMBRE de quien autoriza, total
+     con comas de miles, pie en mayúscula. -->
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; background: #F5F3EE; color: #1a1a1a; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 18px; }
@@ -25,8 +29,12 @@
   .total span { font-size: 10px; letter-spacing: 2px; }
   .total b { font-size: 18px; }
   .sello { font-size: 10px; color: #888; letter-spacing: 1.5px; text-align: center; margin-top: 14px; }
-  .pie { font-size: 10px; color: #B7B2A6; text-align: center; margin-top: 10px; letter-spacing: .5px; }
+  .pie { font-size: 10px; color: #B7B2A6; text-align: center; margin-top: 10px; letter-spacing: 1px; }
   .vacio { text-align: center; color: #888; font-size: 13px; padding: 30px 0; }
+  .clave-txt { font-size: 12.5px; color: #555; line-height: 1.6; margin-bottom: 12px; }
+  .clave-inp { width: 100%; padding: 11px 12px; border: 1px solid #DDD8CC; border-radius: 8px; font: inherit; font-size: 14px; margin-bottom: 10px; }
+  .clave-btn { width: 100%; padding: 11px; border: none; border-radius: 8px; background: #C8141C; color: #fff; font: inherit; font-size: 13px; font-weight: 700; letter-spacing: 1px; cursor: pointer; }
+  .clave-err { font-size: 12px; color: #C8141C; margin-top: 8px; text-align: center; display: none; }
 </style>
 </head>
 <body>
@@ -34,25 +42,97 @@
   <div class="marca"><img src="logo.png" alt="" onerror="this.style.display='none'"><b>PUNTO ROJO</b></div>
   <div class="tipo">RESUMEN DIGITAL · ORDEN DE COMPRA</div>
   <div id="c"><div class="vacio">Sin datos — escaneá el QR de una orden.</div></div>
-  <div class="pie">Emitido por la app PUNTO ROJO · puntorojo.app</div>
+  <div class="pie">EMITIDO POR LA APP PUNTOROJO.APP</div>
 </div>
 <script>
 (function(){
   var _esc = function(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]; }); };
-  var ps;
-  try { ps = new URLSearchParams(location.hash.slice(1)); } catch(e){ return; }
-  var n = ps.get('n');
-  if (!n) return;
-  var fila = function(k, v){ return v ? '<div class="fila"><span class="k">' + k + '</span><span class="v">' + _esc(v) + '</span></div>' : ''; };
-  var aut = ps.get('a') ? (ps.get('a') + (ps.get('u') ? ' (@' + ps.get('u') + ')' : '')) : '';
-  document.getElementById('c').innerHTML =
-    '<div class="num">' + _esc(n) + '</div>'
-    + fila('PROVEEDOR', ps.get('p'))
-    + fila('FECHA', ps.get('f'))
-    + fila('AUTORIZADA POR', aut)
-    + fila('FECHA DE AUTORIZACIÓN', ps.get('h'))
-    + '<div class="total"><span>TOTAL</span><b>Q ' + _esc(ps.get('t') || '0.00') + '</b></div>'
-    + (ps.get('s') ? '<div class="sello">SELLO · ' + _esc(ps.get('s')) + '</div>' : '');
+  function _selloHash32(s, seed){
+    var h = seed >>> 0;
+    for (var i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    h ^= h >>> 13; h = Math.imul(h, 2246822507) >>> 0; h ^= h >>> 16;
+    return h >>> 0;
+  }
+  function _qrKs(clave, salt, n){
+    var s0 = (_selloHash32(clave + '|' + salt, 2166136261) || 1) >>> 0;
+    var s1 = (_selloHash32(salt + '|' + clave, 40009) || 2) >>> 0;
+    var s2 = (_selloHash32(clave + salt + clave, 8887) || 3) >>> 0;
+    var s3 = (_selloHash32(salt + clave + salt, 123457) || 4) >>> 0;
+    var out = [];
+    for (var i = 0; i < n; i++) {
+      var t = (s1 << 9) >>> 0;
+      s2 = (s2 ^ s0) >>> 0; s3 = (s3 ^ s1) >>> 0; s1 = (s1 ^ s2) >>> 0; s0 = (s0 ^ s3) >>> 0;
+      s2 = (s2 ^ t) >>> 0;
+      s3 = ((s3 << 11) | (s3 >>> 21)) >>> 0;
+      out.push(((s0 + s1) >>> 0) & 0xFF);
+    }
+    return out;
+  }
+  function _qrDescifrar(b64, clave, salt){
+    var s = atob(String(b64 || '').replace(/-/g, '+').replace(/_/g, '/'));
+    var ks = _qrKs(clave, salt, s.length), by = [];
+    for (var i = 0; i < s.length; i++) by.push(s.charCodeAt(i) ^ ks[i]);
+    var out = '', j = 0;
+    while (j < by.length) {
+      var b = by[j++];
+      if (b < 128) out += String.fromCharCode(b);
+      else if (b < 224) out += String.fromCharCode(((b & 31) << 6) | (by[j++] & 63));
+      else out += String.fromCharCode(((b & 15) << 12) | ((by[j++] & 63) << 6) | (by[j++] & 63));
+    }
+    return out;
+  }
+  var _fmtTotal = function(t){ return (Number(t) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+  var _render = function(ps){
+    var n = ps.get('n');
+    if (!n) return;
+    var fila = function(k, v){ return v ? '<div class="fila"><span class="k">' + k + '</span><span class="v">' + _esc(v) + '</span></div>' : ''; };
+    document.getElementById('c').innerHTML =
+      '<div class="num">' + _esc(n) + '</div>'
+      + fila('PROVEEDOR', ps.get('p'))
+      + fila('FECHA DE SOLICITUD', ps.get('f'))
+      + fila('AUTORIZADA POR', ps.get('a'))
+      + fila('FECHA DE AUTORIZACIÓN', ps.get('h'))
+      + '<div class="total"><span>TOTAL</span><b>Q ' + _esc(_fmtTotal(ps.get('t'))) + '</b></div>'
+      + (ps.get('s') ? '<div class="sello">SELLO · ' + _esc(ps.get('s')) + '</div>' : '');
+  };
+  var _intentar = function(ps0, clave){
+    try {
+      var plano = _qrDescifrar(ps0.get('x'), clave, ps0.get('k') || '');
+      if (('000000' + ((_selloHash32(plano, 777) >>> 0).toString(16))).slice(-6) !== ps0.get('t')) return false;
+      try { sessionStorage.setItem('prQrClave', clave); } catch(e){}
+      _render(new URLSearchParams(plano));
+      return true;
+    } catch(e){ return false; }
+  };
+  var _pedirClave = function(ps0){
+    document.getElementById('c').innerHTML =
+      '<div class="clave-txt">Este resumen está protegido. Ingresá la clave para verlo.</div>'
+      + '<input class="clave-inp" id="cl" type="password" placeholder="Clave" autocomplete="off">'
+      + '<button class="clave-btn" id="clb">VER RESUMEN</button>'
+      + '<div class="clave-err" id="cle">Clave incorrecta.</div>';
+    var go = function(){
+      var v = (document.getElementById('cl') || {}).value || '';
+      if (!_intentar(ps0, v)) {
+        var e = document.getElementById('cle');
+        if (e) e.style.display = 'block';
+      }
+    };
+    document.getElementById('clb').onclick = go;
+    document.getElementById('cl').addEventListener('keydown', function(ev){ if (ev.key === 'Enter') go(); });
+    try { document.getElementById('cl').focus(); } catch(e){}
+  };
+  var ps0;
+  try { ps0 = new URLSearchParams(location.hash.slice(1)); } catch(e){ return; }
+  if (ps0.get('x')) {
+    var guardada = '';
+    try { guardada = sessionStorage.getItem('prQrClave') || ''; } catch(e){}
+    if (!guardada || !_intentar(ps0, guardada)) _pedirClave(ps0);
+  } else if (ps0.get('n')) {
+    _render(ps0);
+  }
 })();
 </script>
 </body>
