@@ -3388,7 +3388,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1218</span>
+    <span style="opacity:.5;font-size:9px">v1219</span>
   </footer>
 
 </div>
@@ -27733,6 +27733,109 @@ function _docHeadMeta(){
 function _docVolverOnclick(){
   return "try{window.close()}catch(e){}; setTimeout(function(){ try{ location.replace('" + location.origin + "'); }catch(e){} },350);";
 }
+/* ═══ v1219 · SELLO DE INTEGRIDAD + VERIFICAR OC (pedido de Antonio, 16-ago: vio a compras
+   editando una OC en Paint — "que las OC del chat del proveedor sean legítimas y NO estén
+   editadas"). Una imagen siempre se puede editar; LA NUBE no. Cada OC imprime un sello
+   derivado de número+proveedor+fecha+renglones+total (un centavo cambia el sello completo)
+   y un QR con los datos legítimos (local, qrcodejs — nada viaja a terceros). El verificador
+   muestra lo que dice Firestore para cruzar contra la imagen recibida. La regla operativa:
+   finanzas paga SOLO contra la app, nunca contra una imagen. ═══ */
+function _selloHash32(s, seed){
+  var h = seed >>> 0;
+  for (var i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  h ^= h >>> 13; h = Math.imul(h, 2246822507) >>> 0; h ^= h >>> 16;
+  return h >>> 0;
+}
+function _ocSelloIntegridad(oc){
+  try {
+    var items = (oc.items || []).map(function(it){ return [String(it.name||''), Number(it.qty)||0, Number(it.precio)||0].join(':'); }).join(';');
+    var base = [_numLimpio(oc.numero||''), String(oc.proveedorNombre||''), String(oc.fecha||''), (Number(oc.total)||0).toFixed(2), items].join('|').toUpperCase();
+    var a = _selloHash32(base, 2166136261), b = _selloHash32(base, 40009);
+    var hex = (('00000000' + a.toString(16)).slice(-8) + ('00000000' + b.toString(16)).slice(-8)).toUpperCase();
+    return hex.slice(0, 4) + '-' + hex.slice(4, 8) + '-' + hex.slice(8, 12);
+  } catch(e){ return '—'; }
+}
+function _ocQrTexto(oc){
+  return 'PUNTO ROJO · ORDEN ' + _numLimpio(oc.numero||'') + '\n'
+    + 'PROVEEDOR: ' + String(oc.proveedorNombre||'') + '\n'
+    + 'FECHA: ' + String(oc.fecha||'') + '\n'
+    + 'TOTAL: Q ' + (Number(oc.total)||0).toFixed(2) + '\n'
+    + 'SELLO: ' + _ocSelloIntegridad(oc) + '\n'
+    + 'SI EL DOCUMENTO NO COINCIDE CON ESTOS DATOS, FUE ALTERADO.';
+}
+function _ocQrDataUrl(texto){
+  try {
+    if (typeof QRCode === 'undefined') return '';
+    var d = document.createElement('div');
+    d.style.cssText = 'position:fixed;left:-9999px;top:0';
+    document.body.appendChild(d);
+    new QRCode(d, { text: texto, width: 172, height: 172, correctLevel: QRCode.CorrectLevel.M });
+    var cv = d.querySelector('canvas');
+    var url = cv ? cv.toDataURL('image/png') : '';
+    d.remove();
+    return url;
+  } catch(e){ return ''; }
+}
+window._verificarOcUI = function(){
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS/FINANZAS O ADMIN', 'red');
+  var w = document.createElement('div');
+  w.id = '_verifOcModal';
+  w.style.cssText = 'position:fixed;inset:0;z-index:100090;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+  w.innerHTML = '<div style="background:#fff;border-radius:14px;max-width:660px;width:100%;padding:18px;max-height:88vh;overflow:auto">'
+    + '<b style="font-size:13px;letter-spacing:.5px">VERIFICAR ORDEN DE COMPRA</b>'
+    + '<div style="font-size:11px;color:#78716C;margin:6px 0 10px;line-height:1.6">Escribí el número de la orden que te llegó (ej. <b>OC4 - 000016</b> o <b>8273-12</b>). La app muestra los datos LEGÍTIMOS de la nube — compará contra la imagen: si UN solo dato difiere (cantidad, precio, total o sello), el documento fue alterado.</div>'
+    + '<div style="display:flex;gap:8px;margin-bottom:10px">'
+    + '<input id="_verifOcQ" placeholder="NÚMERO DE LA ORDEN" style="flex:1;padding:9px 12px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:12px" onkeydown="if(event.key===\'Enter\')window._verificarOcBuscar()">'
+    + '<button class="btn" onclick="window._verificarOcBuscar()">VERIFICAR</button></div>'
+    + '<div id="_verifOcRes"></div>'
+    + '<div class="modal-actions" style="display:flex;justify-content:flex-end;margin-top:10px"><button class="btn ghost" onclick="document.getElementById(\'_verifOcModal\').remove()">CERRAR</button></div>'
+    + '</div>';
+  document.body.appendChild(w);
+  try { document.getElementById('_verifOcQ').focus(); } catch(e){}
+};
+window._verificarOcBuscar = function(){
+  var _esc = function(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]; }); };
+  var N = function(s){ return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); };
+  var res = document.getElementById('_verifOcRes');
+  if (!res) return;
+  var q = N((document.getElementById('_verifOcQ') || {}).value);
+  if (q.length < 2) { res.innerHTML = '<div style="font-size:11px;color:#B91C1C">Escribí al menos 2 caracteres del número.</div>'; return; }
+  var todas = [];
+  ((state && state.projects) || []).forEach(function(p){ if (p && p.materiales && Array.isArray(p.materiales.ordenes)) p.materiales.ordenes.forEach(function(o){ if (o) todas.push(o); }); });
+  [((state || {}).bodegaMat), ((state || {}).variosMat)].forEach(function(s){ if (s && Array.isArray(s.ordenes)) s.ordenes.forEach(function(o){ if (o) todas.push(o); }); });
+  var hits = todas.filter(function(o){ return N(_numLimpio(o.numero||'')).indexOf(q) >= 0 || N(o.refExterna||'').indexOf(q) >= 0; })
+    .sort(function(a, b){ return (b.ts||0) - (a.ts||0); }).slice(0, 3);
+  if (!hits.length) { res.innerHTML = '<div style="background:#FEF2F2;border-left:3px solid #DC2626;padding:10px 12px;border-radius:4px;font-size:12px;color:#991B1B"><b>NO EXISTE ninguna orden con ese número.</b> Si la imagen que te llegó lo trae, ese documento NO salió de la app.</div>'; return; }
+  res.innerHTML = hits.map(function(o){
+    var fmt = function(n){ return 'Q ' + (Number(n)||0).toLocaleString('en-US', { minimumFractionDigits: 2 }); };
+    var filas = (o.items || []).map(function(it){
+      return '<tr><td style="padding:3px 6px;border-bottom:1px solid #F1F5F9">' + _esc(it.name) + '</td>'
+        + '<td style="padding:3px 6px;border-bottom:1px solid #F1F5F9;text-align:right">' + _esc(it.qty) + '</td>'
+        + '<td style="padding:3px 6px;border-bottom:1px solid #F1F5F9;text-align:right">' + fmt(it.precio) + '</td>'
+        + '<td style="padding:3px 6px;border-bottom:1px solid #F1F5F9;text-align:right">' + fmt((Number(it.qty)||0) * (Number(it.precio)||0)) + '</td></tr>';
+    }).join('');
+    var st = o.status || 'AUTORIZADA';
+    var fecha = function(ts){ if (!ts) return ''; var d = new Date(ts); return d.toLocaleDateString('es-GT') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0'); };
+    return '<div style="border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px">'
+      + '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">'
+      + '<b style="font-size:13px">' + _esc(_numLimpio(o.numero)) + '</b>'
+      + '<span style="font-size:10px;font-weight:800;letter-spacing:1px;padding:2px 10px;border-radius:10px;background:' + (st === 'AUTORIZADA' ? '#DCFCE7;color:#15803D' : (st === 'CANCELADA' ? '#FEE2E2;color:#991B1B' : '#FEF3C7;color:#92400E')) + '">' + _esc(st.replace(/_/g, ' ')) + '</span></div>'
+      + '<div style="font-size:12px;margin-top:6px">' + _esc(o.proveedorNombre || '') + ' · ' + _esc(o.fecha || '') + (o.refExterna ? ' · REF ' + _esc(o.refExterna) : '') + '</div>'
+      + '<div style="background:#0F172A;color:#fff;border-radius:8px;padding:8px 12px;margin:8px 0;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">'
+      + '<span style="font-size:10px;letter-spacing:1.5px;align-self:center">SELLO DE INTEGRIDAD</span><b style="font-size:14px;letter-spacing:2px">' + _esc(_ocSelloIntegridad(o)) + '</b>'
+      + '<span style="font-size:10px;letter-spacing:1px;align-self:center">TOTAL</span><b style="font-size:14px">' + fmt(o.total) + '</b></div>'
+      + '<table style="width:100%;border-collapse:collapse;font-size:10.5px"><tr style="color:#78716C;text-align:left"><th style="padding:3px 6px">PRODUCTO</th><th style="padding:3px 6px;text-align:right">CANT.</th><th style="padding:3px 6px;text-align:right">PRECIO U</th><th style="padding:3px 6px;text-align:right">TOTAL</th></tr>' + filas + '</table>'
+      + '<div style="font-size:10px;color:#78716C;margin-top:8px;line-height:1.7">'
+      + 'GENERADA POR <b>' + _esc(o.generadoPor || '—') + '</b>' + (o.generadoTs ? ' · ' + _esc(fecha(o.generadoTs)) : '')
+      + (o.autorizadoPor ? '<br>AUTORIZADA POR <b>' + _esc(o.autorizadoPor) + '</b>' + (o.autorizadoTs ? ' · ' + _esc(fecha(o.autorizadoTs)) : '') : '<br>SIN AUTORIZAR')
+      + '</div>'
+      + '<div style="font-size:10px;color:#7C5800;background:#FFF8E1;border-left:3px solid #F4D040;padding:6px 10px;border-radius:4px;margin-top:8px">Compará TODO contra la imagen recibida: renglones, cantidades, precios, total y sello. <b>Si un solo dato difiere, la imagen NO es la orden legítima.</b></div>'
+      + '</div>';
+  }).join('');
+};
 function printOrdenCompra(ocId, isDraft, opts){
   const _hit = _bodegaFindOc(ocId); // v964: la OC puede vivir en el store de bodega
   const oc = _hit && _hit.oc;
@@ -28127,6 +28230,17 @@ ${showDraft ? '<div class="no-print" style="background:var(--red-soft);padding:1
       `}
     </div>
   </div>
+  <!-- v1219: franja de verificación — el QR y el sello viajan EN el documento (impreso y
+       compartido como imagen). Editar la imagen no puede regenerarlos: cualquier retoque
+       se detecta escaneando el QR o con COMPRAS → VERIFICAR OC. -->
+  <div style="margin-top:16px;padding-top:12px;border-top:1px solid #E5E5E5;display:flex;align-items:center;gap:14px">
+    ${(function(){ try { var _q = _ocQrDataUrl(_ocQrTexto(oc)); return _q ? '<img src="' + _q + '" style="width:88px;height:88px;flex-shrink:0">' : ''; } catch(e){ return ''; } })()}
+    <div style="font-size:8.5px;color:#555;line-height:1.9;letter-spacing:.4px">
+      <div style="font-size:10.5px;font-weight:800;color:#1a1a1a;letter-spacing:2px">SELLO DE INTEGRIDAD · ${_ocSelloIntegridad(oc)}</div>
+      <div>EL QR MUESTRA EL No., PROVEEDOR, TOTAL Y SELLO LEGÍTIMOS DE ESTA ORDEN — ESCANEALO CON CUALQUIER TELÉFONO.</div>
+      <div>VERIFICABLE EN LA APP (COMPRAS → VERIFICAR OC). SI CUALQUIER DATO NO COINCIDE, EL DOCUMENTO FUE ALTERADO.</div>
+    </div>
+  </div>
 </div>
 </body></html>
   `);
@@ -28215,10 +28329,14 @@ function renderOrdenesList(){
   if (window._ocSerieFiltro && !_serCounts[window._ocSerieFiltro]) window._ocSerieFiltro = '';
   const _fSer = String(window._ocSerieFiltro || '');
   const _serOrdenTabs = ['OC','DESP','OP','DPP','TRAS'].filter(s => _serCounts[s]);
-  const _serBar = (_ordTodasSeries.length ? `<div class="mat-tabs ped-tabs-bar" style="margin:0 0 12px">`
+  /* v1219: el verificador de integridad — para finanzas y admin, siempre a la mano */
+  const _verifBtn = (can('compras.autorizar') || can('users.manage'))
+    ? `<button class="mat-tab" style="margin-left:auto;border-color:#0F172A;color:#0F172A;font-weight:700" onclick="window._verificarOcUI()">VERIFICAR OC</button>` : '';
+  const _serBar = (_ordTodasSeries.length ? `<div class="mat-tabs ped-tabs-bar" style="margin:0 0 12px;display:flex;flex-wrap:wrap">`
     + `<button class="mat-tab${!_fSer ? ' active' : ''}" onclick="window._ocSerieSub('')">TODAS</button>`
     + _serOrdenTabs.map(s => `<button class="mat-tab${_fSer === s ? ' active' : ''}" onclick="window._ocSerieSub('${s}')">${s}</button>`).join('')
-    + `</div>` : '');
+    + _verifBtn
+    + `</div>` : (_verifBtn ? `<div class="mat-tabs ped-tabs-bar" style="margin:0 0 12px;display:flex">${_verifBtn}</div>` : ''));
   const ordenes = _fSer ? _ordTodasSeries.filter(o => _ocSerieDe(o) === _fSer) : _ordTodasSeries;
 
   const countLbl = document.getElementById('ocCountLabel');

@@ -1,0 +1,67 @@
+/* v1219 (Antonio, 16-ago: vio a compras editando una OC en Paint — "¿cómo verificamos que
+   las ÓRDENES DE COMPRA que se suben al chat del proveedor sean legítimas y NO estén
+   editadas?").
+
+   Una imagen siempre se puede editar; LA NUBE no. Tres piezas:
+   1. SELLO DE INTEGRIDAD impreso en cada OC — derivado del número+proveedor+fecha+
+      renglones+total: si cambia UN centavo, el sello cambia completo.
+   2. QR local (librería qrcodejs ya cargada, sin servicios externos) con los datos
+      legítimos — cualquier teléfono lo escanea sin login y compara contra la imagen.
+   3. VERIFICAR OC en COMPRAS (finanzas/admin): muestra lo que dice Firestore — la
+      fuente de verdad — para cruzar contra la imagen recibida. */
+const fs = require('fs'), path = require('path');
+const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const code = html.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+function ex(src, marker){ let m=src.indexOf(marker); if(m<0) return ''; let i=src.indexOf('{',m),d=0; for(;i<src.length;i++){ if(src[i]==='{')d++; else if(src[i]==='}'){ d--; if(d===0) return src.slice(m,i+1); } } return ''; }
+let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
+
+console.log('— 1. el sello: determinista y sensible a TODO —');
+const zH = ex(code, 'function _selloHash32(');
+const zS = ex(code, 'function _ocSelloIntegridad(');
+ok('existen', !!zH && !!zS);
+try {
+  const fH = new Function('return (' + zH + ')')();
+  const fS = new Function('_numLimpio', '_selloHash32', 'return (' + zS + ')')(s => String(s||''), fH);
+  const OC = () => ({ numero:'OC4 - 000016', proveedorNombre:'SISTEGUA, S.A.', fecha:'2026-08-15', total:3321.16,
+    items:[{ name:'CANAL LISTON', qty:100, precio:11.85 }, { name:'REBORDE', qty:10, precio:32 }] });
+  const s1 = fS(OC());
+  ok('formato XXXX-XXXX-XXXX', /^[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$/.test(s1));
+  ok('determinista (el mismo doc da el mismo sello en cualquier aparato)', fS(OC()) === s1);
+  const t = OC(); t.total = 3321.17;
+  ok('UN centavo en el total cambia el sello', fS(t) !== s1);
+  const q = OC(); q.items[0].qty = 101;
+  ok('una cantidad cambia el sello', fS(q) !== s1);
+  const pr = OC(); pr.items[1].precio = 33;
+  ok('un precio cambia el sello', fS(pr) !== s1);
+  const n = OC(); n.numero = 'OC4 - 000017';
+  ok('el número cambia el sello', fS(n) !== s1);
+} catch(e){ ok('evalúa aislado', false); console.log('  ' + e.message); }
+
+console.log('\n— 2. el QR: local y con los datos legítimos —');
+const zQ = ex(code, 'function _ocQrTexto(');
+ok('el texto del QR lleva número, proveedor, total y sello',
+  /PROVEEDOR: /.test(zQ) && /TOTAL: Q /.test(zQ) && /SELLO: /.test(zQ) && /_ocSelloIntegridad\(oc\)/.test(zQ));
+const zD = ex(code, 'function _ocQrDataUrl(');
+ok('el QR se genera LOCAL con qrcodejs (nada viaja a servicios externos)',
+  /new QRCode\(/.test(zD) && /toDataURL/.test(zD) && !/qrserver|googleapis/.test(zD));
+
+console.log('\n— 3. el documento de la OC lleva el sello y el QR (impreso Y compartido) —');
+const zP = code.slice(code.indexOf('function printOrdenCompra('));
+ok('la franja de verificación está en el doc', /SELLO DE INTEGRIDAD · \$\{/.test(html) && /_ocQrDataUrl\(_ocQrTexto\(oc\)\)/.test(html));
+ok('avisa cómo verificar', /VERIFICAR OC/.test(zP.slice(0, 30000)));
+
+console.log('\n— 4. el verificador: la nube es la fuente de verdad —');
+const zU = ex(code, 'window._verificarOcUI = function(');
+ok('existe con candado de permiso', !!zU && /can\('compras\.autorizar'\)/.test(zU) && /can\('users\.manage'\)/.test(zU));
+const zB = ex(code, 'window._verificarOcBuscar = function(');
+ok('busca en LOS TRES contenedores (obras + bodega + varios)',
+  /state\.projects/.test(zB) && /bodegaMat/.test(zB) && /variosMat/.test(zB));
+ok('normaliza el número buscado (espacios/guiones fuera)', /replace\(/.test(zB) && /toUpperCase\(\)/.test(zB));
+ok('muestra quién la generó y quién la autorizó', /generadoPor/.test(zB) && /autorizadoPor/.test(zB));
+ok('todo lo pintado va escapado (regla XSS v849)', /_esc\(|esc\(/.test(zB));
+
+console.log('\n— 5. el botón en COMPRAS —');
+ok('la barra de órdenes ofrece VERIFICAR OC', /VERIFICAR OC<\/button>/.test(html) && /_verificarOcUI\(\)/.test(html));
+
+console.log('PASS=' + pass + ' FAIL=' + fail);
+process.exit(fail ? 1 : 0);
