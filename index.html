@@ -3392,7 +3392,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1232</span>
+    <span style="opacity:.5;font-size:9px">v1233</span>
   </footer>
 
 </div>
@@ -9794,6 +9794,7 @@ const CloudSync = {
         // v1170: sin escritura real no se pinta EN LÍNEA ni se limpian los pendientes
         if (_r === false) return;
         this._chipDone();
+        try { this._recuperarSnapDescartado(); } catch(e2){} // v1233: lo que llegó durante la subida se relee AHORA
         try { if (typeof _fotosPendClear === 'function') _fotosPendClear(); } catch(e2){} // v899: la nube confirmó → chip POR COMPARTIR fuera
         try { if (typeof _pedPendClear === 'function') _pedPendClear(); } catch(e2){} // v1170: ídem para los pedidos POR ENVIAR
         /* v1186: lo que se acumuló mientras la subida confirmaba sale AHORA, una sola vez —
@@ -9859,6 +9860,7 @@ const CloudSync = {
            false para que quien esperaba —submitPedido -- pueda decir la verdad. */
         if (!_escribio) return false;
         this._chipDone();
+        try { this._recuperarSnapDescartado(); } catch(e2){} // v1233: lo que llegó durante la subida se relee AHORA
         try { if (typeof _fotosPendClear === 'function') _fotosPendClear(); } catch(e2){} // v899: la nube confirmó → chip POR COMPARTIR fuera
         try { if (typeof _pedPendClear === 'function') _pedPendClear(); } catch(e2){} // v1170: ídem para los pedidos POR ENVIAR
         /* v1186: lo que el debounce dejó en bandera mientras esta subida confirmaba */
@@ -10251,6 +10253,21 @@ const CloudSync = {
   },
 
   /* v491: reensambla el state (forma del doc unico viejo) desde core + proj_*. */
+  /* v1233: la recuperación del remote descartado. El descarte de applyRemote (v305-b)
+     deja _snapDescartado en true; al CONFIRMAR la subida se relee la nube completa UNA
+     vez y se aplica — lo que finanzas autorizó mientras esta pestaña subía aparece en
+     segundos, no "cuando alguien más mueva algo". Anti-reentrada con _recuperandoSnap;
+     si la relectura vuelve a caer en un descarte (el usuario siguió escribiendo), la
+     bandera se re-levanta y la PRÓXIMA subida confirmada reintenta: converge sola. */
+  _recuperarSnapDescartado(){
+    if (!this._snapDescartado || this._recuperandoSnap) return;
+    this._snapDescartado = false;
+    this._recuperandoSnap = true;
+    const _fin = () => { this._recuperandoSnap = false; };
+    try {
+      this.downloadAll().then((d) => { _fin(); if (d) this.applyRemote(d, { initial: false }); }).catch(_fin);
+    } catch(e){ _fin(); }
+  },
   _assembleFromSnap(snap){
     if (!snap) return null;
     let core = null, facesData = null, asistData = null; const projById = {}; const recetaById = {}; // v930
@@ -10441,7 +10458,13 @@ const CloudSync = {
     // (bug "envio planilla y desaparece"). El remote sera reemitido por
     // Firestore cuando nuestro upload sobreviva.
     if (!opts.initial && (this.pendingWrite || this.uploadingNow)) {
-      console.warn('[CloudSync] ignorando remote — hay escritura local pendiente.');
+      /* v1233 (Susana: "se tarda mucho en reflejarse lo de finanzas") — EL DESPERTADOR
+         PERDIDO: este descarte asumía que "Firestore reemite al terminar la subida", pero
+         el eco de la PROPIA subida se filtra en el listener (hasPendingWrites) — nadie
+         reemitía nada y lo descartado quedaba invisible hasta que OTRO usuario moviera
+         algo. La bandera hace que, al confirmar la subida, se relea la nube UNA vez. */
+      this._snapDescartado = true;
+      console.warn('[CloudSync] ignorando remote — hay escritura local pendiente (se relee al confirmar la subida, v1233).');
       return;
     }
 
