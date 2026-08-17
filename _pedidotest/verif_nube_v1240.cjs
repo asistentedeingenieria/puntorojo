@@ -36,7 +36,9 @@ ok('lleva el sello de integridad', /_ocSelloIntegridad\(oc\)/.test(zPay));
 const zSub = ex(html, 'window._ocVerifSubir = async function');
 ok('sube a ocVerif/<token> CIFRADO (x/k/t) y marca verifOk sellando _ts', /collection\('ocVerif'\)/.test(zSub) && /_qrCifrar/.test(zSub) && /verifOk = true/.test(zSub) && /_ts = Date\.now\(\)/.test(zSub));
 ok('sin clave del admin NO sube (el QR sigue como hoy)', /_qrClave/.test(zSub));
-ok('idempotente: con verifOk ya puesto no re-sube', /verifOk\) return/.test(zSub));
+/* v1244: el gate ahora también mira la VERSIÓN de la copia (pv:2 = firma tinta) — con
+   verifOk puesto Y copia al día no re-sube; una copia vieja sí se re-sella. */
+ok('idempotente: con verifOk y copia al día no re-sube', /verifOk && \(Number\(oc\.verifV\) \|\| 0\) >= 2\) return/.test(zSub));
 
 console.log('— 3. autorizar siembra el token —');
 const zAut = ex(html, 'async function autorizarOrden(');

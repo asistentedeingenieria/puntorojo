@@ -123,10 +123,31 @@
     /* v1243: mix-blend-mode:multiply funde el blanco del JPEG con la tarjeta — la firma
        queda como TINTA sobre el documento, nunca con fondo */
     return '<div style="text-align:center;flex:1;min-width:150px">'
-      + '<img src="' + src + '" style="height:52px;max-width:190px;object-fit:contain;display:block;margin:0 auto;mix-blend-mode:multiply" alt="">'
+      + '<img class="fmg" src="' + src + '" style="height:52px;max-width:190px;object-fit:contain;display:block;margin:0 auto;mix-blend-mode:multiply" alt="">'
       + '<div style="border-top:1px solid #1a1a1a;max-width:200px;margin:5px auto 0;padding-top:5px;font-size:11px;font-weight:700">' + _esc(nombre || '') + '</div>'
       + '<div style="font-size:8.5px;letter-spacing:1.5px;color:#888;margin-top:2px">' + _esc(cargo || '') + '</div>'
       + '</div>';
+  };
+  /* v1244: la firma se LIMPIA al mostrarla — lo claro (el fondo de la foto, aunque no sea
+     blanco puro) se vuelve transparente y queda solo el trazo, como tinta sobre el
+     documento. Arregla también las copias selladas ANTES de v1243 (firma cruda). Si el
+     procesado falla, el mix-blend-mode:multiply del estilo queda de respaldo. */
+  var _firmaLimpiar = function(img){
+    try {
+      var c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      if (!c.width || !c.height) return;
+      var cx = c.getContext('2d');
+      cx.drawImage(img, 0, 0);
+      var id = cx.getImageData(0, 0, c.width, c.height), data = id.data;
+      for (var i = 0; i < data.length; i += 4) {
+        var v = Math.max(data[i], data[i + 1], data[i + 2]);
+        var a = v >= 235 ? 0 : (v <= 180 ? 255 : Math.round((235 - v) * 255 / 55));
+        data[i + 3] = Math.min(data[i + 3], a);
+      }
+      cx.putImageData(id, 0, 0);
+      img.src = c.toDataURL('image/png');
+    } catch(e){}
   };
   var _renderNube = function(d){
     var el = document.getElementById('vivo');
@@ -166,7 +187,9 @@
       firmas = _firmaImg(d.firmaGen, d.generadoPor, 'GENERADO POR — REGISTRADA') + _firmaImg(d.firmaAut, d.autorizadoPor, 'AUTORIZADO POR — REGISTRADA');
     }
     el.innerHTML =
-      '<div style="margin-top:16px;background:#F0FDF4;border:1px solid #16A34A;border-radius:8px;padding:8px 12px;font-size:10px;letter-spacing:1.5px;color:#166534;font-weight:700;text-align:center">' + _esc(tipo) + ' · ' + leido + ' EN VIVO EN LA NUBE</div>'
+      /* v1244 (Antonio): el mensaje SIEMPRE en una fila única — nowrap y la letra se encoge
+         hasta caber (nunca quiebra ni se corta) */
+      '<div id="bannerVivo" style="margin-top:16px;background:#F0FDF4;border:1px solid #16A34A;border-radius:8px;padding:8px 12px;font-size:10px;letter-spacing:1.5px;color:#166534;font-weight:700;text-align:center;white-space:nowrap;overflow:hidden">' + _esc(tipo) + ' · ' + leido + ' EN VIVO EN LA NUBE</div>'
       + '<table style="width:100%;border-collapse:collapse;margin-top:10px"><thead><tr>'
       + '<th style="text-align:left;font-size:9px;letter-spacing:1.5px;color:#888;padding:4px 8px">DESCRIPCIÓN</th>'
       + '<th style="text-align:center;font-size:9px;letter-spacing:1.5px;color:#888;padding:4px 8px">CANT</th>'
@@ -176,6 +199,24 @@
       + (conDinero && (Number(d.saldoAplicado) || 0) > 0 ? '<div class="fila"><span class="k">SALDO A FAVOR APLICADO</span><span class="v">− Q ' + _q(d.saldoAplicado) + '</span></div>' : '')
       + (firmas ? '<div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:18px">' + firmas + '</div>' : '');
     if (firmas) { try { var fc = document.getElementById('firmaCal'); if (fc) fc.style.display = 'none'; } catch(e){} }
+    try {
+      var bn = document.getElementById('bannerVivo');
+      if (bn) {
+        var _fs = 10;
+        while (bn.scrollWidth > bn.clientWidth && _fs > 6) {
+          _fs -= 0.5;
+          bn.style.fontSize = _fs + 'px';
+          if (_fs < 8.5) bn.style.letterSpacing = '0.5px';
+        }
+      }
+    } catch(e){}
+    try {
+      var fm = el.querySelectorAll('img.fmg');
+      for (var fi = 0; fi < fm.length; fi++) (function(im){
+        if (im.complete && im.naturalWidth) _firmaLimpiar(im);
+        else im.onload = function(){ im.onload = null; _firmaLimpiar(im); };
+      })(fm[fi]);
+    } catch(e){}
     try {
       var b = document.getElementById('verMasBtn');
       if (b) b.onclick = function(){

@@ -3392,7 +3392,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1243</span>
+    <span style="opacity:.5;font-size:9px">v1244</span>
   </footer>
 
 </div>
@@ -27982,6 +27982,7 @@ function _ocVerifPayload(oc){
     try { _fa = _firmaTintaSrc(_miFirmaImg(typeof _firmaUsernameAutoriza === 'function' ? _firmaUsernameAutoriza(oc) : (oc.autorizadoPorUsername || '')) || '') || ''; } catch(e){}
     return JSON.stringify({
       d: 'oc',
+      pv: 2, /* v1244: versión del payload — 2 = firma tinta */
       tipo: oc.esTrasiego ? 'TRASIEGO DE MATERIAL' : (oc.esPrepago ? 'DESPACHO PRE-PAGO' : (oc.esDespacho ? 'ORDEN DE DESPACHO' : (oc.esProduccion ? 'ORDEN DE PRODUCCIÓN' : 'ORDEN DE COMPRA'))), /* v1243: el mensaje verde nombra el documento */
       numero: _numLimpio(oc.numero || ''),
       proveedor: String(oc.proveedorNombre || ''),
@@ -28003,7 +28004,10 @@ function _ocVerifPayload(oc){
 }
 window._ocVerifSubir = async function(oc){
   try {
-    if (!oc || !oc.verifTok || oc.verifOk) return;
+    if (!oc || !oc.verifTok) return;
+    /* v1244: pv:2 = firma TINTA en el payload. La copia vieja (sellada antes, con la firma
+       cruda con fondo) se RE-SELLA — el gate vive acá, los llamadores solo llaman. */
+    if (oc.verifOk && (Number(oc.verifV) || 0) >= 2) return;
     var _clave = String(window._qrClave || '');
     if (!_clave) return; /* sin clave del admin no hay copia cifrada — el QR sigue como hoy */
     var _json = _ocVerifPayload(oc);
@@ -28012,6 +28016,7 @@ window._ocVerifSubir = async function(oc){
     var _tag = ('000000' + ((_selloHash32(_json, 777) >>> 0).toString(16))).slice(-6);
     await firebase.firestore().collection('ocVerif').doc(oc.verifTok).set({ x: _qrCifrar(_json, _clave, _salt), k: _salt, t: _tag, ts: Date.now() });
     oc.verifOk = true;
+    oc.verifV = 2; /* v1244 */
     oc._ts = Date.now(); /* mutación en contenedor union-merged: se sella (v972) */
     saveState();
   } catch(e){ console.warn('[v1240] la copia sellada no subió — se reintenta al imprimir/compartir', e); }
@@ -28027,6 +28032,7 @@ function _pedVerifPayload(pd, p){
     (pd.extras || []).forEach(function(e2){ _its.push({ n: String(e2.name || ''), q: Number(e2.qty) || 0 }); });
     return JSON.stringify({
       d: 'p',
+      pv: 2, /* v1244 */
       tipo: 'PEDIDO DE MATERIALES', /* v1243 */
       numero: _projSiglas((pd && pd.proyectoPedido) || (p && p.name) || '') + ' - ' + _solNum(pd),
       proyecto: String((pd && pd.proyectoPedido) || (p && p.name) || ''),
@@ -28042,7 +28048,8 @@ function _pedVerifPayload(pd, p){
 }
 window._pedVerifSubir = async function(pd, p){
   try {
-    if (!pd || !pd.verifTok || pd.verifOk) return;
+    if (!pd || !pd.verifTok) return;
+    if (pd.verifOk && (Number(pd.verifV) || 0) >= 2) return; /* v1244: re-sella la copia vieja */
     var _clave = String(window._qrClave || '');
     if (!_clave) return;
     var _json = _pedVerifPayload(pd, p);
@@ -28051,6 +28058,7 @@ window._pedVerifSubir = async function(pd, p){
     var _tag = ('000000' + ((_selloHash32(_json, 777) >>> 0).toString(16))).slice(-6);
     await firebase.firestore().collection('ocVerif').doc(pd.verifTok).set({ x: _qrCifrar(_json, _clave, _salt), k: _salt, t: _tag, ts: Date.now() });
     pd.verifOk = true;
+    pd.verifV = 2; /* v1244 */
     pd._ts = Date.now();
     saveState();
   } catch(e){ console.warn('[v1240] la copia sellada del pedido no subió — se reintenta al imprimir/compartir', e); }
@@ -28171,7 +28179,7 @@ function printOrdenCompra(ocId, isDraft, opts){
   if (!showDraft && oc.autorizadoPor) {
     try {
       if (!oc.verifTok && window._qrClave) { oc.verifTok = _verifTokenNuevo(); oc._ts = Date.now(); saveState(); }
-      if (oc.verifTok && !oc.verifOk) _ocVerifSubir(oc);
+      if (oc.verifTok) _ocVerifSubir(oc); /* v1244: el gate (verifOk + versión de copia) vive en el subidor */
     } catch(e){}
   }
 
@@ -29616,7 +29624,7 @@ function _pedVerifAsegurar(pd, p){
   try {
     if (!pd) return;
     if (!pd.verifTok && window._qrClave) { pd.verifTok = _verifTokenNuevo(); pd._ts = Date.now(); saveState(); }
-    if (pd.verifTok && !pd.verifOk) _pedVerifSubir(pd, p);
+    if (pd.verifTok) _pedVerifSubir(pd, p); /* v1244: el gate vive en el subidor */
   } catch(e){}
 }
 function printPedido(){
@@ -40798,6 +40806,7 @@ function _verifTokShield(mergedList, localList, remoteList){
     if (!f) return;
     o.verifTok = f.verifTok;
     if (f.verifOk) o.verifOk = true;
+    if (f.verifV) o.verifV = f.verifV; /* v1244: la versión de la copia viaja con el par */
     changed = true;
   });
   return changed;
