@@ -47,8 +47,12 @@ ok('re-abre el modal de la orden con sus datos', /openOrdenCompra|_ocCargarBorra
 ok('el botón EDITAR sale en la bandeja de bodega', /EDITAR/.test(html) && /_ocEditarBorrador\(/.test(html));
 // al re-generar no se duplica: la orden vieja se reemplaza
 ok('regenerar reemplaza la orden en edición (no crea otra)', /_ocEditandoId/.test(html));
-// el modal re-arma TODAS las órdenes del pedido: hay que cubrir los dos lados
-ok('no se edita si el pedido ya tiene otra orden AUTORIZADA', /YA TIENE OTRA ORDEN AUTORIZADA/.test(zE));
+/* v1235: el candado "YA TIENE OTRA ORDEN AUTORIZADA" se retiró — dejaba INCORREGIBLE una
+   DEVUELTA cuyo pedido tuviera cualquier hermana firmada (caso real OC1-000010 + DESP1).
+   La MISMA propiedad (el material autorizado jamás se duplica) ahora se garantiza mejor:
+   la siembra del modal RESTA lo cubierto por las autorizadas y el barrido no las toca. */
+ok('v1235: las autorizadas no bloquean — se RESTAN de la siembra al corregir',
+  !/YA TIENE OTRA ORDEN AUTORIZADA/.test(zE) && /_ocRestarCubiertoAutorizado/.test(html));
 const zG2 = ex('async function generarOrdenCompra(');
 ok('al regenerar se quitan las versiones pendientes viejas del pedido', /_nuevos\[o\.id\]/.test(zG2) && /o\.pedidoId !== pd\.id/.test(zG2));
 /* v1144: el barrido ahora también quita las DEVUELTAS (es la versión que se está corrigiendo).

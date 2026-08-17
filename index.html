@@ -3392,7 +3392,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1234</span>
+    <span style="opacity:.5;font-size:9px">v1235</span>
   </footer>
 
 </div>
@@ -20762,6 +20762,18 @@ function renderPedidoCard(pd, p){
       ${(pd.itemsQuitados || []).length ? `<div style="font-size:10.5px;background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:8px 10px;margin-bottom:8px"><div style="font-size:8.5px;letter-spacing:1.2px;font-weight:700;color:#B91C1C;text-transform:uppercase;margin-bottom:4px">Quitado por compras — no aplica</div>${pd.itemsQuitados.map(q => `<div style="padding:2px 0;color:#7F1D1D"><b>${esc(q.name)}</b> ×${esc(q.qty)} — "${esc(q.motivo)}" <span style="color:#9CA3AF">(${esc(q.por || '')}${q.fecha ? ' · ' + esc(q.fecha) : ''})</span></div>`).join('')}</div>` : ''}<!-- v1153: el solicitante ve qué le quitaron y por qué -->
       ${_esCancel && pd.cancelacion ? `<div style="font-size:10.5px;background:#F3F4F6;border:1px solid #D1D5DB;border-radius:6px;padding:8px 10px;margin-bottom:8px"><div style="font-size:8.5px;letter-spacing:1.2px;font-weight:700;color:#4B5563;text-transform:uppercase;margin-bottom:3px">Pedido cancelado</div><div style="color:#374151">"${esc(pd.cancelacion.motivo || '')}" <span style="color:#9CA3AF">(${esc(pd.cancelacion.por || '')}${pd.cancelacion.fecha ? ' · ' + esc(pd.cancelacion.fecha) : ''})</span></div></div>` : ''}<!-- v1162 -->
       ${(pd.herramientas || []).length ? `<div style="font-size:10.5px;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:6px;padding:8px 10px;margin-bottom:8px"><div style="font-size:8.5px;letter-spacing:1.2px;font-weight:700;color:#1D4ED8;text-transform:uppercase;margin-bottom:4px">Herramientas de bodega · sin costo</div>${pd.herramientas.map(h => `<div style="padding:2px 0;color:#1E3A5F">${esc(h.name)} ×${esc(h.qty)}</div>`).join('')}${pd.herrDespacho ? `<div style="margin-top:4px;font-size:9.5px;font-weight:700;color:#15803D">DESPACHADAS ✓ ${esc(pd.herrDespacho.fecha || '')} · ${esc(pd.herrDespacho.por || '')}</div>` : (_puedeGestionarBodega() ? `<button class="btn sm" style="margin-top:6px;background:#1D4ED8;border-color:#1D4ED8;color:#fff" onclick="_herrDespacharDePedido('${pd.id}')">DESPACHAR HERRAMIENTAS</button>` : '<div style="margin-top:4px;font-size:9.5px;color:#B45309;font-weight:700">PENDIENTES DE DESPACHO EN BODEGA</div>')}</div>` : ''}<!-- v1155 -->
+      ${(function(){ try {
+        /* v1235 (Antonio): la corrección vive EN PEDIDOS — si finanzas devolvió una orden
+           de este pedido, la tarjeta lo grita con el motivo y el botón CORREGIR acá. */
+        var _devs = (getPedidoOrdenes(pd.id) || []).filter(function(o){ return o && (o.status || '') === 'DEVUELTA'; });
+        if (!_devs.length) return '';
+        return _devs.map(function(o){ return '<div style="background:#FEF2F2;border:1px solid #FCA5A5;border-left:4px solid #B91C1C;border-radius:8px;padding:8px 12px;margin-bottom:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
+          + '<div style="flex:1;min-width:180px"><b style="font-size:10px;letter-spacing:1px;color:#B91C1C">DEVUELTA POR FINANZAS · ' + esc(_numLimpio(o.numero)) + '</b>'
+          + ((o.devolucion && o.devolucion.motivo) ? '<div style="font-size:11px;color:#7F1D1D;margin-top:2px">' + esc(o.devolucion.motivo) + '</div>' : '')
+          + '</div>'
+          + '<button class="btn sm" data-perm="compras.autorizar|materiales.bodega" style="background:#B91C1C;border-color:#B91C1C;color:#fff;font-size:10px" onclick="event.stopPropagation();_ocEditarBorrador(&quot;' + o.id + '&quot;)">CORREGIR</button>'
+          + '</div>'; }).join('');
+      } catch(e){ return ''; } })()}
       ${pd.observaciones ? `<div style="font-size:11px;color:var(--mute);margin-bottom:8px;font-style:italic">"${esc(_obsSinEco(pd.observaciones))}"</div>` : ''}
       <div class="pedido-actions">
         <div class="timeline">${timelineDots}</div>
@@ -22515,6 +22527,37 @@ function buildPedidoOcItems(pd){
   var _quit = (typeof _pedidoQuitadosKeys === 'function') ? _pedidoQuitadosKeys(pd) : null;
   if (_quit) return arr.filter(function(it){ return !_quit[it.sourceKey]; });
   return arr;
+}
+/* v1235 (Antonio: "NO me deja corregir — ya tiene otra orden autorizada"): al CORREGIR,
+   el modal siembra el pedido RESTANDO lo cubierto por las órdenes YA AUTORIZADAS del
+   mismo pedido — re-armar ya no duplica material firmado y el candado v1001 se retira.
+   Las autorizadas no se tocan (el barrido v1001 solo reemplaza PENDIENTES/DEVUELTAS).
+   OJO: se aplica SOLO en la siembra del modal al editar — buildPedidoOcItems sigue
+   intacto para recepción y detalle (punto único v1153). Presentaciones cuentan en
+   UNIDADES (qtyUnidades, v1189). */
+function _ocRestarCubiertoAutorizado(arr, pdId){
+  try {
+    const _auth = (getPedidoOrdenes(pdId) || []).filter(o => o && (o.status || 'AUTORIZADA') === 'AUTORIZADA');
+    if (!_auth.length) return arr;
+    const _cub = {};
+    _auth.forEach(o => (o.items || []).forEach(it => {
+      if (!it || !it.name) return;
+      const k = _ocItemMemKey(it.name);
+      const q = Number(it.qtyUnidades) > 0 ? Number(it.qtyUnidades) : (Number(it.qty) || 0);
+      _cub[k] = (_cub[k] || 0) + q;
+    }));
+    return arr.filter(it => {
+      if (!it) return false;
+      const k = _ocItemMemKey(it.matchName || it.name);
+      const disp = _cub[k] || 0;
+      if (!(disp > 0)) return true;
+      const q = Number(it.qty) || 0;
+      const resta = Math.min(q, disp);
+      _cub[k] = disp - resta;
+      it.qty = +(q - resta).toFixed(4);
+      return it.qty > 0.0001;
+    });
+  } catch(e){ return arr; }
 }
 
 function autoAssignOcProviders(pd){
@@ -25271,6 +25314,7 @@ async function openOrdenCompra(){
   }
 
   ocWorkingItems = buildPedidoOcItems(pd);
+  if (window._ocEditandoId) ocWorkingItems = _ocRestarCubiertoAutorizado(ocWorkingItems, pd.id); // v1235: al corregir, lo firmado no se re-arma
   autoAssignOcProviders(pd); // v916: pedidos de receta traen su proveedor recordado
   window._ocPorProv = {}; // v985: fecha/pago POR PROVEEDOR arrancan vacíos (heredan lo general)
   renderOcItems();
@@ -28594,9 +28638,9 @@ function renderOrdenesList(){
     const devolverBtn = (isPending && canAuthorize)
       ? `<button class="btn ghost sm" onclick="window._ocDevolver('${oc.id}')" style="color:#B91C1C;border-color:#FCA5A5" title="Regresarla a compras con la observación de qué corregir">DEVOLVER</button>`
       : '';
-    /* v1143: compras corrige la devuelta desde la propia fila (reusa el editor de borradores) */
+    /* v1235 (Antonio): la corrección vive EN PEDIDOS — acá solo se señala el camino */
     const corregirBtn = (isDevuelta && (canFactura || can('materiales.bodega')))
-      ? `<button class="btn sm" onclick="_ocEditarBorrador('${oc.id}')" style="background:#B91C1C;border-color:#B91C1C;color:#fff" title="Corregir lo que señaló finanzas y volver a generarla">CORREGIR</button>`
+      ? `<span style="font-size:9px;font-weight:800;letter-spacing:1px;color:#B91C1C;align-self:center">CORREGILA DESDE PEDIDOS →</span>`
       : '';
 
     /* v1192: VER BORRADOR ya no va suelto — VER PREVIEW (siempre visible, abajo) cubre
@@ -28814,13 +28858,12 @@ window._ocEditarBorrador = async function(ocId){
   if ((oc.status || 'AUTORIZADA') !== 'PENDIENTE_AUTORIZACION' && (oc.status || '') !== 'DEVUELTA') {
     return showToast('YA ESTÁ AUTORIZADA — NO SE PUEDE EDITAR', 'red');
   }
-  /* El modal re-arma la orden DESDE EL PEDIDO y vuelve a agrupar por proveedor, así que
-     regenera todas las órdenes de ese pedido. Si alguna ya fue autorizada, su material
-     saldría dos veces — ahí no se edita: se cancela y se hace de nuevo. */
+  /* v1235: las AUTORIZADAS ya no bloquean la corrección — la siembra del modal resta su
+     material (_ocRestarCubiertoAutorizado) y el barrido v1001 no las toca: se re-arma
+     SOLO lo no firmado. El candado viejo dejaba incorregible una DEVUELTA cuyo pedido
+     tuviera cualquier hermana autorizada (caso real: OC1-000010 con DESP1-000012). */
   const _hermanas = (typeof getPedidoOrdenes === 'function') ? getPedidoOrdenes(oc.pedidoId) : [];
-  if (_hermanas.some(o => o && o.id !== ocId && (o.status || 'AUTORIZADA') === 'AUTORIZADA')) {
-    return showToast('ESTE PEDIDO YA TIENE OTRA ORDEN AUTORIZADA — NO SE PUEDE RE-ARMAR', 'red');
-  }
+  const _autzN = _hermanas.filter(o => o && o.id !== ocId && (o.status || 'AUTORIZADA') === 'AUTORIZADA').length;
   /* v1143: si finanzas la devolvió, la observación se muestra ACÁ — es lo primero que compras
      tiene que leer antes de corregir */
   const _obsDev = (oc.devolucion && oc.devolucion.motivo)
@@ -28829,7 +28872,7 @@ window._ocEditarBorrador = async function(ocId){
   const _ok = await window.prConfirm({
     title: 'CORREGIR LA ORDEN',
     bodyHTML: `<div style="font-size:12.5px;color:#333;line-height:1.5">Vas a volver a armar <b>${String(_numLimpio(oc.numero)).replace(/[<>]/g,'')}</b> (${String(oc.proveedorNombre||'').replace(/[<>]/g,'')}).</div>${_obsDev}
-               <div style="margin-top:10px;font-size:12px;color:#666">Al generarla de nuevo, esta versión se reemplaza. Si el pedido tiene otras órdenes, no se tocan.</div>`,
+               <div style="margin-top:10px;font-size:12px;color:#666">Al generarla de nuevo, esta versión se reemplaza.${_autzN ? ` Las <b>${_autzN}</b> orden(es) YA AUTORIZADAS de este pedido no se tocan — se re-arma solo el resto.` : ''}</div>`,
     okText: 'CORREGIR', cancelText: 'CANCELAR'
   });
   if (!_ok) return;
