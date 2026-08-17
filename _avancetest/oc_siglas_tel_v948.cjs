@@ -40,7 +40,9 @@ if (telTxt) {
 
 // ── 3. template de impresión de la OC ──
 const iSheet = html.indexOf('class="oc-sheet"');
-const sheet = iSheet > -1 ? html.slice(iSheet, iSheet + 4000) : '';
+/* v1239: la MALLA anti-edicion (~700 chars) se inserta al abrir .oc-sheet y volvio a empujar
+   la fila Proyecto fuera de la ventana (la trampa de siempre: ventana fija). 4000→5200. */
+const sheet = iSheet > -1 ? html.slice(iSheet, iSheet + 5200) : '';
 const logoLine = (sheet.match(/<div[^>]*><img src="\$\{_LOGO_PR\}"[^>]*>[^\n]*/) || [''])[0];
 ok('el texto APP ya no está al lado del logo', !!logoLine && !/>APP</.test(logoLine));
 ok('bloque No.: sigla del proyecto + " - APP"', /\$\{_obraSigla\(_ocNumeroPartes\(oc\)\.proyecto\)\} - APP/.test(sheet));

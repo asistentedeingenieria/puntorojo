@@ -54,7 +54,9 @@ ok('sube al toque (plata/documentos: forceUploadNow)', /forceUploadNow/.test(src
 // ── 5. firma más grande en la hoja, respetando la línea ──
 const srcPrint = extractFn('printOrdenCompra');
 ok('firma más grande que la v929 (38px) en ambas columnas', (srcPrint.match(/height:\d+px;max-width:2\d\dpx;object-fit:contain/g) || []).length >= 2);
-ok('ya no queda la de 38px', srcPrint.indexOf('height:38px') === -1);
+/* v1239: la malla trae line-height:38px y el indexOf('height:38px') la agarraba de rebote.
+   La propiedad anclada es que NINGUNA FIRMA mida 38px — se excluye el line-height. */
+ok('ya no queda la de 38px', (srcPrint.match(/(?<!line-)height:38px/g) || []).length === 0);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
