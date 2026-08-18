@@ -3392,7 +3392,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1250</span>
+    <span style="opacity:.5;font-size:9px">v1252</span>
   </footer>
 
 </div>
@@ -43377,11 +43377,30 @@ window.DELETION_EXECUTORS['catProvProducto'] = (payload) => _doDeleteCatProvProd
 function _crearSolicitudPrecio(tipo, proveedorId, productoNombre, unidad, precioActual, precioNuevo, motivo, proveedorNombreFallback){
   const list=(state.solicitudesPrecios=state.solicitudesPrecios||[]);
   const prov=(_getProveedores().find(p=>p.id===proveedorId)||{});
+  /* v1252: IDEMPOTENTE — el cierre de toma reintentaba (la pendiente no pone precio en el
+     catálogo, la toma no cerraba) y fabricaba GEMELAS del mismo producto; el admin
+     autorizaba una y la otra "reaparecía". Misma clave (producto+proveedor+tipo) PENDIENTE
+     ⇒ se ACTUALIZA precio/motivo y se devuelve, jamás se duplica. */
+  const _kNom = matchKeyProducto(productoNombre);
+  const _kProv = normOcName(prov.nombre || proveedorNombreFallback || '');
+  const _ya = list.find(x => x && x.estado === 'PENDIENTE' && x.tipo === tipo
+    && matchKeyProducto(x.productoNombre) === _kNom
+    && normOcName(x.proveedorNombre || '') === _kProv);
+  if (_ya) {
+    _ya.precioNuevo = Number(precioNuevo);
+    if (motivo) _ya.motivo = motivo;
+    _ya._ts = Date.now();
+    saveState();
+    try{ if(typeof CloudSync!=='undefined'&&CloudSync.forceUploadNow) CloudSync.forceUploadNow().then(r=>{ if(r===false&&typeof showToast==='function') showToast('LA SOLICITUD NO SUBIÓ — HAY UN CANDADO DE SYNC, REINTENTÁ','red'); }).catch(()=>{}); }catch(e){}
+    return _ya;
+  }
   const _u = (typeof currentUser!=='undefined') ? currentUser : null;
   const _nombre = ((_u && (_u.displayName||_u.username||_u.email)) || '').toUpperCase();
   const s={ id:'sp-'+uid(), tipo:tipo, proveedorId, proveedorNombre:(prov.nombre||proveedorNombreFallback||''), productoNombre:String(productoNombre||''), unidad:unidad||'', precioActual:(precioActual==null?null:Number(precioActual)), precioNuevo:Number(precioNuevo), motivo:motivo||'', solicitadoPor:((_u&&(_u.email||_u.username))||''), solicitadoNombre:_nombre, ts:Date.now(), estado:'PENDIENTE' };
   s._ts=Date.now(); // v1070: solicitudesPrecios por union-merge
-  list.push(s); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  /* v1252: canal fuerte (v940/v1186) con aviso — uploadCurrent directo devolvía false MUDO
+     con el candado de versión y el cambio quedaba solo local sin que nadie se enterara */
+  list.push(s); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.forceUploadNow) CloudSync.forceUploadNow().then(r=>{ if(r===false&&typeof showToast==='function') showToast('LA SOLICITUD NO SUBIÓ — HAY UN CANDADO DE SYNC, REINTENTÁ','red'); }).catch(()=>{}); }catch(e){}
   try{ if(typeof _notifyByPerm==='function') _notifyByPerm('precios.autorizar', { type:'precio-solicitud', title:'SOLICITUD DE PRECIO', body:(tipo==='ALTA'?'Alta':'Cambio')+' de "'+s.productoNombre+'" a Q'+s.precioNuevo }).catch(()=>{}); }catch(e){}
   /* v1070 (bug de Antonio: "no me llega esa solicitud"): _notifyByPerm exige que el ACTOR
      pueda leer la colección users — un solicitante no-admin no puede y la notificación
@@ -43405,13 +43424,35 @@ function autorizarSolicitudPrecio(id){
   if(ex){ ex.precio=Number(s.precioNuevo); ex._ts=Date.now(); } else { prov.productos.push({nombre:String(s.productoNombre).toUpperCase(),unidad:s.unidad||'',precio:Number(s.precioNuevo),rendimiento:1,_ts:Date.now()}); }
   prov._ts=Date.now(); // v1070: catálogo por union-merge — toda mutación se sella
   s.estado='AUTORIZADA'; s.resueltoTs=Date.now(); s._ts=Date.now(); // v1070: el cambio de estado gana el merge por elemento
-  saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){}
+  /* v1252: las GEMELAS (reintentos del cierre de toma — misma clave y MISMO precio) se
+     resuelven con esta; las de precio DISTINTO se quedan: son decisiones aparte. */
+  try {
+    const _kN = matchKeyProducto(s.productoNombre), _kP = normOcName(s.proveedorNombre || '');
+    (state.solicitudesPrecios || []).forEach(x => {
+      if (!x || x.id === s.id || x.estado !== 'PENDIENTE') return;
+      if (matchKeyProducto(x.productoNombre) !== _kN || normOcName(x.proveedorNombre || '') !== _kP) return;
+      if (Number(x.precioNuevo) !== Number(s.precioNuevo)) return;
+      x.estado = 'AUTORIZADA'; x.resueltoTs = Date.now(); x._ts = Date.now();
+    });
+  } catch(e){}
+  saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.forceUploadNow) CloudSync.forceUploadNow().then(r=>{ if(r===false) showToast('EL CAMBIO NO SUBIÓ — HAY UN CANDADO DE SYNC, REINTENTÁ','red'); }).catch(()=>{}); }catch(e){}
   showToast('PRECIO AUTORIZADO','green'); if(typeof renderCatProvList==='function') renderCatProvList(); if(typeof _renderSolicitudesPrecio==='function') _renderSolicitudesPrecio();
 }
 function rechazarSolicitudPrecio(id){
   if(!(can('precios.autorizar')||can('users.manage'))) return showToast('SIN PERMISO','red');
   const s=(state.solicitudesPrecios||[]).find(x=>x.id===id); if(!s||s.estado!=='PENDIENTE') return;
-  s.estado='RECHAZADA'; s.resueltoTs=Date.now(); s._ts=Date.now(); saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.uploadCurrent) CloudSync.uploadCurrent(); }catch(e){} // v1070: sellada
+  s.estado='RECHAZADA'; s.resueltoTs=Date.now(); s._ts=Date.now();
+  /* v1252: mismas gemelas, mismo barrido */
+  try {
+    const _kN = matchKeyProducto(s.productoNombre), _kP = normOcName(s.proveedorNombre || '');
+    (state.solicitudesPrecios || []).forEach(x => {
+      if (!x || x.id === s.id || x.estado !== 'PENDIENTE') return;
+      if (matchKeyProducto(x.productoNombre) !== _kN || normOcName(x.proveedorNombre || '') !== _kP) return;
+      if (Number(x.precioNuevo) !== Number(s.precioNuevo)) return;
+      x.estado = 'RECHAZADA'; x.resueltoTs = Date.now(); x._ts = Date.now();
+    });
+  } catch(e){}
+  saveState(); try{ if(typeof CloudSync!=='undefined'&&CloudSync.forceUploadNow) CloudSync.forceUploadNow().then(r=>{ if(r===false) showToast('EL CAMBIO NO SUBIÓ — HAY UN CANDADO DE SYNC, REINTENTÁ','red'); }).catch(()=>{}); }catch(e){} // v1070: sellada
   showToast('SOLICITUD RECHAZADA',''); if(typeof _renderSolicitudesPrecio==='function') _renderSolicitudesPrecio();
 }
 
