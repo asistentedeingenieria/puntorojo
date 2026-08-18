@@ -13,7 +13,11 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
 // ── 1. el input de precio va bloqueado salvo postes a medida ──
 const srcRender = extractFn('renderOcItems');
-ok('input de precio condicionado por aMedida', /it\.aMedida[\s\S]{0,400}updateOcPrecio/.test(srcRender));
+/* v1249: la celda del precio pasó a un IIFE con gate _libre (aMedida/eventual/bodega/tras)
+   + candado solo-si-protege (sin precio de catálogo ⇒ editable). El primer it.aMedida de la
+   función es el BADGE del nombre (a ~4400 chars del input) — el ancla correcta es el gate.
+   La propiedad v923 SE CONSERVA: con precio de catálogo, disabled + guard en updateOcPrecio. */
+ok('input de precio condicionado por aMedida', /const _libre = it\.aMedida[\s\S]{0,1500}updateOcPrecio/.test(srcRender));
 ok('bloqueado con disabled + aviso de catálogo', /disabled/.test(srcRender) && /catálogo de precios/i.test(srcRender));
 
 // ── 2. guard duro en updateOcPrecio ──
