@@ -3392,7 +3392,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1252</span>
+    <span style="opacity:.5;font-size:9px">v1253</span>
   </footer>
 
 </div>
@@ -19505,10 +19505,16 @@ function _invReporteNombre(p, toma){
    manda la tabla ENTERA a la hoja siguiente — perfecto para una tabla corta (evita el
    titulo huerfano), pero con una tabla larga que NUNCA cabe completa deja la hoja anterior
    vacia. Se decide por el alto REAL: si no entra en una hoja, fluye; si entra, salta junta. */
-function _invSaltoTabla(nFilas, fontSize, cellPadding, altoUtil){
+function _invSaltoTabla(nFilas, fontSize, cellPadding, altoUtil, restante){
   var altoFila = (Number(fontSize) || 8) + 2 * (Number(cellPadding) || 3.5) + 2;
   var alto = (Number(nFilas) + 1) * altoFila; // +1 por el encabezado
-  return alto > (Number(altoUtil) || 700) ? 'auto' : 'avoid';
+  if (alto > (Number(altoUtil) || 700)) return 'auto'; // no cabe en NINGUNA hoja — se parte sí o sí
+  /* v1253 (Antonio: "no quiero la primera página en blanco"): si estamos ARRIBA de la
+     página (solo el encabezado — lo libre ≈ toda la hoja útil) y aun así la tabla no cabe
+     en lo libre, saltar de hoja solo REGALA una página casi vacía: mejor arrancar acá y
+     que se parta. El salto entero de v1075 queda para cuando la página ya tiene contenido. */
+  if (restante != null && alto > Number(restante) && (Number(altoUtil) - Number(restante)) < 170) return 'auto';
+  return 'avoid';
 }
 function _invMatKey(nombre){
   var s = String(nombre == null ? '' : nombre);
@@ -19607,7 +19613,7 @@ function _invReporteDoc(p, toma){
       columnStyles: { 1: { halign: 'center', cellWidth: 60 }, 2: { halign: 'center', cellWidth: 80 }, 3: { halign: 'center', cellWidth: 95 } },
       /* v1075 (Antonio): si no cabe, la tabla ENTERA arranca en la hoja siguiente — antes
          el encabezado quedaba al final de una hoja y se repetía al principio de la otra */
-      pageBreak: _invSaltoTabla(filasB.length, 8.5, 4, doc.internal.pageSize.getHeight() - 2 * M), rowPageBreak: 'avoid',
+      pageBreak: _invSaltoTabla(filasB.length, 8.5, 4, doc.internal.pageSize.getHeight() - 2 * M, doc.internal.pageSize.getHeight() - M - y), rowPageBreak: 'avoid',
       theme: 'striped' });
     y = doc.lastAutoTable.finalY + 14;
   }
@@ -19645,7 +19651,7 @@ function _invReporteDoc(p, toma){
       alternateRowStyles: { fillColor: [250, 250, 249] }, // v1056: zebra gris suave, no café
       styles: { fontSize: _tAnchos.fontSize, cellPadding: 3.5 },
       columnStyles: colStyles,
-      pageBreak: _invSaltoTabla(filas.length, _tAnchos.fontSize, 3.5, doc.internal.pageSize.getHeight() - 2 * M), rowPageBreak: 'avoid', // v1075/v1088
+      pageBreak: _invSaltoTabla(filas.length, _tAnchos.fontSize, 3.5, doc.internal.pageSize.getHeight() - 2 * M, doc.internal.pageSize.getHeight() - M - y), rowPageBreak: 'avoid', // v1075/v1088
       theme: 'striped' });
     y = doc.lastAutoTable.finalY + 14;
   });
@@ -19684,7 +19690,7 @@ function _invReporteDoc(p, toma){
       alternateRowStyles: { fillColor: [250, 250, 249] },
       styles: { fontSize: _cAnchos.fontSize, cellPadding: 3.5 }, // v1080
       columnStyles: _cStyles,
-      pageBreak: _invSaltoTabla(_cFilas.length, _cAnchos.fontSize, 3.5, doc.internal.pageSize.getHeight() - 2 * M), rowPageBreak: 'avoid', // v1075/v1088
+      pageBreak: _invSaltoTabla(_cFilas.length, _cAnchos.fontSize, 3.5, doc.internal.pageSize.getHeight() - 2 * M, doc.internal.pageSize.getHeight() - M - y), rowPageBreak: 'avoid', // v1075/v1088
       theme: 'striped' });
     y = doc.lastAutoTable.finalY + 14;
   }
@@ -20650,6 +20656,7 @@ function renderPedidosList(){
 }
 /* v1204: los clicks de las subpestañas — setean el filtro local (no se sincroniza) y repintan */
 window._ocSerieSub = function(s){ window._ocSerieFiltro = String(s || ''); try { renderOrdenesList(); } catch(e){} };
+window._ocEstadoSub = function(s){ window._ocEstadoFiltro = String(s || ''); try { renderOrdenesList(); } catch(e){} }; /* v1253: filtro por estado */
 window._pedEstadoSub = function(s){ window._pedEstadoFiltro = String(s || ''); try { renderPedidosList(); } catch(e){} };
 window.togglePedidosHistorial = function(){
   const p = activeProj();
@@ -28789,7 +28796,22 @@ function renderOrdenesList(){
     + `<button class="mat-tab${!_fSer ? ' active' : ''}" onclick="window._ocSerieSub('')">TODAS</button>`
     + _serOrdenTabs.map(s => `<button class="mat-tab${_fSer === s ? ' active' : ''}" onclick="window._ocSerieSub('${s}')">${s}</button>`).join('')
     + `</div>` : '');
-  const ordenes = _fSer ? _ordTodasSeries.filter(o => _ocSerieDe(o) === _fSer) : _ordTodasSeries;
+  const _ordSerie = _fSer ? _ordTodasSeries.filter(o => _ocSerieDe(o) === _fSer) : _ordTodasSeries;
+  /* v1253 (Antonio): filtro por ESTADO — pendientes de autorización / autorizadas (+
+     devueltas solo si hay). Mismo patrón que la serie (v1204): conteo en la pestaña y
+     auto-reset si el filtro quedó sin tarjetas. Sin status = AUTORIZADA (legacy). */
+  const _estDe = o => { const st = String((o && o.status) || 'AUTORIZADA'); return st === 'PENDIENTE_AUTORIZACION' ? 'PEND' : (st === 'DEVUELTA' ? 'DEV' : 'AUT'); };
+  const _estCounts = { PEND: 0, AUT: 0, DEV: 0 };
+  _ordSerie.forEach(o => { _estCounts[_estDe(o)]++; });
+  if (window._ocEstadoFiltro && !_estCounts[window._ocEstadoFiltro]) window._ocEstadoFiltro = '';
+  const _fEst = String(window._ocEstadoFiltro || '');
+  const _estBar = (_ordSerie.length ? `<div class="mat-tabs ped-tabs-bar" style="margin:0 0 12px;display:flex;flex-wrap:wrap">`
+    + `<button class="mat-tab${!_fEst ? ' active' : ''}" onclick="window._ocEstadoSub('')">TODOS LOS ESTADOS</button>`
+    + (_estCounts.PEND ? `<button class="mat-tab${_fEst === 'PEND' ? ' active' : ''}" onclick="window._ocEstadoSub('PEND')">PENDIENTES DE AUTORIZACIÓN (${_estCounts.PEND})</button>` : '')
+    + (_estCounts.AUT ? `<button class="mat-tab${_fEst === 'AUT' ? ' active' : ''}" onclick="window._ocEstadoSub('AUT')">AUTORIZADAS (${_estCounts.AUT})</button>` : '')
+    + (_estCounts.DEV ? `<button class="mat-tab${_fEst === 'DEV' ? ' active' : ''}" onclick="window._ocEstadoSub('DEV')">DEVUELTAS (${_estCounts.DEV})</button>` : '')
+    + `</div>` : '');
+  const ordenes = _fEst ? _ordSerie.filter(o => _estDe(o) === _fEst) : _ordSerie;
 
   const countLbl = document.getElementById('ocCountLabel');
   if (countLbl) countLbl.textContent = `— ${ordenes.length} ÓRDEN${ordenes.length !== 1 ? 'ES' : ''}`
@@ -28797,7 +28819,7 @@ function renderOrdenesList(){
 
   if (ordenes.length === 0) {
     /* v1204: la barra sale también vacía — sin ella no habría cómo volver a TODAS */
-    cont.innerHTML = _serBar + `<div class="empty" style="padding:40px 20px;text-align:center;color:var(--mute)">
+    cont.innerHTML = _serBar + _estBar + `<div class="empty" style="padding:40px 20px;text-align:center;color:var(--mute)">
       <div style="font-family:'Familjen Grotesk',sans-serif;font-size:36px;color:var(--line);margin-bottom:10px">◈</div>
       <p style="font-size:12px;letter-spacing:.5px">No hay órdenes${_fSer ? ' de la serie ' + _fSer : ' de compra generadas todavía'}.</p>
       <p style="font-size:10px;margin-top:8px;letter-spacing:1px;text-transform:uppercase;color:var(--mute)">Las órdenes se generan desde el detalle de un pedido.</p>
@@ -29024,7 +29046,7 @@ function renderOrdenesList(){
       ${_hVisOc ? `<div style="padding:4px 0 12px">${_ocRecib.map(_filaOc).join('')}</div>` : ''}
     </div>`;
   }
-  cont.innerHTML = _serBar + _htmlOc; // v1204: subpestañas por serie arriba de la lista
+  cont.innerHTML = _serBar + _estBar + _htmlOc; // v1204: subpestañas por serie · v1253: + estado
   /* v1041: VER OC desde GASTOS — la orden exacta se trae a la vista y se resalta */
   try {
     if (window._comprasIrAOcId) {
