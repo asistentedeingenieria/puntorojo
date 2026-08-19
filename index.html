@@ -3392,7 +3392,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1253</span>
+    <span style="opacity:.5;font-size:9px">v1254</span>
   </footer>
 
 </div>
@@ -28838,7 +28838,7 @@ function renderOrdenesList(){
 
   /* v1006 (pedido de Antonio): a la vista solo lo que TODAVÍA no llegó a la obra; lo
      recibido se guarda en el historial colapsable. */
-  const _ocPend = [], _ocRecib = [];
+  const _ocPend = [], _ocRecib = [], _ocArch10 = [];
   ordenes.forEach(function(oc){
     /* v1125: lo que espera firma de finanzas va ARRIBA siempre. Un despacho hereda el pedido
        de la madre; si ese pedido de bodega ya está RECIBIDO, _ocPendienteDeRecibir lo mandaría
@@ -28851,10 +28851,18 @@ function renderOrdenesList(){
        recibe una OP; lo que se recibe es la orden de compra que salió de ella). */
     if (oc && _ocSerieDe(oc) === 'OP' && oc.ocDerivadaId) { _ocRecib.push(oc); return; }
     const _pdOc = (typeof _findPedidoGlobal === 'function' && oc && oc.pedidoId) ? _findPedidoGlobal(oc.pedidoId) : null;
-    (_ocPendienteDeRecibir(oc, _pdOc && _pdOc.pd) ? _ocPend : _ocRecib).push(oc);
+    const _pendRec = _ocPendienteDeRecibir(oc, _pdOc && _pdOc.pd);
+    if (!_pendRec) { _ocRecib.push(oc); return; }
+    /* v1254 (Antonio): la AUTORIZADA con más de 10 HORAS se archiva SOLA en su historial.
+       DERIVADO del reloj — nada se escribe: la tarjeta es la misma y sus acciones (entrega,
+       recibir, compartir) siguen vivas adentro. La recibida en obra ya se fue arriba. */
+    if ((oc.status || 'AUTORIZADA') === 'AUTORIZADA' && Number(oc.autorizadoTs) && (Date.now() - Number(oc.autorizadoTs)) > 36e6) { _ocArch10.push(oc); return; }
+    _ocPend.push(oc);
   });
   const _hKeyOc = 'oc_historial_visible_' + ((p && p.id) || 'def');
   const _hVisOc = _histVisible(_hKeyOc); // v1067
+  const _hKeyOcA = 'oc_hist_aut_visible_' + ((p && p.id) || 'def');
+  const _hVisOcA = _histVisible(_hKeyOcA); // v1254
   const _filaOc = oc => {
     const st = oc.status || 'AUTORIZADA'; // fallback para OCs antiguas
     const isPending = st === 'PENDIENTE_AUTORIZACION';
@@ -29034,8 +29042,18 @@ function renderOrdenesList(){
     </div>`;
   };
   let _htmlOc = _ocPend.map(_filaOc).join('');
-  if (!_ocPend.length && _ocRecib.length) {
-    _htmlOc += `<div class="empty" style="padding:26px 16px;text-align:center;color:var(--mute);font-size:12px;letter-spacing:.5px">TODAS LAS ÓRDENES FUERON RECIBIDAS EN OBRA.</div>`;
+  if (!_ocPend.length && (_ocRecib.length || _ocArch10.length)) {
+    _htmlOc += `<div class="empty" style="padding:26px 16px;text-align:center;color:var(--mute);font-size:12px;letter-spacing:.5px">${_ocArch10.length ? 'NADA PENDIENTE A LA VISTA — LO DEMÁS ESTÁ EN LOS HISTORIALES.' : 'TODAS LAS ÓRDENES FUERON RECIBIDAS EN OBRA.'}</div>`;
+  }
+  /* v1254: historial gemelo — autorizadas hace más de 10 horas, colapsado */
+  if (_ocArch10.length) {
+    _htmlOc += `<div style="border-top:2px solid #ddd;margin-top:8px;background:#FAFAFA">
+      <div onclick="window.toggleOcHistorialAut()" style="padding:12px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <strong style="font-size:11px;letter-spacing:.3px;color:#444">HISTORIAL DE ÓRDENES AUTORIZADAS · MÁS DE 10 HORAS</strong>
+        <span style="font-size:11px;color:#666;font-weight:600">${_ocArch10.length} · ${_hVisOcA ? '▼ OCULTAR' : '▶ MOSTRAR'}</span>
+      </div>
+      ${_hVisOcA ? `<div style="padding:4px 0 12px">${_ocArch10.map(_filaOc).join('')}</div>` : ''}
+    </div>`;
   }
   if (_ocRecib.length) {
     _htmlOc += `<div style="border-top:2px solid #ddd;margin-top:8px;background:#FAFAFA">
@@ -29064,6 +29082,12 @@ window.toggleOcHistorial = function(){
   const p = activeProj();
   const k = 'oc_historial_visible_' + ((p && p.id) || 'def');
   _histToggle(k); // v1067
+  try { renderOrdenesList(); } catch(e){}
+};
+window.toggleOcHistorialAut = function(){
+  const p = activeProj();
+  const k = 'oc_hist_aut_visible_' + ((p && p.id) || 'def');
+  _histToggle(k); // v1254: mismo patrón v1067
   try { renderOrdenesList(); } catch(e){}
 };
 
