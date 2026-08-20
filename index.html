@@ -3393,7 +3393,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1259</span>
+    <span style="opacity:.5;font-size:9px">v1260</span>
   </footer>
 
 </div>
@@ -9295,7 +9295,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 941; // v1240: escudo _verifTokShield en los 6 merges (ordenes+pedidos × 3 contenedores) — un cliente viejo sin escudo borraría el token de verificación (trampa v1039)
+const APP_SYNC_VERSION = 942; // v1260: self-heal de colisiones de número de pedido en el merge (_pedidosRenumeraColisiones) — un cliente viejo sin la regla desharía la renumeración y la colisión rebotaría
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10727,6 +10727,7 @@ const CloudSync = {
           if (_verifTokShield(_moc.list, (lp && lp.materiales && lp.materiales.ordenes) || [], rp.materiales.ordenes || [])) needsResync = true; // v1240
           rp.materiales.ordenes = _moc.list;
           if (_moc.changed) needsResync = true;
+          if (_pedidosRenumeraColisiones(rp.materiales)) needsResync = true; // v1260
           // v977: flags "SE PIDE EN MILES" (p.materiales.recetaMiles) — mapa chico por clave
           // {on,ts}: por clave gana el ts más nuevo (idempotente). Sin esto el LWW del proyecto
           // borraba el toggle ante cualquier copia vieja (misma familia que v950/v953/v972).
@@ -10908,6 +10909,7 @@ const CloudSync = {
           if (_ocFacturaShield(_mBo.list, _bmL.ordenes || [], _bmR.ordenes || [])) needsResync = true; // v1039
           if (_verifTokShield(_mBo.list, _bmL.ordenes || [], _bmR.ordenes || [])) needsResync = true; // v1240
           _bmR.ordenes = _mBo.list; if (_mBo.changed) needsResync = true;
+          if (_pedidosRenumeraColisiones(_bmR)) needsResync = true; // v1260
           // memorias proveedor/precio del store: unión simple (lo local que el remoto no trae se conserva)
           ['ocProvPorItem', 'postesPrecioMedida'].forEach(k => {
             const _loc = _bmL[k] || {}, _rem = _bmR[k] || {};
@@ -10943,6 +10945,7 @@ const CloudSync = {
           if (_ocFacturaShield(_mVo.list, _vmL.ordenes || [], _vmR.ordenes || [])) needsResync = true; // v1039
           if (_verifTokShield(_mVo.list, _vmL.ordenes || [], _vmR.ordenes || [])) needsResync = true; // v1240
           _vmR.ordenes = _mVo.list; if (_mVo.changed) needsResync = true;
+          if (_pedidosRenumeraColisiones(_vmR)) needsResync = true; // v1260
           ['ocProvPorItem', 'postesPrecioMedida', 'ocVariantePorItem'].forEach(k => {
             const _loc = _vmL[k] || {}, _rem = _vmR[k] || {};
             _vmR[k] = Object.assign({}, _rem);
@@ -15565,6 +15568,50 @@ function _pedidoSeqSellar(cont, numeroCompleto){
   if (n > cur) cont.pedidoSeq[prefix] = n;   // MONÓTONO: nunca baja
 }
 try { window._pedidoSeqSiguiente = _pedidoSeqSiguiente; window._mergePedidoSeq = _mergePedidoSeq; window._pedidoSeqSellar = _pedidoSeqSellar; } catch(e){}
+/* v1260 (caso real: dos EF2-10 del 10-ago): el contador es merge-max, no transaccional —
+   dos dispositivos creando a la vez podían tomar el MISMO número. Al llegar datos se
+   detectan colisiones DENTRO del contenedor y el gemelo MÁS JOVEN (ts, luego id) que AÚN
+   NO TIENE ÓRDENES se renumera al siguiente libre del prefijo, sella _ts, re-sella su
+   copia del QR (verifOk=false, gate v1244) y reserva el número nuevo. Regla DETERMINISTA:
+   todos los dispositivos calculan lo mismo y convergen; idempotente (tras renumerar no
+   queda colisión). Con órdenes vivas NO se toca nada — la hoja y el QR ya viajaron. */
+function _pedidosRenumeraColisiones(cont){
+  try {
+    if (!cont || !Array.isArray(cont.pedidos) || cont.pedidos.length < 2) return false;
+    var norm = function(s){ return String(s == null ? '' : s).toUpperCase().replace(/\s+/g, ' ').trim(); };
+    var porNum = {};
+    cont.pedidos.forEach(function(pd){
+      if (!pd || pd.status === 'CANCELADO') return;
+      var k = norm(pd.numero);
+      if (!k) return;
+      (porNum[k] = porNum[k] || []).push(pd);
+    });
+    var cambio = false;
+    Object.keys(porNum).forEach(function(k){
+      var g = porNum[k];
+      if (g.length < 2) return;
+      g.sort(function(a, b){ return ((a.ts || 0) - (b.ts || 0)) || String(a.id || '').localeCompare(String(b.id || '')); });
+      for (var i = 1; i < g.length; i++) {
+        var pd = g[i];
+        var tieneOc = (cont.ordenes || []).some(function(o){ return o && o.pedidoId === pd.id && (o.status || 'AUTORIZADA') !== 'CANCELADA'; });
+        if (tieneOc) continue;
+        var m = String(pd.numero || '').match(/^(.*?\s*[–-]\s*)(\d+)\s*$/);
+        if (!m) continue;
+        var usados = {};
+        cont.pedidos.forEach(function(x){ if (x && x.numero) usados[norm(x.numero)] = true; });
+        var n = parseInt(m[2], 10) || 0;
+        var nuevo;
+        do { n++; nuevo = m[1] + n; } while (usados[norm(nuevo)]);
+        pd.numero = nuevo;
+        pd._ts = Date.now();
+        pd.verifOk = false;
+        try { _pedidoSeqSellar(cont, nuevo); } catch(e){}
+        cambio = true;
+      }
+    });
+    return cambio;
+  } catch(e){ return false; }
+}
 /* v1036 — EL TECHO DE LO QUE SE PUEDE PEDIR DE UN MATERIAL. PURA.
    Antonio: "NO debe de poder pedir más de lo que la receta le permite". El atributo max del
    input se saltea escribiendo, así que el techo de verdad vive acá, del lado del generador.
@@ -21838,6 +21885,7 @@ async function submitPedido(){
      manuales viven en PROYECTOS VARIOS desde v1002). Si el pedido después se cae, el número
      queda quemado — es el precio correcto: mejor un hueco que dos pedidos con el mismo número. */
   try { _pedidoSeqSellar(proyectoTipo === 'MANUAL' ? _variosMatStore() : p.materiales, numero); } catch(e){ try { _pedidoSeqSellar(p.materiales, numero); } catch(_e){} }
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch(e){} /* v1260: la RESERVA del número viaja YA — la ventana de colisión baja de minutos a ~1 s */
   /* v1180: una obra de VARIOS toma su código único (OC7, OC8…) la primera vez que pide, y se
      lo queda para siempre — los fijos (OC1-OC6) no pasan por acá. */
   if (proyectoTipo === 'MANUAL') { try { _obraCodigoAsegurar(proyectoPedido); } catch(e){} }
@@ -43144,6 +43192,7 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
   p.materiales.pedidoCounter = (p.materiales.pedidoCounter || 0) + 1;
   const numero = nextPedidoCode(p);
   try { _pedidoSeqSellar(p.materiales, numero); } catch(e){}   // v1169: el número queda RESERVADO
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch(e){} /* v1260: la RESERVA del número viaja YA */
 
   const n = new Date();
   const fecha = `${String(n.getDate()).padStart(2,'0')}/${String(n.getMonth()+1).padStart(2,'0')}/${n.getFullYear()}`;

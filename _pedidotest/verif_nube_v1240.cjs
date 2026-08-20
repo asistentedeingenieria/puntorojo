@@ -70,7 +70,8 @@ const zSh = ex(html, 'function _verifTokShield(');
 ok('existe el escudo quien-lo-tiene-gana', /verifTok\) return/.test(zSh) && /verifOk/.test(zSh));
 const nSh = (html.match(/_verifTokShield\(/g) || []).length;
 ok('cubre los 6 merges (3 de ordenes + 3 de pedidos) + la definición', nSh >= 7);
-ok('APP_SYNC_VERSION subió a 941 (el escudo toca applyRemote)', /const APP_SYNC_VERSION = 941;/.test(html));
+/* v1260 subió a 942 (self-heal de correlativos) — la propiedad v1240 es AL MENOS 941 */
+ok('APP_SYNC_VERSION subió a 941 o más (el escudo toca applyRemote)', (function(){ const m = html.match(/const APP_SYNC_VERSION = (\d+);/); return !!m && Number(m[1]) >= 941; })());
 
 console.log('— 8. verificar.html lee la nube EN VIVO —');
 ok('fetch REST a Firestore del proyecto punto-rojo-3fcf1', /firestore\.googleapis\.com\/v1\/projects\/punto-rojo-3fcf1/.test(vh) && /ocVerif\//.test(vh));
