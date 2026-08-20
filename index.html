@@ -3393,7 +3393,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1257</span>
+    <span style="opacity:.5;font-size:9px">v1258</span>
   </footer>
 
 </div>
@@ -28149,6 +28149,20 @@ window._ocVerifSubir = async function(oc){
     saveState();
   } catch(e){ console.warn('[v1240] la copia sellada no subió — se reintenta al imprimir/compartir', e); }
 };
+/* v1258: ANULAR la copia sellada — la hoja ya compartida deja de verificar como válida.
+   Se sobreescribe ocVerif/<token> con un payload anulada:true (mismo cifrado x/k/t);
+   verificar.html lo pinta en ROJO: "NO PAGAR CONTRA ESTA HOJA". */
+window._ocVerifAnular = async function(oc, motivo){
+  try {
+    if (!oc || !oc.verifTok) return;
+    var _clave = String(window._qrClave || '');
+    if (!_clave) return;
+    var _json = JSON.stringify({ d: 'oc', anulada: true, numero: _numLimpio(oc.numero || ''), motivo: String(motivo || ''), fecha: _qrFechaHora(Date.now()) });
+    var _salt = ((_selloHash32(oc.verifTok + '|ANULADA', 99991)) >>> 0).toString(16);
+    var _tag = ('000000' + ((_selloHash32(_json, 777) >>> 0).toString(16))).slice(-6);
+    await firebase.firestore().collection('ocVerif').doc(oc.verifTok).set({ x: _qrCifrar(_json, _clave, _salt), k: _salt, t: _tag, ts: Date.now(), anulada: true });
+  } catch(e){ console.warn('[v1258] no se pudo anular la copia sellada', e); }
+};
 function _pedVerifPayload(pd, p){
   try {
     var _fs = '';
@@ -29003,6 +29017,11 @@ function renderOrdenesList(){
     const cambiarEntregaBtn = (_puedeEnt && st !== 'CANCELADA')
       ? `<button class="btn ghost sm" onclick="window._ocCambiarEntrega('${oc.id}')" title="Cambiar la fecha en que el proveedor entrega">ENTREGA</button>`
       : '';
+    /* v1258: finanzas puede RETIRAR su firma de una OC autorizada (cambio de precio del
+       proveedor, etc.) — vuelve DEVUELTA a compras y la hoja compartida queda ANULADA */
+    const retirarBtn = (isAuth && !oc.esDespacho && !oc.esPrepago && !oc.esTrasiego && !oc.esProduccion && _puedeAutorizarOc())
+      ? `<button class="btn ghost sm" onclick="window._ocRetirarAutorizacion('${oc.id}')" style="color:#B91C1C;border-color:#FCA5A5" title="Retirar la firma de finanzas: la orden vuelve a compras y la hoja compartida queda ANULADA al escanearse">RETIRAR AUTORIZACIÓN</button>`
+      : '';
     const recibirObraBtn = (_esDpp && isAuth && !_dppRec && (_puedeGestionarBodega() || can('materiales.edit')))
       ? `<button class="btn sm" onclick="window._dppMarcarRecibido('${oc.id}')" style="background:#166534;border-color:#166534;color:#fff" title="Confirmar que el material llegó a la obra">YA RECIBÍ EL MATERIAL</button>`
       : '';
@@ -29047,7 +29066,7 @@ function renderOrdenesList(){
         ${(function(){
           /* v1192 (Antonio): a la vista SOLO quedan VER PREVIEW y el ⋮ — todas las
              acciones viven dentro del menú. Sin acciones (solo-lectura) el ⋮ no sale. */
-          const _accionesMenu = [authBtn, devolverBtn, corregirBtn, recibirBtn, recibirObraBtn, cambiarEntregaBtn, printBtn, facturaBtn, _opBtn,
+          const _accionesMenu = [authBtn, devolverBtn, retirarBtn, corregirBtn, recibirBtn, recibirObraBtn, cambiarEntregaBtn, printBtn, facturaBtn, _opBtn,
             (canDeleteOC ? `<button class="btn ghost sm" style="color:#B91C1C;border-color:#FCA5A5" onclick="deleteOrden('${oc.id}')" title="Eliminar orden">ELIMINAR ✕</button>` : '')
           ].filter(Boolean).join('');
           return `<button class="btn ghost sm" onclick="verPreviewOrden('${oc.id}')" title="Ver el documento como quedó">VER PREVIEW</button>`
@@ -29263,6 +29282,60 @@ function _puedeAutorizarOc(){
    Hoy finanzas solo podía autorizar o dejar la orden en el limbo, y el "corregí esto" viajaba
    por WhatsApp. El ciclo queda dentro de la app:
      PENDIENTE --[DEVOLVER + motivo obligatorio]--> DEVUELTA --[compras EDITA]--> PENDIENTE */
+/* v1258 (Antonio: "el proveedor pidió cambio de precio en una OC ya autorizada y
+   compartida"): una autorizada JAMÁS se edita en el lugar — el sello/QR/copia cubren el
+   monto QUE FINANZAS FIRMÓ (v1220). Finanzas RETIRA su autorización con motivo auditado:
+   la orden vuelve DEVUELTA a compras (circuito v1235, el precio nuevo del catálogo entra
+   solo al re-armar) y la copia sellada de la nube se marca ANULADA — la hoja ya
+   compartida deja de verificar como válida. Solo serie OC y solo si NO fue recibida. */
+window._ocRetirarAutorizacion = async function(id){
+  if (!can('compras.revisar') && !can('users.manage')) return showToast('SOLO EL REVISOR DE FINANZAS PUEDE RETIRAR SU AUTORIZACIÓN', 'red');
+  const _f = _bodegaFindOc(id);
+  if (!_f || !_f.oc) return showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red');
+  if ((_f.oc.status || 'AUTORIZADA') !== 'AUTORIZADA') return showToast('SOLO SE RETIRA LA AUTORIZACIÓN DE UNA ORDEN AUTORIZADA', 'red');
+  if (_f.oc.esDespacho || _f.oc.esPrepago || _f.oc.esTrasiego || _f.oc.esProduccion) return showToast('SOLO ÓRDENES DE COMPRA — LOS DESPACHOS YA MOVIERON BODEGA', 'red');
+  try {
+    const _pdR = (_f.oc.pedidoId && typeof _findPedidoGlobal === 'function') ? _findPedidoGlobal(_f.oc.pedidoId) : null;
+    if (typeof _ocPendienteDeRecibir === 'function' && !_ocPendienteDeRecibir(_f.oc, _pdR && _pdR.pd)) return showToast('YA FUE RECIBIDA EN OBRA — NO SE PUEDE RETIRAR LA AUTORIZACIÓN', 'red');
+  } catch(e){}
+  const _e = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  window._retAutzForm = { motivo: '' };
+  const okc = await window.prConfirm({
+    title: 'RETIRAR LA AUTORIZACIÓN',
+    bodyHTML: '<div style="font-size:12px;color:#444;line-height:1.6">La <b>' + _e(_numLimpio(_f.oc.numero)) + '</b> (' + _e(_f.oc.proveedorNombre || '') + ') pierde la firma de finanzas y vuelve a COMPRAS para corregirse. La hoja ya compartida quedará marcada como <b>ANULADA</b> al escanear su QR.</div>'
+      + '<label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">¿POR QUÉ SE RETIRA? — OBLIGATORIO</label>'
+      + '<textarea class="pr-fld" rows="3" style="width:100%;resize:vertical" placeholder="EJ: EL PROVEEDOR PIDIÓ CAMBIO DE PRECIO" oninput="window._retAutzForm.motivo = this.value"></textarea>',
+    okText: 'RETIRAR AUTORIZACIÓN', cancelText: 'CANCELAR', danger: true
+  });
+  if (!okc) return;
+  const _motivo = String((window._retAutzForm || {}).motivo || '').trim();
+  if (!_motivo) return showToast('ESCRIBÍ EL MOTIVO — NO SE RETIRÓ', 'red');
+  /* re-leer del state vivo tras el await del modal (patrón v769/v940) */
+  const _f2 = _bodegaFindOc(id);
+  if (!_f2 || !_f2.oc) return showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red');
+  if ((_f2.oc.status || 'AUTORIZADA') !== 'AUTORIZADA') return showToast('CAMBIÓ DE ESTADO MIENTRAS TANTO — NO SE HIZO NADA', 'red');
+  const _u = (typeof getCurrentUser === 'function' && getCurrentUser()) || {};
+  const _t = Date.now();
+  const oc2 = _f2.oc;
+  /* histórico auditado de la firma que se retira */
+  oc2.autzRetirada = { por: String(_u.displayName || _u.username || '').toUpperCase(), ts: _t, motivo: _motivo, autorizadoPor: oc2.autorizadoPor || '', autorizadoTs: oc2.autorizadoTs || null };
+  try { _ocVerifAnular(oc2, 'AUTORIZACIÓN RETIRADA: ' + _motivo); } catch(e){}
+  /* sin firma no hay QR ni sello (gate oc.autorizadoPor) */
+  oc2.autorizadoPor = '';
+  oc2.autorizadoPorUsername = '';
+  oc2.autorizadoTs = null;
+  oc2.firmaDigital = '';
+  oc2.selloDigital = '';
+  oc2.status = 'DEVUELTA';
+  oc2.devolucion = { motivo: 'AUTORIZACIÓN RETIRADA · ' + _motivo, por: String(_u.displayName || _u.username || '').toUpperCase(), ts: _t, fecha: (typeof _dateALatam === 'function') ? _dateALatam(new Date()) : '' };
+  oc2._ts = _t; /* el contenedor viaja por union-merge (v972) */
+  try { logActivity('update', 'ORDEN DE COMPRA', 'Autorización RETIRADA: ' + (oc2.numero || '') + ' · ' + _motivo); } catch(e){}
+  saveState();
+  try { CloudSync.forceUploadNow().then(r => { if (r === false) showToast('EL CAMBIO NO SUBIÓ — HAY UN CANDADO DE SYNC, REINTENTÁ', 'red'); }).catch(() => {}); } catch(e){}
+  showToast('AUTORIZACIÓN RETIRADA — LA ORDEN VOLVIÓ A COMPRAS', 'amber');
+  try { renderOrdenesList(); } catch(e){}
+  try { if (document.getElementById('_bodegaPanelModal')) { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } } catch(e){}
+};
 window._ocDevolver = async function(id){
   if (!can('compras.revisar') && !can('users.manage')) return showToast('SOLO EL REVISOR DE FINANZAS PUEDE DEVOLVER', 'red');
   const _f = _bodegaFindOc(id);
@@ -29577,6 +29650,9 @@ function _doDeleteOrden(id){
   const oc = _hit && _hit.oc;
   const p = (_hit && _hit.p) || activeProj();
   if (!oc) return;
+  /* v1258: si estaba AUTORIZADA, su copia sellada en la nube se marca ANULADA — la hoja
+     ya compartida deja de verificar como válida al escanear su QR */
+  try { if ((oc.status || 'AUTORIZADA') === 'AUTORIZADA' && oc.verifTok && typeof _ocVerifAnular === 'function') _ocVerifAnular(oc, 'ORDEN ELIMINADA POR EL ADMINISTRADOR'); } catch(e){}
   const _esDeBodegaMat = !!(_hit && !_hit.p && ((state.bodegaMat || {}).ordenes || []).some(x => x && x.id === id));
   // v1002: la OC puede vivir en PROYECTOS VARIOS — tercer contenedor
   const _esDeVarios = !!(_hit && _hit.esVarios) || !!(((state.variosMat || {}).ordenes || []).some(x => x && x.id === id));
