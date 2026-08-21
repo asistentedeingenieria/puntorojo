@@ -15,10 +15,16 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
   ok(`${id} vive en la capa 100500`, i > 0 && /z-index:100500/.test(html.slice(i, i + 400)));
 });
 
-/* ningún modal de la app puede estar por ENCIMA de los confirms (el toast sí, 999999) */
-const zs = (html.match(/z-index:1\d{5}/g) || []).map(s => Number(s.slice(8)));
+/* ningún MODAL de la app puede estar por ENCIMA de los confirms (el toast sí, 999999).
+   v1268: el picker genérico `_prPickerPanel` (desplegable flotante de los <select> en
+   desktop, v967) NO es un modal — vive en 100600, ENCIMA del confirm, porque un select
+   dentro de un confirm (EDITAR PÓLIZA → PUESTO) lo abría detrás del telón. Se exime. */
+const iPick = html.indexOf("panel.id = '_prPickerPanel';");
+const htmlSinPicker = iPick > 0 ? html.slice(0, iPick) + html.slice(iPick + 1200) : html;
+const zs = (htmlSinPicker.match(/z-index:1\d{5}/g) || []).map(s => Number(s.slice(8)));
 const maxOtro = Math.max.apply(null, zs.filter(z => z !== 100500));
 ok('ningún otro z-index de seis cifras supera a los confirms (' + maxOtro + ' < 100500)', maxOtro < 100500);
+ok('el picker flotante (único eximido) está declarado y va ENCIMA (100600)', iPick > 0 && /z-index:100600/.test(html.slice(iPick, iPick + 1200)));
 ok('el toast sigue arriba de todo', /\.toast\{[^}]*z-index:999999/.test(html));
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
