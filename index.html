@@ -3393,7 +3393,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1265</span>
+    <span style="opacity:.5;font-size:9px">v1266</span>
   </footer>
 
 </div>
@@ -11138,6 +11138,16 @@ const CloudSync = {
         if (document.getElementById('pedidosList') && typeof renderPedidosList === 'function') renderPedidosList();
       }
     } catch(e){ console.warn('[v1248] repintado COMPRAS', e); }
+    /* v1266: el panel de PROYECTOS VARIOS salió de isUserBusy (compras vivía adentro y los
+       pedidos nuevos no le entraban) — al llegar datos se repinta con su propio refresco
+       (el mismo que usan sus acciones), sin input enfocado. Linaje v1058/v1068/v1248. */
+    try {
+      const _ae4 = document.activeElement;
+      if (!(_ae4 && /^(INPUT|TEXTAREA|SELECT)$/.test(_ae4.tagName)) && document.getElementById('_variosPanelModal')
+          && typeof _cerrarPanelVariosDom === 'function' && typeof window._abrirPanelVarios === 'function') {
+        _cerrarPanelVariosDom(); window._abrirPanelVarios();
+      }
+    } catch(e){ console.warn('[v1266] repintado VARIOS', e); }
     // v277: sync silencioso, sin toast intrusivo.
     // Si la limpieza removió filas, re-subir el state limpio a la nube para que
     // todos los dispositivos se sincronicen sin la basura.
@@ -11195,7 +11205,7 @@ const CloudSync = {
     // referencia queda huerfana y el cambio (push/Object.assign/splice) no persiste. Esto
     // arregla de raiz toda la familia "await modal -> escribir" (aprobar/rechazar/procesar/
     // anular planilla, editar/eliminar anticipos y polizas, etc.).
-    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal, #_bodegaCargaModal, #_recepcionModal, #_variosPanelModal, #_limpiaModal, #_limpiaUnirModal, #_adminPanelModal, #prvRetencionesModal, .prModal-backdrop')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO; v977: prPrompt/prAlert (.prModal-backdrop) — recetaV2Op escribía sobre un p tomado antes del await del prompt. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo.
+    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal, #_bodegaCargaModal, #_recepcionModal, #_limpiaModal, #_limpiaUnirModal, #_adminPanelModal, #prvRetencionesModal, .prModal-backdrop')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO; v977: prPrompt/prAlert (.prModal-backdrop) — recetaV2Op escribía sobre un p tomado antes del await del prompt. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo. v1266: el panel de VARIOS (_variosPanelModal) salió por la MISMA razón — compras vivía adentro y los pedidos nuevos no le entraban nunca; sus acciones re-leen por _ctx.cont (v1002-08).
     const focused = document.activeElement;
     if (focused && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)) return true;
     return false;
@@ -21791,6 +21801,31 @@ async function resetPedidoForm(){
   renderPedidoForm();
 }
 
+/* v1266 (caso ESSENSA vs ESSENZA): la agrupación y el correlativo de PROYECTOS VARIOS van
+   por NOMBRE — otra letra = otra obra = contador propio. Canon FONÉTICO para detectar la
+   misma obra escrita distinto: sin tildes, sin H, Z≈S, C(suave)≈S, V≈B, LL≈Y, espacios
+   colapsados. PURA. */
+function _obraVariosCanon(s){
+  return String(s == null ? '' : s).toUpperCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/LL/g, 'Y').replace(/H/g, '')
+    .replace(/Z/g, 'S').replace(/CE/g, 'SE').replace(/CI/g, 'SI')
+    .replace(/V/g, 'B')
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+}
+/* devuelve el nombre EXISTENTE de varios que suena igual al tipeado (o '' si no hay) */
+function _obraVariosParecida(nombre){
+  try {
+    const k = _obraVariosCanon(nombre);
+    if (!k) return '';
+    const vistos = {};
+    (((typeof _variosMatStore === 'function' && _variosMatStore()) || {}).pedidos || []).forEach(pd => { if (pd && pd.proyectoPedido) vistos[String(pd.proyectoPedido).toUpperCase()] = 1; });
+    Object.keys((state && state.obraCodigos) || {}).forEach(n => { vistos[String(n).toUpperCase()] = 1; });
+    const hit = Object.keys(vistos).find(n => n !== String(nombre).toUpperCase() && _obraVariosCanon(n) === k);
+    return hit || '';
+  } catch(e){ return ''; }
+}
 async function submitPedido(){
   if (!can('pedidos.create')) return showToast('SIN PERMISO', 'red');
   // v979: la SOLICITUD siempre lleva la FIRMA del solicitante (pedido de Antonio) — la
@@ -21839,11 +21874,27 @@ async function submitPedido(){
     return showToast('ESPECIFICAR: ' + missingSpecs.slice(0,2).join(' · ') + (missingSpecs.length > 2 ? ' ...' : ''), 'red');
   }
 
-  const p = activeProj();
   const proyectoTipo = document.getElementById('pfProyectoTipo')?.value || 'ACTIVO';
   const proyectoManualTxt = (document.getElementById('pfProyectoManual')?.value || '').trim().toUpperCase();
   if (proyectoTipo === 'MANUAL' && !proyectoManualTxt) return showToast('ESCRIBIR EL PROYECTO O CLIENTE', 'red');
-  const proyectoPedido = proyectoTipo === 'MANUAL' ? proyectoManualTxt
+  /* v1266: si el nombre tipeado SUENA igual a una obra de varios existente (ESSENSA vs
+     ESSENZA), se pregunta — unificar mantiene el grupo y el correlativo. Nunca silencioso. */
+  let proyectoManualFinal = proyectoManualTxt;
+  if (proyectoTipo === 'MANUAL') {
+    const _igual = _obraVariosParecida(proyectoManualTxt);
+    if (_igual) {
+      const _e6 = s => String(s).replace(/[<>]/g, '');
+      const _usar = await window.prConfirm({
+        title: '¿ES LA MISMA OBRA?',
+        bodyHTML: '<div style="font-size:12.5px;color:#333;line-height:1.6">Escribiste <b>' + _e6(proyectoManualTxt) + '</b> y ya existe la obra <b>' + _e6(_igual) + '</b>.<br>Si es la misma, el pedido se agrupa con ella y <b>sigue su correlativo</b>.</div>',
+        okText: 'SÍ — ES LA MISMA', cancelText: 'NO, ES OTRA OBRA'
+      });
+      if (_usar) proyectoManualFinal = _igual;
+    }
+  }
+  /* v1266 (regla v769): activeProj() se lee DESPUÉS del await del confirm */
+  const p = activeProj();
+  const proyectoPedido = proyectoTipo === 'MANUAL' ? proyectoManualFinal
     : (proyectoTipo === 'OFICINA' ? 'OFICINA CENTRAL — ABASTECIMIENTO' : p.name.toUpperCase()); // v921
 
   // v312: en MANUAL no se valida torre/nivel — el pedido es de un proyecto pequeno.

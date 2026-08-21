@@ -103,7 +103,12 @@ ok('el folio previsto sale del CONTENEDOR del pedido, no del proyecto activo', z
 const zGen = ex('async function generarOrdenCompra(');
 ok('la base de folios también', zGen.includes('_ordExistentes = (_ctx.cont && _ctx.cont.ordenes)'));
 ok('y la memoria de proveedor/precio se guarda con el pedido', zGen.includes('_memDest = _ctx.cont'));
-ok('el panel pospone applyRemote como los demás modales', /#_variosPanelModal/.test(html));
+/* v1266: la propiedad se INVIRTIÓ a propósito — el panel de varios YA NO pospone
+   applyRemote (compras vivía adentro y los pedidos nuevos no le entraban nunca, el
+   mismo motivo del panel de bodega en v961). A cambio: applyRemote lo REPINTA al
+   llegar datos. Lo que se ancla ahora es ese par: fuera de isUserBusy + repintado. */
+ok('v1266: el panel NO pospone applyRemote y se repinta al llegar datos',
+  (function(){ const zBusy = ex('isUserBusy('); return !/querySelector\('[^']*_variosPanelModal/.test(zBusy) && /_variosPanelModal/.test(html) && /\[v1266\] repintado VARIOS/.test(html); })());
 ok('la numeración del cliente mira el contenedor de varios', ex('async function submitPedido(').includes('_variosPedidosTodos()'));
 
 /* v1002 — otros dos reportes de Antonio del mismo tramo */
