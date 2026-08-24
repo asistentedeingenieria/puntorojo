@@ -23,6 +23,11 @@ ok('sin NINGUNA orden (getPedidoOrdenes)', /getPedidoOrdenes\(pd\.id\)/.test(zE)
 ok('las solicitudes de etapa NO se editan', /esSolicitudEtapa/.test(zE));
 ok('RECIBIDO y CANCELADO no se editan', /RECIBIDO/.test(zE) && /CANCELADO/.test(zE));
 ok('cierra el panel de COMPRAS antes de abrir el formulario (patrón v1256)', /_cerrarPanelBodegaDom/.test(zE));
+/* v1275 (foto de Antonio: "cuando le da editar NO le sale nada"): al devolver los nodos del
+   panel, mat-pedidos queda display:none — la cadena COMPLETA es vista→sección→pestaña */
+ok('v1275: re-activa la cadena completa (setView + setMatTab + setPedidoTab)', /setView\('materiales'\)/.test(zE) && /setMatTab\('pedidos'\)/.test(zE));
+const zArmar = ex('window._solEtapaArmarFormal = function');
+ok('v1275: el ARMAR FORMAL de v1256 lleva la misma cadena (mismo hueco latente)', /setView\('materiales'\)/.test(zArmar) && /setMatTab\('pedidos'\)/.test(zArmar));
 ok('precarga items, specs, extras y metal', /pedidoFormItems = Object\.assign\(\{\}, pd\.items/.test(zE) && /pedidoExtraMaterials = /.test(zE) && /pedidoMetalMedida = /.test(zE));
 ok('las herramientas vuelven al formulario (v1155 las separa al guardar)', /HERRAMIENTAS DE BODEGA::/.test(zE));
 ok('nivel/apto se re-seleccionan por RÓTULO (el pedido no guarda ids)', /textContent/.test(zE));
