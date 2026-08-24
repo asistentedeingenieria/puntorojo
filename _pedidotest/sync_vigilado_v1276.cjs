@@ -47,7 +47,8 @@ ok('la confirmación con escritura la limpia', /if \(_r === false\) return;\s*th
 /* ── 4. lo pospuesto añejo AVISA ── */
 const iApply = html.indexOf('if (!opts.initial && this.isUserBusy())');
 const zBusy = html.slice(iApply, iApply + 1400);
-ok('a los 2 min de pospuesto: toast + rastro sync-pospuesto-largo', /LLEGARON CAMBIOS DEL EQUIPO/.test(zBusy) && /sync-pospuesto-largo/.test(zBusy));
+/* v1277 (orden de Antonio): SIN mensajes — el aviso murió el mismo día; queda solo el rastro */
+ok('a los 2 min de pospuesto: SOLO rastro sync-pospuesto-largo (sin toast)', !/LLEGARON CAMBIOS DEL EQUIPO/.test(zBusy) && /sync-pospuesto-largo/.test(zBusy) && !/showToast/.test(zBusy.slice(0, zBusy.indexOf('return'))));
 ok('al aplicar se resetea el reloj del pospuesto', /_pospuestoDesde = 0/.test(zBusy));
 
 /* ── 5. fallos y candados con rastro ── */

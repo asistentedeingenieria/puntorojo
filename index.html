@@ -3394,7 +3394,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1276</span>
+    <span style="opacity:.5;font-size:9px">v1277</span>
   </footer>
 
 </div>
@@ -10641,14 +10641,13 @@ const CloudSync = {
     // Si el usuario está ocupado editando, no destruimos su input.
     if (!opts.initial && this.isUserBusy()) {
       this.pendingRemoteData = merged;
-      /* v1276: lo pospuesto que se añeja se AVISA — el usuario vive metido en un modal y
-         no ve lo del equipo ("la autorización tardó 20 minutos": estaba en su aparato,
-         invisible). El toast vive en la capa más alta (999999) — se ve sobre el modal. */
+      /* v1277 (orden de Antonio): SIN mensajes — con isUserBusy recortado, posponer solo
+         pasa en diálogos breves o tipeando; si algún pospuesto llegara a añejarse >2 min,
+         queda SOLO el rastro en telemetría para cazarlo (nada visible al usuario). */
       if (!this._pospuestoDesde) this._pospuestoDesde = Date.now();
       if (!this._pospuestoAviso && Date.now() - this._pospuestoDesde > 120000) {
         this._pospuestoAviso = true;
         try { _loginDiag('sync-pospuesto-largo', { min: Math.round((Date.now() - this._pospuestoDesde) / 60000) }); } catch(e){}
-        try { showToast('LLEGARON CAMBIOS DEL EQUIPO — SE APLICAN AL CERRAR ESTE CUADRO', ''); } catch(e){}
       }
       return;
     }
@@ -11375,18 +11374,27 @@ const CloudSync = {
   },
 
   isUserBusy(){
-    if (document.querySelector('.modal-bg.show')) return true;
-    // v770: FIX SISTEMICO — los modales dinamicos de plata/planilla (prConfirm, el editor
-    // de planilla rechazada, el modal de rechazo) usan divs con estilo inline e ids propios,
-    // NO la clase .modal-bg.show, asi que no se detectaban como "ocupado". Mientras alguno
-    // este abierto hay que POSPONER applyRemote: si reasigna state (state=merged con objetos
-    // nuevos) bajo la referencia p/pl/ant/po que el handler tomo ANTES del modal, esa
-    // referencia queda huerfana y el cambio (push/Object.assign/splice) no persiste. Esto
-    // arregla de raiz toda la familia "await modal -> escribir" (aprobar/rechazar/procesar/
-    // anular planilla, editar/eliminar anticipos y polizas, etc.).
-    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal, #_bodegaCargaModal, #_recepcionModal, #_limpiaModal, #_limpiaUnirModal, #_adminPanelModal, #prvRetencionesModal, .prModal-backdrop')) return true; // v841-fix: los modales de anticipo posponen applyRemote durante la subida a Storage; v940: firma (v934) y abastecer bodega (v936); v959: MARCAR RECIBIDO; v977: prPrompt/prAlert (.prModal-backdrop) — recetaV2Op escribía sobre un p tomado antes del await del prompt. OJO v961: la VISTA de bodega (_bodegaPanelModal) NO va acá — es un espacio de trabajo largo y congelaría el sync; sus escrituras re-leen el state vivo. v1266: el panel de VARIOS (_variosPanelModal) salió por la MISMA razón — compras vivía adentro y los pedidos nuevos no le entraban nunca; sus acciones re-leen por _ctx.cont (v1002-08).
+    /* ═══ v1277 (Antonio: "DEBE SER INSTANTÁNEO — sin mensajes, para todo") ═══
+       Los modales de TRABAJO (.modal-bg.show: la OC abierta, el catálogo, VER DETALLE,
+       gestión de usuarios) YA NO posponen applyRemote — lo del equipo se aplica al
+       instante por debajo. Es seguro porque sus flujos de escritura re-leen el state
+       VIVO por id (regla v769/v940/v964, aplicada casa por casa desde hace meses) y el
+       contenido del modal abierto no se repinta en applyRemote (los repintados dirigidos
+       v1248/v1266 apuntan a las LISTAS). Siguen posponiendo SOLO:
+       (a) los DIÁLOGOS DE ESPERA (prConfirm y la familia v770) — ahí vive la referencia
+           tomada antes del await, y son breves: al cerrarlos, el click/focusout aplica
+           lo pendiente al instante;
+       (b) el TIPEO ACTIVO fuera de un modal (un repintado de lista mataría el input;
+           dentro de un modal el input no se repinta — no estorba). */
+    // v770: los modales dinamicos de plata/planilla (prConfirm, el editor de planilla
+    // rechazada, el modal de rechazo) usan divs con ids propios. Mientras alguno este
+    // abierto hay que POSPONER applyRemote: si reasigna state bajo la referencia
+    // p/pl/ant/po que el handler tomo ANTES del modal, esa referencia queda huerfana
+    // y el cambio no persiste.
+    if (document.querySelector('#prConfirmModal, #v289EditorModal, #prRechazarModal, .pr-ant-modal, #_firmaModal, #_bodegaModal, #_ocRecibidoModal, #_bodegaCargaModal, #_recepcionModal, #_limpiaModal, #_limpiaUnirModal, #_adminPanelModal, #prvRetencionesModal, .prModal-backdrop')) return true; // v841-fix/v940/v959/v977; OJO v961/v1266: los paneles de bodega y varios NUNCA van acá.
     const focused = document.activeElement;
-    if (focused && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)) return true;
+    if (focused && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)
+        && !(focused.closest && focused.closest('.modal-bg'))) return true; // v1277: tipear DENTRO de un modal no congela el sync
     return false;
   },
 
