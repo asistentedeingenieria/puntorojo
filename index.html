@@ -3393,7 +3393,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1272</span>
+    <span style="opacity:.5;font-size:9px">v1273</span>
   </footer>
 
 </div>
@@ -42990,6 +42990,121 @@ function _selAptoPedir(towerId, levelId, stageIdx){
 window._abrirMenuPedirEtapa=_abrirMenuPedirEtapa; window._menuPedirCerrar=_menuPedirCerrar;
 window._abrirSelectorAptoEtapa=_abrirSelectorAptoEtapa; window._selAptoRefresh=_selAptoRefresh;
 window._cerrarSelectorApto=_cerrarSelectorApto; window._selAptoPedir=_selAptoPedir;
+/* ══ v1273 · RESUMEN DE RECETA POR APTO Y POR NIVEL (Antonio, 24-ago, foto de su Excel
+   "TORRE 2 -- ESSENZA -- NIVEL 2") ══
+   Matriz de un NIVEL: renglones de la receta agrupados por ETAPA (con su UNIDAD), una
+   columna por APTO y el TOTAL NIVEL (tn del Excel — redondeo único v907 — o la suma).
+   PURA la parte de datos; cantidades SIN decimales SOLO en el display (el dato no se toca).
+   Renglones todo-cero se omiten (el Excel los arrastraba; acá son ruido). */
+function _recetaResumenNivel(p, lid){
+  var rv = p && p.materiales && p.materiales.recetaV2;
+  if (!(rv && rv.formato === 'estandar' && rv.niveles && rv.niveles[lid] && Array.isArray(rv.etapas))) return null;
+  var t0 = null, l0 = null;
+  (p.towers || []).some(function(t){ return ((t && t.levels) || []).some(function(l){ if (l && l.id === lid) { t0 = t; l0 = l; return true; } return false; }); });
+  if (!l0) return null;
+  var aptos = (l0.aptos || []).filter(Boolean);
+  if (!aptos.length) return null;
+  var niv = rv.niveles[lid];
+  var etapas = [];
+  rv.etapas.forEach(function(nombre, ei){
+    var lineas = niv[ei] || [];
+    var por = {}, orden = [];
+    lineas.forEach(function(item){
+      if (!item) return;
+      var nom = String(item.m || item.nc || '').trim();
+      if (!nom) return;
+      var k = nom + '||' + String(item.u || '');
+      if (!por[k]) { por[k] = { name: nom, u: String(item.u || ''), celdas: aptos.map(function(){ return 0; }), total: 0 }; orden.push(k); }
+      var fila = por[k];
+      aptos.forEach(function(a, i){ fila.celdas[i] += Number(((item.aptos) || {})[a.id]) || 0; });
+      fila.total += (Number(item.tn) > 0) ? Number(item.tn)
+        : aptos.reduce(function(s, a){ return s + (Number(((item.aptos) || {})[a.id]) || 0); }, 0);
+    });
+    var filas = orden.map(function(k){ return por[k]; })
+      .filter(function(x){ return x.total > 0 || x.celdas.some(function(v){ return v > 0; }); });
+    if (filas.length) etapas.push({ nombre: nombre, filas: filas });
+  });
+  if (!etapas.length) return null;
+  return { torre: String((t0 && t0.name) || ''), nivel: String(l0.name || ''), aptos: aptos.map(function(a){ return String(a.name || ''); }), etapas: etapas };
+}
+try { window._recetaResumenNivel = _recetaResumenNivel; } catch(e){}
+
+/* niveles que tienen receta, rotulados TORRE · NIVEL para el selector */
+function _recetaResumenNiveles(p){
+  var rv = p && p.materiales && p.materiales.recetaV2;
+  var out = [];
+  if (!(rv && rv.niveles)) return out;
+  ((p.towers) || []).forEach(function(t){ ((t.levels) || []).forEach(function(l){ if (l && rv.niveles[l.id]) out.push({ id: l.id, name: (t.name ? t.name + ' · ' : '') + (l.name || l.id) }); }); });
+  return out;
+}
+
+function _recetaResumenBodyHTML(p, lid){
+  var e6 = function(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); };
+  var r = _recetaResumenNivel(p, lid);
+  if (!r) return '<div class="empty" style="padding:30px;text-align:center;color:var(--mute);font-size:11.5px">ESTE NIVEL NO TIENE RECETA.</div>';
+  var th = 'padding:8px 10px;font-size:8.5px;letter-spacing:1.2px;font-weight:700;color:#78716C;text-transform:uppercase;background:#FAFAF9;position:sticky;top:0;z-index:1;border-bottom:2px solid #E7E5E4';
+  var h = '<div style="overflow:auto;max-height:calc(92vh - 130px)"><table style="border-collapse:collapse;width:100%;min-width:' + (380 + r.aptos.length * 86) + 'px">';
+  h += '<thead><tr><th style="' + th + ';text-align:left">RENGLÓN</th><th style="' + th + ';text-align:center">UNIDAD</th>'
+    + r.aptos.map(function(a){ return '<th style="' + th + ';text-align:right">' + e6(a) + '</th>'; }).join('')
+    + '<th style="' + th + ';text-align:right;border-left:2px solid #E7E5E4">TOTAL NIVEL</th></tr></thead><tbody>';
+  var cd = 'padding:6px 10px;font-size:11.5px;font-variant-numeric:tabular-nums;text-align:right;border-bottom:1px solid #F5F5F4';
+  r.etapas.forEach(function(et){
+    h += '<tr><td colspan="' + (r.aptos.length + 3) + '" style="padding:8px 10px;background:var(--cream);font-size:9px;letter-spacing:2px;font-weight:800;color:var(--cafe);text-transform:uppercase;border-top:1px solid #E7E5E4">' + e6(et.nombre) + '</td></tr>';
+    et.filas.forEach(function(fx, i){
+      var z = i % 2 ? 'background:#FAFAF9;' : '';
+      /* v1273: SIN decimales — solo display; la celda en 0 va atenuada como raya */
+      h += '<tr>'
+        + '<td style="' + z + 'padding:6px 10px;font-size:11.5px;border-bottom:1px solid #F5F5F4">' + e6(fx.name) + '</td>'
+        + '<td style="' + z + cd + ';text-align:center;color:#A8A29E;font-size:10px">' + e6(fx.u || 'U') + '</td>'
+        + fx.celdas.map(function(v){ var n = Math.round(Number(v) || 0); return '<td style="' + z + cd + (n ? '' : ';color:#D6D3D1') + '">' + (n || '—') + '</td>'; }).join('')
+        + '<td style="' + z + cd + ';font-weight:700;border-left:2px solid #E7E5E4">' + Math.round(Number(fx.total) || 0) + '</td>'
+        + '</tr>';
+    });
+  });
+  h += '</tbody></table></div>';
+  return h;
+}
+
+window._recetaResumenNivelSet = function(lid){
+  try {
+    window._recetaResumenLid = String(lid || '');
+    var p = activeProj();
+    var host = document.getElementById('_recetaResumenBody');
+    if (host) host.innerHTML = _recetaResumenBodyHTML(p, window._recetaResumenLid);
+    var sub = document.getElementById('_recetaResumenSub');
+    var r = _recetaResumenNivel(p, window._recetaResumenLid);
+    if (sub && r) sub.textContent = (r.torre ? r.torre + ' · ' : '') + String(p.name || '').toUpperCase() + ' · ' + r.nivel;
+  } catch(e){ console.warn('[v1273] resumen', e); }
+};
+window._recetaResumenCerrar = function(){
+  var m = document.getElementById('_recetaResumenModal');
+  if (m) m.remove();
+};
+window._recetaResumenAbrir = function(lid){
+  var p = (typeof activeProj === 'function') ? activeProj() : null; if (!p) return;
+  var niveles = _recetaResumenNiveles(p);
+  if (!niveles.length) return showToast('ESTE PROYECTO NO TIENE RECETA FORMATO ESTÁNDAR', 'red');
+  var e6 = function(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); };
+  var sel = String(lid || (niveles[0] || {}).id || '');
+  window._recetaResumenCerrar();
+  var wrap = document.createElement('div');
+  wrap.id = '_recetaResumenModal';
+  /* capa de modales (regla v1257/v1268): modales ≤100400; el picker de los select vive en 100600 y queda encima */
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:100400;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;padding:14px';
+  wrap.innerHTML = '<div style="background:#fff;border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.28);width:min(1100px,97vw);max-height:92vh;display:flex;flex-direction:column;overflow:hidden">'
+    + '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 18px;border-bottom:1px solid var(--line)">'
+    +   '<div style="flex:1;min-width:200px"><div style="font-size:12px;font-weight:800;letter-spacing:1.5px;color:var(--red)">RESUMEN DE RECETA</div>'
+    +   '<div id="_recetaResumenSub" style="font-size:10px;letter-spacing:1px;color:#78716C;font-weight:600;margin-top:2px"></div></div>'
+    +   '<select class="pr-obra-sel" onchange="window._recetaResumenNivelSet(this.value)">' + niveles.map(function(n){ return '<option value="' + e6(n.id) + '"' + (n.id === sel ? ' selected' : '') + '>' + e6(n.name) + '</option>'; }).join('') + '</select>'
+    +   '<button class="btn ghost sm" onclick="window._recetaResumenCerrar()">CERRAR</button>'
+    + '</div>'
+    + '<div id="_recetaResumenBody" style="min-height:120px"></div>'
+    + '</div>';
+  wrap.onclick = function(ev){ if (ev.target === wrap) window._recetaResumenCerrar(); };
+  document.body.appendChild(wrap);
+  window._recetaResumenNivelSet(sel);
+};
+
 function renderRecetaPedir(){
   const cont = document.getElementById('recetaPedirContent');
   if (!cont) return;
@@ -43038,6 +43153,8 @@ function renderRecetaPedir(){
   } catch(e) { collapsedSet = new Set(); }
 
   let html = '';
+  /* v1273: matriz apto×material del nivel (como el Excel de Antonio, pero de la app) */
+  html += _rvStd ? `<div style="display:flex;justify-content:flex-end;margin:2px 0 10px"><button class="btn sm cafe" onclick="window._recetaResumenAbrir()">RESUMEN POR NIVEL</button></div>` : '';
   torres.forEach(t => {
     const levels = (t.levels || []).filter(l => (l.aptos || []).length > 0);
     if (levels.length === 0) return;
