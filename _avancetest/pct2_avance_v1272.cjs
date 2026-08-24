@@ -34,5 +34,10 @@ const zCuad = html.slice(iCuad, iCuad + 3000);
 ok('cuadritos: pctT con _pct2', /_pct2\(pctT\)/.test(zCuad) && !/Math\.round\(termT/.test(zCuad));
 ok('cuadritos: pctL con _pct2', /_pct2\(pctL\)/.test(zCuad) && !/Math\.round\(termL/.test(zCuad));
 
+/* ── v1279: los KPIs "Avance promedio" (vista de avance) y "Avance físico promedio"
+   (dashboard ejecutivo) se habían quedado con Math.round — Antonio los vio en su foto ── */
+ok('KPI Avance promedio con _pct2', /_pct2\(avanceProm\)/.test(html) && !/Math\.round\(totalPct\/totalAptos\)/.test(html));
+ok('KPI del dashboard también', !/Math\.round\(avanceFisicoSum \/ avanceFisicoCount\)/.test(html));
+
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);
