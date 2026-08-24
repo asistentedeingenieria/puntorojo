@@ -3393,7 +3393,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1273</span>
+    <span style="opacity:.5;font-size:9px">v1274</span>
   </footer>
 
 </div>
@@ -20565,6 +20565,11 @@ function setPedidoTab(tab){
   // v913: PEDIR DE RECETA abre un MODAL a nivel body (la grilla ya no vive en un panel
   // de la pestaña — en algunas sesiones ese panel quedaba invisible). No toca los tabs.
   if (tab === 'receta') { _abrirModalPedirReceta(); return; }
+  /* v1274: TODO cambio de pestaña mata el MODO EDICIÓN — un modo colgado convertiría el
+     próximo pedido nuevo en una edición silenciosa del viejo. _pedidoEditarVDC lo vuelve
+     a encender DESPUÉS de llamar acá. */
+  window._pedidoEditId = null;
+  try { const _bEd = document.getElementById('_pedidoEditBanner'); if (_bEd) _bEd.remove(); } catch(e){}
   if (window._lastPedidoTab !== null && window._lastPedidoTab !== tab && typeof _resetAllCollapsibles === 'function') {
     _resetAllCollapsibles();
   }
@@ -21018,6 +21023,16 @@ function renderPedidoCard(pd, p){
       <div class="pedido-actions">
         <div class="timeline">${timelineDots}</div>
         <button class="btn ghost sm" onclick="openPedidoDetalle('${pd.id}')">VER DETALLE</button>
+        ${(function(){ /* v1274: EDITAR — solo VDC, pedido PROPIO, vivo, sin solicitud y SIN órdenes */
+          try {
+            if (!(typeof _vdcModoObs === 'function' && _vdcModoObs(p))) return '';
+            if (pd.esSolicitudEtapa || _esCancel || pd.status === 'RECIBIDO') return '';
+            if ((getPedidoOrdenes(pd.id) || []).length) return '';
+            const _mio = String(pd.solicitanteUsername || '').toLowerCase() === String((currentUser && currentUser.username) || '').toLowerCase();
+            if (!_mio && !can('users.manage')) return '';
+            return `<button class="btn ghost sm" style="border-color:var(--cafe);color:var(--cafe)" onclick="_pedidoEditarVDC('${pd.id}')" title="Corregir cantidades o materiales ANTES de generar la OC (mientras no tenga órdenes)">EDITAR</button>`;
+          } catch(e){ return ''; }
+        })()}
         ${(pd.recepcion && pd.recepcion.parcial) ? `<span style="font-size:9px;font-weight:800;letter-spacing:1px;color:#B45309;background:#FFFBEB;border:1px solid #FCD34D;border-radius:20px;padding:3px 9px;align-self:center">RECIBIDO PARCIAL · FALTANTE RE-PEDIBLE</span>` : ''}
         ${pd.recepcion ? `<button class="btn ghost sm" onclick="imprimirRecibo('${pd.id}')" title="Comprobante de recepción firmado">VER RECIBO</button>
         <button class="btn sm" onclick="compartirReciboImg('${pd.id}')" style="background:#25D366;border-color:#25D366;color:#fff">COMPARTIR RECIBO</button>` : ''}
@@ -21939,6 +21954,8 @@ async function resetPedidoForm(){
   pedidoPosteEspecial = { tipo: '', metros: '' }; /* v1156 */
   pedidoExtraMaterials = [];
   pedidoMetalMedida = [];
+  window._pedidoEditId = null; // v1274: limpiar formulario también apaga el modo edición
+  try { const _bEd2 = document.getElementById('_pedidoEditBanner'); if (_bEd2) _bEd2.remove(); } catch(e){}
   ['pfSolicitante','pfOrdenCambio','pfObservaciones','pfProyectoManual','pfAptoManual'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   const pft = document.getElementById('pfProyectoTipo'); if (pft) pft.value = 'ACTIVO';
   togglePedidoProyectoManual();
@@ -21973,6 +21990,71 @@ function _obraVariosParecida(nombre){
     return hit || '';
   } catch(e){ return ''; }
 }
+/* ══ v1274 · EDITAR PEDIDO (solo VICINIA DEL CARMEN) ══
+   Antonio: "en VDC la de compras ARMA el pedido; que pueda editar SUS pedidos mientras
+   no los haya mandado a finanzas (sin ninguna orden)". Reabre el formulario NUEVO
+   PEDIDO precargado; submitPedido detecta _pedidoEditId y ACTUALIZA en el lugar. */
+window._pedidoEditarVDC = function(pdId){
+  const p = (typeof activeProj === 'function') ? activeProj() : null; if (!p) return;
+  if (!(typeof _vdcModoObs === 'function' && _vdcModoObs(p))) return showToast('EDITAR PEDIDOS SOLO EXISTE EN VICINIA DEL CARMEN', 'red');
+  if (!can('pedidos.create')) return showToast('SIN PERMISO', 'red');
+  const pd = ((p.materiales && p.materiales.pedidos) || []).find(x => x && x.id === pdId);
+  if (!pd) return showToast('EL PEDIDO YA NO EXISTE — RECARGÁ', 'red');
+  const _u = getCurrentUser() || {};
+  if (String(pd.solicitanteUsername || '').toLowerCase() !== String(_u.username || '').toLowerCase() && !can('users.manage')) {
+    return showToast('SOLO QUIEN CREÓ EL PEDIDO PUEDE EDITARLO', 'red');
+  }
+  if (pd.esSolicitudEtapa) return showToast('LA SOLICITUD DE ETAPA NO SE EDITA — SE ATIENDE CON EL PEDIDO FORMAL', 'red');
+  if (pd.status === 'RECIBIDO' || pd.status === 'CANCELADO') return showToast('ESTE PEDIDO YA NO SE PUEDE EDITAR', 'red');
+  if ((getPedidoOrdenes(pd.id) || []).length) return showToast('YA TIENE ORDEN GENERADA — PARA EDITAR, ELIMINÁ PRIMERO LA ORDEN', 'red');
+  /* si venimos del panel de COMPRAS, el formulario vive en la vista de obra (patrón v1256) */
+  try { if (document.getElementById('_bodegaPanelModal') && typeof _cerrarPanelBodegaDom === 'function') _cerrarPanelBodegaDom(); } catch(e){}
+  try { setPedidoTab('nuevo'); } catch(e){} // limpia cualquier modo colgado ANTES de encender el nuestro
+  window._pedidoEditId = pd.id;
+  /* precarga del formulario: items + specs + extras + metal; las HERRAMIENTAS vuelven
+     como renglones (v1155 las separa al guardar) */
+  pedidoFormItems = Object.assign({}, pd.items || {});
+  (Array.isArray(pd.herramientas) ? pd.herramientas : []).forEach(h => { if (h && h.name) pedidoFormItems['HERRAMIENTAS DE BODEGA::' + h.name] = Number(h.qty) || 0; });
+  pedidoFormSpecs = Object.assign({}, pd.specs || {});
+  pedidoExtraMaterials = (Array.isArray(pd.extras) ? pd.extras : []).map(m => ({ name: m.name, unit: m.unit || '', qty: Number(m.qty) || 0 }));
+  pedidoMetalMedida = (Array.isArray(pd.metalMedida) ? pd.metalMedida : []).map(m => ({ tipo: m.tipo, medida: m.medida, calibre: m.calibre || '', qty: Number(m.qty) || 0, torre: m.torreId || '', nivel: m.nivelId || '' }));
+  pedidoPosteEspecial = { tipo: '', metros: '' };
+  setTimeout(() => { try {
+    try { renderPedidoForm(); } catch(e){}
+    /* nivel/apto: el pedido guarda RÓTULOS, no ids — se re-selecciona por texto */
+    const nv = document.getElementById('pfNivel');
+    if (nv) {
+      if (pd.destinoBodega && typeof PF_NIVEL_BODEGA !== 'undefined') nv.value = PF_NIVEL_BODEGA;
+      else {
+        const op = Array.from(nv.options || []).find(o => String(o.textContent || '').trim() === String(pd.nivel || '').trim());
+        if (op) nv.value = op.value;
+      }
+      try { nv.dispatchEvent(new Event('change', { bubbles: true })); } catch(e){}
+    }
+    setTimeout(() => { try {
+      const ap = document.getElementById('pfApto');
+      if (ap && pd.apto) {
+        const op2 = Array.from(ap.options || []).find(o => String(o.textContent || '').trim() === String(pd.apto || '').trim());
+        if (op2) ap.value = op2.value;
+      }
+      const fe = document.getElementById('pfFechaEntrega');
+      if (fe && pd.fechaEntrega) { const mF = String(pd.fechaEntrega).match(/^(\d{2})\/(\d{2})\/(\d{4})$/); if (mF) fe.value = mF[3] + '-' + mF[2] + '-' + mF[1]; }
+      const ob = document.getElementById('pfObservaciones'); if (ob) ob.value = pd.observaciones || '';
+      const ocx = document.getElementById('pfOrdenCambio'); if (ocx) ocx.value = pd.ordenCambio || '';
+      try { updateSelectedCount(); } catch(e){}
+      /* banner de modo edición — que se VEA que al enviar se actualiza, no se crea otro */
+      const pane = document.getElementById('pedido-nuevo');
+      if (pane && !document.getElementById('_pedidoEditBanner')) {
+        const b = document.createElement('div');
+        b.id = '_pedidoEditBanner';
+        b.style.cssText = 'margin:0 0 12px;padding:10px 14px;background:#FFFBEB;border:1px solid #FCD34D;border-radius:8px;font-size:11px;font-weight:800;letter-spacing:.5px;color:#92400E';
+        b.textContent = 'EDITANDO EL PEDIDO ' + _numLimpio(pd.numero) + ' — AL ENVIAR SE ACTUALIZA ESTE MISMO PEDIDO (NO SE CREA OTRO)';
+        pane.insertBefore(b, pane.firstChild);
+      }
+    } catch(e){} }, 160);
+  } catch(e){ console.warn('[v1274] editar pedido', e); } }, 150);
+};
+
 async function submitPedido(){
   if (!can('pedidos.create')) return showToast('SIN PERMISO', 'red');
   // v979: la SOLICITUD siempre lleva la FIRMA del solicitante (pedido de Antonio) — la
@@ -22071,6 +22153,10 @@ async function submitPedido(){
   }
 
   // Generar correlativo por proyecto
+  /* v1274: en MODO EDICIÓN no hay número nuevo — el pedido conserva el suyo y NO se quema
+     correlativo (ni counter ni reserva de la serie: editar es gratis para la numeración). */
+  let numero = null;
+  if (!window._pedidoEditId) {
   p.materiales.pedidoCounter = (p.materiales.pedidoCounter || 0) + 1;
   // v996: un pedido de proyecto MANUAL se numera con SU proyecto (TIFFANY – 1, 2, 3…)
   /* v1002: la serie del cliente se cuenta sobre PROYECTOS VARIOS (donde ahora viven),
@@ -22079,7 +22165,7 @@ async function submitPedido(){
   const _contNum = (proyectoTipo === 'MANUAL')
     ? { materiales: { pedidos: _variosPedidosTodos(), ordenes: (_variosMatStore().ordenes || []).concat(((p.materiales || {}).ordenes) || []) }, name: p.name, pedidoPrefix: p.pedidoPrefix }
     : p;
-  const numero = nextPedidoCode(_contNum, proyectoTipo === 'MANUAL' ? proyectoPedido : '');
+  numero = nextPedidoCode(_contNum, proyectoTipo === 'MANUAL' ? proyectoPedido : '');
   /* v1169: RESERVAR el número apenas se emite, en el contenedor que es dueño de la serie (los
      manuales viven en PROYECTOS VARIOS desde v1002). Si el pedido después se cae, el número
      queda quemado — es el precio correcto: mejor un hueco que dos pedidos con el mismo número. */
@@ -22088,6 +22174,7 @@ async function submitPedido(){
   /* v1180: una obra de VARIOS toma su código único (OC7, OC8…) la primera vez que pide, y se
      lo queda para siempre — los fijos (OC1-OC6) no pasan por acá. */
   if (proyectoTipo === 'MANUAL') { try { _obraCodigoAsegurar(proyectoPedido); } catch(e){} }
+  }
 
   const n = new Date();
   const fecha = `${String(n.getDate()).padStart(2,'0')}/${String(n.getMonth()+1).padStart(2,'0')}/${n.getFullYear()}`;
@@ -22177,6 +22264,46 @@ async function submitPedido(){
     status: 'SOLICITADO',
     history: [{ ts: Date.now(), from: null, to: 'SOLICITADO', role: (getCurrentUser()?.username || 'unknown') }]
   };
+
+  /* ══ v1274 · MODO EDICIÓN (solo VDC): el pedido EXISTENTE se actualiza EN su lugar ══
+     Mismo id y mismo número; sello _ts (union-merge v972); la copia sellada del QR se
+     re-sube con los renglones nuevos (v1240). El candado se re-verifica FRESCO: si otra
+     persona le generó una orden mientras ella editaba, ya no se toca. */
+  if (window._pedidoEditId) {
+    const _epd = ((p.materiales && p.materiales.pedidos) || []).find(x => x && x.id === window._pedidoEditId);
+    window._pedidoEditId = null;
+    try { const _bEd3 = document.getElementById('_pedidoEditBanner'); if (_bEd3) _bEd3.remove(); } catch(e){}
+    if (!_epd) return showToast('EL PEDIDO A EDITAR YA NO EXISTE — RECARGÁ', 'red');
+    if ((getPedidoOrdenes(_epd.id) || []).length) return showToast('EL PEDIDO YA TIENE UNA ORDEN GENERADA — YA NO SE PUEDE EDITAR', 'red');
+    if (_epd.status === 'RECIBIDO' || _epd.status === 'CANCELADO') return showToast('ESTE PEDIDO YA NO SE PUEDE EDITAR', 'red');
+    _epd.items = pedido.items; _epd.specs = pedido.specs;
+    _epd.extras = pedido.extras; _epd.herramientas = pedido.herramientas;
+    _epd.metalMedida = pedido.metalMedida;
+    _epd.nivel = pedido.nivel; _epd.apto = pedido.apto; _epd.destinoBodega = pedido.destinoBodega;
+    _epd.fechaEntrega = pedido.fechaEntrega;
+    _epd.ordenCambio = pedido.ordenCambio; _epd.observaciones = pedido.observaciones;
+    _epd._ts = Date.now();
+    _epd.history = _epd.history || [];
+    _epd.history.push({ ts: Date.now(), from: _epd.status, to: _epd.status, role: (getCurrentUser()?.username || 'unknown'), nota: 'EDITADO POR ' + solicitante });
+    /* M5: si la edición metió metal a medida, el nivel queda trabado igual que al crear */
+    if (validMetal.length > 0) {
+      if (!p.materiales.metalMedidaPedida) p.materiales.metalMedidaPedida = {};
+      validMetal.forEach(mm => {
+        if (!mm.nivel) return;
+        if (!Array.isArray(p.materiales.metalMedidaPedida[mm.nivel])) p.materiales.metalMedidaPedida[mm.nivel] = [];
+        if (!p.materiales.metalMedidaPedida[mm.nivel].includes(_epd.id)) p.materiales.metalMedidaPedida[mm.nivel].push(_epd.id);
+      });
+    }
+    try { logActivity('update', `Pedido ${_numLimpio(_epd.numero)} editado`, `${p.name} · ${totalCount} materiales · ${solicitante}`); } catch(e){}
+    saveState();
+    try { CloudSync.forceUploadNow().catch(() => {}); } catch(e){}
+    try { _pedVerifSubir(_epd, p); } catch(e){}
+    pedidoMetalMedida = []; pedidoFormItems = {}; pedidoFormSpecs = {};
+    pedidoPosteEspecial = { tipo: '', metros: '' }; pedidoExtraMaterials = [];
+    try { setPedidoTab('lista'); } catch(e){}
+    showToast(`PEDIDO ${_numLimpio(_epd.numero)} ACTUALIZADO`, 'green');
+    return;
+  }
 
   /* v1002 (pedido de Antonio): un pedido de PROYECTO PEQUEÑO / REPARACIÓN ya no se guarda
      dentro del proyecto que estuviera abierto — va a su propio contenedor, PROYECTOS VARIOS,
