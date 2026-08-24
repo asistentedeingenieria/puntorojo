@@ -3393,7 +3393,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1269</span>
+    <span style="opacity:.5;font-size:9px">v1270</span>
   </footer>
 
 </div>
@@ -20757,6 +20757,13 @@ function renderPedidosList(){
   const pedidos = _esp ? _todos : _todos.filter(pd => _pedidoEsDeEstaObra(pd, p));
   const _ajenos = _todos.length - pedidos.length;
   if (_healPedidosRecibidos(pedidos)) { try { saveState(); } catch(e){} }
+  /* v1270 (caso VDC): un pedido SIN status — la solicitud de etapa v1256 nacía sin él —
+     reventaba renderPedidoCard a media lista: KPIs de ESTA obra + tarjetas de la ANTERIOR
+     (la vista mentía el proyecto entero y el try{}catch{} de los llamadores lo callaba).
+     Self-heal con SELLO (union-merge v972) para que el arreglo viaje a toda la flota. */
+  let _sinStatus = 0;
+  _todos.forEach(pd => { if (pd && typeof pd.status !== 'string') { pd.status = 'SOLICITADO'; pd._ts = Date.now(); _sinStatus++; } });
+  if (_sinStatus) { try { saveState(); } catch(e){} }
 
   // KPIs de pedidos
   const total = pedidos.length;
@@ -20821,11 +20828,21 @@ function renderPedidosList(){
     : _fPed === 'REC' ? [] : _act0;
   const _hKey = 'pedidos_historial_visible_' + ((p && p.id) || 'def');
   const _hVis = _histVisible(_hKey); // v1067: cerrado por default en cada entrada
+  /* v1270 BLINDAJE: cada tarjeta se pinta en su PROPIO try — una tarjeta dañada sale como
+     tarjeta de error VISIBLE y jamás vuelve a tumbar la lista entera (que era lo que dejaba
+     en pantalla los pedidos de otra obra). REGLA: un render que falla avisa, no miente. */
+  const _cardSegura = (pd) => {
+    try { return renderPedidoCard(pd, p); }
+    catch(e) {
+      console.warn('[v1270] tarjeta de pedido dañada', pd && pd.id, e);
+      return `<div class="card" style="padding:12px 16px;margin-bottom:10px;border:1px solid #FCA5A5;background:#FEF2F2;font-size:11px;color:#B91C1C;font-weight:700">EL PEDIDO ${String((pd && (pd.numero || pd.id)) || '?').replace(/[<>]/g, '')} NO SE PUDO MOSTRAR — AVISAR A ANTONIO</div>`;
+    }
+  };
   let _html = _pedBar + _avisoAjenos;
-  _html += _act.map(pd => renderPedidoCard(pd, p)).join('');
+  _html += _act.map(pd => _cardSegura(pd)).join('');
   if (_fPed === 'REC') {
     _html += _hist.length
-      ? _hist.map(pd => renderPedidoCard(pd, p)).join('')
+      ? _hist.map(pd => _cardSegura(pd)).join('')
       : `<div class="empty" style="padding:22px 12px"><p style="margin:0">No hay pedidos recibidos todavía.</p></div>`;
   } else if (_fPed && !_act.length) {
     _html += `<div class="empty" style="padding:22px 12px"><p style="margin:0">No hay pedidos en este estado.</p></div>`;
@@ -20839,7 +20856,7 @@ function renderPedidosList(){
         <strong style="font-size:11px;letter-spacing:.3px;color:#444;white-space:nowrap">HISTORIAL DE PEDIDOS RECIBIDOS</strong>
         <span style="font-size:11px;color:#666;font-weight:600;white-space:nowrap;flex-shrink:0">${_hist.length} · ${_hVis ? '▼ OCULTAR' : '▶ MOSTRAR'}</span>
       </div>
-      ${_hVis ? `<div style="padding:4px 0 12px">${_hist.map(pd => renderPedidoCard(pd, p)).join('')}</div>` : ''}
+      ${_hVis ? `<div style="padding:4px 0 12px">${_hist.map(pd => _cardSegura(pd)).join('')}</div>` : ''}
     </div>`;
   }
   list.innerHTML = _html;
@@ -20864,7 +20881,7 @@ function renderPedidoCard(pd, p){
   const totalItemCount = itemCount + extraItemCount;
   const totalQty = Object.values(items).reduce((s,v) => s + (Number(v)||0), 0)
                  + extras.reduce((s,e) => s + (Number(e.qty)||0), 0);
-  const statusClass = pd.status.replace(/\s+/g,'-');
+  const statusClass = String(pd.status || 'SOLICITADO').replace(/\s+/g,'-'); // v1270: sin status no se revienta (defensa en profundidad; el heal ya lo repara)
   const _esCancel = pd.status === 'CANCELADO'; // v1162
   const statusInfo = PEDIDO_ESTADOS.find(s => s.key === pd.status) || (_esCancel ? { key:'CANCELADO', label:'CANCELADO', next:null, role:null } : PEDIDO_ESTADOS[0]);
   // v1005: APROBADO solo cuando finanzas firmó TODAS sus órdenes
@@ -43131,6 +43148,9 @@ window._vdcPedirEtapaObs = async function(tid, lid, ei){
     ordenCambio: '',
     items: {}, extras: [], herramientas: [], specs: {}, metalMedida: [],
     observaciones: `ETAPA ${ei + 1}${apto ? ' · ' + String(apto.name || '') : ''} — ${obs}`,
+    /* v1270: nacía SIN status y renderPedidoCard reventaba (pd.status.replace) — la lista
+       de pedidos quedaba con las tarjetas de OTRA obra pintadas antes. */
+    status: 'SOLICITADO',
     esSolicitudEtapa: true, solEtapaTid: tid, solEtapaLid: lid, solEtapaIdx: ei
   };
   p.materiales.pedidos = p.materiales.pedidos || [];
