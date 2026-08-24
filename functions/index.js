@@ -14,7 +14,7 @@
    ════════════════════════════════════════════════════════════════ */
 
 const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
-const { onRequest } = require('firebase-functions/v2/https');
+const { onRequest, onCall, HttpsError } = require('firebase-functions/v2/https');
 const { setGlobalOptions } = require('firebase-functions/v2');
 const { defineSecret } = require('firebase-functions/params');
 const { initializeApp } = require('firebase-admin/app');
@@ -750,5 +750,61 @@ exports.onAiQuestion = onDocumentCreated(
       console.error('onAiQuestion error:', e && (e.status || ''), e && e.message);
       await responder({ error: 'No pude responder ahora, probá de nuevo.' });
     }
+  }
+);
+
+/* ════════════════════════════════════════════════════════════════
+   v1269 · RESTABLECER CLAVE DE UN USUARIO (callable)
+   ────────────────────────────────────────────────────────────────
+   Los usuarios de usuario+PIN tienen email sintético (@u.puntorojo.app):
+   el "olvidé mi clave" por correo JAMÁS les llega, y el cliente no puede
+   cambiar la clave de OTRO usuario. Solo el Admin SDK puede.
+
+   Reglas:
+   - Caller autenticado y con users.manage o '*' en SU doc users/{uid}.
+   - Clave temporal mínima 6.
+   - A un admin ('*') solo lo restablece otro admin.
+   - Deja mustChangePassword=true (elige clave propia al entrar) y rastro.
+
+   Desplegar:  firebase deploy --only functions:resetUserClave
+   ════════════════════════════════════════════════════════════════ */
+exports.resetUserClave = onCall(
+  { timeoutSeconds: 30, memory: '256MiB' },
+  async (request) => {
+    if (!request.auth) throw new HttpsError('unauthenticated', 'SIN SESIÓN');
+    const db = getFirestore();
+
+    const callerSnap = await db.collection('users').doc(request.auth.uid).get();
+    const callerPerms = (callerSnap.exists && Array.isArray(callerSnap.data().perms)) ? callerSnap.data().perms : [];
+    const esAdmin = callerPerms.includes('*');
+    if (!esAdmin && !callerPerms.includes('users.manage')) {
+      throw new HttpsError('permission-denied', 'SIN PERMISO PARA GESTIONAR USUARIOS');
+    }
+
+    const uid = String((request.data && request.data.uid) || '');
+    const clave = String((request.data && request.data.clave) || '');
+    if (!uid) throw new HttpsError('invalid-argument', 'FALTA EL USUARIO');
+    if (clave.length < 6) throw new HttpsError('invalid-argument', 'CLAVE TEMPORAL MÍNIMA: 6');
+
+    const targetSnap = await db.collection('users').doc(uid).get();
+    if (!targetSnap.exists) {
+      // Cuenta huérfana (Auth sin perfil): restablecer la clave no la arregla —
+      // el listener del cliente la expulsa igual. Hay que recrear el perfil.
+      throw new HttpsError('not-found', 'EL USUARIO NO TIENE PERFIL (CUENTA HUÉRFANA) — HAY QUE RECREARLO');
+    }
+    const targetPerms = Array.isArray(targetSnap.data().perms) ? targetSnap.data().perms : [];
+    if (targetPerms.includes('*') && !esAdmin) {
+      throw new HttpsError('permission-denied', 'LA CLAVE DE UN ADMINISTRADOR SOLO LA RESTABLECE OTRO ADMINISTRADOR');
+    }
+
+    await getAuth().updateUser(uid, { password: clave });
+    await db.collection('users').doc(uid).set({
+      mustChangePassword: true,
+      claveReseteadaPor: request.auth.uid,
+      claveReseteadaTs: Date.now()
+    }, { merge: true });
+
+    console.log('Clave restablecida:', uid, 'por', request.auth.uid);
+    return { ok: true };
   }
 );

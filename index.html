@@ -3393,7 +3393,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1268</span>
+    <span style="opacity:.5;font-size:9px">v1269</span>
   </footer>
 
 </div>
@@ -4696,6 +4696,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
     <div id="euError" class="auth-error"></div>
     <div class="modal-actions">
+      <button class="btn ghost" id="euResetClaveBtn" onclick="resetearClaveUsuario()" style="display:none;margin-right:auto;border-color:var(--red);color:var(--red)">RESTABLECER CLAVE</button>
       <button class="btn ghost" onclick="closeModal('editUser')">CANCELAR</button>
       <button class="btn primary" onclick="saveUser()">GUARDAR</button>
     </div>
@@ -6850,10 +6851,19 @@ function _isUserAccountEmail(email){
   return new RegExp('@'+PR_USER_DOMAIN.replace(/\./g,'\\.')+'$','i').test(String(email||''));
 }
 
+/* v1269: "INGRESANDO..." quedaba ETERNO con mala señal (la promesa ni resolvía ni
+   rechazaba y no había timeout). Envoltorio genérico para promesas de red. */
+function _conTimeout(p, ms){
+  return Promise.race([p, new Promise(function(_res, rej){
+    setTimeout(function(){ var e = new Error('timeout'); e.code = 'pr/timeout'; rej(e); }, ms);
+  })]);
+}
+
 async function doLogin(){
   const raw = document.getElementById('loginUser').value.trim();
   const email = _userToEmail(raw);
-  const pass = document.getElementById('loginPass').value;
+  let pass = document.getElementById('loginPass').value;
+  if (raw.indexOf('@') < 0) pass = pass.trim(); // v1269: la clave de un usuario de PIN jamás lleva espacios (el autofill/copypaste los mete)
   const err = document.getElementById('loginError');
   err.textContent = '';
 
@@ -6861,14 +6871,21 @@ async function doLogin(){
 
   err.textContent = 'INGRESANDO...';
   try {
-    await firebase.auth().signInWithEmailAndPassword(email, pass);
+    await _conTimeout(firebase.auth().signInWithEmailAndPassword(email, pass), 25000);
     document.getElementById('loginUser').value = '';
     document.getElementById('loginPass').value = '';
     err.textContent = '';
     // El listener onAuthStateChanged se encarga del resto.
   } catch(e) {
     console.error(e);
-    err.textContent = traducirErrorFirebase(e);
+    _loginDiag('login-fallo', { u: String(raw).slice(0, 40), code: (e && e.code) || '' });
+    let _msg = traducirErrorFirebase(e);
+    if (raw.indexOf('@') < 0 && _msg === 'EMAIL O CLAVE INCORRECTOS') _msg = 'USUARIO O CLAVE INCORRECTOS — SI LA OLVIDASTE, PEDIR AL ADMIN QUE LA RESTABLEZCA';
+    /* v1269: si Chrome auto-rellenó una clave VIEJA, dejarla puesta produce la ráfaga
+       de fallos que bloquea la cuenta (too-many-requests). Tras INCORRECTOS se limpia
+       para que el próximo intento sea tipeado de verdad. */
+    if (_msg.indexOf('INCORRECTOS') >= 0) { try { document.getElementById('loginPass').value = ''; } catch(_e){} }
+    err.textContent = _msg;
   }
 }
 
@@ -6883,7 +6900,10 @@ function openForgotPasswordModal(){
   if (inp) inp.value = prefill;
   if (err) err.textContent = '';
   if (m) m.classList.add('show');
-  setTimeout(() => { try { document.getElementById('forgotEmail').focus(); } catch(e){} }, 100);
+  /* v1269: antídoto de la trampa readonly del anti-autofill (v487/v695/v932): este
+     input caía hardened (readonly-hasta-foco) y el foco por programa lo dejaba
+     ATASCADO sin dejar escribir. Quitar el candado ANTES de enfocar. */
+  setTimeout(() => { try { const _fe = document.getElementById('forgotEmail'); _fe.removeAttribute('readonly'); _fe.removeAttribute('data-naf-ro'); _fe.focus(); } catch(e){} }, 120);
 }
 
 async function sendPasswordReset(){
@@ -6917,10 +6937,48 @@ function traducirErrorFirebase(e){
     case 'auth/weak-password':           return 'CLAVE MUY DÉBIL — USAR MÍN. 6 CARACTERES';
     case 'auth/network-request-failed':  return 'SIN CONEXIÓN A INTERNET';
     case 'auth/too-many-requests':       return 'DEMASIADOS INTENTOS — ESPERAR UNOS MINUTOS';
+    case 'pr/timeout':                   return 'SIN RESPUESTA DEL SERVIDOR — REVISAR INTERNET Y VOLVER A INTENTAR';
     case 'auth/operation-not-allowed':   return 'EMAIL/PASSWORD NO ESTÁ HABILITADO EN FIREBASE';
     case 'permission-denied':            return 'SIN PERMISO PARA ESA OPERACIÓN';
     default: return 'ERROR: ' + (e?.message || code || 'desconocido');
   }
+}
+
+/* ═════════ v1269: TELEMETRÍA DE LOGIN ═════════
+   "unos usuarios no pueden entrar y no sé por qué" (Antonio, 24-ago). Cada fallo de
+   login y cada expulsión deja rastro DOBLE: siempre en la cola local pr_login_diag
+   (últimos 30) y, si la regla de Firestore para loginDiag está pegada, también en la
+   nube. Cada evento lleva id propio ⇒ la subida es IDEMPOTENTE (lección v1252: el
+   reintento no duplica). La cola local se sube al lograr entrar en ese dispositivo
+   (applyAuthSession → _loginDiagFlush). Leer: colección loginDiag, ordenada por ts. */
+function _loginDiag(evento, extra){
+  try {
+    var d = Object.assign({
+      id: 'ld' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+      ev: String(evento || '').slice(0, 40),
+      ts: Date.now(),
+      v: (typeof APP_SYNC_VERSION !== 'undefined' ? APP_SYNC_VERSION : 0),
+      ua: String((navigator && navigator.userAgent) || '').slice(0, 140)
+    }, extra || {});
+    try {
+      var cola = JSON.parse(localStorage.getItem('pr_login_diag') || '[]');
+      cola.push(d);
+      localStorage.setItem('pr_login_diag', JSON.stringify(cola.slice(-30)));
+    } catch(e){}
+    try { firebase.firestore().collection('loginDiag').doc(d.id).set(d).catch(function(){}); } catch(e){}
+  } catch(e){}
+}
+function _loginDiagFlush(){
+  try {
+    var cola = JSON.parse(localStorage.getItem('pr_login_diag') || '[]');
+    if (!cola.length) return;
+    localStorage.removeItem('pr_login_diag');
+    var col = firebase.firestore().collection('loginDiag');
+    cola.forEach(function(d){
+      if (!d || !d.id) return;
+      try { col.doc(d.id).set(d).catch(function(){}); } catch(e){}
+    });
+  } catch(e){}
 }
 
 /* ═════════════════ PHONE AUTH (M2) ═════════════════
@@ -7313,6 +7371,7 @@ function openNewUser(){
     if (el) { el.value = ''; el.removeAttribute('readonly'); }
   });
   document.getElementById('euError').textContent = '';
+  { const _rb = document.getElementById('euResetClaveBtn'); if (_rb) _rb.style.display = 'none'; } // v1269: solo al editar
   document.getElementById('euFullAdmin').checked = false;
   { var _roNew=document.getElementById('euSoloLectura'); if(_roNew) _roNew.checked=false; } // v866
   renderPermsChecklist([]);
@@ -7360,6 +7419,10 @@ function openEditUser(uid){
     if (emailField) emailField.style.display = 'none';
     if (emailInput) emailInput.value = '';
   }
+  /* v1269: RESTABLECER CLAVE — el "olvidé mi clave" por correo no le sirve a los
+     usuarios de PIN (email sintético sin buzón) y el cliente no puede cambiar la
+     clave de otro. Lo hace la callable resetUserClave (Admin SDK). */
+  { const _rb = document.getElementById('euResetClaveBtn'); if (_rb) _rb.style.display = (hasEmail && can('users.manage')) ? '' : 'none'; }
   document.getElementById('euError').textContent = '';
   const isFullAdmin = u.perms && u.perms.includes('*');
   document.getElementById('euFullAdmin').checked = isFullAdmin;
@@ -7404,6 +7467,52 @@ function toggleEuSoloLectura(checked){
   if (checked) { var fa=document.getElementById('euFullAdmin'); if(fa) fa.checked=false; }
   _euRefreshPermsDisabled();
 }
+
+/* ═════════ v1269: RESTABLECER CLAVE DE OTRO USUARIO (admin) ═════════
+   Único camino real: la callable resetUserClave (functions/index.js, Admin SDK).
+   Se llama por el protocolo callable (fetch + Bearer ID token) — la app no carga
+   el SDK de functions. Deja mustChangePassword=true: el usuario entra con la
+   temporal y la app le exige elegir clave propia. */
+window.resetearClaveUsuario = async function(){
+  if (!can('users.manage')) return showToast('SIN PERMISO', 'red');
+  if (!editingUid) return;
+  const u = loadUsers().find(x => x.uid === editingUid);
+  if (!u || !u.email) return;
+  const esPin = _isUserAccountEmail(u.email);
+  const nueva = await window.prPrompt({
+    title: 'RESTABLECER CLAVE',
+    bodyHTML: '<div style="font-size:12px;color:#333;line-height:1.55">Se le asigna una <strong>clave temporal</strong> a <strong>' + (u.displayName || u.username || u.email) + '</strong>. Entra con ella y la app le exige elegir una clave propia.' + (esPin ? '<br><strong>Solo números, mínimo 6.</strong>' : '<br>Mínimo 6 caracteres.') + '</div>',
+    placeholder: esPin ? 'CLAVE TEMPORAL (MÍN. 6 NÚMEROS)' : 'CLAVE TEMPORAL (MÍN. 6)',
+    okText: 'RESTABLECER', minLength: 6
+  });
+  if (!nueva) return;
+  if (nueva.length < 6 || (esPin && !/^[0-9]+$/.test(nueva))) {
+    return showToast(esPin ? 'LA CLAVE TEMPORAL: SOLO NÚMEROS, MÍNIMO 6' : 'CLAVE TEMPORAL MUY CORTA (MÍNIMO 6)', 'red');
+  }
+  showToast('RESTABLECIENDO CLAVE...', '');
+  try {
+    const tok = await firebase.auth().currentUser.getIdToken();
+    const resp = await _conTimeout(fetch('https://us-central1-punto-rojo-3fcf1.cloudfunctions.net/resetUserClave', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok },
+      body: JSON.stringify({ data: { uid: editingUid, clave: nueva } })
+    }), 25000);
+    const j = await resp.json().catch(() => ({}));
+    if (resp.ok && j.result && j.result.ok) {
+      showToast('CLAVE RESTABLECIDA · ENTRA CON LA TEMPORAL Y ELIGE LA SUYA AL ENTRAR', 'green');
+      logActivity('update', 'Restableció la clave de ' + (u.displayName || u.username || u.email), u.email);
+    } else if (resp.status === 404) {
+      await window.prAlert({
+        title: 'FALTA DESPLEGAR LA FUNCIÓN',
+        bodyHTML: '<div style="font-size:12px;line-height:1.7">La función <strong>resetUserClave</strong> aún no está desplegada en Firebase.<br>En PowerShell, dentro de la carpeta del proyecto:<br><code style="background:#F3F4F6;padding:2px 6px;border-radius:4px">firebase deploy --only functions:resetUserClave</code><br>Una sola vez; después este botón queda funcionando.</div>'
+      });
+    } else {
+      showToast('NO SE PUDO RESTABLECER: ' + ((j.error && j.error.message) || ('HTTP ' + resp.status)), 'red');
+    }
+  } catch(e) {
+    showToast('NO SE PUDO RESTABLECER: ' + (e.message || 'SIN CONEXIÓN'), 'red');
+  }
+};
 
 async function saveUser(){
   if (!can('users.manage')) return showToast('SIN PERMISO', 'red');
@@ -7532,7 +7641,23 @@ async function saveUser(){
           // real y usuarios de usuario+clave; estos últimos eligen una clave numérica).
           mustChangePassword: true
         };
-        await saveUserDoc(uid, profile);
+        /* v1269: el alta NO es atómica — la cuenta Auth ya existe y si esta escritura
+           falla el usuario queda HUÉRFANO (entra y el listener lo expulsa con "LA
+           CUENTA NO TIENE PERMISOS") y el alta no se puede repetir (email en uso).
+           Reintentar; si aun así no entra, REVERTIR la cuenta Auth recién creada
+           (cred.user está logueado en la app secundaria: puede borrarse a sí mismo)
+           para que el alta quede repetible. */
+        let _docOk = false, _docErr = null;
+        for (let _i = 0; _i < 3 && !_docOk; _i++) {
+          try { await saveUserDoc(uid, profile); _docOk = true; }
+          catch(_e) { _docErr = _e; await new Promise(r => setTimeout(r, 900 * (_i + 1))); }
+        }
+        if (!_docOk) {
+          _loginDiag('alta-a-medias', { u: emailVal, code: (_docErr && _docErr.code) || '' });
+          try { await cred.user.delete(); } catch(_e){}
+          err.textContent = 'NO SE PUDO GUARDAR EL PERFIL — NO SE CREÓ EL USUARIO. REVISAR INTERNET Y VOLVER A INTENTAR';
+          return;
+        }
         await secondaryApp.auth().signOut();
         showToast(_isEmailInput
           ? 'USUARIO CREADO · CAMBIARÁ SU CLAVE EN EL PRIMER LOGIN'
@@ -53049,7 +53174,12 @@ function initAuthListener(){
     // Usuario autenticado en Firebase. Cargar su perfil de Firestore.
     try {
       const docRef = firebase.firestore().collection('users').doc(fbUser.uid);
-      const doc = await docRef.get();
+      /* v1269: lectura ROBUSTA — reintenta ante fallos transitorios de red y un
+         "no existe" que venga del CACHÉ se confirma contra el servidor antes de
+         expulsar (un negativo cacheado expulsaba a usuarios válidos). */
+      const _lect = await _leerPerfilRobusto(docRef);
+      if (_lect.error) throw _lect.error;
+      const doc = _lect.doc;
 
       if (!doc.exists) {
         // ── M2: si entró por TELÉFONO, buscar pre-registro en pendingPhoneUsers ──
@@ -53060,6 +53190,7 @@ function initAuthListener(){
             return;
           }
           // Sin pre-registro y sin perfil = usuario no autorizado
+          _loginDiag('expulsado-telefono', { uid: fbUser.uid, u: fbUser.phoneNumber || '' }); // v1269
           await firebase.auth().signOut();
           showAuthScreen('login');
           showToast('TU TELÉFONO NO ESTÁ REGISTRADO · PEDÍ AL ADMIN QUE TE INVITE', 'red');
@@ -53080,6 +53211,9 @@ function initAuthListener(){
             return;
           }
         }
+        /* v1269: rastro — este es el síntoma de la CUENTA HUÉRFANA (Auth existe pero
+           users/{uid} no: alta que quedó a medias, o usuario borrado sin borrar Auth). */
+        _loginDiag('expulsado-sin-perfil', { uid: fbUser.uid, u: fbUser.email || '' });
         await firebase.auth().signOut();
         showAuthScreen('login');
         showToast('LA CUENTA NO TIENE PERMISOS — SOLICITAR AL ADMIN QUE LOS ASIGNE', 'red');
@@ -53089,10 +53223,39 @@ function initAuthListener(){
       applyAuthSession(fbUser, doc.data());
     } catch(e) {
       console.error('Error cargando perfil:', e);
-      showToast('ERROR CARGANDO PERFIL · ' + (e.message || ''), 'red');
+      _loginDiag('perfil-error', { uid: fbUser.uid, u: fbUser.email || '', code: (e && e.code) || '' }); // v1269
+      /* v1269: distinguir la causa — antes todo era "ERROR CARGANDO PERFIL" genérico */
+      showToast((e && e.code === 'permission-denied')
+        ? 'SIN PERMISO PARA LEER TU PERFIL — AVISAR AL ADMIN (REGLAS DE FIRESTORE)'
+        : 'NO SE PUDO CARGAR TU PERFIL — REVISAR INTERNET Y VOLVER A INTENTAR', 'red');
       showAuthScreen('login');
     }
   });
+}
+
+/* v1269: lectura robusta del perfil users/{uid} al entrar. Hasta 3 intentos ante
+   fallos transitorios (red caída justo al abrir la app); permission-denied corta de
+   una (reintentar no ayuda — es de reglas); y un exists=false que venga del CACHÉ
+   se confirma con el servidor: un negativo cacheado NO es prueba de que la cuenta
+   no exista (expulsaba usuarios válidos con "LA CUENTA NO TIENE PERMISOS"). */
+async function _leerPerfilRobusto(docRef){
+  var ultimo = null;
+  for (var i = 0; i < 3; i++) {
+    try {
+      var d = await docRef.get();
+      if (d.exists) return { doc: d };
+      if (d.metadata && d.metadata.fromCache) {
+        var s = await docRef.get({ source: 'server' });
+        return { doc: s };
+      }
+      return { doc: d };
+    } catch(e) {
+      ultimo = e;
+      if (e && e.code === 'permission-denied') break;
+    }
+    await new Promise(function(r){ setTimeout(r, 700 * (i + 1)); });
+  }
+  return { error: ultimo || new Error('perfil ilegible') };
 }
 
 /* M2: cuando un usuario entra por SMS la primera vez, su UID es nuevo.
@@ -53147,6 +53310,7 @@ function applyAuthSession(fbUser, profileData){
     createdAt: profileData.createdAt
   };
   hideAuthScreen();
+  try { _loginDiagFlush(); } catch(e){} // v1269: subir la cola de fallos de login de este dispositivo
 
   // ── CAMBIO DE CLAVE OBLIGATORIO EN PRIMER LOGIN ──
   // Si el admin marcó al usuario con mustChangePassword=true al crearlo,
