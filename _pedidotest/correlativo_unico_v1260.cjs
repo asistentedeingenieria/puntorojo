@@ -53,7 +53,9 @@ if (f) {
 } else ok('helper evaluable', false);
 ok('los 3 contenedores lo corren tras el merge de órdenes',
   (html.match(/_pedidosRenumeraColisiones\((rp\.materiales|_bmR|_vmR)\)/g) || []).length === 3);
-ok('APP_SYNC_VERSION subió a 942', /const APP_SYNC_VERSION = 942;/.test(html));
+/* v1278: la versión siguió subiendo (943 con pedarch) — la intención de esta aserción
+   es "quedó EN o ARRIBA de 942", no clavar el número para siempre */
+ok('APP_SYNC_VERSION en 942 o más', (Number((html.match(/const APP_SYNC_VERSION = (\d+);/) || [])[1]) || 0) >= 942);
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

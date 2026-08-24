@@ -3394,7 +3394,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1277</span>
+    <span style="opacity:.5;font-size:9px">v1278</span>
   </footer>
 
 </div>
@@ -9421,7 +9421,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 942; // v1260: self-heal de colisiones de número de pedido en el merge (_pedidosRenumeraColisiones) — un cliente viejo sin la regla desharía la renumeración y la colisión rebotaría
+const APP_SYNC_VERSION = 943; // v1278: partición pedarch_ — un cliente viejo no ve el doc de archivo y subiría el proj_ sin los pedidos archivados (los nuevos los re-unen, pero el viejo vería historial/gastos incompletos)
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10243,6 +10243,32 @@ const CloudSync = {
         }
       } catch(e){}
     }
+    /* ═══ v1278 · FASE 1: pedidos/órdenes CERRADOS a su propio doc pedarch_<obra> ═══
+       Mismo ORDEN SEGURO que receta (v930) / pagos (v931) / gastos (v1166) / evidencia
+       (v1218): el doc se CONFIRMA en la nube ANTES de adelgazar el clon; si la escritura
+       falla (reglas/red), los archivados viajan embebidos esta vez y nadie pierde nada.
+       En memoria la app SIEMPRE ve todo (re-unión en _assembleFromSnap): listas, gastos
+       derivados, CxP y reimpresiones no cambian. */
+    if (!this._pedArchHashes) this._pedArchHashes = {};
+    for (let _di = 0; _di < projects.length; _di++) {
+      const _dp = projects[_di];
+      if (!_dp || !_dp.id || !_dp.materiales) continue;
+      const _dctx = _pedArchCtx(_dp); // UN solo contexto: partición y strip lo comparten (regla v933)
+      const _arch = _pedArchDe(_dp, _dctx);
+      if (_arch.pedidos.length || _arch.ordenes.length) {
+        const _djson = JSON.stringify(_arch);
+        if (_djson.length > 900000) console.warn('[SIZE] archivo de pedidos de "'+(_dp.name||_dp.id)+'": '+Math.round(_djson.length/1024)+' KB (límite Firestore 1 MB)');
+        if (this._pedArchHashes[_dp.id] !== _djson) {
+          try { await db.collection('appState').doc('pedarch_' + _dp.id).set({ pedidos: _arch.pedidos, ordenes: _arch.ordenes, _lastUpdate: stamp }); this._pedArchHashes[_dp.id] = _djson; }
+          catch(e){ console.warn('Doc de archivo de pedidos no se subió (viajan embebidos esta vez):', e && e.message); continue; }
+        }
+      } else if (this._pedArchHashes[_dp.id]) {
+        // ya no queda nada archivado (p. ej. todo revivió o se eliminó con tombstone) → borrar el doc para que no resucite
+        try { await db.collection('appState').doc('pedarch_' + _dp.id).delete(); delete this._pedArchHashes[_dp.id]; }
+        catch(e){ console.warn('Doc de archivo de pedidos no se pudo borrar:', e && e.message); }
+      }
+      projects[_di] = _projSinPedArch(_dp, _dctx); // confirmado: el proj_ sube SOLO lo caliente (mismo ctx que la partición)
+    }
     try { _autoAligerarProyectos(projects); } catch(e){} // v1166: vigilancia de peso, sin molestar
     const seen = {};
     projects.forEach(p => {
@@ -10283,6 +10309,11 @@ const CloudSync = {
       if (seen[pid]) return;
       const _cs = this;
       db.collection('appState').doc('evid_' + k).delete().then(() => { delete _cs._evidHashes[k]; }).catch(()=>{});
+    });
+    Object.keys(this._pedArchHashes || {}).forEach(id => {      // v1278: ídem para el archivo de pedidos
+      if (seen[id]) return;
+      const _cs = this;
+      db.collection('appState').doc('pedarch_' + id).delete().then(() => { delete _cs._pedArchHashes[id]; }).catch(()=>{});
     });
     const CHUNK = 450;
     for (let i = 0; i < ops.length; i += CHUNK) {
@@ -10444,6 +10475,7 @@ const CloudSync = {
     const pagosArchById = {}; // v931
     const gastosImpById = {}; // v1166
     const evidByKey = {}; // v1218: evidencia por obra__nivel
+    const pedArchById = {}; // v1278: archivo de pedidos/órdenes por obra
     snap.forEach(doc => {
       /* v1204 (incidente del reloj de Erlin: aparato 9 días atrás sellando "4-8-26" en OCs
          del 13-ago y perdiendo merges en silencio): registrar el stamp remoto MÁS NUEVO.
@@ -10456,6 +10488,7 @@ const CloudSync = {
       else if (doc.id.indexOf('pagosarch_') === 0) { const d = doc.data(); if (d && Array.isArray(d.pagos)) pagosArchById[doc.id.slice(10)] = d.pagos; } // v931
       else if (doc.id.indexOf('gastosimp_') === 0) { const d = doc.data(); if (d && Array.isArray(d.gastos)) gastosImpById[doc.id.slice(10)] = d.gastos; } // v1166
       else if (doc.id.indexOf('evid_') === 0) { const d = doc.data(); if (d && d.ev && typeof d.ev === 'object') evidByKey[doc.id.slice(5)] = d.ev; } // v1218
+      else if (doc.id.indexOf('pedarch_') === 0) { const d = doc.data(); if (d && (Array.isArray(d.pedidos) || Array.isArray(d.ordenes))) pedArchById[doc.id.slice(8)] = { pedidos: d.pedidos || [], ordenes: d.ordenes || [] }; } // v1278
       else if (doc.id.indexOf('proj_') === 0) { const d = doc.data(); if (d && d.p) projById[doc.id.slice(5)] = d.p; }
     });
     if (!core) return null;
@@ -10532,6 +10565,33 @@ const CloudSync = {
       });
       data._gastosImpDocOnly = gastosImpById;
       data._gastosImpEmbebidaIds = _impEmbIds;
+    }
+    /* v1278: re-unir los pedidos/órdenes ARCHIVADOS desde su doc pedarch_<obra> al array
+       vivo. El caliente MANDA en duplicados por id (una corrección reciente gana) y los
+       tombstones filtran (un pedido/orden eliminado no resucita desde el archivo).
+       _pedArchDocOnly siembra los hashes en applyRemote; _pedArchEmbebidaIds = proj_ que
+       aún traen archivables adentro → fuera del hash-skip para que la próxima subida los
+       migre (automático, sin comandos — igual que receta/pagos/gastos). */
+    {
+      const _dEmbIds = [];
+      data.projects.forEach(p => {
+        if (!p || !p.id || !p.materiales) return;
+        try { const _c0 = _pedArchCtx(p); if (Object.keys(_c0.peds).length || Object.keys(_c0.ords).length) _dEmbIds.push(p.id); } catch(e){}
+        const _arch = pedArchById[p.id];
+        if (!_arch) return;
+        const _hotP = Array.isArray(p.materiales.pedidos) ? p.materiales.pedidos : [];
+        const _hotO = Array.isArray(p.materiales.ordenes) ? p.materiales.ordenes : [];
+        const _pIds = {}; _hotP.forEach(x => { if (x && x.id) _pIds[x.id] = 1; });
+        const _oIds = {}; _hotO.forEach(x => { if (x && x.id) _oIds[x.id] = 1; });
+        const _tp = (p.materiales.pedidosEliminados && typeof p.materiales.pedidosEliminados === 'object') ? p.materiales.pedidosEliminados : {};
+        const _to = (p.materiales.ordenesEliminadas && typeof p.materiales.ordenesEliminadas === 'object') ? p.materiales.ordenesEliminadas : {};
+        const _addP = (_arch.pedidos || []).filter(x => x && x.id && !_pIds[x.id] && !_tp[x.id]);
+        const _addO = (_arch.ordenes || []).filter(x => x && x.id && !_oIds[x.id] && !_to[x.id]);
+        if (_addP.length) p.materiales.pedidos = _hotP.concat(_addP);
+        if (_addO.length) p.materiales.ordenes = _hotO.concat(_addO);
+      });
+      data._pedArchDocOnly = pedArchById;
+      data._pedArchEmbebidaIds = _dEmbIds;
     }
     /* v1218: re-adjuntar la EVIDENCIA (fotos + acuses) desde sus docs evid_<obra>__<nivel>.
        En memoria la app SIEMPRE ve todo (ningún lector cambia). La unión doc ∪ embebido va
@@ -10746,6 +10806,10 @@ const CloudSync = {
     // los migra a su doc pagosarch_ (mismo patrón de migración que receta v930 / asistencia v649).
     try { const _gdo = merged._pagosArchDocOnly || {}; const _gh = {}; Object.keys(_gdo).forEach(id => { if (_gdo[id]) _gh[id] = JSON.stringify(_gdo[id]); }); this._pagosArchHashes = _gh; } catch(e){ this._pagosArchHashes = {}; }
     try { delete merged._pagosArchDocOnly; } catch(e){}
+    /* v1278: la siembra del archivo de pedidos — SOLO desde lo bajado de los docs (la misma
+       forma canónica {pedidos, ordenes} con que la subida calcula su hash, lección v1166-68) */
+    try { const _ddo = merged._pedArchDocOnly || {}; const _dh = {}; Object.keys(_ddo).forEach(id => { if (_ddo[id]) _dh[id] = JSON.stringify(_ddo[id]); }); this._pedArchHashes = _dh; } catch(e){ this._pedArchHashes = {}; }
+    try { delete merged._pedArchDocOnly; } catch(e){}
     // v1168: sembrar los hashes del doc gastosimp_ con lo BAJADO (mismo patrón v649/v930/v931).
     // Sin esto, la primera subida de CADA sesión reescribía el doc de gastos importados entero.
     try { const _xdo = merged._gastosImpDocOnly || {}; const _xh = {}; Object.keys(_xdo).forEach(id => { if (_xdo[id]) _xh[id] = JSON.stringify(_xdo[id]); }); this._gastosImpHashes = _xh; } catch(e){ this._gastosImpHashes = {}; }
@@ -11256,9 +11320,10 @@ const CloudSync = {
        arriba, cometido de nuevo. */
     /* v1218: la forma canónica ganó su cuarto strip — la EVIDENCIA. Misma regla v1168:
        las DOS puntas deben producir EXACTAMENTE el mismo string o el hash-skip muere. */
-    { const _nh = {}; (remoteData.projects || []).forEach(pp => { if (pp && pp.id) _nh[pp.id] = JSON.stringify(_projSinEvidencia(_projSinGastosImp(_projSinPagosCongelados(_projSinReceta(pp))))); }); (merged._recetaEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._pagosArchEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._gastosImpEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._evidEmbebidaIds || []).forEach(id => { delete _nh[id]; }); this._projHashes = _nh; }
+    { const _nh = {}; (remoteData.projects || []).forEach(pp => { if (pp && pp.id) _nh[pp.id] = JSON.stringify(_projSinPedArch(_projSinEvidencia(_projSinGastosImp(_projSinPagosCongelados(_projSinReceta(pp)))))); }); (merged._recetaEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._pagosArchEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._gastosImpEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._evidEmbebidaIds || []).forEach(id => { delete _nh[id]; }); (merged._pedArchEmbebidaIds || []).forEach(id => { delete _nh[id]; }); this._projHashes = _nh; } // v1278: _projSinPedArch en la cadena + embebidos fuera del skip
     try { delete merged._recetaEmbebidaIds; } catch(e){}
     try { delete merged._pagosArchEmbebidaIds; } catch(e){}
+    try { delete merged._pedArchEmbebidaIds; } catch(e){} // v1278
     try { delete merged._gastosImpEmbebidaIds; } catch(e){}
     try { delete merged._evidEmbebidaIds; } catch(e){}
     /* v1175: una sola vez por sesión y con retraso —la app ya cargó y no compite con el
@@ -41380,6 +41445,55 @@ function _autoAligerarProyectos(projects){
   } catch(e){}
   return avisos;
 }
+/* ═══ v1278 · FASE 1 DEL ALIGERAMIENTO: ARCHIVO DE PEDIDOS/ÓRDENES ═══
+   (radiografía 24-ago: p.materiales = 320 KB en VDC — la mitad es historial que viajaba
+   completo en cada subida de 50 aparatos → "SINCRONIZANDO" eterno.)
+   Archivable: pedido CERRADO (RECIBIDO / CANCELADO / solicitud atendida v1256) + SIN
+   orden DEVUELTA (v1259: eso es trabajo vivo) + ≥7 días de reposo (las correcciones de
+   la semana quedan calientes y el doc de archivo casi nunca se reescribe). Sus órdenes
+   se van con él. PURAS las tres; el criterio se recalcula en CADA subida, así un pedido
+   que revive (DEVUELTA) vuelve solo al doc caliente. */
+const PEDARCH_DIAS = 7;
+function _pedArchCtx(p, ahora){
+  const ctx = { peds: {}, ords: {} };
+  if (!p || !p.materiales) return ctx;
+  const _now = Number(ahora) || Date.now();
+  const ordenes = Array.isArray(p.materiales.ordenes) ? p.materiales.ordenes : [];
+  const devueltaPorPedido = {};
+  ordenes.forEach(o => { if (o && o.pedidoId && String(o.status || '') === 'DEVUELTA') devueltaPorPedido[o.pedidoId] = true; });
+  (Array.isArray(p.materiales.pedidos) ? p.materiales.pedidos : []).forEach(pd => {
+    if (!pd || !pd.id) return;
+    const cerrado = pd.status === 'RECIBIDO' || pd.status === 'CANCELADO' || !!pd.solEtapaAtendida;
+    if (!cerrado) return;
+    if (devueltaPorPedido[pd.id]) return;
+    const sello = Number(pd._ts || pd.ts) || 0;
+    if (_now - sello < PEDARCH_DIAS * 86400000) return;
+    ctx.peds[pd.id] = true;
+  });
+  ordenes.forEach(o => { if (o && o.id && o.pedidoId && ctx.peds[o.pedidoId]) ctx.ords[o.id] = true; });
+  return ctx;
+}
+function _projSinPedArch(p, ctx){
+  if (!p || !p.materiales) return p;
+  const _ctx = ctx || _pedArchCtx(p);
+  const hayP = (p.materiales.pedidos || []).some(pd => pd && _ctx.peds[pd.id]);
+  const hayO = (p.materiales.ordenes || []).some(o => o && _ctx.ords[o.id]);
+  if (!hayP && !hayO) return p; // sin archivables: MISMO objeto (no invalida el hash)
+  const c = Object.assign({}, p);
+  c.materiales = Object.assign({}, p.materiales);
+  if (hayP) c.materiales.pedidos = (p.materiales.pedidos || []).filter(pd => !(pd && _ctx.peds[pd.id]));
+  if (hayO) c.materiales.ordenes = (p.materiales.ordenes || []).filter(o => !(o && _ctx.ords[o.id]));
+  return c;
+}
+function _pedArchDe(p, ctx){
+  const _ctx = ctx || _pedArchCtx(p);
+  return {
+    pedidos: (((p || {}).materiales || {}).pedidos || []).filter(pd => pd && _ctx.peds[pd.id]),
+    ordenes: (((p || {}).materiales || {}).ordenes || []).filter(o => o && _ctx.ords[o.id])
+  };
+}
+try { window._pedArchCtx = _pedArchCtx; window._projSinPedArch = _projSinPedArch; window._pedArchDe = _pedArchDe; } catch(e){}
+
 function _projSinPagosCongelados(p, ctx){
   if (!p || !p.planilla || !Array.isArray(p.planilla.pagos)) return p;
   const _ctx = ctx || _pagoCongCtx(p);
