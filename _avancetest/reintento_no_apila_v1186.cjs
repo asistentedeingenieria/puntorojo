@@ -55,7 +55,9 @@ ok('la promesa en vuelo se registra', /this\._subidaEnVuelo = _p;/.test(sch));
 ok('al resolver se limpia por identidad (no pisa una más nueva)', /if \(this\._subidaEnVuelo === _p\) this\._subidaEnVuelo = null;/.test(sch));
 ok('se desarma el abandono al resolver', /clearTimeout\(this\._guardAbandono\)/.test(sch));
 ok('la bandera dispara UNA re-subida al confirmar', /const _re = this\._reintentarAlConfirmar; this\._reintentarAlConfirmar = false;/.test(sch) && /if \(_re\) \{ try \{ this\.scheduleSave\(\); \} catch/.test(sch));
-ok('el catch real no cambió: _chipError con su backoff', /catch\(\(e\) => \{[\s\S]{0,400}this\._chipError\(e\);/.test(sch));
+/* v1276: la ventana pasa de 400 a 600 — el catch ganó una línea de telemetría
+   (sync-subida-fallo) ANTES del _chipError; el backoff sigue intacto al final */
+ok('el catch real no cambió: _chipError con su backoff', /catch\(\(e\) => \{[\s\S]{0,600}this\._chipError\(e\);/.test(sch));
 
 console.log('\n— forceUploadNow (plata) se ENCADENA, no apila —');
 const fun = ex(code, 'async forceUploadNow(){');

@@ -3394,7 +3394,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1275</span>
+    <span style="opacity:.5;font-size:9px">v1276</span>
   </footer>
 
 </div>
@@ -9694,8 +9694,22 @@ const CloudSync = {
         try {
           if (document.visibilityState !== 'visible' || !this.enabled) return;
           if (this._lastSnapTs && Date.now() - this._lastSnapTs > 60000) this._resuscribirConEspera('volví a la pestaña con snapshot viejo', true);
+          this._vigilarPendientes('volví a la pestaña'); // v1276
         } catch(e){}
       });
+      /* ═══ v1276 · VIGILANTE DE PENDIENTES ═══
+         "el pedido no le sale hasta un día después / a veces NO se sube": lo local sin
+         confirmar solo se reintentaba cuando el usuario tocaba algo. Ahora se reintenta
+         SOLO: cada 60 s, al volver la señal, al volver a la pestaña, y al ARRANCAR con
+         pendientes marcados (v1170 — sobreviven en localStorage). Ciclo de vida puro. */
+      if (!this._vigilanteTimer) this._vigilanteTimer = setInterval(() => { try { this._vigilarPendientes('vigilante 60s'); } catch(e){} }, 60000);
+      window.addEventListener('online', () => { try { this._vigilarPendientes('volvió la señal'); } catch(e){} });
+      try {
+        if (Object.keys(_pedPendGet()).length || Object.keys(_fotosPendGet()).length) {
+          try { _loginDiag('sync-arranque-con-pendientes', { ped: Object.keys(_pedPendGet()).length }); } catch(e){}
+          this.scheduleSave();
+        }
+      } catch(e){}
 
       // Si el usuario "se libera" (cierra modal, sale de input), aplicar cambios pendientes
       document.addEventListener('focusout', () => this.flushPendingRender(), true);
@@ -9859,9 +9873,28 @@ const CloudSync = {
     } catch(err){}
   },
 
+  /* v1276: si hay algo local sin confirmar (marca _dirtyTs o pendientes v1170) y el canal
+     está libre, se reintenta la subida SOLO — sin esperar a que el usuario toque algo.
+     Es la pieza que faltaba para "el pedido no le sale hasta un día después". */
+  _vigilarPendientes(motivo){
+    if (!this.enabled || navigator.onLine === false) return;
+    if (this.pendingWrite || this.uploadingNow || this._subidaEnVuelo || this._forceInFlight) return;
+    let hay = false;
+    try { hay = !!(this._dirtyTs && Date.now() - this._dirtyTs > 90000); } catch(e){}
+    try { if (!hay) hay = Object.keys(_pedPendGet()).length > 0 || Object.keys(_fotosPendGet()).length > 0; } catch(e){}
+    if (!hay) return;
+    /* rastro rate-limited: un pendiente rancio no debe inundar la telemetría */
+    if (!this._vigDiagUlt || Date.now() - this._vigDiagUlt > 600000) {
+      this._vigDiagUlt = Date.now();
+      try { _loginDiag('sync-reintento-pendientes', { motivo: String(motivo || '').slice(0, 30) }); } catch(e){}
+    }
+    this.scheduleSave();
+  },
+
   /* Programa una escritura a la nube. Si hay otra pendiente, se reemplaza. */
   scheduleSave(){
     if (!this.enabled) return;
+    this._dirtyTs = Date.now(); // v1276: hay algo local sin confirmar (lo limpia la confirmación con escritura)
     if (this.pendingWrite) clearTimeout(this.pendingWrite);
     this.pendingWrite = setTimeout(() => {
       this.pendingWrite = null;
@@ -9892,6 +9925,7 @@ const CloudSync = {
         if (!this.uploadingNow) return;
         this.uploadingNow = false;
         try { asistNeedsResync = true; } catch(e){}
+        try { _loginDiag('sync-guard-45s', { donde: 'debounce' }); } catch(e){} // v1276: las épocas de "sube a ciegas" quedan registradas
         console.warn('[v1139] la subida no confirmó en ' + ((this._UPLOAD_GUARD_MS||45000)/1000) + 's — se libera el candado para poder RECIBIR; la escritura sigue encolada');
         try { this._chipError(_errLento()); } catch(e){}
         /* v1186: acá vivía `this.scheduleSave()` — el reintento inmediato que APILABA el
@@ -9918,10 +9952,14 @@ const CloudSync = {
         if (this._subidaEnVuelo === _p) this._subidaEnVuelo = null;
         const _re = this._reintentarAlConfirmar; this._reintentarAlConfirmar = false;
         this.uploadingNow = false;
+        /* v1276: RECIBIR jamás depende de escribir — lo descartado durante la subida se
+           relee AUNQUE no se haya escrito nada (antes el early-return de abajo se lo
+           saltaba y el dispositivo quedaba ciego hasta la próxima subida CON escritura). */
+        try { this._recuperarSnapDescartado(); } catch(e2){}
         // v1170: sin escritura real no se pinta EN LÍNEA ni se limpian los pendientes
         if (_r === false) return;
+        this._dirtyTs = 0; // v1276: la nube confirmó lo local
         this._chipDone();
-        try { this._recuperarSnapDescartado(); } catch(e2){} // v1233: lo que llegó durante la subida se relee AHORA
         try { if (typeof _fotosPendClear === 'function') _fotosPendClear(); } catch(e2){} // v899: la nube confirmó → chip POR COMPARTIR fuera
         try { if (typeof _pedPendClear === 'function') _pedPendClear(); } catch(e2){} // v1170: ídem para los pedidos POR ENVIAR
         /* v1186: lo que se acumuló mientras la subida confirmaba sale AHORA, una sola vez —
@@ -9932,6 +9970,7 @@ const CloudSync = {
         if (this._guardAbandono) { clearTimeout(this._guardAbandono); this._guardAbandono = null; }
         if (this._subidaEnVuelo === _p) this._subidaEnVuelo = null;
         this._reintentarAlConfirmar = false;   // el backoff de _chipError ya reintenta solo
+        try { _loginDiag('sync-subida-fallo', { code: (e && e.code) || '', donde: 'debounce' }); } catch(e2){} // v1276
         this.uploadingNow = false; console.error('CloudSync auto-save error:', e); this._chipError(e);
       });
       this._subidaEnVuelo = _p;
@@ -9974,6 +10013,7 @@ const CloudSync = {
     const _guardF = setTimeout(() => {
       if (!this.uploadingNow) return;
       this.uploadingNow = false;
+      try { _loginDiag('sync-guard-45s', { donde: 'force' }); } catch(e){} // v1276
       console.warn('[v1139] forceUploadNow no confirmó en ' + ((this._UPLOAD_GUARD_MS||45000)/1000) + 's — candado liberado');
       try { this._chipError(_errLento()); } catch(e){}
     }, (this._UPLOAD_GUARD_MS || 45000));
@@ -9982,12 +10022,14 @@ const CloudSync = {
         const _escribio = (await this.uploadCurrent()) !== false;
         clearTimeout(_guardF);
         this.uploadingNow = false;
+        /* v1276: lo descartado durante la subida se relee AUNQUE no se haya escrito nada */
+        try { this._recuperarSnapDescartado(); } catch(e2){}
         /* v1170: si uploadCurrent salió SIN escribir (solo lectura o candado de versión), no se
            canta victoria: no se limpian los pendientes ni se pinta EN LÍNEA, y se devuelve
            false para que quien esperaba —submitPedido -- pueda decir la verdad. */
         if (!_escribio) return false;
+        this._dirtyTs = 0; // v1276: la nube confirmó lo local
         this._chipDone();
-        try { this._recuperarSnapDescartado(); } catch(e2){} // v1233: lo que llegó durante la subida se relee AHORA
         try { if (typeof _fotosPendClear === 'function') _fotosPendClear(); } catch(e2){} // v899: la nube confirmó → chip POR COMPARTIR fuera
         try { if (typeof _pedPendClear === 'function') _pedPendClear(); } catch(e2){} // v1170: ídem para los pedidos POR ENVIAR
         /* v1186: lo que el debounce dejó en bandera mientras esta subida confirmaba */
@@ -9996,6 +10038,7 @@ const CloudSync = {
       } catch(e) {
         clearTimeout(_guardF);
         this.uploadingNow = false;
+        try { _loginDiag('sync-subida-fallo', { code: (e && e.code) || '', donde: 'force' }); } catch(e2){} // v1276
         console.error('CloudSync forceUploadNow error:', e);
         this._chipError(e);
         throw e;
@@ -10598,8 +10641,18 @@ const CloudSync = {
     // Si el usuario está ocupado editando, no destruimos su input.
     if (!opts.initial && this.isUserBusy()) {
       this.pendingRemoteData = merged;
+      /* v1276: lo pospuesto que se añeja se AVISA — el usuario vive metido en un modal y
+         no ve lo del equipo ("la autorización tardó 20 minutos": estaba en su aparato,
+         invisible). El toast vive en la capa más alta (999999) — se ve sobre el modal. */
+      if (!this._pospuestoDesde) this._pospuestoDesde = Date.now();
+      if (!this._pospuestoAviso && Date.now() - this._pospuestoDesde > 120000) {
+        this._pospuestoAviso = true;
+        try { _loginDiag('sync-pospuesto-largo', { min: Math.round((Date.now() - this._pospuestoDesde) / 60000) }); } catch(e){}
+        try { showToast('LLEGARON CAMBIOS DEL EQUIPO — SE APLICAN AL CERRAR ESTE CUADRO', ''); } catch(e){}
+      }
       return;
     }
+    this._pospuestoDesde = 0; this._pospuestoAviso = false; // v1276: se aplicó — reloj a cero
 
     // CRÍTICO: aplicar migraciones/limpiezas (ensureDataV9) a los datos remotos
     // antes de asignarlos al state. Esto remueve estimaciones vacías, normaliza
