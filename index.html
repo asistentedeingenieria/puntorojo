@@ -3394,7 +3394,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1284</span>
+    <span style="opacity:.5;font-size:9px">v1285</span>
   </footer>
 
 </div>
@@ -24012,21 +24012,27 @@ window._herrRentarDePedido = async function(pdId){
   /* buscar cada herramienta en TODOS los proveedores: solo cuentan las marcadas SE RENTA */
   const porProv = {}, provOrden = [], sinCat = [];
   herr.forEach(h => {
+    /* v1285: el match EXACTO (matchKeyProducto) manda con rango 2; si no hay, compite
+       el matcher tolerante ("RODOS" ≈ "RODO PARA ANDAMIO") y gana el mejor puntaje
+       entre TODOS los proveedores. Solo productos marcados SE RENTA entran al ruedo. */
     const k = matchKeyProducto(h.name);
-    let hit = null;
-    _getProveedores().some(pv => {
-      const pc = (pv.productos || []).find(q => q && matchKeyProducto(q.nombre) === k && _prodRentaInfo(q).renta);
-      if (pc) { hit = { prov: pv, prod: pc }; return true; }
-      return false;
+    let hit = null, mejor = 0;
+    _getProveedores().forEach(pv => {
+      (pv.productos || []).forEach(q => {
+        if (!q || !_prodRentaInfo(q).renta) return;
+        const sc = (matchKeyProducto(q.nombre) === k) ? 2 : _rentaNombresParecidos(h.name, q.nombre);
+        if (sc > mejor) { mejor = sc; hit = { prov: pv, prod: q }; }
+      });
     });
     if (!hit) { sinCat.push(h.name); return; }
     const ri = _prodRentaInfo(hit.prod);
     if (!porProv[hit.prov.id]) { porProv[hit.prov.id] = { prov: hit.prov, items: [] }; provOrden.push(hit.prov.id); }
-    porProv[hit.prov.id].items.push({ name: hit.prod.nombre, qty: Number(h.qty) || 0, tarifa: Number(hit.prod.precio) || 0, periodo: ri.periodo, sourceKey: '', cat: '', eventual: false });
+    porProv[hit.prov.id].items.push({ name: hit.prod.nombre, qty: Number(h.qty) || 0, tarifa: Number(hit.prod.precio) || 0, periodo: ri.periodo, sourceKey: '', cat: '', eventual: false,
+      dePedido: (mejor < 2 && matchKeyProducto(hit.prod.nombre) !== k) ? String(h.name) : '' /* v1285: para que el diálogo enseñe de qué nombre del pedido salió */ });
   });
   if (!provOrden.length) return showToast('NINGUNA DE ESTAS HERRAMIENTAS ESTÁ COMO "SE RENTA" EN EL CATÁLOGO — MARCALAS PRIMERO (CATÁLOGO DE PRECIOS → columna RENTA)', 'red');
   const _e5 = s => String(s == null ? '' : s).replace(/[<>]/g, '');
-  const _lista = provOrden.map(id => { const g = porProv[id]; return '<div style="margin:6px 0 2px;font-weight:800;font-size:10px;letter-spacing:.5px;color:#1D4ED8">' + _e5(g.prov.nombre) + '</div>' + g.items.map(x => '<div style="font-size:11.5px;color:#444;padding:1px 0">' + _e5(x.name) + ' ×' + x.qty + ' · Q' + x.tarifa + '/' + (x.periodo === 'DIA' ? 'DÍA' : x.periodo) + '</div>').join(''); }).join('');
+  const _lista = provOrden.map(id => { const g = porProv[id]; return '<div style="margin:6px 0 2px;font-weight:800;font-size:10px;letter-spacing:.5px;color:#1D4ED8">' + _e5(g.prov.nombre) + '</div>' + g.items.map(x => '<div style="font-size:11.5px;color:#444;padding:1px 0">' + _e5(x.name) + ' ×' + x.qty + ' · Q' + x.tarifa + '/' + (x.periodo === 'DIA' ? 'DÍA' : x.periodo) + (x.dePedido ? ' <span style="color:#92700C;font-size:10px">— por «' + _e5(x.dePedido) + '» del pedido</span>' : '') + '</div>').join(''); }).join('');
   window._rentaForm = { dias: '', inicio: '' };
   const _ok = await window.prConfirm({
     title: 'RENTAR HERRAMIENTAS',
@@ -27389,6 +27395,47 @@ function _rentaCalcItems(items, dias){
   });
 }
 try { window._rentaCalcItems = _rentaCalcItems; } catch(e){}
+
+/* ═══ v1285 · match TOLERANTE herramienta ↔ catálogo (PURO) ═══
+   El supervisor escribe "RODOS" y el catálogo dice "RODO PARA ANDAMIO": la igualdad
+   exacta de matchKeyProducto jamás los junta. Regla: todos los tokens del nombre
+   CORTO deben estar en el largo (singular≡plural, prefijo real ≥4 letras vale);
+   el puntaje baja con los tokens sobrantes del largo — así entre varios candidatos
+   gana el más ceñido, y el diálogo de confirmación deja que el humano valide. */
+function _rentaTokCanon(t){
+  t = String(t || '');
+  if (t.length >= 5 && /ES$/.test(t)) return t.slice(0, -2);
+  if (t.length >= 4 && /S$/.test(t)) return t.slice(0, -1);
+  return t;
+}
+function _rentaNombreTokens(nombre){
+  const STOP = { DE:1, DEL:1, LA:1, EL:1, LOS:1, LAS:1, PARA:1, CON:1, SIN:1, Y:1, O:1, UN:1, UNA:1, P:1 };
+  return String(nombre == null ? '' : nombre).toUpperCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^A-Z0-9]+/g, ' ').trim()
+    .split(/\s+/)
+    .filter(t => t && !STOP[t] && !/^\d+$/.test(t))
+    .map(_rentaTokCanon);
+}
+function _rentaTokIgual(a, b){
+  if (a === b) return true;
+  const corto = a.length <= b.length ? a : b, largo = a.length <= b.length ? b : a;
+  return corto.length >= 4 && largo.indexOf(corto) === 0;
+}
+function _rentaNombresParecidos(nomA, nomB){
+  const A = _rentaNombreTokens(nomA), B = _rentaNombreTokens(nomB);
+  if (!A.length || !B.length) return 0;
+  const chico = A.length <= B.length ? A : B, grande = A.length <= B.length ? B : A;
+  const usados = [];
+  let comunes = 0;
+  chico.forEach(t => {
+    const i = grande.findIndex((u, ix) => usados.indexOf(ix) < 0 && _rentaTokIgual(t, u));
+    if (i >= 0) { usados.push(i); comunes++; }
+  });
+  if (comunes < chico.length) return 0; /* el corto tiene que caber ENTERO */
+  return comunes / grande.length;
+}
+try { window._rentaNombresParecidos = _rentaNombresParecidos; } catch(e){}
 
 /* v1282: ¿este renglón del pedido es RENTABLE? Devuelve el PERIODO ('' = no es renta).
    Busca el producto en el catálogo del proveedor asignado respetando la VARIANTE
