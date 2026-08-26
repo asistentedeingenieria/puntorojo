@@ -3394,7 +3394,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1279</span>
+    <span style="opacity:.5;font-size:9px">v1280</span>
   </footer>
 
 </div>
@@ -44352,6 +44352,37 @@ window.DELETION_EXECUTORS['catProvProducto'] = (payload) => _doDeleteCatProvProd
 function _crearSolicitudPrecio(tipo, proveedorId, productoNombre, unidad, precioActual, precioNuevo, motivo, proveedorNombreFallback){
   const list=(state.solicitudesPrecios=state.solicitudesPrecios||[]);
   const prov=(_getProveedores().find(p=>p.id===proveedorId)||{});
+  /* ═══ v1280 · TRES CANDADOS ANTI-BUCLE (Antonio: "ya 3 veces las autoricé y me
+     vuelven a aparecer") ═══
+     El aparato de compras estuvo CIEGO semanas (receptor-ciego, cerrado en v1276):
+     nunca recibió las autorizaciones y su app re-generaba las solicitudes con ID
+     NUEVO — la idempotencia v1252 solo mira PENDIENTES y no las paraba. Además se
+     creaban CAMBIOS AL MISMO PRECIO ("Q20.25 → Q20.25, variación por centécimas").
+     (1) un CAMBIO sin cambio real (<Q0.005) no existe;
+     (2) si el catálogo YA tiene ese precio, no hay nada que pedir;
+     (3) una gemela RESUELTA hace <72 h con el mismo precio manda — el aparato
+         atrasado la recibe por el merge, no re-pidiendo. */
+  const _cerca = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) < 0.005;
+  if (tipo === 'CAMBIO' && precioActual != null && _cerca(precioActual, precioNuevo)) {
+    try { showToast('EL PRECIO YA ES Q' + Number(precioNuevo) + ' — NO HAY NADA QUE CAMBIAR', ''); } catch(e){}
+    return null;
+  }
+  const _kNom0 = matchKeyProducto(productoNombre);
+  const _prodCat = Array.isArray(prov.productos) ? prov.productos.find(q => q && matchKeyProducto(q.nombre) === _kNom0) : null;
+  if (_prodCat && _prodCat.precio > 0 && _cerca(_prodCat.precio, precioNuevo)) {
+    try { console.log('[v1280] el catálogo ya tiene ese precio — no se crea solicitud:', productoNombre); } catch(e){}
+    return null;
+  }
+  const _kProv0 = normOcName(prov.nombre || proveedorNombreFallback || '');
+  const _resuelta = list.find(x => x && x.estado === 'AUTORIZADA' && x.tipo === tipo
+    && matchKeyProducto(x.productoNombre) === _kNom0
+    && normOcName(x.proveedorNombre || '') === _kProv0
+    && _cerca(x.precioNuevo, precioNuevo)
+    && (Date.now() - (x.resueltoTs || 0)) < 72 * 3600e3);
+  if (_resuelta) {
+    try { console.log('[v1280] gemela ya AUTORIZADA hace <72h — no se re-pide:', productoNombre); } catch(e){}
+    return _resuelta;
+  }
   /* v1252: IDEMPOTENTE — el cierre de toma reintentaba (la pendiente no pone precio en el
      catálogo, la toma no cerraba) y fabricaba GEMELAS del mismo producto; el admin
      autorizaba una y la otra "reaparecía". Misma clave (producto+proveedor+tipo) PENDIENTE
