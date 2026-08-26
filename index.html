@@ -1381,8 +1381,8 @@ html.ios-standalone .pedido-meta dd{font-size:11px}
 .cat-prov-search-row{display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:10px}
 .cat-prov-search-row input{padding:8px 12px;border:1px solid var(--line);border-radius:2px;font-family:inherit;font-size:12px;background:var(--paper)}
 .cat-prov-search-row input:focus{outline:none;border-color:var(--red);background:var(--white)}
-.cat-prov-productos-head{display:grid;grid-template-columns:1fr 90px 120px 120px 38px;gap:10px;padding:8px 12px;background:var(--cream);font-size:8.5px;letter-spacing:1.5px;text-transform:uppercase;font-weight:700;color:var(--mute);border:1px solid var(--line);border-bottom:none;border-radius:2px 2px 0 0}
-.cat-prov-producto-row{display:grid;grid-template-columns:1fr 90px 120px 120px 38px;gap:10px;padding:8px 12px;border:1px solid var(--line);border-top:none;align-items:center;background:var(--white)}
+.cat-prov-productos-head{display:grid;grid-template-columns:1fr 90px 120px 120px 92px 38px;gap:10px;padding:8px 12px;background:var(--cream);font-size:8.5px;letter-spacing:1.5px;text-transform:uppercase;font-weight:700;color:var(--mute);border:1px solid var(--line);border-bottom:none;border-radius:2px 2px 0 0}/* v1281: +columna RENTA */
+.cat-prov-producto-row{display:grid;grid-template-columns:1fr 90px 120px 120px 92px 38px;gap:10px;padding:8px 12px;border:1px solid var(--line);border-top:none;align-items:center;background:var(--white)}/* v1281: +columna RENTA */
 .cat-prov-producto-row:nth-child(even){background:var(--paper)}
 .cat-prov-producto-row input{padding:6px 10px;border:1px solid var(--line-soft);border-radius:2px;font-family:inherit;font-size:11.5px;background:transparent;width:100%;text-transform:uppercase}
 .cat-prov-producto-row input:focus{outline:none;border-color:var(--red);background:var(--white)}
@@ -1393,7 +1393,7 @@ html.ios-standalone .pedido-meta dd{font-size:11px}
 @media (max-width:720px){
   .cat-prov-layout{grid-template-columns:1fr;height:auto;max-height:70vh;max-height:70dvh}
   .cat-prov-sidebar{max-height:180px}
-  .cat-prov-productos-head,.cat-prov-producto-row{grid-template-columns:1fr 56px 84px 84px 30px;font-size:10px;padding:6px 8px}
+  .cat-prov-productos-head,.cat-prov-producto-row{grid-template-columns:1fr 56px 84px 84px 62px 30px;font-size:10px;padding:6px 8px}/* v1281 */
 }
 
 /* Modal detalle pedido — muestra todos los items */
@@ -3394,7 +3394,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1280</span>
+    <span style="opacity:.5;font-size:9px">v1281</span>
   </footer>
 
 </div>
@@ -3926,6 +3926,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
             <div>UNIDAD</div>
             <div>PRECIO UNITARIO (Q)</div>
             <div>SI LO RECOGEMOS (Q)</div>
+            <div>RENTA</div><!-- v1281: lo alquilable (andamios, rodos, camas) genera ORDEN DE RENTA -->
             <div></div>
           </div>
           <div id="catProvProductos"></div>
@@ -15772,6 +15773,7 @@ function _recetaV2EtapaNivelPorApto(p, levelId, etapaIdx, aptoId){
 function _ocSerieDe(oc){
   if (!oc) return 'OC';
   if (oc.serie) return String(oc.serie);
+  if (oc.esRenta) return 'RENTA'; // v1281: lo alquilable va en su propia serie
   if (oc.esDespacho) return 'DESP';
   if (oc.esProduccion) return 'OP';
   return 'OC';
@@ -27262,6 +27264,39 @@ function saveNewDireccion(){
   showToast('DIRECCIÓN AGREGADA', 'green');
 }
 
+/* ═══ v1282 · ORDEN DE RENTA — helpers ═══
+   Cálculo PURO de los renglones de renta: el precio EFECTIVO del renglón es
+   tarifa × periodos COMPLETOS (ceil — 15 días con tarifa semanal son 3 semanas;
+   nadie renta media semana). Con el precio efectivo guardado, el total, el gasto,
+   la CxP y la hoja cuadran solos con qty × precio, sin tocar ningún consumidor. */
+function _rentaCalcItems(items, dias){
+  const D = { DIA: 1, SEMANA: 7, MES: 30 };
+  const d = Math.max(1, Math.round(Number(dias) || 1));
+  return (items || []).map(it => {
+    const per = D[String((it && it.periodo) || 'DIA')] || 1;
+    const periodos = Math.max(1, Math.ceil(d / per));
+    const tarifa = Number(it && it.tarifa) || 0;
+    return Object.assign({}, it, { periodos: periodos, rentaDias: d, precio: Math.round(tarifa * periodos * 100) / 100 });
+  });
+}
+try { window._rentaCalcItems = _rentaCalcItems; } catch(e){}
+
+/* v1282: ¿este renglón del pedido es RENTABLE? Devuelve el PERIODO ('' = no es renta).
+   Busca el producto en el catálogo del proveedor asignado respetando la VARIANTE
+   elegida (v997). Bodega, pre-pago y trasiego jamás son renta. */
+function _ocItemRentaPeriodo(it){
+  try {
+    const _pid = String((it && it.proveedorId) || '').split('|')[0];
+    if (!_pid || _pid === '_bodega' || _pid.indexOf('_dpp:') === 0 || _pid.indexOf('_tras:') === 0) return '';
+    const prov = _getProveedores().find(x => x.id === _pid);
+    if (!prov || !Array.isArray(prov.productos)) return '';
+    const k = matchKeyProducto((it && (it.variante || it.name)) || '');
+    const pc = prov.productos.find(q => q && matchKeyProducto(q.nombre) === k);
+    const ri = pc ? _prodRentaInfo(pc) : null;
+    return (ri && ri.renta) ? ri.periodo : '';
+  } catch(e){ return ''; }
+}
+
 async function generarOrdenCompra(){
   if (!currentPedidoDetalleId) return;
 
@@ -27342,6 +27377,27 @@ async function generarOrdenCompra(){
   const formaPago = document.getElementById('ocFormaPago').value;
   const entregarA = _esCompraAnticipada ? '' : document.getElementById('ocEntregarA').value.trim().toUpperCase(); // v1062
 
+  /* ═══ v1282: si el pedido trae equipo ALQUILABLE (SE RENTA en el catálogo), se
+     pregunta el TIEMPO una sola vez — todo lo rentable de esta generación comparte
+     la ventana. Captura por onchange (prConfirm destruye el modal antes del await —
+     patrón v813/v1130). */
+  const _hayRenta = ocWorkingItems.some(it => !!_ocItemRentaPeriodo(it));
+  if (_hayRenta) {
+    window._rentaForm = { dias: '', inicio: '' };
+    const _okR = await window.prConfirm({
+      title: 'HAY EQUIPO DE RENTA EN ESTE PEDIDO',
+      bodyHTML: `<div style="font-size:12px;color:#444;line-height:1.6">Lo marcado como <b>SE RENTA</b> en el catálogo (andamios, rodos, camas…) sale en su propia <b>ORDEN DE RENTA</b>. El costo se calcula con la tarifa del catálogo × el tiempo.</div>
+        <label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">¿CUÁNTOS DÍAS SE RENTA?</label>
+        <input type="number" min="1" step="1" class="pr-fld" style="width:100%" placeholder="ej: 15" oninput="window._rentaForm.dias = this.value" onchange="window._rentaForm.dias = this.value">
+        <label style="display:block;margin:12px 0 4px;font-size:10px;letter-spacing:1px;color:#666;font-weight:700">DESDE (INICIO DE LA RENTA)</label>
+        <input type="date" class="pr-fld" style="width:100%" onchange="window._rentaForm.inicio = this.value">
+        <div style="font-size:10px;color:#78716C;margin-top:6px">Sin fecha = hoy. Si la tarifa es por SEMANA o MES se cobran periodos completos (15 días = 3 semanas, o 1 mes).</div>`,
+      okText: 'SEGUIR', cancelText: 'CANCELAR'
+    });
+    if (!_okR) return;
+    if (!(Math.round(Number((window._rentaForm || {}).dias) || 0) > 0)) return showToast('ESCRIBÍ CUÁNTOS DÍAS SE RENTA — LA ORDEN DE RENTA NO SE GENERÓ', 'red');
+  }
+
   // v926: si el generador no ha registrado su firma dibujada, ofrecérsela (opcional —
   // si cierra sin firmar, el PDF usa el texto cursivo de siempre).
   await _pedirFirmaSiFalta();
@@ -27407,6 +27463,56 @@ async function generarOrdenCompra(){
         }
       } catch(e){ console.warn('[v1201] filtro de herramientas en despacho:', e); }
     }
+    /* ═══ v1282 · ORDEN DE RENTA: lo alquilable sale del grupo y nace en su PROPIA
+       orden, serie RENTA — ANTES de calcular los totales del grupo normal. */
+    const _rentaItems = esBodega ? [] : items.filter(it => _ocItemRentaPeriodo(it));
+    if (_rentaItems.length) {
+      _rentaItems.forEach(it => { const _ix = items.indexOf(it); if (_ix >= 0) items.splice(_ix, 1); });
+      const _rf = window._rentaForm || {};
+      const _rd = Math.max(1, Math.round(Number(_rf.dias) || 1));
+      const _iniLatam = _rf.inicio ? _fechaInputALatam(_rf.inicio) : _dateALatam(new Date());
+      const _finLatam = (function(){ try { const m = String(_iniLatam).match(/^(\d{2})\/(\d{2})\/(\d{4})$/); if (!m) return ''; const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])); d.setDate(d.getDate() + _rd); return _dateALatam(d); } catch(e){ return ''; } })();
+      const _itemsR = _rentaCalcItems(_rentaItems.map(it => ({ name: it.name, qty: it.qty, tarifa: Number(it.precio) || 0, periodo: _ocItemRentaPeriodo(it), sourceKey: it.sourceKey || '', cat: it.cat || '', eventual: it.eventual || false })), _rd);
+      const _totR = _ocTotalesIvaIncluido(_itemsR);
+      const _folioR = _primerNumeroLibre(_usadosSerie['RENTA'] || []);
+      (_usadosSerie['RENTA'] = _usadosSerie['RENTA'] || []).push(_folioR);
+      const _ppR = (window._ocPorProv || {})[provId] || {};
+      const ocR = {
+        id: 'oc-' + uid(),
+        numero: `${pd.numero} - RENTA ${_folioR}`,
+        folio: _folioR,
+        ts: Date.now(),
+        pedidoId: pd.id,
+        pedidoNumero: pd.numero,
+        proveedorId: prov.id,
+        proveedorNombre: prov.nombre,
+        proveedorGroupSeq: existingForPedido + created.length + 1,
+        fecha: fechaOc,
+        fechaEntrega: (_ppR.fechaEntrega ? _fechaInputALatam(_ppR.fechaEntrega) : fechaEntregaNueva),
+        proyecto: proyectoOc,
+        area: areaOc,
+        formaPago: (_ppR.formaPago || formaPago),
+        credito: _diasCredito(_ppR.formaPago || formaPago),
+        transporte: String(_ppR.transporte || 'PROVEEDOR'),
+        destinoProyectoId: _destinoProyectoDePedido(pd),
+        entregarA,
+        items: _itemsR,
+        subtotal: _totR.subtotal, ivaPct: 0.12, ivaIncluido: true, ivaMonto: _totR.ivaMonto,
+        total: _totR.total,
+        totalLetras: numeroALetras(_totR.total).toUpperCase(),
+        generadoPor: String((getCurrentUser() || {}).displayName || (getCurrentUser() || {}).username || 'COMPRAS').toUpperCase(),
+        generadoPorUsername: String((getCurrentUser() || {}).username || '').toLowerCase(),
+        generadoTs: Date.now(),
+        autorizadoPor: '', autorizadoTs: null, impreso: false,
+        esRenta: true, serie: 'RENTA', rentaDias: _rd, rentaInicio: _iniLatam, rentaFin: _finLatam,
+        status: 'PENDIENTE_AUTORIZACION'
+      };
+      ocR._ts = ocR.ts; // v972: nace sellada (union-merge)
+      _ctx.cont.ordenes.push(ocR);
+      created.push(ocR);
+    }
+    if (!items.length) return; // v1282: todo el grupo era renta — no nace una OC vacía
+
     // v922: precios CON IVA — total = suma directa; el desglose (base/IVA) es informativo
     const { total, subtotal, ivaMonto } = _ocTotalesIvaIncluido(items);
 
@@ -28366,7 +28472,7 @@ function _obraSigla(nombre){
 }
 /* v1181: etiqueta corta para botones ("OC 10") — sale del numero CRUDO, no del formateado */
 function _serieFolioCorto(numero){
-  var m = String(numero == null ? '' : numero).match(/(OC|DESP|OP|DPP|TRAS)\s*0*(\d+)\s*$/i);
+  var m = String(numero == null ? '' : numero).match(/(RENTA|OC|DESP|OP|DPP|TRAS)\s*0*(\d+)\s*$/i); // v1281: +RENTA
   return m ? (m[1].toUpperCase() + ' ' + parseInt(m[2], 10)) : String(numero == null ? '' : numero);
 }
 function _obraCodigoNorm(s){
@@ -28386,7 +28492,7 @@ function _obraCodigoDe(nombre, registro){
    prefijos sin código) pasa INTACTO — nunca se inventa un código. */
 function _docNumNuevo(numero){
   var s = String(numero == null ? '' : numero);
-  var m = s.match(/^(.+?)\s*[–-]\s*\d+\s*-\s*(OC|DESP|OP|DPP|TRAS)\s*0*(\d+)\s*$/i);
+  var m = s.match(/^(.+?)\s*[–-]\s*\d+\s*-\s*(RENTA|OC|DESP|OP|DPP|TRAS)\s*0*(\d+)\s*$/i); // v1281: +RENTA
   if (!m) return s;
   var cod = _obraCodigoDe(m[1]);
   if (!(cod > 0)) return s;
@@ -28677,7 +28783,7 @@ function _ocVerifPayload(oc){
     return JSON.stringify({
       d: 'oc',
       pv: 2, /* v1244: versión del payload — 2 = firma tinta */
-      tipo: oc.esTrasiego ? 'TRASIEGO DE MATERIAL' : (oc.esPrepago ? 'DESPACHO PRE-PAGO' : (oc.esDespacho ? 'ORDEN DE DESPACHO' : (oc.esProduccion ? 'ORDEN DE PRODUCCIÓN' : 'ORDEN DE COMPRA'))), /* v1243: el mensaje verde nombra el documento */
+      tipo: oc.esRenta ? 'ORDEN DE RENTA' : (oc.esTrasiego ? 'TRASIEGO DE MATERIAL' : (oc.esPrepago ? 'DESPACHO PRE-PAGO' : (oc.esDespacho ? 'ORDEN DE DESPACHO' : (oc.esProduccion ? 'ORDEN DE PRODUCCIÓN' : 'ORDEN DE COMPRA')))), /* v1243: el mensaje verde nombra el documento · v1282: +RENTA */
       numero: _numLimpio(oc.numero || ''),
       proveedor: String(oc.proveedorNombre || ''),
       proyecto: (function(){ try { return _ocProyectoLabel(oc); } catch(e){ return String(oc.proyecto || ''); } })(),
@@ -29128,7 +29234,8 @@ ${(!showDraft && oc.autorizadoPor && !_sinMalla) ? (function(){ try {
     <!-- v948: solo el logo (el texto "APP" se movió al bloque del No., abajo de la sigla) -->
     <div style="display:flex;align-items:center;gap:8px"><img src="${_LOGO_PR}" style="height:62px;max-width:165px;object-fit:contain" alt="PUNTO ROJO"></div>
     <div class="oc-title-col">
-      <div class="oc-title"${oc.esPrepago ? ' style="white-space:nowrap;font-size:24px"' : ''}>${oc.esTrasiego ? 'TRASIEGO DE MATERIAL' : (oc.esPrepago ? 'DESPACHO PRE-PAGO' : (esDespacho ? 'ORDEN DE DESPACHO' : (oc.esProduccion ? 'ORDEN DE PRODUCCIÓN' : 'ORDEN DE COMPRA')))}</div><!-- v1151: el guion de PRE-PAGO quebraba el título en dos filas -->
+      <div class="oc-title"${oc.esPrepago ? ' style="white-space:nowrap;font-size:24px"' : ''}>${oc.esRenta ? 'ORDEN DE RENTA' : (oc.esTrasiego ? 'TRASIEGO DE MATERIAL' : (oc.esPrepago ? 'DESPACHO PRE-PAGO' : (esDespacho ? 'ORDEN DE DESPACHO' : (oc.esProduccion ? 'ORDEN DE PRODUCCIÓN' : 'ORDEN DE COMPRA'))))}</div><!-- v1151: el guion de PRE-PAGO quebraba el título en dos filas · v1282: +RENTA -->
+      ${oc.esRenta ? `<div style="font-size:10.5px;font-weight:800;letter-spacing:1px;color:#1D4ED8;margin-top:3px">RENTA DEL ${oc.rentaInicio || '—'} AL ${oc.rentaFin || '—'} · ${oc.rentaDias || '?'} DÍAS — LA TARIFA DEL CATÁLOGO YA ESTÁ MULTIPLICADA POR EL TIEMPO</div>` : ''}
       ${oc.esTrasiego ? '<div style="font-size:10px;color:#555;letter-spacing:1.2px;margin-top:4px;font-weight:700;white-space:nowrap">' + String(oc.origenProyectoNombre || '').replace(/[<>]/g, '') + ' → ' + String(oc.destinoProyectoNombre || '').replace(/[<>]/g, '') + '</div>' : ''}
       ${esDespacho ? '<div style="font-size:10px;color:#555;letter-spacing:2px;margin-top:4px;font-weight:700">BODEGA CENTRAL → OBRA</div>' : ''}
       ${oc.esPrepago ? '<div style="font-size:9px;color:#555;letter-spacing:.6px;margin-top:4px;font-weight:700;white-space:nowrap">LIBERACIÓN DE MATERIAL YA PAGADO · ' + String(_numLimpio(oc.refOcMadreNumero || '')).replace(/[<>]/g, '') + '</div>' : ''}<!-- v1151: en una fila · v1196: apretado para caber en la columna (con minmax(0,1fr) ya no la infla) -->
@@ -29386,7 +29493,7 @@ function renderOrdenesList(){
   const _serCounts = {}; _ordTodasSeries.forEach(o => { const s = _ocSerieDe(o); _serCounts[s] = (_serCounts[s] || 0) + 1; });
   if (window._ocSerieFiltro && !_serCounts[window._ocSerieFiltro]) window._ocSerieFiltro = '';
   const _fSer = String(window._ocSerieFiltro || '');
-  const _serOrdenTabs = ['OC','DESP','OP','DPP','TRAS'].filter(s => _serCounts[s]);
+  const _serOrdenTabs = ['OC','DESP','OP','DPP','TRAS','RENTA'].filter(s => _serCounts[s]); // v1281: +RENTA
   /* v1234 (Antonio): el botón VERIFICAR OC se retiró — la verificación del día a día es
      escanear el QR. El panel (window._verificarOcUI, candado admin+Sibila) sigue vivo por
      consola para el caso raro de una imagen SIN QR que haya que cruzar contra la nube. */
@@ -29611,7 +29718,13 @@ function renderOrdenesList(){
       <div class="oc-list-num"><small>No.</small>${numHTML}</div>
       <dl class="oc-list-info" style="margin:0">
         <dd class="proveedor">${oc.proveedorNombre || '—'}</dd>
-        <div style="margin-top:4px">${statusBadge}${autorizInfo}${devueltaInfo}</div>
+        <div style="margin-top:4px">${statusBadge}${autorizInfo}${devueltaInfo}${(function(){
+          /* v1282: la RENTA muestra su ventana — rojo si venció sin devolver; verde al devolver */
+          if (!oc.esRenta) return '';
+          if (oc.rentaDevuelta && oc.rentaDevuelta.ts) return ` <div style="display:inline-block;background:#F0FDF4;color:#15803D;padding:3px 9px;border-radius:10px;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border:1px solid #15803D">EQUIPO DEVUELTO</div>`;
+          let _venc = false; try { const m = String(oc.rentaFin || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/); _venc = m ? (new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), 23, 59) < new Date()) : false; } catch(e){}
+          return ` <div style="display:inline-block;background:${_venc ? '#FEF2F2' : '#DBEAFE'};color:${_venc ? '#B91C1C' : '#1D4ED8'};padding:3px 9px;border-radius:10px;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border:1px solid ${_venc ? '#B91C1C' : '#93C5FD'}">RENTA ${oc.rentaDias || '?'} DÍAS · ${_venc ? 'VENCIÓ' : 'VENCE'} ${oc.rentaFin || '—'}</div>`;
+        })()}</div>
         ${_opEstado}
         ${facturaInfo}
         ${recibidaInfo}
@@ -29632,7 +29745,9 @@ function renderOrdenesList(){
         ${(function(){
           /* v1192 (Antonio): a la vista SOLO quedan VER PREVIEW y el ⋮ — todas las
              acciones viven dentro del menú. Sin acciones (solo-lectura) el ⋮ no sale. */
-          const _accionesMenu = [authBtn, devolverBtn, retirarBtn, corregirBtn, recibirBtn, recibirObraBtn, cambiarEntregaBtn, printBtn, facturaBtn, _opBtn,
+          const _rentaBtn = (oc.esRenta && oc.status === 'AUTORIZADA' && !(oc.rentaDevuelta && oc.rentaDevuelta.ts) && (can('compras.autorizar') || can('users.manage')))
+            ? `<button class="btn ghost sm" style="border-color:#1D4ED8;color:#1D4ED8" onclick="_rentaMarcarDevuelta('${oc.id}')" title="El equipo rentado ya regresó al proveedor">EQUIPO DEVUELTO ✓</button>` : ''; /* v1282 */
+          const _accionesMenu = [_rentaBtn, authBtn, devolverBtn, retirarBtn, corregirBtn, recibirBtn, recibirObraBtn, cambiarEntregaBtn, printBtn, facturaBtn, _opBtn,
             (canDeleteOC ? `<button class="btn ghost sm" style="color:#B91C1C;border-color:#FCA5A5" onclick="deleteOrden('${oc.id}')" title="Eliminar orden">ELIMINAR ✕</button>` : '')
           ].filter(Boolean).join('');
           return `<button class="btn ghost sm" onclick="verPreviewOrden('${oc.id}')" title="Ver el documento como quedó">VER PREVIEW</button>`
@@ -40365,6 +40480,31 @@ window._ocCambiarEntrega = async function(ocId){
   try { renderOrdenesList(); } catch(e){}
   showToast(_f2.oc.fechaEntrega ? ('ENTREGA: ' + _f2.oc.fechaEntrega) : 'ENTREGA SIN FECHA', 'green');
 };
+/* v1282: el equipo rentado regresó — cierra el ciclo de la ORDEN DE RENTA. Re-lee el
+   state vivo tras el await (regla v769/v940) y sella (union-merge v972). */
+window._rentaMarcarDevuelta = async function(id){
+  if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
+  const _f = _bodegaFindOc(id);
+  if (!_f || !_f.oc || !_f.oc.esRenta) return showToast('LA ORDEN DE RENTA NO EXISTE — RECARGÁ', 'red');
+  const _ok = await window.prConfirm({
+    title: 'EQUIPO DEVUELTO',
+    bodyHTML: `<div style="font-size:12.5px;color:#333;line-height:1.6">¿El equipo de la <b>${_numLimpio(_f.oc.numero)}</b> ya regresó al proveedor?<br>La renta queda CERRADA y deja de aparecer como vigente.</div>`,
+    okText: 'SÍ — YA SE DEVOLVIÓ', cancelText: 'TODAVÍA NO'
+  });
+  if (!_ok) return;
+  const _f2 = _bodegaFindOc(id); // re-lectura viva tras el await
+  if (!_f2 || !_f2.oc) return showToast('LA ORDEN YA NO EXISTE — RECARGÁ', 'red');
+  if (_f2.oc.rentaDevuelta && _f2.oc.rentaDevuelta.ts) return showToast('YA ESTABA MARCADA COMO DEVUELTA', 'amber');
+  _f2.oc.rentaDevuelta = { ts: Date.now(), por: String((getCurrentUser() || {}).displayName || (getCurrentUser() || {}).username || '').toUpperCase() };
+  _f2.oc._ts = Date.now();
+  try { logActivity('update', 'RENTA DEVUELTA', _numLimpio(_f2.oc.numero) + ' · ' + (_f2.oc.proveedorNombre || '')); } catch(e){}
+  saveState();
+  try { CloudSync.forceUploadNow().catch(() => {}); } catch(e){}
+  showToast('RENTA CERRADA — EQUIPO DEVUELTO', 'green');
+  try { renderOrdenesList(); } catch(e){}
+  try { if (document.getElementById('_bodegaPanelModal')) { _cerrarPanelBodegaDom(); _abrirPanelBodega(); } } catch(e){}
+};
+
 window._ocDerivarDeOp = async function(opId){
   if (!can('compras.autorizar') && !can('users.manage')) return showToast('SOLO COMPRAS O ADMIN', 'red');
   const _f = _bodegaFindOc(opId);
@@ -44151,10 +44291,46 @@ function renderCatProvProductos(){
       <!-- v1078 (Antonio): segundo precio OPCIONAL, para cuando el material lo recogemos
            nosotros. Vacío = ese producto no tiene modalidad alternativa. -->
       <input type="number" step="0.01" min="0" class="precio" value="${prod.precioRecoge || ''}" placeholder="—" title="Precio si el material lo recogemos nosotros (opcional)" onchange="updateCatProvProducto(${origIdx}, 'precioRecoge', this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">
+      ${(function(){ /* v1281: chip SE RENTA — lo alquilable (andamios, rodos, camas) genera ORDEN DE RENTA; el precio pasa a ser la TARIFA por periodo */
+        const _ri = _prodRentaInfo(prod);
+        const _lbl = _ri.renta ? ('RENTA·' + (_ri.periodo === 'DIA' ? 'DÍA' : _ri.periodo === 'SEMANA' ? 'SEM' : 'MES')) : 'COMPRA';
+        const _st = _ri.renta ? 'background:#DBEAFE;color:#1D4ED8;border:1px solid #93C5FD' : 'background:#F5F5F4;color:#78716C;border:1px solid #E7E5E4';
+        return _esAdminCat
+          ? `<button type="button" onclick="_catProdRentaCiclo(${origIdx})" title="Clic para ciclar: COMPRA → RENTA POR DÍA → SEMANA → MES" style="${_st};border-radius:999px;padding:4px 6px;font-size:9px;font-weight:800;letter-spacing:.5px;cursor:pointer;white-space:nowrap">${_lbl}</button>`
+          : `<span style="${_st};border-radius:999px;padding:4px 6px;font-size:9px;font-weight:800;letter-spacing:.5px;text-align:center;white-space:nowrap">${_lbl}</span>`;
+      })()}
       ${_esAdminCat ? `<button class="btn-icon" onclick="deleteCatProvProducto(${origIdx})" title="Eliminar">✕</button>` : '<span></span>'}
     </div>
   `).join('');
 }
+
+/* v1281: ¿este producto del catálogo se RENTA? PURA. Sin marca = compra normal;
+   marcado sin periodo = por DÍA (el más común en andamios). */
+function _prodRentaInfo(prod){
+  const renta = !!(prod && prod.renta);
+  const periodo = renta ? (['DIA','SEMANA','MES'].indexOf(String((prod && prod.rentaPeriodo) || '')) >= 0 ? String(prod.rentaPeriodo) : 'DIA') : '';
+  return { renta: renta, periodo: periodo, etiqueta: periodo === 'DIA' ? 'DÍA' : periodo };
+}
+try { window._prodRentaInfo = _prodRentaInfo; } catch(e){}
+
+/* v1281: ciclo del chip — COMPRA → RENTA·DÍA → RENTA·SEMANA → RENTA·MES → COMPRA.
+   Solo autorizador/admin; sella producto Y proveedor (union-merge v1070) y sube YA. */
+window._catProdRentaCiclo = function(idx){
+  if (!(can('precios.autorizar') || can('users.manage'))) return showToast('SOLO EL AUTORIZADOR PUEDE MARCAR QUÉ SE RENTA', 'red');
+  const prv = _getProveedores().find(x => x.id === currentCatProvId);
+  if (!prv || !prv.productos || !prv.productos[idx]) return;
+  const prod = prv.productos[idx];
+  const _ri = _prodRentaInfo(prod);
+  if (!_ri.renta) { prod.renta = true; prod.rentaPeriodo = 'DIA'; }
+  else if (_ri.periodo === 'DIA') { prod.rentaPeriodo = 'SEMANA'; }
+  else if (_ri.periodo === 'SEMANA') { prod.rentaPeriodo = 'MES'; }
+  else { prod.renta = false; prod.rentaPeriodo = ''; }
+  prod._ts = Date.now();
+  prv._ts = Date.now();
+  saveState();
+  try { if (typeof CloudSync !== 'undefined' && CloudSync.forceUploadNow) CloudSync.forceUploadNow().catch(() => {}); } catch(e){}
+  try { renderCatProvProductos(); } catch(e){}
+};
 
 function filterCatProvProductos(term){
   catProvSearchTerm = String(term || '').trim();

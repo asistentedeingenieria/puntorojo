@@ -22,7 +22,7 @@ console.log('— ÓRDENES: subpestañas por serie —');
 const ro = ex(code, 'function renderOrdenesList(');
 ok('el filtro vive en window._ocSerieFiltro', /_ocSerieFiltro/.test(ro));
 ok('filtra por la serie real (_ocSerieDe)', /_ocSerieDe\(o\) === _fSer/.test(ro));
-ok('solo series PRESENTES, con conteo', /\['OC','DESP','OP','DPP','TRAS'\]\.filter\(s => _serCounts\[s\]\)/.test(ro));
+ok('solo series PRESENTES, con conteo', /\['OC','DESP','OP','DPP','TRAS','RENTA'\]\.filter\(s => _serCounts\[s\]\)/.test(ro)); /* v1281: +RENTA */
 /* v1205 (Antonio: "NO debe decir ningún número en el título"): las subpestañas van SIN
    conteo — solo el nombre. Los conteos internos (_serCounts) siguen, pero solo para
    decidir qué series ofrecer. */

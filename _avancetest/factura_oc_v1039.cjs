@@ -66,7 +66,7 @@ ok('derivar la OC rescata la factura de la OP', !/facturaUrl: null|facturaUrl: '
 console.log('\n— 4. la tarjeta de la OP, como la pidió Antonio —');
 /* "lo que dice ESPERANDO PROVEEDOR quiero que esté en otro lado" → va con el estado (badge),
    no flotando junto al total; el botón queda en la columna de acciones, arriba de la ✕ */
-ok('el estado de la OP vive junto al badge', /\$\{statusBadge\}\$\{autorizInfo\}\$\{_opEstado\}/.test(zBtn) || /_opEstado[\s\S]{0,200}?statusBadge|statusBadge\}[^`]{0,80}\$\{_opEstado\}/.test(zBtn));
+ok('el estado de la OP vive junto al badge', /\$\{statusBadge\}\$\{autorizInfo\}\$\{_opEstado\}/.test(zBtn) || /_opEstado[\s\S]{0,200}?statusBadge|statusBadge\}[\s\S]{0,2400}\$\{_opEstado\}/.test(zBtn)); /* v1282: el chip de RENTA vive entre el badge y _opEstado */
 ok('el botón quedó separado del rótulo', /_opBtn/.test(zBtn));
 /* v1192: los botones ya no van sueltos en la columna — viven dentro del menú ⋮
    (pedido de Antonio 12-ago). Lo que v1039 protege sigue: el botón de la OP (_opBtn)
