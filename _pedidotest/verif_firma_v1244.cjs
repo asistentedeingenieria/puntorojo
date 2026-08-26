@@ -22,11 +22,13 @@ ok('si el procesado falla, el multiply queda de respaldo', /mix-blend-mode:multi
 
 console.log('— 2. los docs con copia vieja se RE-SELLAN —');
 const zSub = ex(html, 'window._ocVerifSubir = async function');
-ok('el subidor de la orden re-sube si la copia es vieja (verifV < 2)', /verifV/.test(zSub) && /pv/.test(ex(html, 'function _ocVerifPayload(')) === false ? false : /verifV\) \|\| 0\) >= 2\) return/.test(zSub.replace(/\n/g, ' ')));
-ok('y al confirmar marca la versión nueva', /verifV = 2/.test(zSub));
+/* v1286: la versión vigente del payload OC subió a 3 (cotejo completo); el mecanismo
+   v1244 es el mismo — el gate compara contra la versión VIGENTE. El pedido sigue en 2. */
+ok('el subidor de la orden re-sube si la copia es vieja (verifV < vigente)', /verifV/.test(zSub) && /pv/.test(ex(html, 'function _ocVerifPayload(')) === false ? false : /verifV\) \|\| 0\) >= 3\) return/.test(zSub.replace(/\n/g, ' ')));
+ok('y al confirmar marca la versión nueva', /verifV = 3/.test(zSub));
 const zSubP = ex(html, 'window._pedVerifSubir = async function');
 ok('el del pedido igual', /verifV = 2/.test(zSubP) && /verifV\) \|\| 0\) >= 2\) return/.test(zSubP.replace(/\n/g, ' ')));
-ok('los payloads llevan pv:2', /pv: 2/.test(ex(html, 'function _ocVerifPayload(')) && /pv: 2/.test(ex(html, 'function _pedVerifPayload(')));
+ok('los payloads llevan su versión (OC 3, pedido 2)', /pv: 3/.test(ex(html, 'function _ocVerifPayload(')) && /pv: 2/.test(ex(html, 'function _pedVerifPayload(')));
 ok('los respaldos perezosos delegan el gate al subidor (siempre lo llaman)',
   (function(){ const zP = ex(html, 'function printOrdenCompra('); const zA = ex(html, 'function _pedVerifAsegurar(');
     return /_ocVerifSubir\(oc\)/.test(zP) && /_pedVerifSubir\(pd, p\)/.test(zA); })());

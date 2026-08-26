@@ -3394,7 +3394,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1285</span>
+    <span style="opacity:.5;font-size:9px">v1286</span>
   </footer>
 
 </div>
@@ -28938,7 +28938,7 @@ function _ocVerifPayload(oc){
     try { _fa = _firmaTintaSrc(_miFirmaImg(typeof _firmaUsernameAutoriza === 'function' ? _firmaUsernameAutoriza(oc) : (oc.autorizadoPorUsername || '')) || '') || ''; } catch(e){}
     return JSON.stringify({
       d: 'oc',
-      pv: 2, /* v1244: versión del payload — 2 = firma tinta */
+      pv: 3, /* v1244: 2 = firma tinta · v1286: 3 = cotejo COMPLETO (forma de pago + entregar a + renta) */
       tipo: oc.esRenta ? 'ORDEN DE RENTA' : (oc.esTrasiego ? 'TRASIEGO DE MATERIAL' : (oc.esPrepago ? 'DESPACHO PRE-PAGO' : (oc.esDespacho ? 'ORDEN DE DESPACHO' : (oc.esProduccion ? 'ORDEN DE PRODUCCIÓN' : 'ORDEN DE COMPRA')))), /* v1243: el mensaje verde nombra el documento · v1282: +RENTA */
       numero: _numLimpio(oc.numero || ''),
       proveedor: String(oc.proveedorNombre || ''),
@@ -28949,6 +28949,15 @@ function _ocVerifPayload(oc){
       items: (oc.items || []).map(function(it){ return { n: String(it.name || ''), q: Number(it.qty) || 0, pu: Number(it.precio) || 0 }; }),
       total: Number(oc.total) || 0,
       saldoAplicado: Number(oc.saldoAplicado) || 0,
+      /* v1286 (Antonio: "necesito que sí o sí me diga si NO se modificó"): el cotejo tiene
+         que cubrir TODO lo que dice el papel — la forma de pago, la dirección/contactos de
+         entrega y el detalle de renta son justo lo alterable sin tocar el total */
+      formaPago: String(oc.formaPago || ''),
+      credito: Number(oc.credito) || 0,
+      entregarA: String(oc.entregarA || ''),
+      rentaDias: Number(oc.rentaDias) || 0,
+      rentaInicio: String(oc.rentaInicio || ''),
+      rentaFin: String(oc.rentaFin || ''),
       sinDinero: !!(oc.esDespacho && !oc.esPrepago && !oc.esTrasiego),
       generadoPor: String(oc.generadoPor || ''),
       autorizadoPor: String(oc.autorizadoPor || ''),
@@ -28963,7 +28972,7 @@ window._ocVerifSubir = async function(oc){
     if (!oc || !oc.verifTok) return;
     /* v1244: pv:2 = firma TINTA en el payload. La copia vieja (sellada antes, con la firma
        cruda con fondo) se RE-SELLA — el gate vive acá, los llamadores solo llaman. */
-    if (oc.verifOk && (Number(oc.verifV) || 0) >= 2) return;
+    if (oc.verifOk && (Number(oc.verifV) || 0) >= 3) return; /* v1286: pv:3 = cotejo completo; copias viejas se re-sellan al imprimir/compartir */
     var _clave = String(window._qrClave || '');
     if (!_clave) return; /* sin clave del admin no hay copia cifrada — el QR sigue como hoy */
     var _json = _ocVerifPayload(oc);
@@ -28972,7 +28981,7 @@ window._ocVerifSubir = async function(oc){
     var _tag = ('000000' + ((_selloHash32(_json, 777) >>> 0).toString(16))).slice(-6);
     await firebase.firestore().collection('ocVerif').doc(oc.verifTok).set({ x: _qrCifrar(_json, _clave, _salt), k: _salt, t: _tag, ts: Date.now() });
     oc.verifOk = true;
-    oc.verifV = 2; /* v1244 */
+    oc.verifV = 3; /* v1244 tinta · v1286 cotejo completo */
     oc._ts = Date.now(); /* mutación en contenedor union-merged: se sella (v972) */
     saveState();
   } catch(e){ console.warn('[v1240] la copia sellada no subió — se reintenta al imprimir/compartir', e); }
@@ -29115,6 +29124,20 @@ window._verificarOcBuscar = function(){
       + '</div>';
   }).join('');
 };
+/* ═══ v1286 · LA HOJA LLEVA SU PROPIA LETRA ═══
+   Las hojas decían font-family:Arial — en Android no existe y cae a Roboto, así que la
+   MISMA hoja legítima salía con letra distinta según el aparato que la generó (y una
+   letra rara parecía manipulación). Se embebe la fuente de la app (el base64 que
+   _pdfBarlow ya cachea en cada aparato para los PDFs) como @font-face en las 3 hojas:
+   misma letra en compu, teléfono, impresión y captura. Sin la fuente cacheada devuelve
+   '' y la hoja sale con Arial como siempre (y se dispara el prefetch para la próxima). */
+function _hojaFontTag(){
+  try {
+    var b64 = window._pdfBarlow && window._pdfBarlow.ready();
+    if (!b64) { try { window._pdfBarlow && window._pdfBarlow.prefetch(); } catch(e2){} return ''; }
+    return '<style>@font-face{font-family:HojaPR;src:url(data:font/ttf;base64,' + b64 + ') format("truetype");font-weight:100 900}body{font-family:HojaPR,Arial,sans-serif !important}</style>';
+  } catch(e){ return ''; }
+}
 function printOrdenCompra(ocId, isDraft, opts){
   const _hit = _bodegaFindOc(ocId); // v964: la OC puede vivir en el store de bodega
   const oc = _hit && _hit.oc;
@@ -29176,7 +29199,7 @@ function printOrdenCompra(ocId, isDraft, opts){
   const _soloHTML = !!(arguments.length > 2 && arguments[2] && arguments[2].soloHTML);
   const _docHTML = (`
 <!DOCTYPE html>
-<html><head>${_docHeadMeta()}<title>Orden de Compra No. ${_numLimpio(oc.numero)}</title>
+<html><head>${_docHeadMeta()}${_hojaFontTag()}<title>Orden de Compra No. ${_numLimpio(oc.numero)}</title>
 <style>
 :root{color-scheme:only light} /* v980: Android forzaba modo oscuro sobre el documento */
 @page { size: letter; margin: 0; } /* v943: los márgenes viven ADENTRO de la hoja — así "Márgenes: Ninguno/Predeterminado" del diálogo dan lo mismo y las firmas quedan al fondo FÍSICO siempre */
@@ -29587,6 +29610,7 @@ window.compartirOcImg = async function(ocId){
     try { idoc.querySelectorAll('.no-print').forEach(el => el.remove()); } catch(e){}   // los botones VOLVER/IMPRIMIR no van en la foto
     /* v1241: se captura la HOJA (.oc-sheet, 780px × 272mm) y no el body de 920px — con los
        márgenes de 72px la imagen queda en proporción CARTA exacta, igual que los pedidos. */
+    try { await Promise.race([idoc.fonts.ready, new Promise(r => setTimeout(r, 2500))]); } catch(e){} /* v1286: la foto espera la letra embebida — sin esto sale con la letra de respaldo del aparato */
     const canvas = await iwin.html2canvas(idoc.querySelector('.oc-sheet') || idoc.body, { scale: 2, backgroundColor: '#ffffff', windowWidth: 920, windowHeight: 1500 }); /* v1247: ancho explícito — en el celular innerWidth miente */
     const M = 72;
     const c2 = document.createElement('canvas'); c2.width = canvas.width + M * 2; c2.height = canvas.height + M * 2;
@@ -30596,7 +30620,7 @@ function _solicitudDocHTML(pd, p, paraCaptura){
     byCat[cat].push({ name, qty, spec: specs[key] || null });
   });
 
-  return `<!DOCTYPE html><html><head>${_docHeadMeta()}<title>${pd.numero} · ${pd.proyectoPedido || p.name}</title>
+  return `<!DOCTYPE html><html><head>${_docHeadMeta()}${_hojaFontTag()}<title>${pd.numero} · ${pd.proyectoPedido || p.name}</title>
 <style>
   :root{color-scheme:only light}
   *{box-sizing:border-box;margin:0;padding:0}
@@ -30770,6 +30794,7 @@ window.compartirSolicitudImg = async function(){
     await cargado;
     const idoc = fr.contentDocument, iwin = fr.contentWindow;
     await new Promise((res, rej) => { const s = idoc.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'; s.onload = res; s.onerror = rej; idoc.head.appendChild(s); });
+    try { await Promise.race([idoc.fonts.ready, new Promise(r => setTimeout(r, 2500))]); } catch(e){} /* v1286: espera la letra embebida */
     const canvas = await iwin.html2canvas(idoc.querySelector('.wrap'), { scale: 2, backgroundColor: '#ffffff', windowWidth: 820, windowHeight: 1400 }); /* v1247 */
     // v979: margen blanco — la imagen quedaba justa al abrirla
     const M = 72;
@@ -30805,7 +30830,7 @@ function _reciboDocHTML(pd, p, paraCaptura, ocId){
   const totalUnid = nombres.reduce((s, k) => s + (Number(items[k]) || 0), 0);
   const filas = nombres.map(k => `<tr><td style="padding:6px 10px;border-bottom:1px solid #eee">${esc2(k)}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right;font-weight:700;width:90px">${Number(items[k]) || 0}</td></tr>`).join('');
   const firma = _miFirmaImg(rec.por || '');
-  return `<!DOCTYPE html><html><head>${_docHeadMeta()}<title>RECIBO ${esc2(pd.numero)}</title>
+  return `<!DOCTYPE html><html><head>${_docHeadMeta()}${_hojaFontTag()}<title>RECIBO ${esc2(pd.numero)}</title>
 <style>
   :root{color-scheme:only light}
   *{box-sizing:border-box;margin:0;padding:0}
@@ -30898,6 +30923,7 @@ window.compartirReciboImg = async function(id, ocId){
     await cargado;
     const idoc = fr.contentDocument, iwin = fr.contentWindow;
     await new Promise((res, rej) => { const s = idoc.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'; s.onload = res; s.onerror = rej; idoc.head.appendChild(s); });
+    try { await Promise.race([idoc.fonts.ready, new Promise(r => setTimeout(r, 2500))]); } catch(e){} /* v1286: espera la letra embebida */
     const canvas = await iwin.html2canvas(idoc.querySelector('.wrap'), { scale: 2, backgroundColor: '#ffffff', windowWidth: 820, windowHeight: 1400 }); /* v1247 */
     const M = 72;
     const c2 = document.createElement('canvas'); c2.width = canvas.width + M * 2; c2.height = canvas.height + M * 2;
