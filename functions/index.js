@@ -797,7 +797,25 @@ exports.resetUserClave = onCall(
       throw new HttpsError('permission-denied', 'LA CLAVE DE UN ADMINISTRADOR SOLO LA RESTABLECE OTRO ADMINISTRADOR');
     }
 
-    await getAuth().updateUser(uid, { password: clave });
+    /* v1269b: el updateUser puede fallar por causas ajenas al admin (cuenta Auth
+       inexistente = huérfana inversa; permisos del service account). Sin este catch
+       el cliente recibía "INTERNAL" pelado — inservible para diagnosticar. */
+    try {
+      await getAuth().updateUser(uid, { password: clave });
+    } catch (e) {
+      const code = (e && e.code) || '';
+      console.error('resetUserClave updateUser falló:', code, e && e.message);
+      if (code === 'auth/user-not-found') {
+        throw new HttpsError('not-found', 'EL PERFIL EXISTE PERO LA CUENTA DE AUTH NO — HAY QUE RECREAR EL USUARIO');
+      }
+      if (code === 'auth/invalid-password') {
+        throw new HttpsError('invalid-argument', 'FIREBASE RECHAZÓ LA CLAVE (MÍNIMO 6 CARACTERES)');
+      }
+      if (code === 'auth/insufficient-permission' || code === 'app/invalid-credential') {
+        throw new HttpsError('failed-precondition', 'AL SERVICIO LE FALTA PERMISO DE AUTH (' + code + ') — AVISAR A CLAUDE');
+      }
+      throw new HttpsError('unknown', 'AUTH: ' + (code || (e && e.message) || 'error desconocido'));
+    }
     await db.collection('users').doc(uid).set({
       mustChangePassword: true,
       claveReseteadaPor: request.auth.uid,
