@@ -15,7 +15,7 @@ const zL = ex('function renderPedidosList(');
 ok('los recibidos salen de la lista activa', /status !== 'RECIBIDO'/.test(zL));
 ok('y se agrupan en el historial', /status === 'RECIBIDO'/.test(zL) && /HISTORIAL DE PEDIDOS RECIBIDOS/.test(zL));
 ok('el bloque muestra el conteo y MOSTRAR/OCULTAR', /\$\{_hist\.length\} · \$\{_hVis \? '▼ OCULTAR' : '▶ MOSTRAR'\}/.test(zL));
-ok('recuerda la preferencia POR PROYECTO', /pedidos_historial_visible_' \+ \(\(p && p\.id\) \|\| 'def'\)/.test(zL));
+ok('recuerda la preferencia POR CONTEXTO (obra o contenedor especial, v1290)', /pedidos_historial_visible_' \+ _histCtxId\(\)/.test(zL));
 ok('solo pinta las tarjetas del historial si está abierto', /_hVis \? `<div style="padding:4px 0 12px">/.test(zL));
 ok('si no queda ningún activo lo dice (no una lista vacía muda)', /No hay pedidos activos/.test(zL));
 const zT = ex('window.togglePedidosHistorial = function');
