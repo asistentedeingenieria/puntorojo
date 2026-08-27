@@ -44,8 +44,8 @@ ok('_hojaFontTag existe', zFont.length > 50);
 let tag;
 try { if (zFont.length > 50) tag = new Function('window', zFont + '\nreturn _hojaFontTag;'); } catch(e){ ok('evaluable solo', false); }
 if (tag) {
-  /* v1291: la fuente de las hojas pasó de la de la app (_pdfBarlow) a ARIMO (_hojaArimo) */
-  ok('con la fuente cacheada embebe @font-face con el base64', (function(){ const t = tag({ _hojaArimo: { ready: function(){ return 'QUJDRA'; } } })(); return /@font-face/.test(t) && /QUJDRA/.test(t) && /font\/ttf;base64/.test(t); })());
+  /* v1291/v1292: la fuente de las hojas vive en el loader neutral _hojaFont (hoy Oswald) */
+  ok('con la fuente cacheada embebe @font-face con el base64', (function(){ const t = tag({ _hojaFont: { ready: function(){ return 'QUJDRA'; } } })(); return /@font-face/.test(t) && /QUJDRA/.test(t) && /font\/ttf;base64/.test(t); })());
   ok('sin fuente devuelve vacío (la hoja sigue saliendo con Arial)', tag({})() === '');
 }
 ok('las 3 hojas la inyectan (OC + solicitud + recibo)', (html.match(/_hojaFontTag\(\)/g) || []).length >= 4);
