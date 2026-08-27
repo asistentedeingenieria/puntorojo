@@ -113,7 +113,7 @@ ok('si no está con ese nombre, ofrece los parecidos', /_bodegaPedirMatch\(/.tes
    de los dos nombres, según con cuál se cargó la existencia */
 ok('busca por el canónico y por sus hermanos', /_matAliasMap\(\)/.test(zB));
 const zCand = ex('function _bodegaCandidatosParecidos(');
-ok('los parecidos salen por palabras en común', zCand.length > 100 && /indexOf\(w\)/.test(zCand));
+ok('los parecidos salen por palabras en común (v1297: tolerante singular≈plural)', zCand.length > 100 && /_rentaTokIgual/.test(zCand));
 ok('solo ofrece lo que de verdad hay en existencia', /saldo\) > 0/.test(zCand));
 ok('elegir uno deja declarada la equivalencia', /_matFixAdd\(/.test(ex('window._bodegaUnirYUsar = function')));
 
