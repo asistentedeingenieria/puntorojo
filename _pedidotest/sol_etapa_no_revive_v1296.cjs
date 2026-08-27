@@ -66,7 +66,7 @@ ok('renderPedidosList lo corre y guarda si curó', (function(){
 })());
 
 /* ── 3. el ritual del sync ── */
-ok('APP_SYNC_VERSION subió a 944', /const APP_SYNC_VERSION = 944/.test(html));
+ok('APP_SYNC_VERSION subió al menos a 944', (function(){ const m = html.match(/APP_SYNC_VERSION = (\d+)/); return m && Number(m[1]) >= 944; })());
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

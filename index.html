@@ -3394,7 +3394,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1297</span>
+    <span style="opacity:.5;font-size:9px">v1298</span>
   </footer>
 
 </div>
@@ -9422,7 +9422,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 944; // v1296: escudo _solAtendidaShield en el merge de pedidos — un cliente viejo sin el escudo puede volver a perder la marca ATENDIDA de las solicitudes de etapa (v1278: partición pedarch_)
+const APP_SYNC_VERSION = 945; // v1298: BUS de autorizaciones (autzBus + injerto en applyRemote) — un cliente viejo no injerta y sigue ciego a las firmas hasta que el doc gordo le llegue (v1296: escudo solAtendida · v1278: pedarch_)
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10490,6 +10490,7 @@ const CloudSync = {
       else if (doc.id.indexOf('gastosimp_') === 0) { const d = doc.data(); if (d && Array.isArray(d.gastos)) gastosImpById[doc.id.slice(10)] = d.gastos; } // v1166
       else if (doc.id.indexOf('evid_') === 0) { const d = doc.data(); if (d && d.ev && typeof d.ev === 'object') evidByKey[doc.id.slice(5)] = d.ev; } // v1218
       else if (doc.id.indexOf('pedarch_') === 0) { const d = doc.data(); if (d && (Array.isArray(d.pedidos) || Array.isArray(d.ordenes))) pedArchById[doc.id.slice(8)] = { pedidos: d.pedidos || [], ordenes: d.ordenes || [] }; } // v1278
+      else if (doc.id === 'autzBus') { try { window._autzBusRemoto = doc.data() || null; } catch(e){} } // v1298: bus de autorizaciones — se injerta en applyRemote
       else if (doc.id.indexOf('proj_') === 0) { const d = doc.data(); if (d && d.p) projById[doc.id.slice(5)] = d.p; }
     });
     if (!core) return null;
@@ -11358,6 +11359,12 @@ const CloudSync = {
         if (!(_ae && /^(INPUT|TEXTAREA|SELECT)$/.test(_ae.tagName))) renderInventarios();
       }
     } catch(e){ console.warn('[v1058] repintado de inventarios', e); }
+    /* v1298 · BUS DE AUTORIZACIONES: la firma de finanzas llega en el doc chiquito y se
+       INJERTA acá, antes de los repintados — SIN needsResync (nada de manadas de
+       re-subida; el doc canónico converge con las subidas naturales). El auto-rescate
+       emite lo autorizado reciente que al bus le falte (cadencia 5 min). */
+    try { _autzBusInjertar(); } catch(e){ console.warn('[v1298] bus autz', e); }
+    try { _autzBusAutoEmitir(); } catch(e){}
     /* v1068 (Antonio: "DEBE DE ESTAR IGUAL"): la BODEGA PRE-PAGO y los TRASIEGOS también se
        repintan al llegar datos de otro dispositivo — mismo patrón v1058, sin input enfocado. */
     try {
@@ -30399,6 +30406,7 @@ window._ocRetirarAutorizacion = async function(id){
   oc2.status = 'DEVUELTA';
   oc2.devolucion = { motivo: 'AUTORIZACIÓN RETIRADA · ' + _motivo, por: String(_u.displayName || _u.username || '').toUpperCase(), ts: _t, fecha: (typeof _dateALatam === 'function') ? _dateALatam(new Date()) : '' };
   oc2._ts = _t; /* el contenedor viaja por union-merge (v972) */
+  try { _autzBusRetirar(oc2); } catch(e){} /* v1298: la tumba del bus — que ningún injerto la re-autorice */
   try { logActivity('update', 'ORDEN DE COMPRA', 'Autorización RETIRADA: ' + (oc2.numero || '') + ' · ' + _motivo); } catch(e){}
   saveState();
   try { CloudSync.forceUploadNow().then(r => { if (r === false) showToast('EL CAMBIO NO SUBIÓ — HAY UN CANDADO DE SYNC, REINTENTÁ', 'red'); }).catch(() => {}); } catch(e){}
@@ -30540,6 +30548,7 @@ async function autorizarOrden(id){
   oc._ts = Date.now(); // v964: el store de bodega va por union-merge — toda mutación se sella
   oc.firmaDigital = _firmaDefault;
   oc.selloDigital = `AUTORIZADO DIGITALMENTE POR ${_autorizadorDefault} · ${_selloHora}`;
+  try { _autzBusEmitir(oc); } catch(e){} /* v1298: la firma viaja en el BUS (2 KB) — llega aunque el doc gordo se atasque */
 
   // v959: una ORDEN DE DESPACHO autorizada descuenta existencias de la bodega central.
   // Idempotente por OC (_bodegaYaTieneMov dentro de _bodegaSalidaDespacho); si el saldo
@@ -42215,6 +42224,98 @@ function _solAtendidaShield(mergedList, localList, remoteList){
     changed = true;
   });
   return changed;
+}
+/* ═══ v1298 · BUS DE AUTORIZACIONES ═══
+   La firma de finanzas viajaba SOLO en el doc gordo del proyecto (~700 KB) — con
+   internet de obra esa subida falla o tarda (probado con OC1-000016: la copia sellada
+   del QR, 2 KB por canal propio, SÍ llegó mientras la firma no). Ahora la firma viaja
+   ADEMÁS en appState/autzBus: un doc chiquito que la colección YA escucha (v491 —
+   cero listeners nuevos). El receptor la INJERTA localmente sin needsResync (nada de
+   manadas de re-subida); el doc canónico converge solo. ret > ts = retirada manda. */
+function _autzBusEmitir(oc){
+  try {
+    if (!oc || !oc.id || !oc.autorizadoPor) return;
+    const e = { n: _numLimpio(oc.numero || ''), por: oc.autorizadoPor, porU: oc.autorizadoPorUsername || '',
+      ts: Number(oc.autorizadoTs) || Date.now(), tok: oc.verifTok || '', fd: oc.firmaDigital || '',
+      sd: oc.selloDigital || '', st: 'AUTORIZADA', _ts: Number(oc._ts) || Date.now() };
+    const doc = firebase.firestore().collection('appState').doc('autzBus');
+    const cache = (window._autzBusRemoto && typeof window._autzBusRemoto === 'object') ? window._autzBusRemoto : null;
+    const llaves = cache ? Object.keys(cache).filter(k => k !== '_last') : [];
+    if (cache && llaves.length > 80) {
+      /* poda: entradas de más de 7 días fuera — el bus se mantiene chiquito */
+      const corte = Date.now() - 7 * 864e5;
+      const nuevo = { _last: Date.now() };
+      llaves.forEach(k => { const x = cache[k]; if (x && (Number(x.ts) || 0) >= corte) nuevo[k] = x; });
+      nuevo[oc.id] = e;
+      doc.set(nuevo).catch(() => {});
+    } else {
+      doc.set({ [oc.id]: e, _last: Date.now() }, { merge: true }).catch(() => {});
+    }
+  } catch(err){}
+}
+function _autzBusRetirar(oc){
+  try {
+    if (!oc || !oc.id) return;
+    /* la tumba: ret MÁS NUEVO que ts mata el injerto; una re-autorización posterior
+       escribe ts nuevo > ret y revive (merge profundo de Firestore conserva ambos) */
+    firebase.firestore().collection('appState').doc('autzBus').set({ [oc.id]: { ret: Date.now() }, _last: Date.now() }, { merge: true }).catch(() => {});
+  } catch(e){}
+}
+function _autzBusInjertar(){
+  try {
+    const bus = window._autzBusRemoto;
+    if (!bus || typeof bus !== 'object') return false;
+    const bolsas = [];
+    (((typeof state !== 'undefined' && state) || {}).projects || []).forEach(p => { if (p && p.materiales && Array.isArray(p.materiales.ordenes)) bolsas.push(p.materiales.ordenes); });
+    if (state && state.bodegaMat && Array.isArray(state.bodegaMat.ordenes)) bolsas.push(state.bodegaMat.ordenes);
+    if (state && state.variosMat && Array.isArray(state.variosMat.ordenes)) bolsas.push(state.variosMat.ordenes);
+    let hubo = false;
+    Object.keys(bus).forEach(id => {
+      if (id === '_last') return;
+      const e = bus[id];
+      if (!e || typeof e !== 'object' || !e.por) return;
+      if (Number(e.ret || 0) > Number(e.ts || 0)) return;                 /* retirada más nueva manda */
+      for (const arr of bolsas) {
+        const o = arr.find(x => x && x.id === id);
+        if (!o) continue;
+        if (o.status === 'CANCELADA') return;
+        if (o.autzRetirada && Number(o.autzRetirada.ts || 0) > Number(e.ts || 0)) return; /* la retiraron después de esta firma */
+        if (o.autorizadoPor && Number(o.autorizadoTs || 0) >= Number(e.ts || 0)) return;  /* ya la tiene igual o más nueva */
+        o.autorizadoPor = e.por || '';
+        o.autorizadoPorUsername = e.porU || '';
+        o.autorizadoTs = Number(e.ts) || Date.now();
+        o.status = 'AUTORIZADA';
+        if (!o.verifTok && e.tok) o.verifTok = e.tok;   /* respeta el escudo v1240: quien-lo-tiene-gana */
+        if (e.fd) o.firmaDigital = e.fd;
+        if (e.sd) o.selloDigital = e.sd;
+        o._ts = Math.max(Number(o._ts) || 0, Number(e._ts) || 0, Number(e.ts) || 0);
+        hubo = true;
+        return;
+      }
+    });
+    return hubo;
+  } catch(err){ return false; }
+}
+/* AUTO-RESCATE: cualquier aparato que TENGA una autorización de las últimas 48 h que
+   al bus le falte (o la tenga vieja) la emite — así las firmas que quedaron atascadas
+   en el aparato de finanzas salen solas en cuanto recargue, sin consola. Cadencia 5 min. */
+function _autzBusAutoEmitir(){
+  try {
+    if (window._autzBusAutoUlt && Date.now() - window._autzBusAutoUlt < 3e5) return;
+    window._autzBusAutoUlt = Date.now();
+    const bus = (window._autzBusRemoto && typeof window._autzBusRemoto === 'object') ? window._autzBusRemoto : {};
+    const corte = Date.now() - 48 * 36e5;
+    const bolsas = [];
+    (((typeof state !== 'undefined' && state) || {}).projects || []).forEach(p => { if (p && p.materiales && Array.isArray(p.materiales.ordenes)) bolsas.push(p.materiales.ordenes); });
+    if (state && state.bodegaMat && Array.isArray(state.bodegaMat.ordenes)) bolsas.push(state.bodegaMat.ordenes);
+    if (state && state.variosMat && Array.isArray(state.variosMat.ordenes)) bolsas.push(state.variosMat.ordenes);
+    bolsas.forEach(arr => arr.forEach(o => {
+      if (!o || !o.autorizadoPor || Number(o.autorizadoTs || 0) < corte) return;
+      const e = bus[o.id];
+      if (e && Number(e.ts || 0) >= Number(o.autorizadoTs || 0)) return;
+      _autzBusEmitir(o);
+    }));
+  } catch(e){}
 }
 function _verifTokShield(mergedList, localList, remoteList){
   var por = function(l){ var m = {}; (Array.isArray(l) ? l : []).forEach(function(o){ if (o && o.id) m[o.id] = o; }); return m; };
