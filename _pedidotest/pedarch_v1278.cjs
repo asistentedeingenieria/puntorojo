@@ -76,7 +76,7 @@ ok('hash-skip: los embebidos quedan fuera (migran en la próxima subida)', /_ped
 
 /* ── 5. limpieza al borrar proyecto + candado de versión ── */
 ok('proyecto eliminado: su pedarch_ se borra', /doc\('pedarch_' \+ id\)\.delete\(\)/.test(html));
-ok('APP_SYNC_VERSION subió a 943', /APP_SYNC_VERSION = 943/.test(html));
+ok('APP_SYNC_VERSION subió al menos a 943', (function(){ const m = html.match(/APP_SYNC_VERSION = (\d+)/); return m && Number(m[1]) >= 943; })()); /* v1296: ancla de piso, no de igualdad — cada subida legítima la rompía */
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

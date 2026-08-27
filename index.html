@@ -3394,7 +3394,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1295</span>
+    <span style="opacity:.5;font-size:9px">v1296</span>
   </footer>
 
 </div>
@@ -9422,7 +9422,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 943; // v1278: partición pedarch_ — un cliente viejo no ve el doc de archivo y subiría el proj_ sin los pedidos archivados (los nuevos los re-unen, pero el viejo vería historial/gastos incompletos)
+const APP_SYNC_VERSION = 944; // v1296: escudo _solAtendidaShield en el merge de pedidos — un cliente viejo sin el escudo puede volver a perder la marca ATENDIDA de las solicitudes de etapa (v1278: partición pedarch_)
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10939,6 +10939,7 @@ const CloudSync = {
           rp.materiales.pedidosEliminados = _tpd;
           const _mpd = _mergeById((lp && lp.materiales && lp.materiales.pedidos) || [], rp.materiales.pedidos || [], _tpd);
           if (_verifTokShield(_mpd.list, (lp && lp.materiales && lp.materiales.pedidos) || [], rp.materiales.pedidos || [])) needsResync = true; // v1240
+          if (_solAtendidaShield(_mpd.list, (lp && lp.materiales && lp.materiales.pedidos) || [], rp.materiales.pedidos || [])) needsResync = true; // v1296: la marca ATENDIDA no se pierde
           rp.materiales.pedidos = _mpd.list;
           if (_mpd.changed) needsResync = true;
           /* v1169: el contador de numeración se une con GANA EL MAYOR — monótono, así que es
@@ -20955,6 +20956,9 @@ function renderPedidosList(){
      del historial a la vista activa aunque esté RECIBIDO o atendido (v1256); si no, el
      CORREGIR de v1235 queda escondido en el colapsable. El CANCELADO se queda (no puede
      tener órdenes vivas). */
+  /* v1296: las solicitudes ATENDIDAS que un aparato atrasado re-selló SIN la marca se
+     re-curan desde el PEDIDO FORMAL, dueño del vínculo (regla v1064) — idempotente */
+  try { if (_solEtapaHeal(pedidos)) saveState(); } catch(e){}
   const _conDevuelta = {};
   pedidos.forEach(pd => { try { if (pd && pd.status !== 'CANCELADO' && (getPedidoOrdenes(pd.id) || []).some(o => o && (o.status || '') === 'DEVUELTA')) _conDevuelta[pd.id] = true; } catch(e){} });
   const _act0 = pedidos.filter(pd => pd && (_conDevuelta[pd.id] || (pd.status !== 'RECIBIDO' && pd.status !== 'CANCELADO' && !pd.solEtapaAtendida)));
@@ -28797,7 +28801,7 @@ window._ocQuitarSaldo = async function(ocId){
   try { if (typeof renderOrdenesCompra === 'function') renderOrdenesCompra(); } catch(e){}
 };
 try { window._saldoProvDe = _saldoProvDe; } catch(e){}
-var OBRA_SIGLAS_FIJAS = { 'ESSENZA F2': 'EF2', 'TORELO': 'TOR', 'VICINIA DEL CARMEN': 'VEC' }; // v1271 (Antonio): "Vicinia del carmen es VEC en TODAS las abreviaturas" — la automática daba VDC; el PDF de asistencia (v839) ya decía VEC
+var OBRA_SIGLAS_FIJAS = { 'ESSENZA F2': 'EF2', 'TORELO': 'TOR', 'VICINIA DEL CARMEN': 'VDC' }; // v1271 pidió VEC; v1296 (Antonio, 27-ago): "me volvió a salir VEC cuando debe de ser VDC" — vuelve VDC. DERIVADA en display (v1180): cero migración; el candado v1256 acepta ambas
 function _obraSigla(nombre){
   var k = _obraCodigoNorm(nombre);
   if (OBRA_SIGLAS_FIJAS[k]) return OBRA_SIGLAS_FIJAS[k];
@@ -42189,6 +42193,23 @@ function _ocFacturaShield(mergedList, localList, remoteList){
    por objeto ENTERO, y una copia vieja sin token que toque el mismo objeto después lo
    borraría de toda la flota. Quien lo tiene, gana. Idempotente (segunda pasada: el token
    ya está y no marca cambio). Sirve para ordenes Y pedidos en los 3 contenedores. */
+/* ═══ v1296 · ESCUDO de la marca ATENDIDA de las solicitudes de etapa (v1256) ═══
+   Incidente 27-ago: solicitudes YA atendidas revivieron — un aparato atrasado re-selló
+   la solicitud SIN la marca (el self-heal v1270 estampa status+_ts fresco) y el merge
+   le ganó a la versión atendida. Quien-la-tiene-GANA (patrón v1039/_verifTokShield). */
+function _solAtendidaShield(mergedList, localList, remoteList){
+  var por = function(l){ var m = {}; (Array.isArray(l) ? l : []).forEach(function(o){ if (o && o.id) m[o.id] = o; }); return m; };
+  var L = por(localList), R = por(remoteList);
+  var changed = false;
+  (Array.isArray(mergedList) ? mergedList : []).forEach(function(o){
+    if (!o || !o.id || !o.esSolicitudEtapa || o.solEtapaAtendida) return;
+    var f = (L[o.id] && L[o.id].solEtapaAtendida) ? L[o.id] : ((R[o.id] && R[o.id].solEtapaAtendida) ? R[o.id] : null);
+    if (!f) return;
+    o.solEtapaAtendida = f.solEtapaAtendida;
+    changed = true;
+  });
+  return changed;
+}
 function _verifTokShield(mergedList, localList, remoteList){
   var por = function(l){ var m = {}; (Array.isArray(l) ? l : []).forEach(function(o){ if (o && o.id) m[o.id] = o; }); return m; };
   var L = por(localList), R = por(remoteList);
@@ -44125,6 +44146,31 @@ window._vdcPedirEtapaObs = async function(tid, lid, ei){
 };
 /* compras la ARMA como pedido formal: abre el talonario (+ NUEVO PEDIDO) con la seña de
    origen; al crear el pedido, submitPedido liga y marca la solicitud ATENDIDA (v1256). */
+/* v1296: SELF-HEAL de la marca ATENDIDA — el formal es el dueño del vínculo (v1064).
+   Cura por origenSolicitudEtapaId y, para formales viejos, por la observación
+   "ATIENDE <numero> — " que escribe _solEtapaArmarFormal. PURA sobre el array. */
+function _solEtapaHeal(pedidos){
+  try {
+    const lista = Array.isArray(pedidos) ? pedidos : [];
+    const porId = {}, porNum = {};
+    lista.forEach(pd => { if (!pd) return; if (pd.id) porId[pd.id] = pd; if (pd.numero) porNum[String(pd.numero)] = pd; });
+    let curo = false;
+    lista.forEach(pd => {
+      if (!pd || pd.esSolicitudEtapa || pd.status === 'CANCELADO') return;
+      let sol = null;
+      if (pd.origenSolicitudEtapaId) sol = porId[pd.origenSolicitudEtapaId] || null;
+      if (!sol) {
+        const m = String(pd.observaciones || '').match(/^ATIENDE (.+?) — /);
+        if (m && porNum[m[1].trim()]) sol = porNum[m[1].trim()];
+      }
+      if (!sol || sol === pd || !sol.esSolicitudEtapa || sol.solEtapaAtendida) return;
+      sol.solEtapaAtendida = { pedidoId: pd.id, numero: pd.numero, ts: Date.now() };
+      sol._ts = Date.now();
+      curo = true;
+    });
+    return curo;
+  } catch(e){ return false; }
+}
 window._solEtapaArmarFormal = function(pdId){
   const _ctx = _findPedidoGlobal(pdId);
   if (!_ctx || !_ctx.pd) return showToast('LA SOLICITUD YA NO EXISTE — RECARGÁ', 'red');

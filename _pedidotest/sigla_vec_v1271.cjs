@@ -14,10 +14,12 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 function ex(marker){ let m=html.indexOf(marker); if(m<0) return ''; let i=html.indexOf('{',m),d=0; for(;i<html.length;i++){ if(html[i]==='{')d++; else if(html[i]==='}'){ d--; if(d===0) return html.slice(m,i+1); } } return ''; }
 let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 
-/* 1. el mapa fijo lleva VEC (y conserva EF2/TOR) */
+/* 1. el mapa fijo — v1296 (27-ago): Antonio revirtió a VDC ("me volvió a salir VEC
+   cuando debe de ser VDC"); el mecanismo v1271 (fijas mandan, derivado en display)
+   sigue igual, solo cambió el valor. El candado v1256 acepta ambas siglas. */
 const mMapa = html.match(/var OBRA_SIGLAS_FIJAS = \{[^}]*\};/);
 const mapaSrc = mMapa ? mMapa[0] : '';
-ok("OBRA_SIGLAS_FIJAS: 'VICINIA DEL CARMEN': 'VEC'", /'VICINIA DEL CARMEN': 'VEC'/.test(mapaSrc));
+ok("OBRA_SIGLAS_FIJAS: 'VICINIA DEL CARMEN': 'VDC' (v1296)", /'VICINIA DEL CARMEN': 'VDC'/.test(mapaSrc));
 ok('OBRA_SIGLAS_FIJAS conserva EF2 y TOR', /'EF2'/.test(mapaSrc) && /'TOR'/.test(mapaSrc));
 
 /* 2. funcional: las fijas mandan también en _projSiglas directo */
@@ -30,9 +32,9 @@ try {
 } catch(e){ console.log('  eval:', e.message); }
 ok('las funciones evalúan juntas', !!fns);
 if (fns) {
-  ok("_projSiglas('VICINIA DEL CARMEN') = VEC", fns.p('VICINIA DEL CARMEN') === 'VEC');
-  ok('con minúsculas también', fns.p('Vicinia del Carmen') === 'VEC');
-  ok("_obraSigla('VICINIA DEL CARMEN') = VEC", fns.o('VICINIA DEL CARMEN') === 'VEC');
+  ok("_projSiglas('VICINIA DEL CARMEN') = VDC", fns.p('VICINIA DEL CARMEN') === 'VDC');
+  ok('con minúsculas también', fns.p('Vicinia del Carmen') === 'VDC');
+  ok("_obraSigla('VICINIA DEL CARMEN') = VDC", fns.o('VICINIA DEL CARMEN') === 'VDC');
   ok('VICINIA LAS AMÉRICAS sigue VLA', fns.p('VICINIA LAS AMÉRICAS') === 'VLA');
   ok('TORELO directo ahora TOR (la fija manda, v1182)', fns.p('TORELO') === 'TOR');
   ok('ESSENZA FASE 2 sigue EF2', fns.o('ESSENZA FASE 2') === 'EF2');
