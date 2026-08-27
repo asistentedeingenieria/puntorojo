@@ -3394,7 +3394,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1293</span>
+    <span style="opacity:.5;font-size:9px">v1294</span>
   </footer>
 
 </div>
@@ -24965,7 +24965,7 @@ function _bodegaHubHTML(){
     if (porRec) hoyBits.push(`<u onclick="_bodegaIrA('abasto')" style="text-decoration:none;color:var(--red);font-weight:800;cursor:pointer">${porRec} POR RECIBIR</u>`);
     if (porAut) hoyBits.push(`<u onclick="_bodegaIrA('abasto')" style="text-decoration:none;color:#B45309;font-weight:800;cursor:pointer">${porAut} OC POR AUTORIZAR</u>`);
     if (ppMadres) hoyBits.push(`<u onclick="_bodegaIrA('tras')" style="text-decoration:none;color:#B45309;font-weight:800;cursor:pointer">PRE-PAGO POR LIBERAR</u>`);
-    if (negativos) hoyBits.push(`<u onclick="_bodegaIrA('existencias')" style="text-decoration:none;color:var(--red);font-weight:800;cursor:pointer">${negativos} EN NEGATIVO</u>`);
+    if (negativos) hoyBits.push(`<u onclick="_bodegaIrA('existencias','neg')" style="text-decoration:none;color:var(--red);font-weight:800;cursor:pointer">${negativos} EN NEGATIVO</u>`);
 
     const fila = (vista, num, tit, sub, alerta) => `<div onclick="_bodegaIrA('${vista}')" style="display:flex;align-items:center;gap:14px;background:#fff;border:1px solid #E7E4DE;${alerta ? 'border-left:4px solid var(--red);' : ''}border-radius:14px;padding:14px 18px;margin-bottom:10px;cursor:pointer">
       <div style="font-size:22px;font-weight:800;min-width:46px;text-align:center;font-variant-numeric:tabular-nums">${num}</div>
@@ -25002,9 +25002,11 @@ function _bodegaAplicarVista(){
   const vol = document.getElementById('_bodegaVolver');
   if (vol) vol.style.display = set ? '' : 'none';
 }
-window._bodegaIrA = function(v){
+window._bodegaIrA = function(v, chip){
   window._bodegaVista = String(v || '');
+  if (chip) { window._bodegaExiFiltro = String(chip); try { const b = document.getElementById('_bodegaViewFiltro'); if (b) b.value = ''; } catch(e){} } // v1294: llegar con chip (HOY → negativos)
   try { _bodegaAplicarVista(); } catch(e){}
+  try { _bodegaExiAplicar(); } catch(e){}
   try { const m = document.getElementById('_bodegaPanelModal'); if (m) m.scrollTop = 0; } catch(e){}
 };
 /* el buscador del hub NO duplica lógica: salta a EXISTENCIAS y delega en el filtro real */
@@ -25035,11 +25037,16 @@ function _abrirPanelBodega(){
   } catch (e) {}
   const lista = Object.values(rows).sort((a, b) => a.name.localeCompare(b.name, 'es'));
   window._bodegaPanelRows = lista;
+  /* v1294: conteos para los CHIPS de la vista comprimida — derivados de la MISMA lista */
+  const _exiNeg = lista.filter(x => x.saldo < 0).length;
+  const _exiCam = lista.filter(x => (x.camino || 0) > 0).length;
+  const _exiAt = lista.filter(x => x.saldo < 0 || (x.camino || 0) > 0).length;
+  const _exiTodos = lista.filter(x => x.saldo || x.camino).length;
   /* v1192 (Antonio): la tabla muestra SOLO lo que tiene existencia (positiva o negativa)
      o material EN CAMINO — los renglones en cero se ocultan. Siguen en el DOM: el buscador
      los encuentra (para volver a cargarles existencia) y al quedar ≠ 0 reaparecen solos. */
   const filas = lista.map((x, i) => `
-    <div data-bfila data-bcero="${(!x.saldo && !x.camino) ? 1 : 0}" data-bname="${(String(x.name) + ' ' + String(x.alias || '')).toLowerCase().replace(/"/g, '&quot;')}" style="display:${(!x.saldo && !x.camino) ? 'none' : 'grid'};grid-template-columns:minmax(0,1fr) 56px 84px 84px 100px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
+    <div data-bfila data-bcero="${(!x.saldo && !x.camino) ? 1 : 0}" data-bneg="${x.saldo < 0 ? 1 : 0}" data-bcam="${(x.camino || 0) > 0 ? 1 : 0}" data-bname="${(String(x.name) + ' ' + String(x.alias || '')).toLowerCase().replace(/"/g, '&quot;')}" style="display:${(!x.saldo && !x.camino) ? 'none' : 'grid'};grid-template-columns:minmax(0,1fr) 56px 84px 84px 100px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #F3F4F6">
       <div style="font-size:11.5px;letter-spacing:.2px">${_invEscAttr(x.name)}</div>
       <div style="text-align:center;font-size:10px;color:#6B7280">${_invEscAttr(x.u || '')}</div>
       <div style="text-align:right;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;color:${x.saldo < 0 ? '#C62828' : '#111827'}">${x.saldo}</div>
@@ -25178,12 +25185,22 @@ function _abrirPanelBodega(){
     <div id="_bodegaHub">${_bodegaHubHTML()}</div>
     <div data-bzona="existencias">
     <input id="_bodegaViewFiltro" class="pr-buscador" placeholder="BUSCAR MATERIAL EN LA BODEGA…" oninput="window._bodegaViewFiltrar(this.value)" style="width:100%;margin-bottom:10px">
+    <!-- v1294: CHIPS de la vista comprimida — ATENCIÓN es el default; TODOS = regla v1192 -->
+    <style>.bexi-on{background:#1C1917 !important;border-color:#1C1917 !important;color:#fff !important}</style>
+    ${lista.length ? `<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
+      <button data-bexichip="atencion" onclick="_bodegaExiChip('atencion')" class="btn ghost sm" style="border-radius:14px;font-size:9.5px;padding:4px 12px">ATENCIÓN · ${_exiAt}</button>
+      ${_exiNeg ? `<button data-bexichip="neg" onclick="_bodegaExiChip('neg')" class="btn ghost sm" style="border-radius:14px;font-size:9.5px;padding:4px 12px;color:var(--red);border-color:#F3C2C4">NEGATIVOS · ${_exiNeg}</button>` : ''}
+      ${_exiCam ? `<button data-bexichip="camino" onclick="_bodegaExiChip('camino')" class="btn ghost sm" style="border-radius:14px;font-size:9.5px;padding:4px 12px;color:#1D4ED8;border-color:#BFDBFE">EN CAMINO · ${_exiCam}</button>` : ''}
+      <button data-bexichip="todos" onclick="_bodegaExiChip('todos')" class="btn ghost sm" style="border-radius:14px;font-size:9.5px;padding:4px 12px">TODOS · ${_exiTodos}</button>
+    </div>` : ''}
     <div class="card" style="padding:4px 18px 8px">
       <!-- v987: en celular la tabla scrollea de lado (las 5 columnas se aplastaban) -->
       ${lista.length ? `<div class="bodega-tabla-scroll"><div class="bodega-tabla-min">
       <div style="display:grid;grid-template-columns:minmax(0,1fr) 56px 84px 84px 100px;gap:10px;padding:10px 0 4px;font-size:8.5px;letter-spacing:1.5px;color:#9CA3AF;font-weight:700"><span>MATERIAL</span><span style="text-align:center">U</span><span style="text-align:right">EXISTENCIA</span><span style="text-align:right">EN CAMINO</span><span style="text-align:right">AJUSTE ±</span></div>
       ${filas}
       </div></div>` : `<div style="padding:24px;text-align:center;color:#9CA3AF;font-size:11px;line-height:1.6">SIN MATERIALES TODAVÍA.<br>Usá <b>CARGAR EXISTENCIAS</b> para anotar lo que ya hay físicamente en la bodega, o <b>ABASTECER</b> para comprarle stock al proveedor.</div>`}
+      ${lista.length ? `<div id="_bodegaExiVacio" style="display:none;padding:16px;text-align:center;color:#15803D;font-size:11px;font-weight:700;letter-spacing:.5px">✓ NADA PIDE ATENCIÓN EN ESTE FILTRO</div>
+      <div id="_bodegaExiVerTodos" onclick="_bodegaExiChip('todos')" style="display:none;text-align:center;border:1.5px dashed #E7E5E4;border-radius:8px;padding:8px;font-size:10px;font-weight:800;letter-spacing:1px;color:var(--red);cursor:pointer;margin:8px 0 2px">▶ VER TODOS · ${_exiTodos}</div>` : ''}
       ${lista.length ? `<div style="padding:12px 0 6px;display:flex;gap:10px;align-items:end;flex-wrap:wrap">
         <!-- v1052 (Antonio): compacto — el placeholder dice qué es, sin rótulo gigante -->
         <input type="text" id="_bodegaAjMotivo" class="pr-buscador" placeholder="MOTIVO DEL AJUSTE · EJ: MERMA, CONTEO" style="flex:1;min-width:170px;height:34px;padding:4px 10px">
@@ -25260,21 +25277,55 @@ function _abrirPanelBodega(){
   try { _comprasLlevarNodos(); } catch(e){ console.warn('[v1040] llevar nodos', e); }
   try { _comprasSetTab(window._comprasTab || 'bodega'); } catch(e){ console.warn('[v1040] seccion', e); }
   try { _bodegaAplicarVista(); } catch(e){ console.warn('[v1293] vista', e); } // v1293: el vestíbulo sobrevive los repintados
+  try { _bodegaExiAplicar(); } catch(e){ console.warn('[v1294] chips', e); } // v1294: los chips de existencias también
   /* v1056: el repintado restaura el scroll donde estaba (los toggles de historial ya no
      mandan hasta arriba) */
   if (window._comprasScroll != null) { try { wrap.scrollTop = window._comprasScroll; } catch(e){} window._comprasScroll = null; }
 }
+/* ═══ v1294 · EXISTENCIAS COMPRIMIDA (fase B del vestíbulo) ═══
+   Sin búsqueda mandan los CHIPS: ATENCIÓN (negativos + en camino, default) · NEGATIVOS ·
+   EN CAMINO · TODOS (= regla v1192: los renglones en cero ocultos). La BÚSQUEDA manda
+   sobre los chips y encuentra TODO, incluidos los cero (v1192). Todo por display —
+   los data-aj posicionales sobre _bodegaPanelRows no se tocan. */
+function _bodegaExiAplicar(){
+  const m = document.getElementById('_bodegaPanelModal'); if (!m) return;
+  const f = String((window && window._bodegaExiFiltro) || 'atencion');
+  const chips = m.querySelectorAll('[data-bexichip]');
+  for (let i = 0; i < chips.length; i++) { try { chips[i].classList.toggle('bexi-on', chips[i].dataset.bexichip === f); } catch(e){} }
+  const vacio = document.getElementById('_bodegaExiVacio');
+  const verTodos = document.getElementById('_bodegaExiVerTodos');
+  const q = String((document.getElementById('_bodegaViewFiltro') || {}).value || '').trim();
+  if (q) { if (vacio) vacio.style.display = 'none'; if (verTodos) verTodos.style.display = 'none'; return; } /* la búsqueda manda */
+  let visibles = 0;
+  const filasEls = m.querySelectorAll('[data-bfila]');
+  for (let i = 0; i < filasEls.length; i++) {
+    const el = filasEls[i];
+    const ver = f === 'neg' ? el.dataset.bneg === '1'
+      : f === 'camino' ? el.dataset.bcam === '1'
+      : f === 'todos' ? el.dataset.bcero !== '1'
+      : (el.dataset.bneg === '1' || el.dataset.bcam === '1');
+    el.style.display = ver ? 'grid' : 'none';
+    if (ver) visibles++;
+  }
+  if (vacio) vacio.style.display = visibles ? 'none' : '';
+  if (verTodos) verTodos.style.display = (f === 'todos' || !filasEls.length) ? 'none' : '';
+}
+window._bodegaExiChip = function(f){
+  window._bodegaExiFiltro = String(f || 'atencion');
+  try { const b = document.getElementById('_bodegaViewFiltro'); if (b) b.value = ''; } catch(e){}
+  try { _bodegaExiAplicar(); } catch(e){}
+};
 // filtro en vivo de la tabla de existencias (por nombre, sin re-render)
 window._bodegaViewFiltrar = function(q){
   const m = document.getElementById('_bodegaPanelModal'); if (!m) return;
   const f = String(q || '').toLowerCase().trim();
+  /* v1294: sin búsqueda mandan los chips (el chip TODOS conserva la regla v1192) */
+  if (!f) { try { _bodegaExiAplicar(); } catch(e){} return; }
+  try { const v = document.getElementById('_bodegaExiVacio'); if (v) v.style.display = 'none'; } catch(e){}
+  try { const t = document.getElementById('_bodegaExiVerTodos'); if (t) t.style.display = 'none'; } catch(e){}
   m.querySelectorAll('[data-bfila]').forEach(el => {
-    /* v1192: sin búsqueda los renglones en CERO quedan ocultos (pedido de Antonio);
-       BUSCANDO se encuentra TODO — así un material en cero se puede volver a tocar */
-    const esCero = el.dataset.bcero === '1';
-    el.style.display = f
-      ? ((el.dataset.bname || '').includes(f) ? 'grid' : 'none')
-      : (esCero ? 'none' : 'grid');
+    /* v1192: BUSCANDO se encuentra TODO — así un material en cero se puede volver a tocar */
+    el.style.display = (el.dataset.bname || '').includes(f) ? 'grid' : 'none';
   });
 };
 function _cerrarPanelBodegaDom(){

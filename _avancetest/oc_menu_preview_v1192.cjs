@@ -48,9 +48,10 @@ ok('.oc-menu flotante (absolute + z-index)', /\.oc-menu\{position:absolute[^}]*z
 ok('en mobile el menú no se sale por la izquierda', /\.oc-menu\{left:0;right:auto\}/.test(html));
 
 console.log('\n— BODEGA CENTRAL: orden nuevo + ceros ocultos (pedidos de Antonio, 12-ago) —');
-// región del template de la sección bodega
+// región del template de la sección bodega — v1293/v1294: el hub del vestíbulo y los
+// chips de existencias viven ANTES de la tabla, la ventana se ensancha para cubrirlos
 const iB = code.indexOf('id="_comprasSecBodega"');
-const zB = code.slice(iB, iB + 3000);
+const zB = code.slice(iB, iB + 9000);
 ok('la sección de bodega se encuentra', iB > 0);
 ok('el buscador y la tabla van PRIMERO (antes de pre-pago/trasiegos)',
   zB.indexOf('_bodegaViewFiltro') >= 0 && zB.indexOf('_bodegaPrepagoWrap') > zB.indexOf('_bodegaViewFiltro'));
@@ -58,8 +59,11 @@ ok('pre-pago y trasiegos quedaron DESPUÉS de la tabla', zB.indexOf('_trasiegosW
 ok('las 4 tarjetitas explicativas ya no existen', !/CÓMO LEER LA TABLA/.test(code) || code.indexOf('CÓMO LEER LA TABLA') !== iB);
 ok('los renglones en CERO nacen ocultos pero quedan en el DOM (buscables)',
   /data-bcero="\$\{\(!x\.saldo && !x\.camino\) \? 1 : 0\}"/.test(code) && /display:\$\{\(!x\.saldo && !x\.camino\) \? 'none' : 'grid'\}/.test(code));
+/* v1294: la regla v1192 sigue viva pero repartida — BUSCANDO encuentra todo (en el
+   filtro) y los ceros ocultos viven en el chip TODOS de _bodegaExiAplicar */
 const zFil = ex(code, 'window._bodegaViewFiltrar = function(');
-ok('el filtro: sin búsqueda oculta ceros, BUSCANDO encuentra todo', /bcero/.test(zFil) && /f\s*\?/.test(zFil));
+ok('el filtro: sin búsqueda mandan los chips y BUSCANDO encuentra todo',
+  /_bodegaExiAplicar/.test(zFil) && /includes\(f\)/.test(zFil) && /bcero/.test(ex(code, 'function _bodegaExiAplicar(')));
 
 console.log('\n— CATÁLOGO: un solo + para todos —');
 ok('queda UN + con permiso doble (admin O proponer)', /data-perm="users\.manage\|precios\.proponer"/.test(code) && /_catAgregarProveedorSmart\(\)/.test(code));
