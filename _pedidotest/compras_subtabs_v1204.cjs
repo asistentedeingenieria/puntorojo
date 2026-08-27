@@ -26,7 +26,9 @@ ok('solo series PRESENTES, con conteo', /\['OC','DESP','OP','DPP','TRAS','RENTA'
 /* v1205 (Antonio: "NO debe decir ningún número en el título"): las subpestañas van SIN
    conteo — solo el nombre. Los conteos internos (_serCounts) siguen, pero solo para
    decidir qué series ofrecer. */
-ok('las subpestañas van SIN números (v1205)', /window\._ocSerieSub\(''\)">TODAS<\/button>/.test(ro) && !/TODAS · \$\{/.test(ro) && /window\._pedEstadoSub\('REC'\)">RECIBIDOS<\/button>/.test(code));
+/* v1299: la barra de PEDIDOS cambió a chips por estado CON conteo (pedido de Antonio,
+   27-ago); las series de ÓRDENES siguen sin números (v1205). */
+ok('las series de ÓRDENES van SIN números (v1205) y PEDIDOS con conteo (v1299)', /window\._ocSerieSub\(''\)">TODAS<\/button>/.test(ro) && !/TODAS · \$\{/.test(ro) && /RECIBIDOS · \$\{_hist\.length\}/.test(code));
 ok('filtro huérfano se auto-resetea (cambio de proyecto)', /!_serCounts\[window\._ocSerieFiltro\]\) window\._ocSerieFiltro = ''/.test(ro));
 ok('la barra también sale con la lista vacía (para poder volver)', (ro.match(/_serBar/g) || []).length >= 2);
 ok('el click re-renderiza', /window\._ocSerieSub = function/.test(code) && /renderOrdenesList\(\)/.test(ex(code, 'window._ocSerieSub = function')));
@@ -34,8 +36,9 @@ ok('el click re-renderiza', /window\._ocSerieSub = function/.test(code) && /rend
 console.log('\n— PEDIDOS: subpestañas por estado —');
 const rp = ex(code, 'function renderPedidosList(');
 ok('el filtro vive en window._pedEstadoFiltro', /_pedEstadoFiltro/.test(rp));
-ok('SOLICITADOS filtra ese estado', /'SOL'/.test(rp) && /status === 'SOLICITADO'/.test(rp));
-ok('EN COMPRA agrupa EN COMPRA + APROBADO', /'COMPRA'/.test(rp) && /EN COMPRA' \|\| pd\.status === 'APROBADO/.test(rp));
+/* v1299: las canastas SOL/COMPRA se reemplazaron por UN chip por estado DERIVADO */
+ok('los chips salen del estado que pinta la tarjeta (v1299)', /_estadoPedidoMostrar\(pd, getPedidoOrdenes\(pd\.id\)\)/.test(rp) && /_estDe\[pd\.id\] === _fPed/.test(rp));
+ok('filtro huérfano se auto-resetea (v1299)', /!_estCounts\[window\._pedEstadoFiltro\]/.test(rp));
 ok('RECIBIDOS muestra el historial directo (sin colapsable)', /'REC'/.test(rp));
 ok('en TODOS el historial colapsable sigue', /togglePedidosHistorial/.test(rp));
 ok('el click re-renderiza', /window\._pedEstadoSub = function/.test(code) && /renderPedidosList\(\)/.test(ex(code, 'window._pedEstadoSub = function')));
