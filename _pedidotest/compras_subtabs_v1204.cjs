@@ -28,7 +28,7 @@ ok('solo series PRESENTES, con conteo', /\['OC','DESP','OP','DPP','TRAS','RENTA'
    decidir qué series ofrecer. */
 /* v1299: la barra de PEDIDOS cambió a chips por estado CON conteo (pedido de Antonio,
    27-ago); las series de ÓRDENES siguen sin números (v1205). */
-ok('las series de ÓRDENES van SIN números (v1205) y PEDIDOS con conteo (v1299)', /window\._ocSerieSub\(''\)">TODAS<\/button>/.test(ro) && !/TODAS · \$\{/.test(ro) && /RECIBIDOS · \$\{_hist\.length\}/.test(code));
+ok('las series de ÓRDENES van SIN números (v1205) y PEDIDOS con conteo (v1299/v1302)', /window\._ocSerieSub\(''\)">TODAS<\/button>/.test(ro) && !/TODAS · \$\{/.test(ro) && /RECIBIDOS \(\$\{_hist\.length\}\)/.test(code));
 ok('filtro huérfano se auto-resetea (cambio de proyecto)', /!_serCounts\[window\._ocSerieFiltro\]\) window\._ocSerieFiltro = ''/.test(ro));
 ok('la barra también sale con la lista vacía (para poder volver)', (ro.match(/_serBar/g) || []).length >= 2);
 ok('el click re-renderiza', /window\._ocSerieSub = function/.test(code) && /renderOrdenesList\(\)/.test(ex(code, 'window._ocSerieSub = function')));

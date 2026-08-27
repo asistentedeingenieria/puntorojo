@@ -16,7 +16,8 @@ const iBar = html.indexOf('const _pedBar =');
 const z = html.slice(iBar - 1800, iBar + 1400);
 ok('los chips se derivan con la MISMA función de la tarjeta', /_estadoPedidoMostrar\(pd, getPedidoOrdenes\(pd\.id\)\)/.test(z));
 ok('un chip por estado PRESENTE con su conteo', /_estCounts/.test(z) && /_estOrden\.map/.test(z));
-ok('TODOS y RECIBIDOS llevan conteo', /TODOS · \$\{_act0\.length\}/.test(z) && /RECIBIDOS · \$\{_hist\.length\}/.test(z));
+/* v1302: mismo look que la barra de estados de ÓRDENES — TODOS LOS ESTADOS + (N) */
+ok('rótulo de órdenes y conteos entre paréntesis', /TODOS LOS ESTADOS<\/button>/.test(z) && /RECIBIDOS \(\$\{_hist\.length\}\)/.test(z) && /\(\$\{_estCounts\[t\]\}\)/.test(z));
 ok('el filtro compara contra el estado DERIVADO', /_estDe\[pd\.id\] === _fPed/.test(z));
 ok('filtro huérfano se auto-resetea', /!_estCounts\[window\._pedEstadoFiltro\]/.test(z));
 ok('las canastas viejas SOL/COMPRA ya no filtran por status crudo', !/pd\.status === 'SOLICITADO'\)\.length/.test(z) && !/_fPed === 'SOL'/.test(z));
