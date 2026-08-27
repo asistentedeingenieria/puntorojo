@@ -28,9 +28,12 @@ if (zC.length > 40) {
 /* ── 2. la suscripción ── */
 const zS = ex('function _suscribirPermisosEnVivo(');
 ok('escucha SU doc users/<uid> con onSnapshot', /collection\('users'\)\.doc\(fbUser\.uid\)\.onSnapshot/.test(zS));
-ok('si nada cambió no hace nada', /_permsCambiaron/.test(zS) && /return;/.test(zS));
-ok('aplica permisos y también la obra asignada', /applyPermissions\(\)/.test(zS) && /obraAsignada/.test(zS));
-ok('el repintado respeta isUserBusy (v770)', /isUserBusy/.test(zS) && /renderAll\(\)/.test(zS));
+/* v1300: la aplicación vive en el helper _permsAplicarFrescos (compartido con el
+   refresco bajo demanda de anticipos) — las mismas garantías, otra casa */
+const zAF = ex('function _permsAplicarFrescos(');
+ok('si nada cambió no hace nada', /_permsCambiaron/.test(zAF) && /return false;/.test(zAF) && /_permsAplicarFrescos\(/.test(zS));
+ok('aplica permisos y también la obra asignada', /applyPermissions\(\)/.test(zAF) && /obraAsignada/.test(zAF));
+ok('el repintado respeta isUserBusy (v770)', /isUserBusy/.test(zAF) && /renderAll\(\)/.test(zAF));
 ok('mata la suscripción anterior antes de abrir otra', /_permsUnsub/.test(zS.slice(0, zS.indexOf('onSnapshot'))));
 ok('el error callback traga el permission-denied del cierre', /onSnapshot\(function[\s\S]*, function\(/.test(zS));
 

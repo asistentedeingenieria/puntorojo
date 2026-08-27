@@ -3394,7 +3394,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1299</span>
+    <span style="opacity:.5;font-size:9px">v1300</span>
   </footer>
 
 </div>
@@ -54509,33 +54509,54 @@ async function _claimPendingPhoneUser(fbUser){
 function _permsCambiaron(a, b){
   return JSON.stringify((a || []).slice().sort()) !== JSON.stringify((b || []).slice().sort());
 }
+/* v1300: aplica un perfil FRESCO (perms/obra) si cambió — lo usan el listener v1288 y
+   el refresco bajo demanda de anticipos. Campo perms ausente JAMÁS borra (v1289). */
+function _permsAplicarFrescos(d){
+  try {
+    if (!currentUser || !d || !Array.isArray(d.perms)) return false;
+    var nuevos = d.perms;
+    var cambioPerms = _permsCambiaron(currentUser.perms, nuevos);
+    var cambioObra = String(d.obraAsignada || '') !== String(currentUser.obraAsignada || '');
+    if (!cambioPerms && !cambioObra) return false;
+    currentUser.perms = nuevos;
+    currentUser.obraAsignada = d.obraAsignada || '';
+    currentUser.cargo = d.cargo || currentUser.cargo;
+    currentUser.displayName = d.displayName || currentUser.displayName;
+    try { applyPermissions(); } catch(e2){}
+    try { if (!(typeof isUserBusy === 'function' && isUserBusy())) renderAll(); } catch(e3){}
+    return true;
+  } catch(e){ return false; }
+}
 function _suscribirPermisosEnVivo(fbUser){
   try { if (window._permsUnsub) { window._permsUnsub(); window._permsUnsub = null; } } catch(e){}
   try {
     window._permsUnsub = firebase.firestore().collection('users').doc(fbUser.uid).onSnapshot(function(s){
       try {
         if (!s || !s.exists || !currentUser || currentUser.uid !== fbUser.uid) return;
-        /* v1289 (mordió a los minutos): el eco de latencia de un write pendiente (el
-           {lastLogin} del login, merge sobre doc no cacheado) llega SIN perms — aplicarlo
-           borraba los permisos EN MEMORIA y salía "SIN PERMISO PARA NINGUNA VISTA".
-           Solo manda lo CONFIRMADO por el servidor; campo ausente ≠ casillas vacías. */
-        if (s.metadata && (s.metadata.hasPendingWrites || s.metadata.fromCache)) return;
-        var d = s.data() || {};
-        if (!Array.isArray(d.perms)) return;
-        var nuevos = d.perms;
-        var cambioPerms = _permsCambiaron(currentUser.perms, nuevos);
-        var cambioObra = String(d.obraAsignada || '') !== String(currentUser.obraAsignada || '');
-        if (!cambioPerms && !cambioObra) return;
-        currentUser.perms = nuevos;
-        currentUser.obraAsignada = d.obraAsignada || '';
-        currentUser.cargo = d.cargo || currentUser.cargo;
-        currentUser.displayName = d.displayName || currentUser.displayName;
-        try { applyPermissions(); } catch(e2){}
-        try { if (!(typeof isUserBusy === 'function' && isUserBusy())) renderAll(); } catch(e3){}
+        /* v1289: el eco de latencia de un write pendiente llega SIN perms — jamás manda.
+           v1300: el CACHE del SDK sí se acepta (es monótono por doc): en aparatos con
+           conexión flaky casi todo llega fromCache y bloquearlo dejaba las casillas
+           congeladas; el caso-wipe lo bloquean hasPendingWrites + el guard de array. */
+        if (s.metadata && s.metadata.hasPendingWrites) return;
+        _permsAplicarFrescos(s.data() || {});
       } catch(e4){}
     }, function(){ /* permission-denied al cerrar sesión: silencio */ });
   } catch(e){}
 }
+/* v1300: al abrir la lista de SOLICITUDES de anticipo se relee el perfil DIRECTO DEL
+   SERVIDOR (cadencia 60 s) — aunque toda otra vía esté atascada, entrar trae la verdad. */
+function _antPermRefrescar(){
+  try {
+    if (window._antPermRefrescarUlt && Date.now() - window._antPermRefrescarUlt < 6e4) return;
+    window._antPermRefrescarUlt = Date.now();
+    var u = (typeof currentUser !== 'undefined' && currentUser) || null;
+    if (!u || !u.uid) return;
+    firebase.firestore().collection('users').doc(u.uid).get({ source: 'server' })
+      .then(function(s){ if (s && s.exists) _permsAplicarFrescos(s.data() || {}); })
+      .catch(function(){});
+  } catch(e){}
+}
+window._antPermRefrescar = _antPermRefrescar;
 
 /* Aplica la sesión: setea currentUser y arranca la app. */
 function applyAuthSession(fbUser, profileData){
@@ -65663,6 +65684,7 @@ async function _anulAnularReal(){
   };
   // Render de la vista SOLICITUDES
   function _antSolicRender(cont){
+    try { if (typeof _antPermRefrescar === 'function') _antPermRefrescar(); } catch(e){} /* v1300: la casilla recién marcada llega aunque el listener esté flaky */
     const _todas = _antSolics().slice().sort((a,b)=>(_antSolicRango(a) - _antSolicRango(b)) || ((Number(b._ts)||0)-(Number(a._ts)||0)));
     // v997: las ENTREGADAS ya no esperan nada — se guardan en el historial colapsable
     const all = _todas.filter(s => s && s.estado !== 'entregada');

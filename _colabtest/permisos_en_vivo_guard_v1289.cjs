@@ -18,11 +18,14 @@ let pass=0, fail=0; const ok=(n,c)=>c?pass++:(fail++,console.log('FAIL '+n));
 const zS = ex('function _suscribirPermisosEnVivo(');
 ok('ignora el eco local de writes pendientes', /hasPendingWrites/.test(zS));
 ok('solo aplica lo confirmado por el servidor (no fromCache)', /fromCache/.test(zS));
-ok('un doc SIN el campo perms jamás borra casillas', /if \(!Array\.isArray\(d\.perms\)\) return;/.test(zS));
-ok('ya no existe el "sin campo = sin permisos"', !/Array\.isArray\(d\.perms\) \? d\.perms : \[\]/.test(zS));
+/* v1300: el guard de array vive en _permsAplicarFrescos (helper compartido); el
+   listener bloquea el eco local ANTES de delegar. fromCache ya se acepta (es monótono). */
+const zAF9 = ex('function _permsAplicarFrescos(');
+ok('un doc SIN el campo perms jamás borra casillas', /!Array\.isArray\(d\.perms\)\) return false;/.test(zAF9));
+ok('ya no existe el "sin campo = sin permisos"', !/Array\.isArray\(d\.perms\) \? d\.perms : \[\]/.test(zS) && !/Array\.isArray\(d\.perms\) \? d\.perms : \[\]/.test(zAF9));
 ok('los candados van ANTES de tocar currentUser', (function(){
-  const iGuard = zS.indexOf('hasPendingWrites'), iMut = zS.indexOf('currentUser.perms =');
-  return iGuard > 0 && iMut > 0 && iGuard < iMut;
+  const iGuard = zS.indexOf('hasPendingWrites'), iDeleg = zS.indexOf('_permsAplicarFrescos(');
+  return iGuard > 0 && iDeleg > 0 && iGuard < iDeleg && zAF9.indexOf('Array.isArray') < zAF9.indexOf('currentUser.perms =');
 })());
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
