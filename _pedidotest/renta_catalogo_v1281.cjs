@@ -20,7 +20,9 @@ const zCiclo = ex('window._catProdRentaCiclo = function');
 ok('_catProdRentaCiclo existe con el gate de autorizador', /precios\.autorizar/.test(zCiclo) || /users\.manage/.test(zCiclo));
 ok('cicla COMPRA → DÍA → SEMANA → MES y SELLA (union-merge v1070)', /DIA/.test(zCiclo) && /SEMANA/.test(zCiclo) && /MES/.test(zCiclo) && /_ts = Date\.now\(\)/.test(zCiclo));
 ok('el encabezado del catálogo tiene la columna RENTA', /<div>RENTA<\/div>/.test(html));
-ok('las columnas del grid crecieron (fila y encabezado)', /1fr 90px 120px 120px 92px 38px/.test(html));
+/* v1306 re-ancló los anchos (descripción gana espacio); la intención de v1281 es que el
+   grid tenga SEIS columnas (con RENTA), no valores exactos */
+ok('las columnas del grid crecieron (fila y encabezado, 6 columnas)', /minmax\(0,1fr\) 64px 106px 106px 78px 32px/.test(html));
 
 /* ── 2. helper puro ── */
 const zInfo = ex('function _prodRentaInfo(');
