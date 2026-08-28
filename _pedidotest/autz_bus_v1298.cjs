@@ -66,7 +66,8 @@ if (zI.length > 500) {
 /* ── 4. auto-rescate y ritual ── */
 const zA = ex('function _autzBusAutoEmitir(');
 ok('auto-rescate: emite lo autorizado reciente que al bus le falta', /48/.test(zA) && /_autzBusEmitir\(/.test(zA) && /_autzBusInjertar\(\)/.test(html) && /_autzBusAutoEmitir\(\)/.test(html.slice(html.indexOf('applyRemote'))));
-ok('APP_SYNC_VERSION subió a 945', /const APP_SYNC_VERSION = 945/.test(html));
+/* v1307 re-ancló como PISO (regla de la casa: cada bump legítimo rompía la igualdad) */
+ok('APP_SYNC_VERSION subió a 945+', (function(){ const m = html.match(/const APP_SYNC_VERSION = (\d+)/); return m && Number(m[1]) >= 945; })());
 
 console.log('PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

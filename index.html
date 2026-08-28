@@ -3405,7 +3405,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1306</span>
+    <span style="opacity:.5;font-size:9px">v1308</span>
   </footer>
 
 </div>
@@ -9433,7 +9433,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 945; // v1298: BUS de autorizaciones (autzBus + injerto en applyRemote) — un cliente viejo no injerta y sigue ciego a las firmas hasta que el doc gordo le llegue (v1296: escudo solAtendida · v1278: pedarch_)
+const APP_SYNC_VERSION = 946; // v1298: BUS de autorizaciones (autzBus + injerto en applyRemote) — un cliente viejo no injerta y sigue ciego a las firmas hasta que el doc gordo le llegue (v1296: escudo solAtendida · v1278: pedarch_)
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10058,7 +10058,21 @@ const CloudSync = {
         this._forceInFlight = null;
       }
     })();
-    return this._forceInFlight;
+    /* v1307 (caso VLA-47): si la promesa del SDK queda COLGADA para siempre (v1139), el
+       guard de 45s liberaba uploadingNow pero _forceInFlight seguía puesto — y contra él
+       rebotan el debounce, el vigilante de pendientes y el propio encolado del force: el
+       aparato quedaba MUDO hasta recargar. A los 90s se ABANDONA la promesa (patrón v1276
+       del debounce): se sueltan los dos flags para que los reintentos vuelvan a fluir. */
+    const _miForce = this._forceInFlight;
+    setTimeout(() => {
+      if (this._forceInFlight === _miForce) {
+        this._forceInFlight = null;
+        this._forceQueued = null;
+        try { _loginDiag('sync-force-abandonado', { donde: 'force-90s' }); } catch(e){}
+        console.warn('[v1307] forceUploadNow abandonado a los 90s — canal liberado para reintentos');
+      }
+    }, 90000);
+    return _miForce;
   },
 
   /* v334: refresca el state desde la nube ANTES de operaciones de solo lectura
@@ -44432,9 +44446,12 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
   const _fOk = await _pedirFirmaSiFalta();
   if (!_fOk && !_miFirmaImg()) return showToast('PARA ENVIAR EL PEDIDO REGISTRÁ TU FIRMA (HOJA EN BLANCO + LAPICERO NEGRO + BUENA FOTO)', 'red');
 
-  const p = activeProj();
-  const t = p.towers.find(x => x.id === towerId);
-  const l = t && t.levels.find(x => x.id === levelId);
+  /* v1307 (caso VLA-47): let, no const — tras el await del modal se RE-LEEN del state vivo
+     (regla v769/v940): un applyRemote con state=merged deja estas referencias huérfanas y
+     el push caería en un objeto muerto = pedido perdido sin rastro. */
+  let p = activeProj();
+  let t = p.towers.find(x => x.id === towerId);
+  let l = t && t.levels.find(x => x.id === levelId);
   if (!t || !l) return;
 
   const numAptos = (l.aptos || []).length;
@@ -44564,6 +44581,16 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
     if (typeof confirmado === 'string' && confirmado) _fechaEntregaElegida = confirmado; // v915
   }
 
+  /* v1307 (regla v940): entre los awaits de firma/confirmación pudo aplicar un snapshot
+     (state=merged). Se re-lee TODO del state vivo ANTES de mutar; si la obra activa ya no
+     es la misma, se aborta sin quemar número ni escribir nada. */
+  const _pvivo = activeProj();
+  if (!_pvivo || _pvivo.id !== p.id) return showToast('LA OBRA ACTIVA CAMBIÓ MIENTRAS SE CONFIRMABA — VOLVÉ A GENERAR EL PEDIDO', 'red');
+  p = _pvivo;
+  t = (p.towers || []).find(x => x.id === towerId);
+  l = t && (t.levels || []).find(x => x.id === levelId);
+  if (!t || !l) return showToast('EL NIVEL YA NO EXISTE EN EL STATE ACTUAL — VOLVÉ A GENERAR EL PEDIDO', 'red');
+
   // Generar el pedido
   p.materiales.pedidoCounter = (p.materiales.pedidoCounter || 0) + 1;
   const numero = nextPedidoCode(p);
@@ -44668,7 +44695,31 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
 
   renderRecetaPedir();
   try { renderPedidosList(); } catch(e){} // v981: que LISTA DE PEDIDOS ya lo tenga al entrar
-  showToast(`PEDIDO ${numero} GENERADO AUTOMÁTICAMENTE`, 'green');
+
+  /* ══ v1307 — CASO VLA-47: EL PEDIDO DE RECETA TAMBIÉN CONFIRMA EN LA NUBE ══
+     Este generador era el ÚNICO creador de pedidos SIN el blindaje v1170: el
+     forceUploadNow de la reserva (arriba) viaja ANTES del push — sube el NÚMERO sin el
+     pedido — y el pedido quedaba confiado al debounce; si esa subida no confirmaba, la
+     flota veía el correlativo quemado sin pedido y el toast verde ya había mentido
+     (exactamente lo que le pasó a Rony con VLA-47). Mismo cinturón que submitPedido:
+     marcar POR ENVIAR, forzar, ESPERAR, decir la verdad. */
+  try { _pedPendAdd(pedido.id); } catch(e){}
+  try { window._pedVerifSubir(pedido, p); } catch(e){} // la copia sellada del QR viaja YA, no solo al imprimir
+  try { showToast('CONFIRMANDO EN LA NUBE...', ''); } catch(e){}
+  let _nubeOk = false;
+  try {
+    if (typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow) {
+      _nubeOk = (await CloudSync.forceUploadNow()) !== false;
+    }
+  } catch(e){ console.warn('[v1307] el pedido de receta no se pudo confirmar en la nube:', e && (e.code || e.message)); }
+  if (_nubeOk) {
+    pedido.nubeOk = true;            // queda en el dato: el impreso puede saber si salió
+    try { _pedPendClear(); } catch(e){}
+    try { saveState(); } catch(e){}  // el sello viaja en la próxima subida (sin forzar de nuevo)
+  }
+  const _av = _pedidoAvisoEnvio(_nubeOk, _numLimpio(numero), 'COMPRAS → PEDIDOS');
+  try { await window.prAlert({ title: _av.title, bodyHTML: _av.bodyHTML }); }
+  catch(e){ showToast(_av.title, _nubeOk ? 'green' : 'red'); }
 }
 
 /* v982: AUTO-SINCRONIZAR pedidos DE RECETA que aún NO generaron su OC cuando la receta
@@ -44801,6 +44852,18 @@ function selectCatProv(provId){
   if (typeof applyPermissions === 'function') applyPermissions();
 }
 
+/* v1308 (Antonio): el precio se MUESTRA con sus decimales reales — mínimo 2, hasta 5 si
+   los tiene (v1306 recortaba todo a 2 y una edición del admin guardaba el valor recortado:
+   destrucción silenciosa de precisión). PURA, solo presentación: lo guardado no se toca. */
+function _catPrecioDisplay(v){
+  if (v == null || v === '' || !isFinite(+v) || +v === 0) return '';
+  const n = +v;
+  let s = n.toFixed(5).replace(/0+$/, '').replace(/\.$/, '');
+  const dec = (s.split('.')[1] || '').length;
+  return dec < 2 ? n.toFixed(2) : s;
+}
+try { window._catPrecioDisplay = _catPrecioDisplay; } catch(e){}
+
 function renderCatProvProductos(){
   const p = activeProj();
   const prv = _getProveedores().find(x => x.id === currentCatProvId);
@@ -44845,10 +44908,10 @@ function renderCatProvProductos(){
 <!-- v1306 (Antonio): el precio se MUESTRA con 2 decimales y la moneda Q como prefijo de la
            celda. El redondeo es solo visual: si el campo no se toca, onchange no dispara y el
            dato guardado queda intacto; al editar se guarda lo tipeado. -->
-      <div class="cat-precio-celda"><span class="cat-q">Q</span><input type="number" step="0.01" min="0" class="precio" value="${(prod.precio && isFinite(+prod.precio)) ? (+prod.precio).toFixed(2) : ''}" placeholder="0.00" onchange="updateCatProvProducto(${origIdx}, 'precio', this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}"></div>
+      <div class="cat-precio-celda"><span class="cat-q">Q</span><input type="number" step="any" min="0" class="precio" value="${_catPrecioDisplay(prod.precio)}" placeholder="0.00" onchange="updateCatProvProducto(${origIdx}, 'precio', this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}"></div>
       <!-- v1078 (Antonio): segundo precio OPCIONAL, para cuando el material lo recogemos
            nosotros. Vacío = ese producto no tiene modalidad alternativa. -->
-      <div class="cat-precio-celda"><span class="cat-q">Q</span><input type="number" step="0.01" min="0" class="precio" value="${(prod.precioRecoge && isFinite(+prod.precioRecoge)) ? (+prod.precioRecoge).toFixed(2) : ''}" placeholder="—" title="Precio si el material lo recogemos nosotros (opcional)" onchange="updateCatProvProducto(${origIdx}, 'precioRecoge', this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}"></div>
+      <div class="cat-precio-celda"><span class="cat-q">Q</span><input type="number" step="any" min="0" class="precio" value="${_catPrecioDisplay(prod.precioRecoge)}" placeholder="—" title="Precio si el material lo recogemos nosotros (opcional)" onchange="updateCatProvProducto(${origIdx}, 'precioRecoge', this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}"></div>
       ${(function(){ /* v1281: chip SE RENTA — lo alquilable (andamios, rodos, camas) genera ORDEN DE RENTA; el precio pasa a ser la TARIFA por periodo */
         const _ri = _prodRentaInfo(prod);
         const _lbl = _ri.renta ? ('RENTA·' + (_ri.periodo === 'DIA' ? 'DÍA' : _ri.periodo === 'SEMANA' ? 'SEM' : 'MES')) : 'COMPRA';

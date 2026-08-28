@@ -13,8 +13,10 @@ ok('mobile compacto', html.includes('grid-template-columns:minmax(0,1fr) 46px 86
 
 /* 2) precio con 2 decimales SOLO al mostrar */
 const row = html.slice(html.indexOf('function renderCatProvProductos'), html.indexOf('function _prodRentaInfo'));
-ok('precio value toFixed(2)', row.includes("value=\"${(prod.precio && isFinite(+prod.precio)) ? (+prod.precio).toFixed(2) : ''}\""));
-ok('precioRecoge value toFixed(2)', row.includes("value=\"${(prod.precioRecoge && isFinite(+prod.precioRecoge)) ? (+prod.precioRecoge).toFixed(2) : ''}\""));
+/* v1308 re-ancló: el display pasó de toFixed(2) fijo a _catPrecioDisplay (mín 2, máx 5
+   decimales) — la intención de v1306 (decimales limitados al mostrar) se conserva */
+ok('precio value con display limitado', row.includes('value="${_catPrecioDisplay(prod.precio)}"'));
+ok('precioRecoge value con display limitado', row.includes('value="${_catPrecioDisplay(prod.precioRecoge)}"'));
 ok('value crudo eliminado', !row.includes('value="${prod.precio || \'\'}"') && !row.includes('value="${prod.precioRecoge || \'\'}"'));
 
 /* 3) moneda Q como prefijo dentro de la celda (en AMBOS precios) */
