@@ -3405,7 +3405,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1310</span>
+    <span style="opacity:.5;font-size:9px">v1311</span>
   </footer>
 
 </div>
@@ -22886,20 +22886,30 @@ function _provsDelProductoEn(itemName){
 function findBestProviderForItem(itemName){
   const p = activeProj();
   const proveedores = _getProveedores();
-  let matches = proveedores.map(prv => {
-    const prod = findCatalogProductForProvider(itemName, prv);
-    return prod ? { proveedor: prv, producto: prod, precio: Number(prod.precio) || 0 } : null;
-  }).filter(Boolean);
+  /* v1311 (caso BOLSA BODEGA-16): antes exactos y difusos iban a UNA bolsa ordenada solo
+     por precio — una referencia DIFUSA barata (Q25, del pseudo-proveedor del importador
+     de Excel) le ganaba al producto EXACTO del proveedor real (Q35), y el candado v1249
+     (que exige exacto) no la reconocía: rótulo ASIGNADO POR CATÁLOGO con "SIN PRECIO EN
+     CATÁLOGO" a la vez. Ahora: EXACTO gana a DIFUSO; "SIN PROVEEDOR FIJO / REFERENCIA"
+     va al FINAL (solo gana si ningún proveedor real lo tiene); entre iguales sigue
+     ganando el más barato (v989 intacto). */
+  const _esRef = prv => /SIN PROVEEDOR FIJO/i.test(String((prv && prv.nombre) || ''));
+  const _arma = nombre => {
+    const _t = normOcName(nombre);
+    return proveedores.map(prv => {
+      const prod = findCatalogProductForProvider(nombre, prv);
+      return prod ? { proveedor: prv, producto: prod, precio: Number(prod.precio) || 0,
+        _exacto: normOcName(prod.nombre) === _t ? 1 : 0, _ref: _esRef(prv) ? 1 : 0 } : null;
+    }).filter(Boolean);
+  };
+  let matches = _arma(itemName);
   if (matches.length === 0) {
     // v1010: segundo intento con el nombre canónico si el material fue unido en la limpia
     const _canon = (typeof _matNombreCanonico === 'function') ? _matNombreCanonico(itemName) : '';
-    if (_canon) matches = proveedores.map(prv => {
-      const prod = findCatalogProductForProvider(_canon, prv);
-      return prod ? { proveedor: prv, producto: prod, precio: Number(prod.precio) || 0 } : null;
-    }).filter(Boolean);
+    if (_canon) matches = _arma(_canon);
   }
   if (matches.length === 0) return null;
-  matches.sort((a,b) => a.precio - b.precio);
+  matches.sort((a,b) => (b._exacto - a._exacto) || (a._ref - b._ref) || (a.precio - b.precio));
   return matches[0];
 }
 
