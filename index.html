@@ -3405,7 +3405,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1309</span>
+    <span style="opacity:.5;font-size:9px">v1310</span>
   </footer>
 
 </div>
@@ -57481,7 +57481,40 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   function esc(s){ return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
   function money(n){ try{ return typeof fQ === 'function' ? fQ(Number(n)||0) : 'Q ' + (Number(n)||0).toFixed(2); }catch(e){ return 'Q ' + (Number(n)||0).toFixed(2); } }
   function cleanFile(s){ return upper(s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]+/g,'_').replace(/^_|_$/g,'').slice(0,50) || 'PROYECTO'; }
-  function pagosPlanilla(p){
+  /* ═══ v1310 · LA QUINCENA ARRANCA LIMPIA (caso Nelson Q8,026.02) ═══
+     El pool de pagos sueltos era acumulativo SIN corte: una liquidación generada y nunca
+     enviada quedaba en pantalla PARA SIEMPRE, y un pago re-generado por un desfase de sync
+     (familia v1252/VLA-47) quedaba como GEMELO de uno YA PAGADO — armarlo pagaba DOBLE.
+     Ahora un pago suelto se APARTA si (a) es GEMELO exacto (colaborador+apto+etapa+monto)
+     de un pago sellado en una planilla armada, o (b) es de una quincena ANTERIOR. Los
+     apartados viven en una sección colapsada con su motivo — nada se borra solo. */
+  function _pagoGemeloKey(pg){
+    return [String(pg.colaboradorId || pg.colaborador || '').toUpperCase().trim(),
+            String(pg.aptoId || pg.aptoName || '').toUpperCase().trim(),
+            String(Number(pg.stageIdx) || 0),
+            (Math.round(Number(pg.neto || 0) * 100) / 100).toFixed(2)].join('|');
+  }
+  function _pagoSueltoMotivo(pg, selladasKeys, qHoy, qDe){
+    if (selladasKeys && selladasKeys.has(_pagoGemeloKey(pg))) return 'GEMELO';
+    var q = (typeof qDe === 'function') ? qDe(pg.ts) : '';
+    if (q && qHoy && q !== qHoy) return 'QUINCENA_ANTERIOR';
+    return '';
+  }
+  function _pagosApartadoCtx(p){
+    const planillas = (p && p.planilla && p.planilla.planillasArmadas) || [];
+    const _activos = new Set(['pendiente_pm','aprobada_inicial','pendiente_pm_final','aprobada','rechazada','archivada']);
+    const sellados = new Set();
+    ((p && p.planilla && p.planilla.pagos) || []).forEach(pg => {
+      if (!pg || !pg.planillaId) return;
+      const pl = planillas.find(x => x && x.id === pg.planillaId);
+      if (pl && _activos.has(pl.estado)) sellados.add(_pagoGemeloKey(pg));
+    });
+    const qDe = (typeof window._quincenaKeyDe === 'function') ? window._quincenaKeyDe : null;
+    return { sellados, qHoy: qDe ? qDe(Date.now()) : '', qDe };
+  }
+  try { window._pagoGemeloKey = _pagoGemeloKey; window._pagoSueltoMotivo = _pagoSueltoMotivo; window._pagosApartadoCtx = _pagosApartadoCtx; } catch(e){}
+
+  function pagosPlanilla(p, soloApartados){
     // v257: solo mostrar pagos que NO esten en una planilla activa (pendiente_pm,
     // aprobada_inicial, aprobada, rechazada). Esto evita que el supervisor vea
     // (y pueda volver a armar) pagos que ya envio a la PM.
@@ -57496,6 +57529,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const _isPM = (typeof window.isPMPlanilla === 'function') ? window.isPMPlanilla() : false;
     const _isAdmin = (typeof can === 'function' && can('users.manage'));
     const _userEm = (typeof window._getUserEmail === 'function') ? (window._getUserEmail() || '').toLowerCase() : '';
+    const _apctx = _pagosApartadoCtx(p); // v1310
     return [...((p && p.planilla && p.planilla.pagos) || [])]
       .filter(pg => pg && (!pg.tipo || pg.tipo === 'ETAPA') && Number(pg.stageIdx) >= 0 && Number(pg.stageIdx) < 5)
       .filter(pg => {
@@ -57516,6 +57550,10 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
           return String(pg.generadoPorUsername).toLowerCase() === _userUn;
         }
         return false;
+      })
+      .filter(pg => { /* v1310: apartados fuera (o SOLO ellos, para la sección) */
+        const _m = _pagoSueltoMotivo(pg, _apctx.sellados, _apctx.qHoy, _apctx.qDe);
+        return soloApartados ? !!_m : !_m;
       })
       .sort((a,b)=> upper(a.colaborador).localeCompare(upper(b.colaborador)) || upper(a.towerName).localeCompare(upper(b.towerName)) || upper(a.aptoName).localeCompare(upper(b.aptoName)) || Number(a.stageIdx||0)-Number(b.stageIdx||0));
   }
@@ -57661,11 +57699,35 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
   window.renderPlanillaPagosList = function(canAuth){
     const p = activeProj();
     const rows = pagosPlanilla(p);
-    if(!rows.length) return '<div class="card"><div class="empty" style="padding:30px">SIN PAGOS GENERADOS</div></div>';
+    /* v1310: los APARTADOS (gemelos de planillas ya pagadas / quincenas anteriores) se
+       listan en su propia sección colapsada, con motivo y ✕ (lápida v891) — se muestran
+       AUNQUE no haya pagos frescos, para que no queden invisibles. */
+    const _apart = pagosPlanilla(p, true);
+    const _ctx = _pagosApartadoCtx(p);
+    let apartHtml = '';
+    if (_apart.length) {
+      const filas = _apart.map(pg => {
+        const _m = _pagoSueltoMotivo(pg, _ctx.sellados, _ctx.qHoy, _ctx.qDe);
+        const _rot = _m === 'GEMELO' ? 'DUPLICADO DE PLANILLA YA PAGADA' : 'QUINCENA ANTERIOR';
+        const _col = _m === 'GEMELO' ? '#B91C1C' : '#92400E';
+        const _f = new Date(pg.ts || 0);
+        return '<div style="display:grid;grid-template-columns:70px minmax(0,1fr) 90px auto 28px;gap:8px;align-items:center;padding:5px 0;border-bottom:1px dashed var(--line-soft);font-size:11px">'
+          + '<span style="color:var(--mute)">' + String(_f.getDate()).padStart(2,'0') + '/' + String(_f.getMonth()+1).padStart(2,'0') + '</span>'
+          + '<span>' + esc(pg.colaborador || '') + ' <span style="color:var(--mute)">· ' + esc(pg.aptoName || '') + ' · ETAPA ' + (Number(pg.stageIdx||0)+1) + '</span></span>'
+          + '<span style="text-align:right;font-weight:700">Q ' + Number(pg.neto || 0).toFixed(2) + '</span>'
+          + '<span style="color:' + _col + ';font-weight:800;font-size:9px;letter-spacing:.5px">' + _rot + '</span>'
+          + '<button onclick="window.eliminarPagoPlanillaGenerada(&quot;' + esc(pg.id) + '&quot;)" title="Eliminar este pago apartado (queda lápida, no revive)" style="background:none;border:1px solid var(--line);border-radius:2px;cursor:pointer;color:var(--mute)">✕</button>'
+          + '</div>';
+      }).join('');
+      apartHtml = '<details style="margin-top:10px;border:1px dashed #D97706;border-radius:2px;padding:8px 12px;background:#FFFBEB">'
+        + '<summary style="cursor:pointer;font-size:10px;letter-spacing:1px;font-weight:800;color:#92400E">PAGOS APARTADOS (' + _apart.length + ') · QUINCENAS ANTERIORES O DUPLICADOS — NO ENTRAN EN LA LIQUIDACIÓN NUEVA</summary>'
+        + '<div style="margin-top:6px">' + filas + '</div></details>';
+    }
+    if(!rows.length) return '<div class="card"><div class="empty" style="padding:30px">SIN PAGOS GENERADOS</div>' + apartHtml + '</div>';
     const by = group(rows);
     let detail = '';
     Object.entries(by).forEach(([name,items])=>{ detail += buildWorkerGroup(name, items, canAuth); });
-    return '<div class="planilla-final-card"><div class="planilla-final-head"><h3>LIQUIDACIÓN GENERADA</h3></div><div id="planillaFinalDetalle" class="planilla-final-detail">'+detail+'</div>'+summaryHtml(rows)+'</div>';
+    return '<div class="planilla-final-card"><div class="planilla-final-head"><h3>LIQUIDACIÓN GENERADA</h3></div><div id="planillaFinalDetalle" class="planilla-final-detail">'+detail+'</div>'+summaryHtml(rows)+apartHtml+'</div>';
   };
   function excelTableRows(rows){
     const by = group(rows);
@@ -59631,6 +59693,7 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
     const _isPM = (typeof window.isPMPlanilla === 'function') ? window.isPMPlanilla() : false;
     const _isAdmin = (typeof can === 'function' && can('users.manage'));
     const _userEm = (typeof window._getUserEmail === 'function') ? (window._getUserEmail() || '').toLowerCase() : '';
+    const _apctx = (typeof window._pagosApartadoCtx === 'function') ? window._pagosApartadoCtx(p) : null; // v1310
     return pagos.filter(pg => {
       if(!pg || !pg.id) return false;
       if(pg.tipo && pg.tipo !== 'ETAPA') return false;
@@ -59642,13 +59705,16 @@ DISABLED — el sistema de auto-colapso fue removido a pedido del usuario. Ahora
       // planilla con el. Ni admin ni PM ni otros supervisores.
       // v319-fix: se revirtio el bypass de admin de v318. Cada usuario arma
       // su propia planilla con sus propios pagos.
-      if(pg.generadoPor) return String(pg.generadoPor).toLowerCase() === _userEm;
-      if(pg.generadoPorUsername){
+      if(pg.generadoPor){ if(String(pg.generadoPor).toLowerCase() !== _userEm) return false; }
+      else if(pg.generadoPorUsername){
         const cu = (typeof getCurrentUser === 'function' && getCurrentUser()) || null;
         const _userUn = String((cu && cu.username) || '').toLowerCase();
-        return String(pg.generadoPorUsername).toLowerCase() === _userUn;
-      }
-      return false;
+        if(String(pg.generadoPorUsername).toLowerCase() !== _userUn) return false;
+      } else return false;
+      /* v1310: un pago APARTADO (gemelo de planilla ya pagada / quincena anterior) NO se
+         puede armar por default — se maneja desde su sección (eliminar o re-generar). */
+      if (_apctx && typeof window._pagoSueltoMotivo === 'function' && window._pagoSueltoMotivo(pg, _apctx.sellados, _apctx.qHoy, _apctx.qDe)) return false;
+      return true;
     });
   }
 
