@@ -3405,7 +3405,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1308</span>
+    <span style="opacity:.5;font-size:9px">v1309</span>
   </footer>
 
 </div>
@@ -9433,7 +9433,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 946; // v1298: BUS de autorizaciones (autzBus + injerto en applyRemote) — un cliente viejo no injerta y sigue ciego a las firmas hasta que el doc gordo le llegue (v1296: escudo solAtendida · v1278: pedarch_)
+const APP_SYNC_VERSION = 947; // v1298: BUS de autorizaciones (autzBus + injerto en applyRemote) — un cliente viejo no injerta y sigue ciego a las firmas hasta que el doc gordo le llegue (v1296: escudo solAtendida · v1278: pedarch_)
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -10516,6 +10516,7 @@ const CloudSync = {
       else if (doc.id.indexOf('evid_') === 0) { const d = doc.data(); if (d && d.ev && typeof d.ev === 'object') evidByKey[doc.id.slice(5)] = d.ev; } // v1218
       else if (doc.id.indexOf('pedarch_') === 0) { const d = doc.data(); if (d && (Array.isArray(d.pedidos) || Array.isArray(d.ordenes))) pedArchById[doc.id.slice(8)] = { pedidos: d.pedidos || [], ordenes: d.ordenes || [] }; } // v1278
       else if (doc.id === 'autzBus') { try { window._autzBusRemoto = doc.data() || null; } catch(e){} } // v1298: bus de autorizaciones — se injerta en applyRemote
+      else if (doc.id === 'pedBus') { try { window._pedBusRemoto = doc.data() || null; } catch(e){} } // v1309: bus de pedidos — se injerta en applyRemote
       else if (doc.id.indexOf('proj_') === 0) { const d = doc.data(); if (d && d.p) projById[doc.id.slice(5)] = d.p; }
     });
     if (!core) return null;
@@ -11390,6 +11391,8 @@ const CloudSync = {
        emite lo autorizado reciente que al bus le falte (cadencia 5 min). */
     try { _autzBusInjertar(); } catch(e){ console.warn('[v1298] bus autz', e); }
     try { _autzBusAutoEmitir(); } catch(e){}
+    try { _pedBusInjertar(); } catch(e){ console.warn('[v1309] bus pedidos', e); }
+    try { _pedBusAutoEmitir(); } catch(e){}
     /* v1068 (Antonio: "DEBE DE ESTAR IGUAL"): la BODEGA PRE-PAGO y los TRASIEGOS también se
        repintan al llegar datos de otro dispositivo — mismo patrón v1058, sin input enfocado. */
     try {
@@ -22520,6 +22523,7 @@ async function submitPedido(){
   } else {
     p.materiales.pedidos.push(pedido);
   }
+  try { _pedBusEmitir(pedido, pedido.esVarios ? '_varios' : (pedido.esBodega ? '_bodega' : p.id)); } catch(e){} /* v1309 */
 
   // M5: marcar bloqueo bidireccional. Si este pedido contiene metal a la medida
   // para algun nivel, ese nivel no puede pedir su etapa 1 después (el metal ya
@@ -23846,6 +23850,7 @@ function _bodegaGenerarPedido(){
     history: [{ ts: _t, from: null, to: 'SOLICITADO', role: (u.username || 'unknown') }]
   };
   b.pedidos.push(pedido);
+  try { _pedBusEmitir(pedido, '_bodega'); } catch(e){} /* v1309 */
   saveState();
   try { CloudSync.forceUploadNow().catch(() => {}); } catch (e) {}
   _cerrarModalBodega();
@@ -42348,6 +42353,77 @@ function _autzBusAutoEmitir(){
     }));
   } catch(e){}
 }
+/* ═══ v1309 · BUS DE PEDIDOS (caso VLA-47) ═══
+   El pedido viajaba SOLO en el doc gordo appState/proj_ — con internet de obra esa
+   subida falla o tarda y la flota no ve el pedido (VLA-47 pasó un día entero mudo en el
+   aparato del supervisor). Ahora el pedido COMPLETO viaja ADEMÁS en appState/pedBus:
+   un doc chiquito con canal propio (mismo patrón que el bus de autorizaciones v1298,
+   probado en producción). El receptor lo INJERTA localmente sin needsResync (nada de
+   manadas de re-subida); el doc canónico converge solo con la subida del creador.
+   La lápida (pedidosEliminados) SIEMPRE manda: el bus no revive pedidos eliminados. */
+function _pedBusEmitir(pd, ob){
+  try {
+    if (!pd || !pd.id || !pd.numero) return;
+    const limpio = JSON.parse(JSON.stringify(pd));
+    const e = { pd: limpio, ob: String(ob || ''), ts: Number(pd.ts) || Date.now() };
+    const doc = firebase.firestore().collection('appState').doc('pedBus');
+    const cache = (window._pedBusRemoto && typeof window._pedBusRemoto === 'object') ? window._pedBusRemoto : null;
+    const llaves = cache ? Object.keys(cache).filter(k => k !== '_last') : [];
+    if (cache && llaves.length > 25) {
+      /* poda: los pedidos pesan más que las firmas — solo las últimas 48 h viven en el bus */
+      const corte = Date.now() - 48 * 36e5;
+      const nuevo = { _last: Date.now() };
+      llaves.forEach(k => { const x = cache[k]; if (x && (Number(x.ts) || 0) >= corte) nuevo[k] = x; });
+      nuevo[pd.id] = e;
+      doc.set(nuevo).catch(() => {});
+    } else {
+      doc.set({ [pd.id]: e, _last: Date.now() }, { merge: true }).catch(() => {});
+    }
+  } catch(err){}
+}
+function _pedBusInjertar(){
+  try {
+    const bus = window._pedBusRemoto;
+    if (!bus || typeof bus !== 'object' || typeof state === 'undefined' || !state) return false;
+    let hubo = false;
+    Object.keys(bus).forEach(id => {
+      if (id === '_last') return;
+      const e = bus[id];
+      if (!e || typeof e !== 'object' || !e.pd || !e.pd.id || !e.pd.numero) return;
+      let mat = null;
+      if (e.ob === '_bodega') mat = state.bodegaMat;
+      else if (e.ob === '_varios') mat = state.variosMat;
+      else { const p = (state.projects || []).find(x => x && x.id === e.ob); mat = p && p.materiales; }
+      if (!mat || !Array.isArray(mat.pedidos)) return;
+      if (mat.pedidosEliminados && mat.pedidosEliminados[id]) return; /* la lápida manda: no revive */
+      if (mat.pedidos.some(x => x && x.id === id)) return;            /* ya llegó por el doc gordo */
+      mat.pedidos.push(JSON.parse(JSON.stringify(e.pd)));
+      try { _pedidoSeqSellar(mat, e.pd.numero); } catch(e2){}          /* nadie re-acuña ese número */
+      hubo = true;
+    });
+    return hubo;
+  } catch(err){ return false; }
+}
+/* AUTO-RESCATE: cualquier aparato que TENGA un pedido de las últimas 48 h que al bus le
+   falte lo emite — un pedido atascado en el aparato del creador sale solo en cuanto ese
+   aparato recargue o sincronice, sin consola. Cadencia 5 min (mismo régimen que v1298). */
+function _pedBusAutoEmitir(){
+  try {
+    if (window._pedBusAutoUlt && Date.now() - window._pedBusAutoUlt < 3e5) return;
+    window._pedBusAutoUlt = Date.now();
+    const bus = (window._pedBusRemoto && typeof window._pedBusRemoto === 'object') ? window._pedBusRemoto : {};
+    const corte = Date.now() - 48 * 36e5;
+    const bolsas = [];
+    (((typeof state !== 'undefined' && state) || {}).projects || []).forEach(p => { if (p && p.materiales && Array.isArray(p.materiales.pedidos)) bolsas.push({ ob: p.id, arr: p.materiales.pedidos }); });
+    if (state && state.bodegaMat && Array.isArray(state.bodegaMat.pedidos)) bolsas.push({ ob: '_bodega', arr: state.bodegaMat.pedidos });
+    if (state && state.variosMat && Array.isArray(state.variosMat.pedidos)) bolsas.push({ ob: '_varios', arr: state.variosMat.pedidos });
+    bolsas.forEach(b => b.arr.forEach(pd => {
+      if (!pd || !pd.id || Number(pd.ts || 0) < corte) return;
+      if (bus[pd.id]) return; /* ya está en el bus */
+      _pedBusEmitir(pd, b.ob);
+    }));
+  } catch(e){}
+}
 function _verifTokShield(mergedList, localList, remoteList){
   var por = function(l){ var m = {}; (Array.isArray(l) ? l : []).forEach(function(o){ if (o && o.id) m[o.id] = o; }); return m; };
   var L = por(localList), R = por(remoteList);
@@ -44273,6 +44349,7 @@ window._vdcPedirEtapaObs = async function(tid, lid, ei){
   };
   p.materiales.pedidos = p.materiales.pedidos || [];
   p.materiales.pedidos.push(pedido);
+  try { _pedBusEmitir(pedido, p.id); } catch(e){} /* v1309 */
   try { logActivity('create', `Solicitud de etapa ${pedido.numero}`, `${p.name} · ${t.name} ${l.name} · Etapa ${ei + 1} · ${pedido.solicitante}`); } catch(e){}
   saveState();
   try { CloudSync.forceUploadNow().catch(() => {}); } catch(e){}
@@ -44679,6 +44756,7 @@ async function pedirEtapaCompleta(towerId, levelId, stageIdx, selectedKeys, opts
   };
 
   p.materiales.pedidos.push(pedido);
+  try { _pedBusEmitir(pedido, p.id); } catch(e){} /* v1309: el pedido viaja YA por el bus — llega aunque el doc gordo se atasque */
 
   // Marcar la etapa como PEDIDA sólo si ya no queda NINGÚN ítem de la etapa por pedir.
   if (!p.materiales.etapasPedidas) p.materiales.etapasPedidas = {};
