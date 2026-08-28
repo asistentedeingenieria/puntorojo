@@ -3405,7 +3405,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1311</span>
+    <span style="opacity:.5;font-size:9px">v1312</span>
   </footer>
 
 </div>
@@ -9433,7 +9433,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 947; // v1298: BUS de autorizaciones (autzBus + injerto en applyRemote) — un cliente viejo no injerta y sigue ciego a las firmas hasta que el doc gordo le llegue (v1296: escudo solAtendida · v1278: pedarch_)
+const APP_SYNC_VERSION = 948; // v1298: BUS de autorizaciones (autzBus + injerto en applyRemote) — un cliente viejo no injerta y sigue ciego a las firmas hasta que el doc gordo le llegue (v1296: escudo solAtendida · v1278: pedarch_)
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -42546,6 +42546,21 @@ function _mergePlanillaProyecto(lp, rp){
     /* v1064: tras el merge, re-estampar los sellos de planilla que el objeto-entero
        haya borrado (el pago vive en pl.pagosIds — la planilla es la verdad) */
     if (typeof _planillaSelloSelfHeal === 'function' && _planillaSelloSelfHeal(rp)) changed = true;
+    /* v1312 (caso modelo I en 0 — SEXTA mordida LWW): planilla.modelos se une por KEY,
+       gana el _ts mayor (sin sello = 0). Un costo tecleado localmente ya no muere cuando
+       llega un snapshot con el array viejo. Sin lápidas: la UI no borra modelos. */
+    var lMod = lpl.modelos;
+    if (Array.isArray(lMod) && lMod.length) {
+      var _modChanged = false, byK = {}, orden = [];
+      (Array.isArray(rp.planilla.modelos) ? rp.planilla.modelos : []).forEach(function(m){ if (m && m.key != null) { byK[m.key] = m; orden.push(m.key); } });
+      lMod.forEach(function(m){
+        if (!m || m.key == null) return;
+        var r = byK[m.key];
+        if (!r) { byK[m.key] = m; orden.push(m.key); _modChanged = true; }
+        else if ((Number(m._ts)||0) > (Number(r._ts)||0)) { byK[m.key] = m; _modChanged = true; }
+      });
+      if (_modChanged) { rp.planilla.modelos = orden.map(function(k){ return byK[k]; }); changed = true; }
+    }
     return changed;
   } catch(e){ console.warn('[v891] _mergePlanillaProyecto:', e); return false; }
 }
@@ -56352,7 +56367,10 @@ window.addEventListener('load', () => {
   window.updatePlanillaModeloCosto = function(key,idx,val){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE MODIFICAR COSTOS','red');
     const p=activeProj(); normalizarPlanilla5(p,true); const m=(p.planilla.modelos||[]).find(x=>x.key===key);
-    if(m && idx>=0 && idx<5){ m.costos[idx]=Number(val)||0; saveState(); renderPlanilla(); }
+    /* v1312 (caso modelo I en 0): el costo es PLATA — se sella _ts (para que el union-merge
+       lo defienda del LWW) y se FUERZA la subida (el debounce solo dejó morir lo tecleado).
+       El tope fijo de 5 ignoraba en silencio etapas extra — ahora manda el largo real. */
+    if(m && idx>=0 && idx<m.costos.length){ m.costos[idx]=Number(val)||0; m._ts=Date.now(); saveState(); try { CloudSync.forceUploadNow().catch(()=>{}); } catch(e){} renderPlanilla(); }
   };
   window.addPlanillaModelo=async function(){
     if(!can('users.manage')) return showToast('SOLO EL ADMINISTRADOR PUEDE AGREGAR MODELOS','red');
@@ -56360,7 +56378,7 @@ window.addEventListener('load', () => {
     const raw = await window.prPrompt({ title:'NUEVO MODELO', body:'Nombre del nuevo modelo de apto.', placeholder:'Ej: 2 AL 6 - 01', okText:'AGREGAR', cancelText:'CANCELAR' });
     if(raw===null) return;
     const name=upper(String(raw||'')); if(!name) return;
-    p.planilla.modelos.push({key:'MOD_'+uid(),nombre:name,costos:[0,0,0,0,0]}); saveState(); renderPlanilla(); showToast('MODELO AGREGADO','green');
+    p.planilla.modelos.push({key:'MOD_'+uid(),nombre:name,costos:[0,0,0,0,0],_ts:Date.now()}); saveState(); renderPlanilla(); showToast('MODELO AGREGADO','green');
   };
 
   // v279: modal para agregar persona sin pasar por la pestaña Colaboradores.
