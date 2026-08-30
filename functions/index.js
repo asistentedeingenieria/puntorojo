@@ -768,6 +768,24 @@ exports.onAiQuestion = onDocumentCreated(
 
    Desplegar:  firebase deploy --only functions:resetUserClave
    ════════════════════════════════════════════════════════════════ */
+/* A5 (hardening batch 4): permisos SENSIBLES — mueven dinero o autorizan pagos, o permiten
+   tomar otras cuentas. Un gestor de usuarios que NO es admin ('*') no puede resetear la
+   clave de alguien que los tenga (evita que tome la cuenta de finanzas y entre como ella). */
+const _permsSensibles = [
+  '*', 'users.manage',
+  'anticipos.transferir', 'anticipos.autorizar',
+  'cobro.edit', 'precios.autorizar', 'compras.autorizar',
+  'planilla.aprobar', 'planilla.authorize', 'planilla.descuentos'
+];
+function _puedeResetearClave(callerPerms, targetPerms) {
+  const c = Array.isArray(callerPerms) ? callerPerms : [];
+  const t = Array.isArray(targetPerms) ? targetPerms : [];
+  if (c.indexOf('*') >= 0) return { ok: true, motivo: '' };          // admin total: resetea a cualquiera
+  const sensible = t.some(p => _permsSensibles.indexOf(p) >= 0);
+  if (sensible) return { ok: false, motivo: 'ESTA CUENTA MANEJA DINERO O USUARIOS — SOLO UN ADMINISTRADOR PUEDE RESTABLECER SU CLAVE' };
+  return { ok: true, motivo: '' };
+}
+
 exports.resetUserClave = onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
@@ -793,8 +811,11 @@ exports.resetUserClave = onCall(
       throw new HttpsError('not-found', 'EL USUARIO NO TIENE PERFIL (CUENTA HUÉRFANA) — HAY QUE RECREARLO');
     }
     const targetPerms = Array.isArray(targetSnap.data().perms) ? targetSnap.data().perms : [];
-    if (targetPerms.includes('*') && !esAdmin) {
-      throw new HttpsError('permission-denied', 'LA CLAVE DE UN ADMINISTRADOR SOLO LA RESTABLECE OTRO ADMINISTRADOR');
+    /* A5: además de bloquear tomar un admin, bloquea tomar cuentas SENSIBLES (finanzas,
+       autorizadores, otros gestores) salvo que el caller sea admin total ('*'). */
+    const _veredicto = _puedeResetearClave(callerPerms, targetPerms);
+    if (!_veredicto.ok) {
+      throw new HttpsError('permission-denied', _veredicto.motivo);
     }
 
     /* v1269b: el updateUser puede fallar por causas ajenas al admin (cuenta Auth
