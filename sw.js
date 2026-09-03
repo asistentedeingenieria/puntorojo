@@ -7,7 +7,7 @@
    Para forzar actualización: subir el número de CACHE_VERSION.
    ════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v1312-modelos-costos-blindados';
+const CACHE_VERSION = 'v1313-portal-clientes-apagado';
 const CACHE_NAME = 'puntorojo-' + CACHE_VERSION;
 /* v993: cache APARTE para las fotos de Firebase Storage. NO lleva la versión en el
    nombre: sobrevive a cada despliegue (si se limpiara con cada versión, la flota
@@ -20,8 +20,7 @@ const CORE_ASSETS = [
   './index.html',
   './puntorojo.html',
   './mobile.html',
-  './clientes.html',
-  './bienvenida.html',
+  // v1313: clientes.html y bienvenida.html (portal de clientes) ya no se precachean — portal apagado
   './manifest.json',
   './logo.png',
   './icon.svg',

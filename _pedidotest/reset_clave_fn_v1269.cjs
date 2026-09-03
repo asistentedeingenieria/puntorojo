@@ -19,7 +19,9 @@ ok('verifica permisos del CALLER contra SU doc users/{uid}', /users'\)\.doc\(req
 ok("admin = perms incluye '*'", /includes\('\*'\)/.test(z));
 ok('clave temporal mínima 6', /clave\.length < 6/.test(z));
 ok('si el destino no tiene perfil: not-found con pista de cuenta huérfana', /not-found/.test(z) && /hu[ée]rfana/i.test(z));
-ok("a un admin solo lo restablece otro admin", /targetPerms\.includes\('\*'\)/.test(z));
+/* A5 (batch 4) subsumió el chequeo literal targetPerms.includes('*') en el helper
+   _puedeResetearClave, cuya lista de permisos sensibles incluye '*' — misma intención */
+ok("a un admin solo lo restablece otro admin", /_puedeResetearClave\(callerPerms, targetPerms\)/.test(z) && /_permsSensibles = \[\s*'\*'/.test(src));
 ok('cambia la clave REAL en Auth (updateUser con password)', /updateUser\(uid, \{ password: clave \}\)/.test(z));
 ok('deja mustChangePassword=true y rastro de quién/cuándo', /mustChangePassword: true/.test(z) && /claveReseteadaPor/.test(z));
 

@@ -33,6 +33,10 @@ const GMAIL_APP_PASSWORD = defineSecret('GMAIL_APP_PASSWORD');
 // ─── SECRETO PARA EL ASISTENTE IA (#4) ───
 //   firebase functions:secrets:set ANTHROPIC_API_KEY
 const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY');
+/* v1313 (pedido de Antonio 28-ago): PORTAL DE CLIENTES apagado. La única función pública
+   (getReceptorAcuses) responde 410 mientras esto sea false — cierra el endpoint abierto de
+   la auditoría (A2/A3) sin borrar el código. Reactivar = true + redeploy. */
+const PORTAL_CLIENTES_ACTIVO = false;
 
 // Default para todas las funciones
 setGlobalOptions({
@@ -311,6 +315,7 @@ exports.getReceptorAcuses = onRequest(
     memory: '256MiB'
   },
   async (req, res) => {
+    if (!PORTAL_CLIENTES_ACTIVO) { res.status(410).json({ error: 'Portal de clientes desactivado' }); return; } // v1313
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Solo POST' });
       return;
