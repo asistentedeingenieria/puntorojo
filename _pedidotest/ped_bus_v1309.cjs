@@ -37,7 +37,8 @@ ok('ventana 48h y solo lo que al bus le falta', auto.includes('48 * 36e5') && au
 /* 6) los CUATRO creadores emiten al bus tras el push */
 ok('generador de receta emite', /pedidos\.push\(pedido\);\s*\n\s*try \{ _pedBusEmitir\(pedido, p\.id\); \} catch\(e\)\{\}/.test(html.slice(html.indexOf('async function pedirEtapaCompleta'))));
 ok('submitPedido emite (varios/bodega/obra)', html.includes("_pedBusEmitir(pedido, pedido.esVarios ? '_varios' : (pedido.esBodega ? '_bodega' : p.id))"));
-ok('solicitud de etapa emite', /esSolicitudEtapa: true[\s\S]{0,400}_pedBusEmitir\(pedido, p\.id\)/.test(html));
+/* v1314: la emisión pasó a ser ESPERADA (_busOk) dentro del cinturón, más abajo del push */
+ok('solicitud de etapa emite', /esSolicitudEtapa: true[\s\S]{0,2500}_busOk = \(await _pedBusEmitir\(pedido, p\.id\)\)/.test(html));
 ok('abastecimiento emite', /esAbastecimiento: true[\s\S]{0,400}_pedBusEmitir\(pedido, '_bodega'\)/.test(html));
 
 /* 7) cambio de sync ⇒ ritual v892 (piso) */

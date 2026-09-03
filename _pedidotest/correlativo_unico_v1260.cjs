@@ -46,7 +46,9 @@ if (f) {
   ok('idempotente: segunda pasada sin cambios', f(c1) === false);
   const c2 = mk();
   c2.ordenes = [{ id: 'o1', pedidoId: 'b', status: 'AUTORIZADA' }];
-  ok('con órdenes vivas NO se toca (los dos EF2-10 históricos quedan)', f(c2) === false && c2.pedidos[1].numero === 'EF2 – 10');
+  /* v1314 (caso VEC-151): antes "los dos históricos quedan" era el caso degenerado —
+     ahora el DUEÑO del número es quien tiene OC (b) y el viejo sin OC (a) se renumera */
+  ok('con OC en el joven: el joven conserva y el viejo sin OC se renumera', f(c2) === true && c2.pedidos[1].numero === 'EF2 – 10' && c2.pedidos[0].numero === 'EF2 – 12');
   const c3 = mk();
   c3.pedidos[1].status = 'CANCELADO';
   ok('un CANCELADO no cuenta como colisión', f(c3) === false);

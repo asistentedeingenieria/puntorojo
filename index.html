@@ -3407,7 +3407,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1313</span>
+    <span style="opacity:.5;font-size:9px">v1314</span>
   </footer>
 
 </div>
@@ -9441,7 +9441,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 948; // v1298: BUS de autorizaciones (autzBus + injerto en applyRemote) — un cliente viejo no injerta y sigue ciego a las firmas hasta que el doc gordo le llegue (v1296: escudo solAtendida · v1278: pedarch_)
+const APP_SYNC_VERSION = 949; // v1298: BUS de autorizaciones (autzBus + injerto en applyRemote) — un cliente viejo no injerta y sigue ciego a las firmas hasta que el doc gordo le llegue (v1296: escudo solAtendida · v1278: pedarch_)
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -9897,6 +9897,10 @@ const CloudSync = {
      está libre, se reintenta la subida SOLO — sin esperar a que el usuario toque algo.
      Es la pieza que faltaba para "el pedido no le sale hasta un día después". */
   _vigilarPendientes(motivo){
+    /* v1314: el auto-rescate del bus vivía SOLO dentro de applyRemote — justo el camino que
+       un aparato con subida atascada no recorre. Desde el vigilante (60s / online / pestaña)
+       también se emite lo reciente que al bus le falte (rate-limit propio de 5 min). */
+    try { if (typeof _pedBusAutoEmitir === 'function') _pedBusAutoEmitir(); } catch(e){}
     if (!this.enabled || navigator.onLine === false) return;
     if (this.pendingWrite || this.uploadingNow || this._subidaEnVuelo || this._forceInFlight) return;
     let hay = false;
@@ -15914,14 +15918,21 @@ function _pedidosRenumeraColisiones(cont){
       var g = porNum[k];
       if (g.length < 2) return;
       g.sort(function(a, b){ return ((a.ts || 0) - (b.ts || 0)) || String(a.id || '').localeCompare(String(b.id || '')); });
-      for (var i = 1; i < g.length; i++) {
-        var pd = g[i];
-        var tieneOc = (cont.ordenes || []).some(function(o){ return o && o.pedidoId === pd.id && (o.status || 'AUTORIZADA') !== 'CANCELADA'; });
-        if (tieneOc) continue;
+      /* v1314 (caso VEC-151): el DUEÑO del número es quien YA tiene OC (su hoja y su QR ya
+         viajaron); si nadie la tiene, el más viejo. Antes g[0] (el más viejo) nunca se
+         renumeraba aunque el gemelo más joven tuviera OC → "dos VEC-151 para siempre".
+         Los que tienen OC son intocables; se renumeran los demás. Determinista e idempotente. */
+      var tieneOcDe = function(pd){ return (cont.ordenes || []).some(function(o){ return o && o.pedidoId === pd.id && (o.status || 'AUTORIZADA') !== 'CANCELADA'; }); };
+      var conOc = g.filter(tieneOcDe);
+      var dueno = conOc.length ? conOc[0] : g[0];
+      g.forEach(function(pd){
+        if (pd === dueno || tieneOcDe(pd)) return;
         var m = String(pd.numero || '').match(/^(.*?\s*[–-]\s*)(\d+)\s*$/);
-        if (!m) continue;
+        if (!m) return;
         var usados = {};
         cont.pedidos.forEach(function(x){ if (x && x.numero) usados[norm(x.numero)] = true; });
+        /* los números que una OC cita (aunque su pedido ya no exista) también están tomados */
+        (cont.ordenes || []).forEach(function(o){ if (o && o.pedidoNumero && (o.status || 'AUTORIZADA') !== 'CANCELADA') usados[norm(o.pedidoNumero)] = true; });
         var n = parseInt(m[2], 10) || 0;
         var nuevo;
         do { n++; nuevo = m[1] + n; } while (usados[norm(nuevo)]);
@@ -15930,7 +15941,7 @@ function _pedidosRenumeraColisiones(cont){
         pd.verifOk = false;
         try { _pedidoSeqSellar(cont, nuevo); } catch(e){}
         cambio = true;
-      }
+      });
     });
     return cambio;
   } catch(e){ return false; }
@@ -42393,17 +42404,19 @@ function _pedBusEmitir(pd, ob){
       const nuevo = { _last: Date.now() };
       llaves.forEach(k => { const x = cache[k]; if (x && (Number(x.ts) || 0) >= corte) nuevo[k] = x; });
       nuevo[pd.id] = e;
-      doc.set(nuevo).catch(() => {});
+      /* v1314: devuelve la promesa — el creador cuenta la entrega por bus (true/false, nunca lanza) */
+      return doc.set(nuevo).then(() => true).catch(() => false);
     } else {
-      doc.set({ [pd.id]: e, _last: Date.now() }, { merge: true }).catch(() => {});
+      return doc.set({ [pd.id]: e, _last: Date.now() }, { merge: true }).then(() => true).catch(() => false);
     }
-  } catch(err){}
+  } catch(err){ return Promise.resolve(false); }
 }
 function _pedBusInjertar(){
   try {
     const bus = window._pedBusRemoto;
     if (!bus || typeof bus !== 'object' || typeof state === 'undefined' || !state) return false;
     let hubo = false;
+    const tocados = []; /* v1314: contenedores con injerto → renumeración de colisiones al final */
     Object.keys(bus).forEach(id => {
       if (id === '_last') return;
       const e = bus[id];
@@ -42417,8 +42430,12 @@ function _pedBusInjertar(){
       if (mat.pedidos.some(x => x && x.id === id)) return;            /* ya llegó por el doc gordo */
       mat.pedidos.push(JSON.parse(JSON.stringify(e.pd)));
       try { _pedidoSeqSellar(mat, e.pd.numero); } catch(e2){}          /* nadie re-acuña ese número */
+      if (tocados.indexOf(mat) < 0) tocados.push(mat);
       hubo = true;
     });
+    /* v1314: un pedido que entra por el bus puede chocar de número con uno local (caso
+       VEC-151) — la misma regla determinista del merge resuelve el choque de inmediato. */
+    tocados.forEach(mat => { try { _pedidosRenumeraColisiones(mat); } catch(e2){} });
     return hubo;
   } catch(err){ return false; }
 }
@@ -44358,9 +44375,16 @@ window._vdcPedirEtapaObs = async function(tid, lid, ei){
   const apto = aptoId ? ((l.aptos || []).find(a => a && a.id === aptoId) || null) : null;
   const u = getCurrentUser();
   const n = new Date();
+  /* v1314 · CASO VEC-151 (03-sep): este era el ÚLTIMO creador de pedidos sin el cinturón
+     v1170/v1307 y NUNCA reservaba el número (_pedidoSeqSellar) — Rony creó VEC-151/152, el
+     toast verde dijo CREADA, el doc gordo no confirmó y Susana acuñó otro VEC-151 con OC.
+     Acá NO hay await entre acuñar y push: reserva + pedido viajan JUNTOS en una sola
+     subida ESPERADA (no se parte como en v1260 — nada de subir el número sin el pedido). */
+  const numero = nextPedidoCode(p);
+  try { _pedidoSeqSellar(p.materiales, numero); } catch(e){} // v1169: el número queda RESERVADO
   const pedido = {
     id: 'pd-' + uid(),
-    numero: nextPedidoCode(p),
+    numero,
     ts: Date.now(),
     _ts: Date.now(), // v972: nace sellado — union-merge
     verifTok: _verifTokenNuevo(), // v1240
@@ -44382,14 +44406,35 @@ window._vdcPedirEtapaObs = async function(tid, lid, ei){
   };
   p.materiales.pedidos = p.materiales.pedidos || [];
   p.materiales.pedidos.push(pedido);
-  try { _pedBusEmitir(pedido, p.id); } catch(e){} /* v1309 */
   try { logActivity('create', `Solicitud de etapa ${pedido.numero}`, `${p.name} · ${t.name} ${l.name} · Etapa ${ei + 1} · ${pedido.solicitante}`); } catch(e){}
   saveState();
-  try { CloudSync.forceUploadNow().catch(() => {}); } catch(e){}
-  try { _pedVerifSubir(pedido, p); } catch(e){}
   try { renderPedidosList(); } catch(e){}
   try { renderRecetaPedir(); } catch(e){}
-  showToast(`SOLICITUD ${pedido.numero} CREADA — AHORA COMPARTILA A COMPRAS`, 'green');
+  /* ══ v1314 — cinturón v1170/v1307: marcar POR ENVIAR, forzar, ESPERAR, decir la verdad.
+     El bus (v1309) ES canal de entrega: si llegó al bus, la flota lo injerta aunque el doc
+     gordo tarde — por eso su promesa cuenta para el aviso; el sello nubeOk y la limpieza
+     de POR ENVIAR solo cuando el doc canónico confirmó (el vigilante reintenta el resto). */
+  try { _pedPendAdd(pedido.id); } catch(e){}
+  try { _pedVerifSubir(pedido, p); } catch(e){} // copia sellada del QR, canal propio
+  try { showToast('CONFIRMANDO EN LA NUBE...', ''); } catch(e){}
+  let _nubeOk = false, _busOk = false;
+  try { _busOk = (await _pedBusEmitir(pedido, p.id)) === true; } catch(e){}
+  try {
+    if (typeof CloudSync !== 'undefined' && CloudSync.enabled && CloudSync.forceUploadNow) {
+      _nubeOk = (await CloudSync.forceUploadNow()) !== false;
+    }
+  } catch(e){ console.warn('[v1314] la solicitud de etapa no se pudo confirmar en la nube:', e && (e.code || e.message)); }
+  if (_nubeOk) {
+    /* re-buscar por id: tras el await pudo aplicar un snapshot (state=merged) y `pedido` ser huérfano */
+    try { const _pv = (typeof _findPedidoGlobal === 'function') ? _findPedidoGlobal(pedido.id) : null; if (_pv && _pv.pd) _pv.pd.nubeOk = true; } catch(e){}
+    pedido.nubeOk = true;
+    try { _pedPendClear(); } catch(e){}
+    try { saveState(); } catch(e){}
+  }
+  const _av = _pedidoAvisoEnvio(_nubeOk || _busOk, _numLimpio(numero), 'COMPRAS → PEDIDOS · después COMPARTILA a compras desde el detalle');
+  try { await window.prAlert({ title: _av.title, bodyHTML: _av.bodyHTML }); }
+  catch(e){ showToast(_av.title, (_nubeOk || _busOk) ? 'green' : 'red'); }
+  try { renderPedidosList(); } catch(e){} // repinta / quita el chip POR ENVIAR
   try { openPedidoDetalle(pedido.id); } catch(e){}
 };
 /* compras la ARMA como pedido formal: abre el talonario (+ NUEVO PEDIDO) con la seña de
