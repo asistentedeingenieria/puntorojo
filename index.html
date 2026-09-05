@@ -3407,7 +3407,7 @@ select.pr-filtro{padding:5px 30px 5px 12px}
 
   <!-- ═════════════════ FOOTER ═════════════════ -->
   <footer class="foot">
-    <span style="opacity:.5;font-size:9px">v1314</span>
+    <span style="opacity:.5;font-size:9px">v1315</span>
   </footer>
 
 </div>
@@ -9441,7 +9441,7 @@ function _facesPayloadFrom(pg){ const o={}; (Array.isArray(pg)?pg:[]).forEach(p=
 // Cierra el último vector del incidente 03-jul (un equipo con HTML viejo en caché subía con
 // lógica de pisar en vez de unir). Al publicar un cambio crítico de sync: subir este número
 // Y el minSyncVersion del doc config (comando de consola del admin).
-const APP_SYNC_VERSION = 949; // v1298: BUS de autorizaciones (autzBus + injerto en applyRemote) — un cliente viejo no injerta y sigue ciego a las firmas hasta que el doc gordo le llegue (v1296: escudo solAtendida · v1278: pedarch_)
+const APP_SYNC_VERSION = 950; // v1315: la cascada de fotos en el merge (_reevalAutoMarcaApto) se corta en etapas con ADELANTO — un cliente viejo marcaría REFUERZOS al recibir la foto de 2ª cara y lo sellaría · v1298: BUS de autorizaciones (autzBus + injerto en applyRemote) — un cliente viejo no injerta y sigue ciego a las firmas hasta que el doc gordo le llegue (v1296: escudo solAtendida · v1278: pedarch_)
 function _versionBloqueada(appVer, minVer){
   var m = Number(minVer);
   if (!isFinite(m) || m <= 0) return false;
@@ -17085,7 +17085,11 @@ function _autoMarcarEtapaPorFotos(a, etapaIdx){
   if (!Array.isArray(a.stages)) a.stages = [false,false,false,false,false,false];
   const _sella = function(i){ if (!Array.isArray(a.stagesTs)) a.stagesTs = []; a.stagesTs[i] = Date.now(); a.stages[i] = true; };
   let inferiores = 0;
-  if (fotos >= 1){ for (let i = 0; i < etapaIdx; i++){ if (!a.stages[i]){ _sella(i); inferiores++; } } }
+  /* v1315: la cascada se CORTA en una etapa con ADELANTO aprobado (a.acuseSaltosAprobados): el
+     adelanto dice justamente que la anterior NO está hecha — la foto de N prueba N-1 solo si N
+     no fue adelantada, y así hacia abajo (marcarla cobraría una etapa no hecha). */
+  const _adel = (k) => !!(a.acuseSaltosAprobados && a.acuseSaltosAprobados[String(k)]);
+  if (fotos >= 1){ for (let j = etapaIdx; j >= 1; j--){ if (_adel(j)) break; if (!a.stages[j - 1]){ _sella(j - 1); inferiores++; } } }
   let actual = 'sin';
   if (a.stages[etapaIdx]) actual = 'ya';
   else if (fotos >= 2){ _sella(etapaIdx); actual = 'marcada'; }
@@ -17201,6 +17205,9 @@ function renderPhotosModal(){
     // v863: DESBLOQUEO TEMPORAL — el user pidió tomar fotos en CUALQUIER etapa sin el candado
     // secuencial. Mientras esté libre, prevDone=true para todas. Re-bloquear: window._PR_ETAPAS_LIBRES=false.
     if (_fotosEtapasLibres() && !_proyectoEtapasEnOrden(p)) prevDone = true; // v904: proyectos "en orden" respetan el candado secuencial
+    // v1315: el adelanto aprobado por el admin (acuse) abre también la foto de ESA etapa
+    const _viaAdelanto = !prevDone && _etapaAdelantoAprobado(a, idx);
+    if (_viaAdelanto) prevDone = true;
 
     const fotosValidas = photos.filter(Boolean);
     const minToComplete = 2;
@@ -17249,7 +17256,7 @@ function renderPhotosModal(){
           <span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:${prevDone?'var(--red)':'var(--line)'};color:#fff;font-size:11px;font-weight:800;margin:0">${idx+1}</span>
           <span style="color:var(--ink);margin:0">${e.name}</span>${prevDone ? completaBadge : ' <span style="background:var(--red-soft);color:var(--red-dark);font-size:9px;padding:2px 7px;border-radius:10px;letter-spacing:1px;font-weight:700">🔒 BLOQUEADA</span>'}
         </div>
-        ${prevDone ? '' : '<div class="photo-etapa-sub">TERMINAR LA ETAPA ANTERIOR PRIMERO</div>'}
+        ${prevDone ? (_viaAdelanto ? '<div class="photo-etapa-sub">ADELANTO APROBADO · LA ETAPA ANTERIOR SIGUE PENDIENTE</div>' : '') : '<div class="photo-etapa-sub">TERMINAR LA ETAPA ANTERIOR PRIMERO</div>'}
       </div>
       <div class="photo-etapa-slots" style="justify-content:center${prevDone ? '' : ';opacity:.45;pointer-events:none'}">
         ${photoTiles}
@@ -17397,6 +17404,7 @@ async function openCameraModal(etapaIdx, slotIdx){
       else _prevDone = _ecS(etapaIdx - 1);
       // v863: el desbloqueo temporal (_fotosEtapasLibres) deja tomar fotos en cualquier etapa.
       // v904: salvo que el proyecto exija ORDEN (p.etapasEnOrden) — ahí manda el candado secuencial.
+      if (!_prevDone && _etapaAdelantoAprobado(_a, etapaIdx)) _prevDone = true; // v1315: el adelanto aprobado (acuse) libera la foto
       if (!_prevDone && !(_fotosEtapasLibres() && !_proyectoEtapasEnOrden(activeProj()))) return showToast('PRIMERO TERMINAR LAS ETAPAS PREVIAS (MÍNIMO 2 FOTOS C/U)', 'red');
     }
   } catch(e) {}
@@ -18241,6 +18249,13 @@ async function deletePhoto(etapaIdx, slotIdx){
 // hasta completar las anteriores). Los proyectos existentes siguen libres (v863). Los
 // proyectos NUEVOS nacen con etapasEnOrden:true; activar en uno existente = consola.
 function _proyectoEtapasEnOrden(p){ return !!(p && p.etapasEnOrden === true); }
+/* v1315 (VLA · apto 201): el ADELANTO que el admin aprueba desde el acuse ("APROBAR ADELANTO":
+   "el supervisor podrá cargar esta etapa antes de que termine la anterior") también libera la
+   FOTO de esa etapa en los proyectos EN ORDEN — antes solo lo respetaba el acuse y la foto
+   seguía "BLOQUEADA". Misma llave que acuseSlotPuedeIniciar: a.acuseSaltosAprobados[idx]. */
+function _etapaAdelantoAprobado(a, idx){
+  try { return !!(a && a.acuseSaltosAprobados && a.acuseSaltosAprobados[String(idx)]); } catch(e){ return false; }
+}
 function _fotosEtapasLibres(){
   try { return (typeof window === 'undefined') || window._PR_ETAPAS_LIBRES !== false; }
   catch(e){ return true; }
@@ -18267,6 +18282,7 @@ window.tomarFotoAvance = async function(etapaIdx){
   else _prevDone = _ecS(etapaIdx - 1);
   // v863: el desbloqueo temporal (_fotosEtapasLibres) deja tomar fotos en cualquier etapa.
   // v904: salvo que el proyecto exija ORDEN (p.etapasEnOrden) — ahí manda el candado secuencial.
+  if (!_prevDone && _etapaAdelantoAprobado(a, etapaIdx)) _prevDone = true; // v1315: el adelanto aprobado (acuse) libera la foto
   if (!_prevDone && !(_fotosEtapasLibres() && !_proyectoEtapasEnOrden(activeProj()))) return showToast('PRIMERO TERMINAR LAS ETAPAS PREVIAS (MÍNIMO 2 FOTOS C/U)', 'red');
 
   let input = document.getElementById('prNativeCameraInput');
@@ -41570,6 +41586,7 @@ function _reevalAutoMarcaApto(a){
   if (!Array.isArray(a.stages)) a.stages = [false, false, false, false, false, false];
   var ts = Array.isArray(a.stagesTs) ? a.stagesTs : (a.stagesTs = []);
   var cnt = function(i){ return Array.isArray(a.photos[i]) ? a.photos[i].filter(Boolean).length : 0; };
+  var adel = function(k){ return !!(a.acuseSaltosAprobados && a.acuseSaltosAprobados[String(k)]); }; // v1315: adelanto aprobado
   var fotoTs = function(i){
     var arr = (a.photoTs && Array.isArray(a.photoTs[i])) ? a.photoTs[i] : [];
     var m = 0; arr.forEach(function(v){ var n = Number(v) || 0; if (n > m) m = n; });
@@ -41581,7 +41598,8 @@ function _reevalAutoMarcaApto(a){
     var evidencia = false, evTs = 0;
     if (cnt(i) >= 2){ evidencia = true; evTs = fotoTs(i); }
     else {                                     // cascada v904: >=1 foto en una etapa superior
-      for (var j = i + 1; j < 6; j++){ if (cnt(j) >= 1){ evidencia = true; var t = fotoTs(j); if (t > evTs) evTs = t; } }
+      // v1315: la cadena se corta en una etapa con ADELANTO aprobado (misma regla que _autoMarcarEtapaPorFotos)
+      for (var j = i + 1; j < 6; j++){ if (adel(j)) break; if (cnt(j) >= 1){ evidencia = true; var t = fotoTs(j); if (t > evTs) evTs = t; } }
     }
     if (!evidencia) continue;
     var sello = Number(ts[i]) || 0;
